@@ -63,6 +63,21 @@ The `required` array lists property names that are required at that object
 level. Required properties are emitted as `T`; others as `Option<T>`. If
 `required` is absent, all properties are treated as optional.
 
+### default
+
+Properties with a `default` value get `#[serde(default)]` or `#[serde(default =
+"fn")]` so missing JSON keys use the default when deserializing:
+
+- When the default equals the type's `Default` (e.g. `false` for bool, `0` for
+  integer, `""` for string, `[]` for array, `null` for optional), emits
+  `#[serde(default)]`.
+- Otherwise, generates a module-level function and emits
+  `#[serde(default = "default_StructName_field")]`.
+
+Supported defaults: `boolean`, `integer`, `number`, `string`, string `enum`,
+and empty array `[]`. Object defaults and non-empty array defaults are not
+supported.
+
 ### additionalProperties
 
 The `additionalProperties` keyword controls extra keys on an object:
@@ -83,7 +98,6 @@ The `additionalProperties` keyword controls extra keys on an object:
 | ------------------------------------------------------ | --------------------------------------------------------- |
 | `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                             |
 | `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization               |
-| `default`                                              | Would enable `#[serde(default)]` or literal defaults      |
 | `description`                                          | Would emit `///` doc comments                             |
 | `format` (e.g. `uuid4`)                                | Would generate `Uuid` or validation                       |
 | `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs                    |
@@ -116,7 +130,7 @@ JSON Schema:
     "id": { "type": "string" },
     "name": { "type": "string" },
     "score": { "type": "number" },
-    "status": { "type": "string", "enum": ["active", "inactive"] },
+    "status": { "type": "string", "enum": ["active", "inactive"], "default": "active" },
     "nested": {
       "type": "object",
       "title": "NestedInfo",
@@ -156,6 +170,10 @@ pub enum Status {
     Inactive,
 }
 
+fn default_Record_status() -> Option<Status> {
+    Some(Status::Active)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NestedInfo {
     pub kind: Option<Kind>,
@@ -174,6 +192,7 @@ pub struct Record {
     pub name: Option<String>,
     pub nested: Option<NestedInfo>,
     pub score: Option<f64>,
+    #[serde(default = "default_Record_status")]
     pub status: Option<Status>,
     pub tags: Option<Vec<String>>,
 }

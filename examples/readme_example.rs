@@ -17,7 +17,7 @@ const SCHEMA_JSON: &str = r#"{
     "id": { "type": "string" },
     "name": { "type": "string" },
     "score": { "type": "number" },
-    "status": { "type": "string", "enum": ["active", "inactive"] },
+    "status": { "type": "string", "enum": ["active", "inactive"], "default": "active" },
     "nested": {
       "type": "object",
       "title": "NestedInfo",

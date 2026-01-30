@@ -195,6 +195,23 @@ skill up to date and reduces repeated discovery.
 - **Arrays**: `resolve_array_item_type` returns `"i64"` / `"f64"` for
   `items.type` of `integer` / `number`.
 
+### Default support (learned)
+
+- **Schema model**: Use `DefaultKeyword` (Absent | Present(Value)) in schema.rs
+  to preserve JSON `null`. Serde deserializes `Option<Value>` with null as
+  `None`, losing the distinction between absent key and `"default": null`.
+- **Two strategies**: `UseTypeDefault` → `#[serde(default)]` when the schema
+  value equals the type's Default (false, 0, 0.0, "", [], null for optional).
+  `Custom { fn_name, rust_expr }` → generated function + `#[serde(default =
+  "fn")]` for literal defaults.
+- **Optional + null**: For optional fields with `default: null`, use
+  `#[serde(default)]` so missing key yields `None`.
+- **Emission order**: Enums first, then default functions (they may reference
+  enums), then structs.
+- **Custom default function**: Returns `Some(expr)` for optional fields,
+  `expr` for required. Must be emitted before the struct that uses it.
+- **Out of scope**: Object defaults, non-empty array defaults.
+
 ## CLI and Makefile (for contributors)
 
 Use these to run the generator locally when testing changes.

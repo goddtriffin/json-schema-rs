@@ -14,7 +14,7 @@
         "created_at": { "type": "string" }
       }
     },
-    "count": { "type": "integer" },
+    "count": { "type": "integer", "default": 0 },
     "content": {
       "type": "object",
       "required": ["headline"],
@@ -26,7 +26,7 @@
           "required": ["text"],
           "properties": {
             "text": { "type": "string" },
-            "format": { "type": "string", "enum": ["plain", "markdown"] }
+            "format": { "type": "string", "enum": ["plain", "markdown"], "default": "plain" }
           }
         }
       }

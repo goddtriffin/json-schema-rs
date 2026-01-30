@@ -16,45 +16,60 @@ struct EnumDef {
     variants: Vec<(String, String)>,
 }
 
+/// How a field gets its default value when the JSON key is missing.
+enum DefaultSpec {
+    /// Use #[serde(default)] - type's Default trait
+    UseTypeDefault,
+    /// Use #[serde(default = "`fn_name`")] - custom literal
+    Custom { fn_name: String, rust_expr: String },
+}
+
 /// Represents a field within a struct.
 enum FieldDef {
     String {
         name: String,
         json_key: String,
         optional: bool,
+        default: Option<DefaultSpec>,
     },
     Object {
         name: String,
         json_key: String,
         type_name: String,
         optional: bool,
+        default: Option<DefaultSpec>,
     },
     Enum {
         name: String,
         json_key: String,
         type_name: String,
         optional: bool,
+        default: Option<DefaultSpec>,
     },
     Boolean {
         name: String,
         json_key: String,
         optional: bool,
+        default: Option<DefaultSpec>,
     },
     Array {
         name: String,
         json_key: String,
         element_type: String,
         optional: bool,
+        default: Option<DefaultSpec>,
     },
     Integer {
         name: String,
         json_key: String,
         optional: bool,
+        default: Option<DefaultSpec>,
     },
     Number {
         name: String,
         json_key: String,
         optional: bool,
+        default: Option<DefaultSpec>,
     },
     AdditionalProperties {
         name: String,
@@ -151,6 +166,111 @@ fn build_enum_variants(enum_values: &[String]) -> Vec<(String, String)> {
         result.push((rust_name, json_val.clone()));
     }
     result
+}
+
+/// Resolve `DefaultSpec` from a property's default value.
+/// Returns None if no default, or if the default is unsupported (object, non-empty array, null for required, etc.).
+fn resolve_default_spec(
+    default_value: Option<&serde_json::Value>,
+    type_kind: DefaultTypeKind,
+    struct_name: &str,
+    field_name: &str,
+    optional: bool,
+    enum_variants: Option<&[(String, String)]>,
+) -> Option<DefaultSpec> {
+    let dv: &serde_json::Value = default_value?;
+
+    // For optional fields, null means use None (i.e. #[serde(default)])
+    if dv.is_null() && optional {
+        return Some(DefaultSpec::UseTypeDefault);
+    }
+    if dv.is_null() {
+        return None;
+    }
+
+    let fn_name: String = format!("default_{struct_name}_{field_name}");
+
+    match type_kind {
+        DefaultTypeKind::Bool => {
+            let b: bool = dv.as_bool()?;
+            if b {
+                Some(DefaultSpec::Custom {
+                    fn_name,
+                    rust_expr: "true".to_string(),
+                })
+            } else {
+                Some(DefaultSpec::UseTypeDefault)
+            }
+        }
+        DefaultTypeKind::I64 => {
+            let n: i64 = dv.as_i64()?;
+            if n == 0 {
+                Some(DefaultSpec::UseTypeDefault)
+            } else {
+                Some(DefaultSpec::Custom {
+                    fn_name,
+                    rust_expr: format!("{n}i64"),
+                })
+            }
+        }
+        DefaultTypeKind::F64 => {
+            #[expect(clippy::cast_precision_loss)]
+            let n: f64 = dv.as_f64().or_else(|| dv.as_i64().map(|i| i as f64))?;
+            if n == 0.0 {
+                Some(DefaultSpec::UseTypeDefault)
+            } else {
+                Some(DefaultSpec::Custom {
+                    fn_name,
+                    rust_expr: format!("{n}"),
+                })
+            }
+        }
+        DefaultTypeKind::String => {
+            let s: &str = dv.as_str()?;
+            if s.is_empty() {
+                Some(DefaultSpec::UseTypeDefault)
+            } else {
+                let escaped: String = s.replace('\\', "\\\\").replace('"', "\\\"");
+                Some(DefaultSpec::Custom {
+                    fn_name,
+                    rust_expr: format!("\"{escaped}\".to_string()"),
+                })
+            }
+        }
+        DefaultTypeKind::Vec => {
+            if dv.is_array() && dv.as_array().is_some_and(std::vec::Vec::is_empty) {
+                Some(DefaultSpec::UseTypeDefault)
+            } else {
+                // Non-empty array default not supported
+                None
+            }
+        }
+        DefaultTypeKind::Enum { type_name } => {
+            let variants: &[(String, String)] = enum_variants?;
+            let json_str: &str = dv.as_str()?;
+            let (rust_name, _): &(String, String) =
+                variants.iter().find(|(_, json_val)| json_val == json_str)?;
+            Some(DefaultSpec::Custom {
+                fn_name,
+                rust_expr: format!("{type_name}::{rust_name}"),
+            })
+        }
+        DefaultTypeKind::Object => {
+            // Object default not supported
+            None
+        }
+    }
+}
+
+/// Type kind for default resolution.
+enum DefaultTypeKind {
+    Bool,
+    I64,
+    F64,
+    String,
+    Vec,
+    Enum { type_name: String },
+    Object,
 }
 
 /// Resolve the Rust element type for an array's `items` schema.
@@ -296,11 +416,25 @@ fn collect_structs(
                             variants: variants.clone(),
                         },
                     );
+                    let default_spec: Option<DefaultSpec> = resolve_default_spec(
+                        match &prop_schema.default {
+                            crate::schema::DefaultKeyword::Present(v) => Some(v),
+                            crate::schema::DefaultKeyword::Absent => None,
+                        },
+                        DefaultTypeKind::Enum {
+                            type_name: enum_name.clone(),
+                        },
+                        struct_name,
+                        &field_rust_name,
+                        optional,
+                        Some(&variants),
+                    );
                     fields.push(FieldDef::Enum {
                         name: field_rust_name.clone(),
                         json_key: key.clone(),
                         type_name: enum_name,
                         optional,
+                        default: default_spec,
                     });
                     continue;
                 }
@@ -308,41 +442,101 @@ fn collect_structs(
 
             match prop_type {
                 "string" => {
+                    let default_spec: Option<DefaultSpec> = resolve_default_spec(
+                        match &prop_schema.default {
+                            crate::schema::DefaultKeyword::Present(v) => Some(v),
+                            crate::schema::DefaultKeyword::Absent => None,
+                        },
+                        DefaultTypeKind::String,
+                        struct_name,
+                        &field_rust_name,
+                        optional,
+                        None,
+                    );
                     fields.push(FieldDef::String {
                         name: field_rust_name.clone(),
                         json_key: key.clone(),
                         optional,
+                        default: default_spec,
                     });
                 }
                 "boolean" => {
+                    let default_spec: Option<DefaultSpec> = resolve_default_spec(
+                        match &prop_schema.default {
+                            crate::schema::DefaultKeyword::Present(v) => Some(v),
+                            crate::schema::DefaultKeyword::Absent => None,
+                        },
+                        DefaultTypeKind::Bool,
+                        struct_name,
+                        &field_rust_name,
+                        optional,
+                        None,
+                    );
                     fields.push(FieldDef::Boolean {
                         name: field_rust_name.clone(),
                         json_key: key.clone(),
                         optional,
+                        default: default_spec,
                     });
                 }
                 "integer" => {
+                    let default_spec: Option<DefaultSpec> = resolve_default_spec(
+                        match &prop_schema.default {
+                            crate::schema::DefaultKeyword::Present(v) => Some(v),
+                            crate::schema::DefaultKeyword::Absent => None,
+                        },
+                        DefaultTypeKind::I64,
+                        struct_name,
+                        &field_rust_name,
+                        optional,
+                        None,
+                    );
                     fields.push(FieldDef::Integer {
                         name: field_rust_name.clone(),
                         json_key: key.clone(),
                         optional,
+                        default: default_spec,
                     });
                 }
                 "number" => {
+                    let default_spec: Option<DefaultSpec> = resolve_default_spec(
+                        match &prop_schema.default {
+                            crate::schema::DefaultKeyword::Present(v) => Some(v),
+                            crate::schema::DefaultKeyword::Absent => None,
+                        },
+                        DefaultTypeKind::F64,
+                        struct_name,
+                        &field_rust_name,
+                        optional,
+                        None,
+                    );
                     fields.push(FieldDef::Number {
                         name: field_rust_name.clone(),
                         json_key: key.clone(),
                         optional,
+                        default: default_spec,
                     });
                 }
                 "object" => {
                     let nested_name: String =
                         struct_name_from_property(key, prop_schema.title.as_deref());
+                    let default_spec: Option<DefaultSpec> = resolve_default_spec(
+                        match &prop_schema.default {
+                            crate::schema::DefaultKeyword::Present(v) => Some(v),
+                            crate::schema::DefaultKeyword::Absent => None,
+                        },
+                        DefaultTypeKind::Object,
+                        struct_name,
+                        &field_rust_name,
+                        optional,
+                        None,
+                    );
                     fields.push(FieldDef::Object {
                         name: field_rust_name.clone(),
                         json_key: key.clone(),
                         type_name: nested_name.clone(),
                         optional,
+                        default: default_spec,
                     });
                     if let Some(ref nested_props) = prop_schema.properties
                         && !nested_props.is_empty()
@@ -387,11 +581,23 @@ fn collect_structs(
                             );
                         }
                     }
+                    let default_spec: Option<DefaultSpec> = resolve_default_spec(
+                        match &prop_schema.default {
+                            crate::schema::DefaultKeyword::Present(v) => Some(v),
+                            crate::schema::DefaultKeyword::Absent => None,
+                        },
+                        DefaultTypeKind::Vec,
+                        struct_name,
+                        &field_rust_name,
+                        optional,
+                        None,
+                    );
                     fields.push(FieldDef::Array {
                         name: field_rust_name.clone(),
                         json_key: key.clone(),
                         element_type,
                         optional,
+                        default: default_spec,
                     });
                 }
                 _ => {
@@ -435,8 +641,138 @@ fn emit_enum<W: Write>(enum_def: &EnumDef, writer: &mut W) -> std::io::Result<()
     Ok(())
 }
 
+/// Emit default functions for all Custom default specs in the given structs.
+/// Order follows the provided struct names (topological).
+fn emit_default_functions<W: Write>(
+    struct_defs: &BTreeMap<String, StructDef>,
+    order: &[String],
+    writer: &mut W,
+) -> std::io::Result<()> {
+    for struct_name in order {
+        let Some(struct_def) = struct_defs.get(struct_name) else {
+            continue;
+        };
+        for field in &struct_def.fields {
+            let (default, optional, return_type): (Option<&DefaultSpec>, bool, String) = match field
+            {
+                FieldDef::String {
+                    default, optional, ..
+                } => (
+                    default.as_ref(),
+                    *optional,
+                    if *optional {
+                        "Option<String>".to_string()
+                    } else {
+                        "String".to_string()
+                    },
+                ),
+                FieldDef::Boolean {
+                    default, optional, ..
+                } => (
+                    default.as_ref(),
+                    *optional,
+                    if *optional {
+                        "Option<bool>".to_string()
+                    } else {
+                        "bool".to_string()
+                    },
+                ),
+                FieldDef::Integer {
+                    default, optional, ..
+                } => (
+                    default.as_ref(),
+                    *optional,
+                    if *optional {
+                        "Option<i64>".to_string()
+                    } else {
+                        "i64".to_string()
+                    },
+                ),
+                FieldDef::Number {
+                    default, optional, ..
+                } => (
+                    default.as_ref(),
+                    *optional,
+                    if *optional {
+                        "Option<f64>".to_string()
+                    } else {
+                        "f64".to_string()
+                    },
+                ),
+                FieldDef::Object {
+                    default,
+                    optional,
+                    type_name,
+                    ..
+                }
+                | FieldDef::Enum {
+                    default,
+                    optional,
+                    type_name,
+                    ..
+                } => (
+                    default.as_ref(),
+                    *optional,
+                    if *optional {
+                        format!("Option<{type_name}>")
+                    } else {
+                        type_name.clone()
+                    },
+                ),
+                FieldDef::Array {
+                    default,
+                    optional,
+                    element_type,
+                    ..
+                } => (
+                    default.as_ref(),
+                    *optional,
+                    if *optional {
+                        format!("Option<Vec<{element_type}>>")
+                    } else {
+                        format!("Vec<{element_type}>")
+                    },
+                ),
+                FieldDef::AdditionalProperties { .. } => continue,
+            };
+
+            if let Some(DefaultSpec::Custom { fn_name, rust_expr }) = default {
+                writeln!(writer, "fn {fn_name}() -> {return_type} {{")?;
+                if optional {
+                    writeln!(writer, "    Some({rust_expr})")?;
+                } else {
+                    writeln!(writer, "    {rust_expr}")?;
+                }
+                writeln!(writer, "}}")?;
+                writeln!(writer)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Emit default attribute(s) before a field: rename (if needed), then default (if any).
+fn emit_field_attrs<W: Write>(
+    writer: &mut W,
+    name: &str,
+    json_key: &str,
+    default: Option<&DefaultSpec>,
+) -> std::io::Result<()> {
+    if name != json_key {
+        writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
+    }
+    if let Some(spec) = default {
+        match spec {
+            DefaultSpec::UseTypeDefault => writeln!(writer, "    #[serde(default)]")?,
+            DefaultSpec::Custom { fn_name, .. } => {
+                writeln!(writer, "    #[serde(default = \"{fn_name}\")]")?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Emit a single struct to the writer.
-#[expect(clippy::too_many_lines)]
 fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Result<()> {
     writeln!(
         writer,
@@ -452,99 +788,82 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 name,
                 json_key,
                 optional,
+                default,
             } => {
                 let type_str: &str = if *optional {
                     "Option<String>"
                 } else {
                     "String"
                 };
-                if name == json_key {
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                } else {
-                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                }
+                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Boolean {
                 name,
                 json_key,
                 optional,
+                default,
             } => {
                 let type_str: &str = if *optional { "Option<bool>" } else { "bool" };
-                if name == json_key {
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                } else {
-                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                }
+                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Integer {
                 name,
                 json_key,
                 optional,
+                default,
             } => {
                 let type_str: &str = if *optional { "Option<i64>" } else { "i64" };
-                if name == json_key {
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                } else {
-                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                }
+                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Number {
                 name,
                 json_key,
                 optional,
+                default,
             } => {
                 let type_str: &str = if *optional { "Option<f64>" } else { "f64" };
-                if name == json_key {
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                } else {
-                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                }
+                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Object {
                 name,
                 json_key,
                 type_name,
                 optional,
+                default,
             }
             | FieldDef::Enum {
                 name,
                 json_key,
                 type_name,
                 optional,
+                default,
             } => {
                 let type_str: String = if *optional {
                     format!("Option<{type_name}>")
                 } else {
                     type_name.clone()
                 };
-                if name == json_key {
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                } else {
-                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                }
+                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Array {
                 name,
                 json_key,
                 element_type,
                 optional,
+                default,
             } => {
                 let type_str: String = if *optional {
                     format!("Option<Vec<{element_type}>>")
                 } else {
                     format!("Vec<{element_type}>")
                 };
-                if name == json_key {
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                } else {
-                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
-                    writeln!(writer, "    pub {name}: {type_str},")?;
-                }
+                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::AdditionalProperties { name, value_type } => {
                 writeln!(writer, "    #[serde(flatten)]")?;
@@ -654,15 +973,16 @@ pub fn generate_to_writer<W: Write>(
     }
     writeln!(writer)?;
 
-    // Emit enums first (alphabetically), then structs (topological order)
+    // Emit enums first (alphabetically), then default functions, then structs (topological order)
     for enum_name in collected_enums.keys() {
         if let Some(enum_def) = collected_enums.get(enum_name) {
             emit_enum(enum_def, writer)?;
         }
     }
     let order: Vec<String> = emission_order(&collected, &root_name);
-    for name in order {
-        if let Some(struct_def) = collected.get(&name) {
+    emit_default_functions(&collected, &order, writer)?;
+    for name in &order {
+        if let Some(struct_def) = collected.get(name) {
             emit_struct(struct_def, writer)?;
         }
     }
@@ -900,6 +1220,106 @@ pub struct Mixed {
         let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
         assert_eq!(expected, actual, "expected output to match exactly");
+    }
+
+    #[test]
+    fn generate_schema_default_null_required_field_ignored() {
+        // default: null on required field is unsupported; no default attribute emitted
+        let schema_json: &str = r#"{
+            "type": "object",
+            "title": "ReqNull",
+            "required": ["x"],
+            "properties": {
+                "x": { "type": "string", "default": null }
+            }
+        }"#;
+
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReqNull {
+    pub x: String,
+}
+
+";
+
+        let mut output: Vec<u8> = Vec::new();
+        generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+
+        let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
+
+        assert_eq!(
+            expected, actual,
+            "default null on required field should be ignored"
+        );
+    }
+
+    #[test]
+    fn generate_schema_default_empty_string_uses_serde_default() {
+        let schema_json: &str = r#"{
+            "type": "object",
+            "title": "EmptyStr",
+            "properties": {
+                "name": { "type": "string", "default": "" }
+            }
+        }"#;
+
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EmptyStr {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+";
+
+        let mut output: Vec<u8> = Vec::new();
+        generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+
+        let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
+
+        assert_eq!(
+            expected, actual,
+            "default empty string should use #[serde(default)]"
+        );
+    }
+
+    #[test]
+    fn generate_schema_default_float_zero_uses_serde_default() {
+        let schema_json: &str = r#"{
+            "type": "object",
+            "title": "ZeroF64",
+            "properties": {
+                "ratio": { "type": "number", "default": 0 }
+            }
+        }"#;
+
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZeroF64 {
+    #[serde(default)]
+    pub ratio: Option<f64>,
+}
+
+";
+
+        let mut output: Vec<u8> = Vec::new();
+        generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+
+        let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
+
+        assert_eq!(
+            expected, actual,
+            "default 0 for number should use #[serde(default)]"
+        );
     }
 
     #[test]

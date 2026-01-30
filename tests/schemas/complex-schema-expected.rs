@@ -10,8 +10,13 @@ pub enum Format {
     Plain,
 }
 
+fn default_BodySection_format() -> Option<Format> {
+    Some(Format::Plain)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BodySection {
+    #[serde(default = "default_BodySection_format")]
     pub format: Option<Format>,
     pub text: String,
 }
@@ -37,6 +42,7 @@ pub struct Metadata {
 #[serde(deny_unknown_fields)]
 pub struct Document {
     pub content: Option<Content>,
+    #[serde(default)]
     pub count: Option<i64>,
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
