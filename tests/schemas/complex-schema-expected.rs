@@ -36,12 +36,15 @@ pub struct Metadata {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Document {
     pub content: Option<Content>,
+    pub count: Option<i64>,
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
     pub highlights: Option<Vec<Highlight>>,
     pub metadata: Metadata,
     pub published: Option<bool>,
+    pub score: Option<f64>,
     pub tags: Option<Vec<String>>,
     pub version: String,
+    pub weights: Option<Vec<f64>>,
 }
 

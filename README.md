@@ -44,12 +44,22 @@ applied so variant names stay unique.
 
 Properties with `type: "boolean"` are emitted as `bool`.
 
+### Numbers
+
+Properties with `type: "integer"` are emitted as `i64`. Properties with
+`type: "number"` are emitted as `f64`. Arrays of integers or numbers use
+`Vec<i64>` or `Vec<f64>` (or `Option<Vec<...>>` when the property is optional).
+Number constraints such as `minimum`, `maximum`, and `multipleOf` are not used
+for type selection; a future version may support constraint-based integer type
+selection (e.g. u8, i32) like [typify](https://lib.rs/crates/typify).
+
 ### Arrays
 
 Properties with `type: "array"` and an `items` schema are emitted as `Vec<T>` or
 `Option<Vec<T>>`. Supported item types: `string` → `String`, `boolean` → `bool`,
-`object` → a nested struct, and string `enum` → a Rust enum. If `items` is
-missing or has an unsupported type, the property is skipped.
+`integer` → `i64`, `number` → `f64`, `object` → a nested struct, and string
+`enum` → a Rust enum. If `items` is missing or has an unsupported type, the
+property is skipped.
 
 ### Required vs Optional
 
@@ -61,7 +71,6 @@ level. Required properties are emitted as `T`; others as `Option<T>`. If
 
 | Feature                                                | Description                                               |
 | ------------------------------------------------------ | --------------------------------------------------------- |
-| `type: "number"` / `type: "integer"`                   | Would generate `f64` / `i64` (or configurable)            |
 | `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                             |
 | `additionalProperties`                                 | Would generate `BTreeMap<String, T>` for map-like objects |
 | `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization               |
@@ -93,8 +102,10 @@ JSON Schema:
   "required": ["id"],
   "properties": {
     "active": { "type": "boolean" },
+    "count": { "type": "integer" },
     "id": { "type": "string" },
     "name": { "type": "string" },
+    "score": { "type": "number" },
     "status": { "type": "string", "enum": ["active", "inactive"] },
     "nested": {
       "type": "object",
@@ -143,11 +154,13 @@ pub struct NestedInfo {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Record {
     pub active: Option<bool>,
+    pub count: Option<i64>,
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
     pub id: String,
     pub name: Option<String>,
     pub nested: Option<NestedInfo>,
+    pub score: Option<f64>,
     pub status: Option<Status>,
     pub tags: Option<Vec<String>>,
 }

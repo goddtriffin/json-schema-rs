@@ -136,6 +136,21 @@ To support a new JSON Schema keyword or type:
 - For unsupported types, ignore rather than fail (PoC behavior; future versions
   will hard-fail).
 
+### Reference implementations
+
+When implementing a new feature, **always check** how the **json_schema**,
+**schemafy**, and **typify** Rust crates implement it (docs and/or source). Compare
+our approach to theirs to see if our idea is better or worse; document the
+choice in the skill (e.g. under a "learned" subsection) or in the PR. This
+reduces duplicated design work and keeps the crate aligned with ecosystem
+conventions where appropriate.
+
+- **json_schema**: Schema representation and validation (not codegen). Use for
+  how schema concepts are modeled (e.g. `SimpleTypes::Integer` vs `Number`).
+- **schemafy**: JSON Schema → Rust codegen; simple fixed type mappings.
+- **typify**: JSON Schema → Rust codegen; uses `minimum`/`maximum` for
+  constraint-based integer type selection (u8, i32, etc.).
+
 ### Post-Feature Knowledge Capture
 
 At the end of development for a new feature, add any knowledge learned during
@@ -171,6 +186,14 @@ skill up to date and reduces repeated discovery.
 - **Raw string literals in tests**: Use `r#"..."#` not `r"..."` when expected
   output contains `]"` (e.g., `#[serde(rename = "x")]`) to avoid Rust parsing
   the `]"` as end of string.
+
+### Numbers (learned)
+
+- **Mapping**: We use fixed `integer` → `i64`, `number` → `f64` (like schemafy).
+  Typify uses `minimum`/`maximum` to choose smaller integral types (u8, i32,
+  etc.); we do not parse number constraints for this PoC.
+- **Arrays**: `resolve_array_item_type` returns `"i64"` / `"f64"` for
+  `items.type` of `integer` / `number`.
 
 ## CLI and Makefile (for contributors)
 

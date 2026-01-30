@@ -12,8 +12,10 @@ const SCHEMA_JSON: &str = r#"{
   "required": ["id"],
   "properties": {
     "active": { "type": "boolean" },
+    "count": { "type": "integer" },
     "id": { "type": "string" },
     "name": { "type": "string" },
+    "score": { "type": "number" },
     "status": { "type": "string", "enum": ["active", "inactive"] },
     "nested": {
       "type": "object",

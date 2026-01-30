@@ -13,6 +13,7 @@
         "created_at": { "type": "string" }
       }
     },
+    "count": { "type": "integer" },
     "content": {
       "type": "object",
       "required": ["headline"],
@@ -41,9 +42,14 @@
       }
     },
     "published": { "type": "boolean" },
+    "score": { "type": "number" },
     "tags": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "weights": {
+      "type": "array",
+      "items": { "type": "number" }
     }
   }
 }

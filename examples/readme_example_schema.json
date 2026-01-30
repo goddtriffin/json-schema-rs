@@ -8,11 +8,17 @@
     "active": {
       "type": "boolean"
     },
+    "count": {
+      "type": "integer"
+    },
     "id": {
       "type": "string"
     },
     "name": {
       "type": "string"
+    },
+    "score": {
+      "type": "number"
     },
     "status": {
       "type": "string",

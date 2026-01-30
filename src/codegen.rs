@@ -45,6 +45,16 @@ enum FieldDef {
         element_type: String,
         optional: bool,
     },
+    Integer {
+        name: String,
+        json_key: String,
+        optional: bool,
+    },
+    Number {
+        name: String,
+        json_key: String,
+        optional: bool,
+    },
 }
 
 /// Convert a string to a valid Rust struct/type identifier (`PascalCase`).
@@ -160,6 +170,8 @@ fn resolve_array_item_type(property_key: &str, items_schema: &JsonSchema) -> Opt
     match item_type {
         "string" => Some("String".to_string()),
         "boolean" => Some("bool".to_string()),
+        "integer" => Some("i64".to_string()),
+        "number" => Some("f64".to_string()),
         "object" => Some(struct_name_from_property(
             property_key,
             items_schema.title.as_deref(),
@@ -230,6 +242,20 @@ fn collect_structs(
                         optional,
                     });
                 }
+                "integer" => {
+                    fields.push(FieldDef::Integer {
+                        name: field_rust_name.clone(),
+                        json_key: key.clone(),
+                        optional,
+                    });
+                }
+                "number" => {
+                    fields.push(FieldDef::Number {
+                        name: field_rust_name.clone(),
+                        json_key: key.clone(),
+                        optional,
+                    });
+                }
                 "object" => {
                     let nested_name: String =
                         struct_name_from_property(key, prop_schema.title.as_deref());
@@ -290,7 +316,7 @@ fn collect_structs(
                     });
                 }
                 _ => {
-                    // Ignore other types (number, etc.) for now
+                    // Ignore other types (null, etc.) for now
                 }
             }
         }
@@ -330,6 +356,7 @@ fn emit_enum<W: Write>(enum_def: &EnumDef, writer: &mut W) -> std::io::Result<()
 }
 
 /// Emit a single struct to the writer.
+#[expect(clippy::too_many_lines)]
 fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Result<()> {
     writeln!(
         writer,
@@ -361,6 +388,32 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 optional,
             } => {
                 let type_str: &str = if *optional { "Option<bool>" } else { "bool" };
+                if name == json_key {
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                } else {
+                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                }
+            }
+            FieldDef::Integer {
+                name,
+                json_key,
+                optional,
+            } => {
+                let type_str: &str = if *optional { "Option<i64>" } else { "i64" };
+                if name == json_key {
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                } else {
+                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                }
+            }
+            FieldDef::Number {
+                name,
+                json_key,
+                optional,
+            } => {
+                let type_str: &str = if *optional { "Option<f64>" } else { "f64" };
                 if name == json_key {
                     writeln!(writer, "    pub {name}: {type_str},")?;
                 } else {
