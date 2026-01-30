@@ -29,6 +29,7 @@
         }
       }
     },
-    "foo-bar": { "type": "string" }
+    "foo-bar": { "type": "string" },
+    "published": { "type": "boolean" }
   }
 }

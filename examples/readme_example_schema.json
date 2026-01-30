@@ -5,6 +5,9 @@
     "id"
   ],
   "properties": {
+    "active": {
+      "type": "boolean"
+    },
     "id": {
       "type": "string"
     },

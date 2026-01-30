@@ -34,6 +34,7 @@ pub struct Document {
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
     pub metadata: Metadata,
+    pub published: Option<bool>,
     pub version: String,
 }
 

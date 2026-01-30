@@ -34,6 +34,11 @@ enum FieldDef {
         type_name: String,
         optional: bool,
     },
+    Boolean {
+        name: String,
+        json_key: String,
+        optional: bool,
+    },
 }
 
 /// Convert a string to a valid Rust struct/type identifier (`PascalCase`).
@@ -181,6 +186,13 @@ fn collect_structs(
                         optional,
                     });
                 }
+                "boolean" => {
+                    fields.push(FieldDef::Boolean {
+                        name: field_rust_name.clone(),
+                        json_key: key.clone(),
+                        optional,
+                    });
+                }
                 "object" => {
                     let nested_name: String =
                         struct_name_from_property(key, prop_schema.title.as_deref());
@@ -197,7 +209,7 @@ fn collect_structs(
                     }
                 }
                 _ => {
-                    // Ignore other types (array, number, boolean, etc.) per PoC scope
+                    // Ignore other types (array, number, etc.) for now
                 }
             }
         }
@@ -255,6 +267,19 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 } else {
                     "String"
                 };
+                if name == json_key {
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                } else {
+                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                }
+            }
+            FieldDef::Boolean {
+                name,
+                json_key,
+                optional,
+            } => {
+                let type_str: &str = if *optional { "Option<bool>" } else { "bool" };
                 if name == json_key {
                     writeln!(writer, "    pub {name}: {type_str},")?;
                 } else {

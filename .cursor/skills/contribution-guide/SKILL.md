@@ -26,8 +26,6 @@ The json-schema-rs crate has two goals:
   serde deserialization with `#[serde(default)]` for optional fields.
 - **Custom error enum**: `JsonSchemaGenError` with manual `Debug`, `Display`,
   `Error`, and `From` impls. Do not use thiserror.
-- **PoC scope**: Objects, nested objects, string fields, and string enums.
-  Ignore arrays, numbers, booleans, and other types.
 
 ## Architecture
 
@@ -96,6 +94,12 @@ To support a new JSON Schema keyword or type:
    `tests/schemas/complex-schema.json` and
    `tests/schemas/complex-schema-expected.rs` so the file-based test covers the
    new behavior. Use full `assert_eq!(expected, actual)`; no partial checks.
+4. **README example and examples directory**: Keep the README’s example (the
+   JSON Schema and "Generated Rust" blocks) and the examples directory in sync.
+   When adding a new feature, update **both** the README example and
+   `examples/readme_example_schema.json` / `examples/readme_example.rs` to
+   demonstrate it. The README example and the examples directory should stay
+   consistent with each other and with supported features.
 
 ## Contribution Guidelines
 
@@ -197,13 +201,15 @@ make json_schema_gen input=json-schema-rs/tests/schemas/complex-schema.json outp
 
 ## Key Files
 
-| File                                                      | Purpose                                                      |
-| --------------------------------------------------------- | ------------------------------------------------------------ |
-| `json-schema-rs/src/lib.rs`                               | Public API: `generate_to_writer`, `generate_from_file`       |
-| `json-schema-rs/src/codegen.rs`                           | Struct collection, emission order, code generation           |
-| `json-schema-rs/src/schema.rs`                            | Custom JSON Schema structs (serde-deserializable)            |
-| `json-schema-rs/src/error.rs`                             | `JsonSchemaGenError` enum                                    |
-| `json-schema-rs/src/main.rs`                              | CLI binary                                                   |
-| `json-schema-rs/tests/integration-tests.rs`               | Integration tests                                            |
-| `json-schema-rs/tests/schemas/complex-schema.json`        | File-based test input; update when adding features           |
-| `json-schema-rs/tests/schemas/complex-schema-expected.rs` | File-based test expected output; update when adding features |
+| File                                                      | Purpose                                                                   |
+| --------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `json-schema-rs/src/lib.rs`                               | Public API: `generate_to_writer`, `generate_from_file`                    |
+| `json-schema-rs/src/codegen.rs`                           | Struct collection, emission order, code generation                        |
+| `json-schema-rs/src/schema.rs`                            | Custom JSON Schema structs (serde-deserializable)                         |
+| `json-schema-rs/src/error.rs`                             | `JsonSchemaGenError` enum                                                 |
+| `json-schema-rs/src/main.rs`                              | CLI binary                                                                |
+| `json-schema-rs/tests/integration-tests.rs`               | Integration tests                                                         |
+| `json-schema-rs/tests/schemas/complex-schema.json`        | File-based test input; update when adding features                        |
+| `json-schema-rs/tests/schemas/complex-schema-expected.rs` | File-based test expected output; update when adding features              |
+| `json-schema-rs/examples/readme_example_schema.json`      | Example schema; keep in sync with README example and readme_example.rs    |
+| `json-schema-rs/examples/readme_example.rs`               | Example binary (inlined schema); keep in sync with README and schema file |

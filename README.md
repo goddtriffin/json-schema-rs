@@ -29,17 +29,20 @@ The `title` of an object schema is used as the struct name (PascalCase). If
 `title` is missing or empty, the struct name is derived from the property key
 that references it.
 
-### String type
+### Strings
 
-Properties with `type: "string"` are emitted as `String` in Rust. Generated
-structs use `serde::Serialize` and `serde::Deserialize`.
+Properties with `type: "string"` are emitted as `String`.
 
 ### Enums
 
-When a property has an `enum` of string values, the crate generates a Rust enum
-instead of `String`. Variant names are PascalCase. If multiple JSON values map
-to the same variant name (e.g. `"PENDING"` and `"pending"`), suffixes like `_0`,
-`_1` are applied so variant names stay unique.
+When a property has an `enum` of string values, generates a Rust enum instead of
+`String`. Variant names are PascalCase. If multiple JSON values map to the same
+variant name (e.g. `"PENDING"` and `"pending"`), suffixes like `_0`, `_1` are
+applied so variant names stay unique.
+
+### Booleans
+
+Properties with `type: "boolean"` are emitted as `bool`.
 
 ### Required vs Optional
 
@@ -52,7 +55,6 @@ level. Required properties are emitted as `T`; others as `Option<T>`. If
 | Feature                                                | Description                                               |
 | ------------------------------------------------------ | --------------------------------------------------------- |
 | `type: "array"` + `items`                              | Would generate `Vec<T>`                                   |
-| `type: "boolean"`                                      | Would generate `bool`                                     |
 | `type: "number"` / `type: "integer"`                   | Would generate `f64` / `i64` (or configurable)            |
 | `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                             |
 | `additionalProperties`                                 | Would generate `BTreeMap<String, T>` for map-like objects |
@@ -84,6 +86,7 @@ JSON Schema:
   "title": "Record",
   "required": ["id"],
   "properties": {
+    "active": { "type": "boolean" },
     "id": { "type": "string" },
     "name": { "type": "string" },
     "status": { "type": "string", "enum": ["active", "inactive"] },
@@ -132,6 +135,7 @@ pub struct NestedInfo {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Record {
+    pub active: Option<bool>,
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
     pub id: String,

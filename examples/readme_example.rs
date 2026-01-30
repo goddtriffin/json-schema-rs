@@ -11,6 +11,7 @@ const SCHEMA_JSON: &str = r#"{
   "title": "Record",
   "required": ["id"],
   "properties": {
+    "active": { "type": "boolean" },
     "id": { "type": "string" },
     "name": { "type": "string" },
     "status": { "type": "string", "enum": ["active", "inactive"] },
