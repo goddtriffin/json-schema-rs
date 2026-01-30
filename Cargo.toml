@@ -1,6 +1,6 @@
 [package]
 name = "json-schema-rs"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.93"
 authors = ["Todd Everett Griffin <tgriffin115@gmail.com>"]
@@ -14,6 +14,10 @@ include = ["**/*.rs", "Cargo.toml", ".clippy.toml", "LICENSE", "README.md"]
 
 [lib]
 path = "src/lib.rs"
+
+[[bin]]
+name = "json-schema-gen"
+path = "src/main.rs"
 
 [lints.rust]
 unsafe_code = { level = "forbid", priority = 0 }
@@ -32,3 +36,5 @@ pedantic = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
 
 [dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"

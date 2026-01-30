@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "title": "Outer",
+  "properties": {
+    "inner": {
+      "type": "object",
+      "title": "Inner",
+      "properties": {
+        "value": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "type": "object",
+  "title": "Document",
+  "required": ["version", "metadata"],
+  "properties": {
+    "version": { "type": "string" },
+    "metadata": {
+      "type": "object",
+      "title": "Metadata",
+      "required": ["author"],
+      "properties": {
+        "author": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "content": {
+      "type": "object",
+      "required": ["headline"],
+      "properties": {
+        "headline": { "type": "string" },
+        "body": {
+          "type": "object",
+          "title": "BodySection",
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string" },
+            "format": { "type": "string", "enum": ["plain", "markdown"] }
+          }
+        }
+      }
+    },
+    "foo-bar": { "type": "string" }
+  }
+}

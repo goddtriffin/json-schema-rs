@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "title": "Record",
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "inactive"
+      ]
+    },
+    "nested": {
+      "type": "object",
+      "title": "NestedInfo",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "A",
+            "a"
+          ]
+        }
+      }
+    },
+    "foo-bar": {
+      "type": "string"
+    }
+  }
+}
