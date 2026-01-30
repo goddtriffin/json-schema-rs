@@ -39,6 +39,12 @@ enum FieldDef {
         json_key: String,
         optional: bool,
     },
+    Array {
+        name: String,
+        json_key: String,
+        element_type: String,
+        optional: bool,
+    },
 }
 
 /// Convert a string to a valid Rust struct/type identifier (`PascalCase`).
@@ -132,8 +138,39 @@ fn build_enum_variants(enum_values: &[String]) -> Vec<(String, String)> {
     result
 }
 
+/// Resolve the Rust element type for an array's `items` schema.
+/// Returns `None` if items type is unsupported or missing.
+fn resolve_array_item_type(property_key: &str, items_schema: &JsonSchema) -> Option<String> {
+    let item_type: &str = items_schema.r#type.as_deref().unwrap_or("");
+
+    // Check for string enum first (same order as property handling)
+    if let Some(ref enum_vals) = items_schema.r#enum {
+        let string_values: Option<Vec<String>> = enum_vals
+            .iter()
+            .map(|v| v.as_str().map(String::from))
+            .collect();
+        if string_values.is_some() && !enum_vals.is_empty() {
+            return Some(struct_name_from_property(
+                property_key,
+                items_schema.title.as_deref(),
+            ));
+        }
+    }
+
+    match item_type {
+        "string" => Some("String".to_string()),
+        "boolean" => Some("bool".to_string()),
+        "object" => Some(struct_name_from_property(
+            property_key,
+            items_schema.title.as_deref(),
+        )),
+        _ => None,
+    }
+}
+
 /// Recursively collect all structs and enums from a schema.
 /// Uses `BTreeMap` for deterministic struct and field ordering (alphabetical by key).
+#[expect(clippy::too_many_lines)]
 fn collect_structs(
     schema: &JsonSchema,
     struct_name: &str,
@@ -208,8 +245,52 @@ fn collect_structs(
                         collect_structs(prop_schema, &nested_name, collected, collected_enums);
                     }
                 }
+                "array" => {
+                    let Some(ref items_schema) = prop_schema.items else {
+                        continue;
+                    };
+                    let Some(element_type) = resolve_array_item_type(key, items_schema) else {
+                        continue;
+                    };
+                    // Collect nested struct or enum for object/enum items
+                    if items_schema.r#type.as_deref() == Some("object") {
+                        if let Some(ref nested_props) = items_schema.properties
+                            && !nested_props.is_empty()
+                        {
+                            collect_structs(
+                                items_schema,
+                                &element_type,
+                                collected,
+                                collected_enums,
+                            );
+                        }
+                    } else if let Some(ref enum_vals) = items_schema.r#enum {
+                        let string_values: Option<Vec<String>> = enum_vals
+                            .iter()
+                            .map(|v| v.as_str().map(String::from))
+                            .collect();
+                        if let Some(ref vals) = string_values
+                            && !vals.is_empty()
+                        {
+                            let variants: Vec<(String, String)> = build_enum_variants(vals);
+                            collected_enums.insert(
+                                element_type.clone(),
+                                EnumDef {
+                                    name: element_type.clone(),
+                                    variants,
+                                },
+                            );
+                        }
+                    }
+                    fields.push(FieldDef::Array {
+                        name: field_rust_name.clone(),
+                        json_key: key.clone(),
+                        element_type,
+                        optional,
+                    });
+                }
                 _ => {
-                    // Ignore other types (array, number, etc.) for now
+                    // Ignore other types (number, etc.) for now
                 }
             }
         }
@@ -311,6 +392,24 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                     writeln!(writer, "    pub {name}: {type_str},")?;
                 }
             }
+            FieldDef::Array {
+                name,
+                json_key,
+                element_type,
+                optional,
+            } => {
+                let type_str: String = if *optional {
+                    format!("Option<Vec<{element_type}>>")
+                } else {
+                    format!("Vec<{element_type}>")
+                };
+                if name == json_key {
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                } else {
+                    writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
+                    writeln!(writer, "    pub {name}: {type_str},")?;
+                }
+            }
         }
     }
     writeln!(writer, "}}")?;
@@ -332,10 +431,16 @@ fn emission_order(struct_defs: &BTreeMap<String, StructDef>, root_name: &str) ->
         visited.insert(name.to_string());
         if let Some(def) = struct_defs.get(name) {
             for field in &def.fields {
-                if let FieldDef::Object { type_name, .. } = field
-                    && struct_defs.contains_key(type_name)
-                {
-                    visit(type_name, struct_defs, order, visited);
+                match field {
+                    FieldDef::Object { type_name, .. } if struct_defs.contains_key(type_name) => {
+                        visit(type_name, struct_defs, order, visited);
+                    }
+                    FieldDef::Array { element_type, .. }
+                        if struct_defs.contains_key(element_type) =>
+                    {
+                        visit(element_type, struct_defs, order, visited);
+                    }
+                    _ => {}
                 }
             }
         }

@@ -44,6 +44,13 @@ applied so variant names stay unique.
 
 Properties with `type: "boolean"` are emitted as `bool`.
 
+### Arrays
+
+Properties with `type: "array"` and an `items` schema are emitted as `Vec<T>` or
+`Option<Vec<T>>`. Supported item types: `string` → `String`, `boolean` → `bool`,
+`object` → a nested struct, and string `enum` → a Rust enum. If `items` is
+missing or has an unsupported type, the property is skipped.
+
 ### Required vs Optional
 
 The `required` array lists property names that are required at that object
@@ -54,7 +61,6 @@ level. Required properties are emitted as `T`; others as `Option<T>`. If
 
 | Feature                                                | Description                                               |
 | ------------------------------------------------------ | --------------------------------------------------------- |
-| `type: "array"` + `items`                              | Would generate `Vec<T>`                                   |
 | `type: "number"` / `type: "integer"`                   | Would generate `f64` / `i64` (or configurable)            |
 | `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                             |
 | `additionalProperties`                                 | Would generate `BTreeMap<String, T>` for map-like objects |
@@ -99,7 +105,8 @@ JSON Schema:
         "kind": { "type": "string", "enum": ["A", "a"] }
       }
     },
-    "foo-bar": { "type": "string" }
+    "foo-bar": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } }
   }
 }
 ```
@@ -142,6 +149,7 @@ pub struct Record {
     pub name: Option<String>,
     pub nested: Option<NestedInfo>,
     pub status: Option<Status>,
+    pub tags: Option<Vec<String>>,
 }
 ```
 

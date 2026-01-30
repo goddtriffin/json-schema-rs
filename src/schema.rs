@@ -22,4 +22,7 @@ pub struct JsonSchema {
 
     #[serde(default)]
     pub r#enum: Option<Vec<serde_json::Value>>,
+
+    #[serde(default)]
+    pub items: Option<Box<JsonSchema>>,
 }

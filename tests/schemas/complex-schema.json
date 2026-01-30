@@ -30,6 +30,20 @@
       }
     },
     "foo-bar": { "type": "string" },
-    "published": { "type": "boolean" }
+    "highlights": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "Highlight",
+        "properties": {
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "published": { "type": "boolean" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
   }
 }

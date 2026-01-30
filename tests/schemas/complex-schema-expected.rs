@@ -23,6 +23,11 @@ pub struct Content {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Highlight {
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub author: String,
     pub created_at: Option<String>,
@@ -33,8 +38,10 @@ pub struct Document {
     pub content: Option<Content>,
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
+    pub highlights: Option<Vec<Highlight>>,
     pub metadata: Metadata,
     pub published: Option<bool>,
+    pub tags: Option<Vec<String>>,
     pub version: String,
 }
 

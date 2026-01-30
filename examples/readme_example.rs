@@ -24,7 +24,8 @@ const SCHEMA_JSON: &str = r#"{
         "kind": { "type": "string", "enum": ["A", "a"] }
       }
     },
-    "foo-bar": { "type": "string" }
+    "foo-bar": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } }
   }
 }"#;
 
