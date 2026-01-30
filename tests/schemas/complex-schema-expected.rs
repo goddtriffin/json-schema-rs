@@ -34,6 +34,7 @@ pub struct Metadata {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Document {
     pub content: Option<Content>,
     pub count: Option<i64>,

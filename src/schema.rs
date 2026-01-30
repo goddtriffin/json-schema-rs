@@ -25,4 +25,7 @@ pub struct JsonSchema {
 
     #[serde(default)]
     pub items: Option<Box<JsonSchema>>,
+
+    #[serde(default, rename = "additionalProperties")]
+    pub additional_properties: Option<serde_json::Value>,
 }

@@ -4,6 +4,7 @@
   "required": [
     "id"
   ],
+  "additionalProperties": { "type": "string" },
   "properties": {
     "active": {
       "type": "boolean"

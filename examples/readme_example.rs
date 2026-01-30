@@ -10,6 +10,7 @@ const SCHEMA_JSON: &str = r#"{
   "type": "object",
   "title": "Record",
   "required": ["id"],
+  "additionalProperties": { "type": "string" },
   "properties": {
     "active": { "type": "boolean" },
     "count": { "type": "integer" },

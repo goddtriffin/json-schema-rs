@@ -1,6 +1,7 @@
 {
   "type": "object",
   "title": "Document",
+  "additionalProperties": false,
   "required": ["version", "metadata"],
   "properties": {
     "version": { "type": "string" },

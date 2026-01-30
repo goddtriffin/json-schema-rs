@@ -7,6 +7,7 @@ use std::io::Write;
 struct StructDef {
     name: String,
     fields: Vec<FieldDef>,
+    deny_unknown_fields: bool,
 }
 
 /// Represents an enum to be emitted, with its variants (`rust_name`, `json_value`).
@@ -54,6 +55,10 @@ enum FieldDef {
         name: String,
         json_key: String,
         optional: bool,
+    },
+    AdditionalProperties {
+        name: String,
+        value_type: String,
     },
 }
 
@@ -180,6 +185,60 @@ fn resolve_array_item_type(property_key: &str, items_schema: &JsonSchema) -> Opt
     }
 }
 
+/// Resolve the Rust value type for `additionalProperties` when it is a schema object.
+/// Returns `None` if the value is not a schema object or is invalid.
+/// For nested objects with properties, collects the struct into `collected`.
+fn resolve_additional_properties_value_type(
+    schema_value: &serde_json::Value,
+    struct_name: &str,
+    collected: &mut BTreeMap<String, StructDef>,
+    collected_enums: &mut BTreeMap<String, EnumDef>,
+) -> Option<String> {
+    let ap_schema: JsonSchema = serde_json::from_value(schema_value.clone()).ok()?;
+    let ap_type: &str = ap_schema.r#type.as_deref().unwrap_or("");
+
+    if let Some(ref enum_vals) = ap_schema.r#enum {
+        let string_values: Option<Vec<String>> = enum_vals
+            .iter()
+            .map(|v| v.as_str().map(String::from))
+            .collect();
+        if string_values.is_some() && !enum_vals.is_empty() {
+            let enum_name: String = format!("{struct_name}Value");
+            let vals: Vec<String> = enum_vals
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            let variants: Vec<(String, String)> = build_enum_variants(&vals);
+            collected_enums.insert(
+                enum_name.clone(),
+                EnumDef {
+                    name: enum_name.clone(),
+                    variants,
+                },
+            );
+            return Some(enum_name);
+        }
+    }
+
+    match ap_type {
+        "string" => Some("String".to_string()),
+        "boolean" => Some("bool".to_string()),
+        "integer" => Some("i64".to_string()),
+        "number" => Some("f64".to_string()),
+        "object" => {
+            let nested_name: String = format!("{struct_name}Extra");
+            if let Some(ref props) = ap_schema.properties
+                && !props.is_empty()
+            {
+                collect_structs(&ap_schema, &nested_name, collected, collected_enums);
+                return Some(nested_name);
+            }
+            Some("serde_json::Value".to_string())
+        }
+        _ => Some("serde_json::Value".to_string()),
+    }
+}
+
 /// Recursively collect all structs and enums from a schema.
 /// Uses `BTreeMap` for deterministic struct and field ordering (alphabetical by key).
 #[expect(clippy::too_many_lines)]
@@ -190,6 +249,26 @@ fn collect_structs(
     collected_enums: &mut BTreeMap<String, EnumDef>,
 ) {
     let mut fields: Vec<FieldDef> = Vec::new();
+    let deny_unknown_fields: bool = schema
+        .additional_properties
+        .as_ref()
+        .and_then(serde_json::Value::as_bool)
+        .is_some_and(|b| !b);
+
+    if let Some(ref ap_value) = schema.additional_properties
+        && ap_value.is_object()
+        && let Some(value_type) = resolve_additional_properties_value_type(
+            ap_value,
+            struct_name,
+            collected,
+            collected_enums,
+        )
+    {
+        fields.push(FieldDef::AdditionalProperties {
+            name: "additional_properties".to_string(),
+            value_type,
+        });
+    }
 
     if let Some(ref properties) = schema.properties {
         for (key, prop_schema) in properties {
@@ -322,12 +401,13 @@ fn collect_structs(
         }
     }
 
-    if !fields.is_empty() {
+    if !fields.is_empty() || deny_unknown_fields {
         collected.insert(
             struct_name.to_string(),
             StructDef {
                 name: struct_name.to_string(),
                 fields,
+                deny_unknown_fields,
             },
         );
     }
@@ -362,6 +442,9 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
         writer,
         "#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]"
     )?;
+    if struct_def.deny_unknown_fields {
+        writeln!(writer, "#[serde(deny_unknown_fields)]")?;
+    }
     writeln!(writer, "pub struct {} {{", struct_def.name)?;
     for field in &struct_def.fields {
         match field {
@@ -463,6 +546,10 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                     writeln!(writer, "    pub {name}: {type_str},")?;
                 }
             }
+            FieldDef::AdditionalProperties { name, value_type } => {
+                writeln!(writer, "    #[serde(flatten)]")?;
+                writeln!(writer, "    pub {name}: BTreeMap<String, {value_type}>,")?;
+            }
         }
     }
     writeln!(writer, "}}")?;
@@ -492,6 +579,11 @@ fn emission_order(struct_defs: &BTreeMap<String, StructDef>, root_name: &str) ->
                         if struct_defs.contains_key(element_type) =>
                     {
                         visit(element_type, struct_defs, order, visited);
+                    }
+                    FieldDef::AdditionalProperties { value_type, .. }
+                        if struct_defs.contains_key(value_type) =>
+                    {
+                        visit(value_type, struct_defs, order, visited);
                     }
                     _ => {}
                 }
@@ -552,6 +644,14 @@ pub fn generate_to_writer<W: Write>(
     )?;
     writeln!(writer)?;
     writeln!(writer, "use serde::{{Deserialize, Serialize}};")?;
+    let needs_btreemap: bool = collected.values().any(|s| {
+        s.fields
+            .iter()
+            .any(|f| matches!(f, FieldDef::AdditionalProperties { .. }))
+    });
+    if needs_btreemap {
+        writeln!(writer, "use std::collections::BTreeMap;")?;
+    }
     writeln!(writer)?;
 
     // Emit enums first (alphabetically), then structs (topological order)
