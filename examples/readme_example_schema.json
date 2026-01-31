@@ -17,6 +17,7 @@
     },
     "id": {
       "type": "string",
+      "format": "uuid",
       "description": "Unique identifier."
     },
     "name": {

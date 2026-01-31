@@ -33,6 +33,15 @@ that references it.
 
 Properties with `type: "string"` are emitted as `String`.
 
+### format (uuid)
+
+Properties with `type: "string"` and `format: "uuid"` (or `uuid1`, `uuid2`, `uuid3`,
+`uuid4`, `uuid5`, `uuid6`, `uuid7`, `uuid8`, case-insensitive) are emitted as
+`Uuid` from the [uuid](https://crates.io/crates/uuid) crate. Consumers of
+generated code must add `uuid = { version = "1", features = ["serde"] }` to
+their `Cargo.toml`. Supported defaults: a UUID string or `null` for optional
+fields.
+
 ### Enums
 
 When a property has an `enum` of string values, generates a Rust enum instead of
@@ -86,9 +95,9 @@ deserializing:
 - Otherwise, generates a module-level function and emits
   `#[serde(default = "default_StructName_field")]`.
 
-Supported defaults: `boolean`, `integer`, `number`, `string`, string `enum`, and
-empty array `[]`. Object defaults and non-empty array defaults are not
-supported.
+Supported defaults: `boolean`, `integer`, `number`, `string`, `uuid` (string),
+string `enum`, and empty array `[]`. Object defaults and non-empty array
+defaults are not supported.
 
 ### additionalProperties
 
@@ -113,7 +122,6 @@ whitespace-only descriptions are omitted.
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                                                                                      |
 | `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization                                                                        |
-| `format` (e.g. `uuid4`)                                | Would generate `Uuid` or validation                                                                                |
 | `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs                                                                             |
 | `optional`                                             | Recognized but ignored; required/optional from `required` only. Future: strict mode or options to allow/interpret. |
 | `$id`                                                  | Schema identification/referencing                                                                                  |
@@ -141,7 +149,7 @@ JSON Schema:
   "properties": {
     "active": { "type": "boolean" },
     "count": { "type": "integer", "minimum": 0, "maximum": 255 },
-    "id": { "type": "string", "description": "Unique identifier." },
+    "id": { "type": "string", "format": "uuid", "description": "Unique identifier." },
     "name": { "type": "string" },
     "score": { "type": "number", "minimum": 0, "maximum": 1 },
     "status": {
@@ -172,6 +180,7 @@ Generated Rust:
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
@@ -210,7 +219,7 @@ pub struct Record {
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
     /// Unique identifier.
-    pub id: String,
+    pub id: Uuid,
     pub name: Option<String>,
     pub nested: Option<NestedInfo>,
     pub score: Option<f32>,

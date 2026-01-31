@@ -15,7 +15,7 @@ const SCHEMA_JSON: &str = r#"{
   "properties": {
     "active": { "type": "boolean" },
     "count": { "type": "integer", "minimum": 0, "maximum": 255 },
-    "id": { "type": "string", "description": "Unique identifier." },
+    "id": { "type": "string", "format": "uuid", "description": "Unique identifier." },
     "name": { "type": "string" },
     "score": { "type": "number", "minimum": 0, "maximum": 1 },
     "status": { "type": "string", "enum": ["active", "inactive"], "default": "active", "description": "Current status." },

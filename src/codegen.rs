@@ -82,6 +82,13 @@ enum FieldDef {
         description: Option<String>,
         number_type: String,
     },
+    Uuid {
+        name: String,
+        json_key: String,
+        optional: bool,
+        default: Option<DefaultSpec>,
+        description: Option<String>,
+    },
     AdditionalProperties {
         name: String,
         value_type: String,
@@ -115,6 +122,18 @@ fn to_rust_struct_name(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Returns true if the format indicates a UUID (uuid, uuid1..uuid8, case-insensitive).
+fn is_uuid_format(format: Option<&str>) -> bool {
+    let Some(f) = format else {
+        return false;
+    };
+    let lower: &str = &f.to_lowercase();
+    matches!(
+        lower,
+        "uuid" | "uuid1" | "uuid2" | "uuid3" | "uuid4" | "uuid5" | "uuid6" | "uuid7" | "uuid8"
+    )
 }
 
 /// Sanitize a property key for use as a Rust field name (replace `-` with `_`).
@@ -338,6 +357,16 @@ fn resolve_default_spec(
                 rust_expr: format!("{type_name}::{rust_name}"),
             })
         }
+        DefaultTypeKind::Uuid => {
+            let s: &str = dv.as_str()?;
+            let escaped: String = s.replace('\\', "\\\\").replace('"', "\\\"");
+            Some(DefaultSpec::Custom {
+                fn_name,
+                rust_expr: format!(
+                    "Uuid::parse_str(\"{escaped}\").expect(\"invalid default uuid\")"
+                ),
+            })
+        }
         DefaultTypeKind::Object => {
             // Object default not supported
             None
@@ -351,6 +380,7 @@ enum DefaultTypeKind {
     Integer { type_name: String },
     Number { type_name: String },
     String,
+    Uuid,
     Vec,
     Enum { type_name: String },
     Object,
@@ -376,7 +406,13 @@ fn resolve_array_item_type(property_key: &str, items_schema: &JsonSchema) -> Opt
     }
 
     match item_type {
-        "string" => Some("String".to_string()),
+        "string" => {
+            if is_uuid_format(items_schema.format.as_deref()) {
+                Some("Uuid".to_string())
+            } else {
+                Some("String".to_string())
+            }
+        }
         "boolean" => Some("bool".to_string()),
         "integer" => Some(choose_integer_type(items_schema)),
         "number" => Some(choose_number_type(items_schema)),
@@ -425,7 +461,13 @@ fn resolve_additional_properties_value_type(
     }
 
     match ap_type {
-        "string" => Some("String".to_string()),
+        "string" => {
+            if is_uuid_format(ap_schema.format.as_deref()) {
+                Some("Uuid".to_string())
+            } else {
+                Some("String".to_string())
+            }
+        }
         "boolean" => Some("bool".to_string()),
         "integer" => Some(choose_integer_type(&ap_schema)),
         "number" => Some(choose_number_type(&ap_schema)),
@@ -531,24 +573,39 @@ fn collect_structs(
 
             match prop_type {
                 "string" => {
+                    let is_uuid: bool = is_uuid_format(prop_schema.format.as_deref());
                     let default_spec: Option<DefaultSpec> = resolve_default_spec(
                         match &prop_schema.default {
                             crate::schema::DefaultKeyword::Present(v) => Some(v),
                             crate::schema::DefaultKeyword::Absent => None,
                         },
-                        DefaultTypeKind::String,
+                        if is_uuid {
+                            DefaultTypeKind::Uuid
+                        } else {
+                            DefaultTypeKind::String
+                        },
                         struct_name,
                         &field_rust_name,
                         optional,
                         None,
                     );
-                    fields.push(FieldDef::String {
-                        name: field_rust_name.clone(),
-                        json_key: key.clone(),
-                        optional,
-                        default: default_spec,
-                        description: prop_description.clone(),
-                    });
+                    if is_uuid {
+                        fields.push(FieldDef::Uuid {
+                            name: field_rust_name.clone(),
+                            json_key: key.clone(),
+                            optional,
+                            default: default_spec,
+                            description: prop_description.clone(),
+                        });
+                    } else {
+                        fields.push(FieldDef::String {
+                            name: field_rust_name.clone(),
+                            json_key: key.clone(),
+                            optional,
+                            default: default_spec,
+                            description: prop_description.clone(),
+                        });
+                    }
                 }
                 "boolean" => {
                     let default_spec: Option<DefaultSpec> = resolve_default_spec(
@@ -795,6 +852,17 @@ fn emit_default_functions<W: Write>(
                         "String".to_string()
                     },
                 ),
+                FieldDef::Uuid {
+                    default, optional, ..
+                } => (
+                    default.as_ref(),
+                    *optional,
+                    if *optional {
+                        "Option<Uuid>".to_string()
+                    } else {
+                        "Uuid".to_string()
+                    },
+                ),
                 FieldDef::Boolean {
                     default, optional, ..
                 } => (
@@ -935,6 +1003,23 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 } else {
                     "String"
                 };
+                emit_field_attrs(
+                    writer,
+                    name,
+                    json_key,
+                    default.as_ref(),
+                    description.as_deref(),
+                )?;
+                writeln!(writer, "    pub {name}: {type_str},")?;
+            }
+            FieldDef::Uuid {
+                name,
+                json_key,
+                optional,
+                default,
+                description,
+            } => {
+                let type_str: &str = if *optional { "Option<Uuid>" } else { "Uuid" };
                 emit_field_attrs(
                     writer,
                     name,
@@ -1163,6 +1248,17 @@ pub fn generate_to_writer<W: Write>(
     if needs_btreemap {
         writeln!(writer, "use std::collections::BTreeMap;")?;
     }
+    let needs_uuid: bool = collected.values().any(|s| {
+        s.fields.iter().any(|f| match f {
+            FieldDef::Uuid { .. } => true,
+            FieldDef::AdditionalProperties { value_type, .. } => value_type == "Uuid",
+            FieldDef::Array { element_type, .. } => element_type == "Uuid",
+            _ => false,
+        })
+    });
+    if needs_uuid {
+        writeln!(writer, "use uuid::Uuid;")?;
+    }
     writeln!(writer)?;
 
     // Emit enums first (alphabetically), then default functions, then structs (topological order)
@@ -1247,6 +1343,25 @@ mod tests {
         let actual: String = to_rust_variant_name("PENDING");
         let expected: &str = "Pending";
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn is_uuid_format_accepts_uuid_and_versions() {
+        assert!(is_uuid_format(Some("uuid")));
+        assert!(is_uuid_format(Some("UUID")));
+        assert!(is_uuid_format(Some("uuid1")));
+        assert!(is_uuid_format(Some("uuid4")));
+        assert!(is_uuid_format(Some("uuid7")));
+        assert!(is_uuid_format(Some("Uuid4")));
+    }
+
+    #[test]
+    fn is_uuid_format_rejects_other_formats() {
+        assert!(!is_uuid_format(None));
+        assert!(!is_uuid_format(Some("")));
+        assert!(!is_uuid_format(Some("date-time")));
+        assert!(!is_uuid_format(Some("email")));
+        assert!(!is_uuid_format(Some("uri")));
     }
 
     #[test]

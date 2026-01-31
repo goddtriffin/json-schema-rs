@@ -13,7 +13,8 @@
       "required": ["author"],
       "properties": {
         "author": { "type": "string" },
-        "created_at": { "type": "string" }
+        "created_at": { "type": "string" },
+        "id": { "type": "string", "format": "uuid", "description": "Unique identifier." }
       }
     },
     "count": { "type": "integer", "default": 0 },
