@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Text format.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Format {
     #[serde(rename = "markdown")]
@@ -16,6 +17,7 @@ fn default_BodySection_format() -> Option<Format> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BodySection {
+    /// Text format.
     #[serde(default = "default_BodySection_format")]
     pub format: Option<Format>,
     pub text: String,
@@ -32,12 +34,14 @@ pub struct Highlight {
     pub text: Option<String>,
 }
 
+/// Author and timestamp.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub author: String,
     pub created_at: Option<String>,
 }
 
+/// Root document with version and metadata.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
@@ -47,10 +51,12 @@ pub struct Document {
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
     pub highlights: Option<Vec<Highlight>>,
+    /// Author and timestamp.
     pub metadata: Metadata,
     pub published: Option<bool>,
     pub score: Option<f64>,
     pub tags: Option<Vec<String>>,
+    /// Schema version string.
     pub version: String,
     pub weights: Option<Vec<f64>>,
 }

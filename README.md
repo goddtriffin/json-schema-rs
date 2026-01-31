@@ -65,8 +65,10 @@ level. Required properties are emitted as `T`; others as `Option<T>`. If
 
 ### default
 
-Properties with a `default` value get `#[serde(default)]` or `#[serde(default =
-"fn")]` so missing JSON keys use the default when deserializing:
+Properties with a `default` value get `#[serde(default)]` or
+`#[serde(default =
+"fn")]` so missing JSON keys use the default when
+deserializing:
 
 - When the default equals the type's `Default` (e.g. `false` for bool, `0` for
   integer, `""` for string, `[]` for array, `null` for optional), emits
@@ -74,8 +76,8 @@ Properties with a `default` value get `#[serde(default)]` or `#[serde(default =
 - Otherwise, generates a module-level function and emits
   `#[serde(default = "default_StructName_field")]`.
 
-Supported defaults: `boolean`, `integer`, `number`, `string`, string `enum`,
-and empty array `[]`. Object defaults and non-empty array defaults are not
+Supported defaults: `boolean`, `integer`, `number`, `string`, string `enum`, and
+empty array `[]`. Object defaults and non-empty array defaults are not
 supported.
 
 ### additionalProperties
@@ -92,27 +94,31 @@ The `additionalProperties` keyword controls extra keys on an object:
   `i64`, `serde_json::Value`, a nested struct, etc.). The generated code
   includes `use std::collections::BTreeMap;` when this is used.
 
+### description
+
+The `description` keyword is emitted as Rust `///` doc comments. Empty or
+whitespace-only descriptions are omitted.
+
 ### Unsupported features
 
-| Feature                                                | Description                                               |
-| ------------------------------------------------------ | --------------------------------------------------------- |
-| `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                             |
-| `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization               |
-| `description`                                          | Would emit `///` doc comments                             |
-| `format` (e.g. `uuid4`)                                | Would generate `Uuid` or validation                       |
-| `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs                    |
-| `optional`                                             | Non-standard; similar to omitting from `required`         |
-| `$id`                                                  | Schema identification/referencing                         |
-| `examples`                                             | Documentation/tests                                       |
-| `const`                                                | Single allowed value                                      |
-| `not`                                                  | Exclusion                                                 |
-| `minProperties` / `maxProperties`                      | Object size constraints                                   |
-| `minItems` / `maxItems` / `uniqueItems`                | Array constraints                                         |
-| `exclusiveMinimum` / `exclusiveMaximum` / `multipleOf` | Number constraints                                        |
-| `readOnly` / `writeOnly` / `deprecated`                | Metadata                                                  |
-| `propertyNames` / `additionalItems`                    | Object/array constraints                                  |
-| `minimum` / `maximum`                                  | Number bounds                                             |
-| `null` type / type array                               | Multiple types                                            |
+| Feature                                                | Description                                       |
+| ------------------------------------------------------ | ------------------------------------------------- |
+| `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                     |
+| `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization       |
+| `format` (e.g. `uuid4`)                                | Would generate `Uuid` or validation               |
+| `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs            |
+| `optional`                                             | Non-standard; similar to omitting from `required` |
+| `$id`                                                  | Schema identification/referencing                 |
+| `examples`                                             | Documentation/tests                               |
+| `const`                                                | Single allowed value                              |
+| `not`                                                  | Exclusion                                         |
+| `minProperties` / `maxProperties`                      | Object size constraints                           |
+| `minItems` / `maxItems` / `uniqueItems`                | Array constraints                                 |
+| `exclusiveMinimum` / `exclusiveMaximum` / `multipleOf` | Number constraints                                |
+| `readOnly` / `writeOnly` / `deprecated`                | Metadata                                          |
+| `propertyNames` / `additionalItems`                    | Object/array constraints                          |
+| `minimum` / `maximum`                                  | Number bounds                                     |
+| `null` type / type array                               | Multiple types                                    |
 
 ## Examples
 
@@ -122,15 +128,21 @@ JSON Schema:
 {
   "type": "object",
   "title": "Record",
+  "description": "A record with id and optional fields.",
   "required": ["id"],
   "additionalProperties": { "type": "string" },
   "properties": {
     "active": { "type": "boolean" },
     "count": { "type": "integer" },
-    "id": { "type": "string" },
+    "id": { "type": "string", "description": "Unique identifier." },
     "name": { "type": "string" },
     "score": { "type": "number" },
-    "status": { "type": "string", "enum": ["active", "inactive"], "default": "active" },
+    "status": {
+      "type": "string",
+      "enum": ["active", "inactive"],
+      "default": "active",
+      "description": "Current status."
+    },
     "nested": {
       "type": "object",
       "title": "NestedInfo",
@@ -162,6 +174,7 @@ pub enum Kind {
     A_1,
 }
 
+/// Current status.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Status {
     #[serde(rename = "active")]
@@ -180,6 +193,7 @@ pub struct NestedInfo {
     pub value: String,
 }
 
+/// A record with id and optional fields.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Record {
     #[serde(flatten)]
@@ -188,10 +202,12 @@ pub struct Record {
     pub count: Option<i64>,
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
+    /// Unique identifier.
     pub id: String,
     pub name: Option<String>,
     pub nested: Option<NestedInfo>,
     pub score: Option<f64>,
+    /// Current status.
     #[serde(default = "default_Record_status")]
     pub status: Option<Status>,
     pub tags: Option<Vec<String>>,

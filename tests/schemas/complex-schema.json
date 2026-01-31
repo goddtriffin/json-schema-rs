@@ -1,13 +1,15 @@
 {
   "type": "object",
   "title": "Document",
+  "description": "Root document with version and metadata.",
   "additionalProperties": false,
   "required": ["version", "metadata"],
   "properties": {
-    "version": { "type": "string" },
+    "version": { "type": "string", "description": "Schema version string." },
     "metadata": {
       "type": "object",
       "title": "Metadata",
+      "description": "Author and timestamp.",
       "required": ["author"],
       "properties": {
         "author": { "type": "string" },
@@ -26,7 +28,7 @@
           "required": ["text"],
           "properties": {
             "text": { "type": "string" },
-            "format": { "type": "string", "enum": ["plain", "markdown"], "default": "plain" }
+            "format": { "type": "string", "enum": ["plain", "markdown"], "default": "plain", "description": "Text format." }
           }
         }
       }

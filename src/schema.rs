@@ -34,6 +34,9 @@ pub struct JsonSchema {
     pub title: Option<String>,
 
     #[serde(default)]
+    pub description: Option<String>,
+
+    #[serde(default)]
     pub r#type: Option<String>,
 
     #[serde(default)]

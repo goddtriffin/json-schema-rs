@@ -9,15 +9,16 @@ use std::io;
 const SCHEMA_JSON: &str = r#"{
   "type": "object",
   "title": "Record",
+  "description": "A record with id and optional fields.",
   "required": ["id"],
   "additionalProperties": { "type": "string" },
   "properties": {
     "active": { "type": "boolean" },
     "count": { "type": "integer" },
-    "id": { "type": "string" },
+    "id": { "type": "string", "description": "Unique identifier." },
     "name": { "type": "string" },
     "score": { "type": "number" },
-    "status": { "type": "string", "enum": ["active", "inactive"], "default": "active" },
+    "status": { "type": "string", "enum": ["active", "inactive"], "default": "active", "description": "Current status." },
     "nested": {
       "type": "object",
       "title": "NestedInfo",

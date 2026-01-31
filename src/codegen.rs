@@ -8,12 +8,14 @@ struct StructDef {
     name: String,
     fields: Vec<FieldDef>,
     deny_unknown_fields: bool,
+    description: Option<String>,
 }
 
 /// Represents an enum to be emitted, with its variants (`rust_name`, `json_value`).
 struct EnumDef {
     name: String,
     variants: Vec<(String, String)>,
+    description: Option<String>,
 }
 
 /// How a field gets its default value when the JSON key is missing.
@@ -31,6 +33,7 @@ enum FieldDef {
         json_key: String,
         optional: bool,
         default: Option<DefaultSpec>,
+        description: Option<String>,
     },
     Object {
         name: String,
@@ -38,6 +41,7 @@ enum FieldDef {
         type_name: String,
         optional: bool,
         default: Option<DefaultSpec>,
+        description: Option<String>,
     },
     Enum {
         name: String,
@@ -45,12 +49,14 @@ enum FieldDef {
         type_name: String,
         optional: bool,
         default: Option<DefaultSpec>,
+        description: Option<String>,
     },
     Boolean {
         name: String,
         json_key: String,
         optional: bool,
         default: Option<DefaultSpec>,
+        description: Option<String>,
     },
     Array {
         name: String,
@@ -58,23 +64,38 @@ enum FieldDef {
         element_type: String,
         optional: bool,
         default: Option<DefaultSpec>,
+        description: Option<String>,
     },
     Integer {
         name: String,
         json_key: String,
         optional: bool,
         default: Option<DefaultSpec>,
+        description: Option<String>,
     },
     Number {
         name: String,
         json_key: String,
         optional: bool,
         default: Option<DefaultSpec>,
+        description: Option<String>,
     },
     AdditionalProperties {
         name: String,
         value_type: String,
     },
+}
+
+/// Normalize description: trim and treat empty/whitespace as None.
+fn normalize_description(s: Option<&String>) -> Option<String> {
+    s.as_ref().and_then(|t| {
+        let trimmed: &str = t.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 /// Convert a string to a valid Rust struct/type identifier (`PascalCase`).
@@ -334,6 +355,7 @@ fn resolve_additional_properties_value_type(
                 EnumDef {
                     name: enum_name.clone(),
                     variants,
+                    description: normalize_description(ap_schema.description.as_ref()),
                 },
             );
             return Some(enum_name);
@@ -396,6 +418,8 @@ fn collect_structs(
             let field_rust_name: String = sanitize_field_name(key);
             let is_required: bool = schema.required.as_ref().is_some_and(|r| r.contains(key));
             let optional: bool = !is_required;
+            let prop_description: Option<String> =
+                normalize_description(prop_schema.description.as_ref());
 
             // Check for enum before type match
             if let Some(ref enum_vals) = prop_schema.r#enum {
@@ -414,6 +438,7 @@ fn collect_structs(
                         EnumDef {
                             name: enum_name.clone(),
                             variants: variants.clone(),
+                            description: normalize_description(prop_schema.description.as_ref()),
                         },
                     );
                     let default_spec: Option<DefaultSpec> = resolve_default_spec(
@@ -435,6 +460,7 @@ fn collect_structs(
                         type_name: enum_name,
                         optional,
                         default: default_spec,
+                        description: prop_description.clone(),
                     });
                     continue;
                 }
@@ -458,6 +484,7 @@ fn collect_structs(
                         json_key: key.clone(),
                         optional,
                         default: default_spec,
+                        description: prop_description.clone(),
                     });
                 }
                 "boolean" => {
@@ -477,6 +504,7 @@ fn collect_structs(
                         json_key: key.clone(),
                         optional,
                         default: default_spec,
+                        description: prop_description.clone(),
                     });
                 }
                 "integer" => {
@@ -496,6 +524,7 @@ fn collect_structs(
                         json_key: key.clone(),
                         optional,
                         default: default_spec,
+                        description: prop_description.clone(),
                     });
                 }
                 "number" => {
@@ -515,6 +544,7 @@ fn collect_structs(
                         json_key: key.clone(),
                         optional,
                         default: default_spec,
+                        description: prop_description.clone(),
                     });
                 }
                 "object" => {
@@ -537,6 +567,7 @@ fn collect_structs(
                         type_name: nested_name.clone(),
                         optional,
                         default: default_spec,
+                        description: prop_description.clone(),
                     });
                     if let Some(ref nested_props) = prop_schema.properties
                         && !nested_props.is_empty()
@@ -577,6 +608,9 @@ fn collect_structs(
                                 EnumDef {
                                     name: element_type.clone(),
                                     variants,
+                                    description: normalize_description(
+                                        items_schema.description.as_ref(),
+                                    ),
                                 },
                             );
                         }
@@ -598,6 +632,7 @@ fn collect_structs(
                         element_type,
                         optional,
                         default: default_spec,
+                        description: prop_description.clone(),
                     });
                 }
                 _ => {
@@ -614,6 +649,7 @@ fn collect_structs(
                 name: struct_name.to_string(),
                 fields,
                 deny_unknown_fields,
+                description: normalize_description(schema.description.as_ref()),
             },
         );
     }
@@ -624,8 +660,29 @@ fn escape_for_rust_attr(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Emit a doc comment from a description: each line becomes a `///` line.
+/// `line_prefix` is prepended to each line (e.g. `""` for struct/enum, `"    "` for fields).
+fn emit_doc_comment<W: Write>(
+    writer: &mut W,
+    description: Option<&str>,
+    line_prefix: &str,
+) -> std::io::Result<()> {
+    let Some(desc) = description else {
+        return Ok(());
+    };
+    let trimmed: &str = desc.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    for line in trimmed.lines() {
+        writeln!(writer, "{line_prefix}/// {line}")?;
+    }
+    Ok(())
+}
+
 /// Emit a single enum to the writer.
 fn emit_enum<W: Write>(enum_def: &EnumDef, writer: &mut W) -> std::io::Result<()> {
+    emit_doc_comment(writer, enum_def.description.as_deref(), "")?;
     writeln!(
         writer,
         "#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]"
@@ -751,13 +808,15 @@ fn emit_default_functions<W: Write>(
     Ok(())
 }
 
-/// Emit default attribute(s) before a field: rename (if needed), then default (if any).
+/// Emit default attribute(s) before a field: doc comment (if any), rename (if needed), then default (if any).
 fn emit_field_attrs<W: Write>(
     writer: &mut W,
     name: &str,
     json_key: &str,
     default: Option<&DefaultSpec>,
+    description: Option<&str>,
 ) -> std::io::Result<()> {
+    emit_doc_comment(writer, description, "    ")?;
     if name != json_key {
         writeln!(writer, "    #[serde(rename = \"{json_key}\")]")?;
     }
@@ -773,7 +832,9 @@ fn emit_field_attrs<W: Write>(
 }
 
 /// Emit a single struct to the writer.
+#[expect(clippy::too_many_lines)]
 fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Result<()> {
+    emit_doc_comment(writer, struct_def.description.as_deref(), "")?;
     writeln!(
         writer,
         "#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]"
@@ -789,13 +850,20 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 json_key,
                 optional,
                 default,
+                description,
             } => {
                 let type_str: &str = if *optional {
                     "Option<String>"
                 } else {
                     "String"
                 };
-                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                emit_field_attrs(
+                    writer,
+                    name,
+                    json_key,
+                    default.as_ref(),
+                    description.as_deref(),
+                )?;
                 writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Boolean {
@@ -803,9 +871,16 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 json_key,
                 optional,
                 default,
+                description,
             } => {
                 let type_str: &str = if *optional { "Option<bool>" } else { "bool" };
-                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                emit_field_attrs(
+                    writer,
+                    name,
+                    json_key,
+                    default.as_ref(),
+                    description.as_deref(),
+                )?;
                 writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Integer {
@@ -813,9 +888,16 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 json_key,
                 optional,
                 default,
+                description,
             } => {
                 let type_str: &str = if *optional { "Option<i64>" } else { "i64" };
-                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                emit_field_attrs(
+                    writer,
+                    name,
+                    json_key,
+                    default.as_ref(),
+                    description.as_deref(),
+                )?;
                 writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Number {
@@ -823,9 +905,16 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 json_key,
                 optional,
                 default,
+                description,
             } => {
                 let type_str: &str = if *optional { "Option<f64>" } else { "f64" };
-                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                emit_field_attrs(
+                    writer,
+                    name,
+                    json_key,
+                    default.as_ref(),
+                    description.as_deref(),
+                )?;
                 writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Object {
@@ -834,6 +923,7 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 type_name,
                 optional,
                 default,
+                description,
             }
             | FieldDef::Enum {
                 name,
@@ -841,13 +931,20 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 type_name,
                 optional,
                 default,
+                description,
             } => {
                 let type_str: String = if *optional {
                     format!("Option<{type_name}>")
                 } else {
                     type_name.clone()
                 };
-                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                emit_field_attrs(
+                    writer,
+                    name,
+                    json_key,
+                    default.as_ref(),
+                    description.as_deref(),
+                )?;
                 writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::Array {
@@ -856,13 +953,20 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 element_type,
                 optional,
                 default,
+                description,
             } => {
                 let type_str: String = if *optional {
                     format!("Option<Vec<{element_type}>>")
                 } else {
                     format!("Vec<{element_type}>")
                 };
-                emit_field_attrs(writer, name, json_key, default.as_ref())?;
+                emit_field_attrs(
+                    writer,
+                    name,
+                    json_key,
+                    default.as_ref(),
+                    description.as_deref(),
+                )?;
                 writeln!(writer, "    pub {name}: {type_str},")?;
             }
             FieldDef::AdditionalProperties { name, value_type } => {

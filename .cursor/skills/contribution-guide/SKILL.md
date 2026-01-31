@@ -212,6 +212,18 @@ skill up to date and reduces repeated discovery.
   `expr` for required. Must be emitted before the struct that uses it.
 - **Out of scope**: Object defaults, non-empty array defaults.
 
+### Description support (learned)
+
+- **Normalization**: Empty or whitespace-only `description` is treated as
+  absent; use `normalize_description()` so we do not emit blank `///` lines.
+- **Multi-line**: Emit one `///` line per line of text via
+  `description.trim().lines()`. Field doc comments use a 4-space prefix
+  (`emit_doc_comment(..., "    ")`) so they align with the field line.
+- **Placement**: Object schema `description` → struct doc; enum schema
+  `description` → enum doc; property schema `description` → field doc (same
+  schema used for the property, including nested object descriptions on the
+  field that references that object).
+
 ## CLI and Makefile (for contributors)
 
 Use these to run the generator locally when testing changes.

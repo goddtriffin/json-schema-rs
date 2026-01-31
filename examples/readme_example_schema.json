@@ -1,6 +1,7 @@
 {
   "type": "object",
   "title": "Record",
+  "description": "A record with id and optional fields.",
   "required": [
     "id"
   ],
@@ -13,7 +14,8 @@
       "type": "integer"
     },
     "id": {
-      "type": "string"
+      "type": "string",
+      "description": "Unique identifier."
     },
     "name": {
       "type": "string"
@@ -27,7 +29,8 @@
         "active",
         "inactive"
       ],
-      "default": "active"
+      "default": "active",
+      "description": "Current status."
     },
     "nested": {
       "type": "object",
