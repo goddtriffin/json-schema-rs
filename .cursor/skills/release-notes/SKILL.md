@@ -81,3 +81,8 @@ If a commit message is vague or critical (e.g. "fix codegen"), run `git show <co
 - Synthesize; do not list every commit. Focus on user-facing impact and clarity.
 
 The result should be suitable for GitHub/Git release notes and helpful to anyone evaluating or upgrading the library.
+
+## Output format
+
+- **Default**: Present the release notes directly in the chat. Do not write them to a file unless the user explicitly asks for a file (e.g. "write to RELEASE_NOTES.md", "save to a file").
+- **Copy-pasteable**: When presenting in chat, format the release notes as easy copy-pasteable markdown (e.g. in a fenced code block with `markdown` language hint) so the user can grab the raw markdown.
