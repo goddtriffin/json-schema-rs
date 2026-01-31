@@ -17,6 +17,8 @@
       }
     },
     "count": { "type": "integer", "default": 0 },
+    "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "small_count": { "type": "integer", "minimum": 0, "maximum": 255 },
     "content": {
       "type": "object",
       "required": ["headline"],

@@ -46,16 +46,22 @@ Properties with `type: "boolean"` are emitted as `bool`.
 
 ### Numbers
 
-Properties with `type: "integer"` are emitted as `i64`. Properties with
-`type: "number"` are emitted as `f64`.
+Properties with `type: "integer"` are emitted as the smallest Rust integer type
+that fits the range: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, or `u64`.
+When `minimum` and `maximum` are both present and valid integers, the generator
+picks the smallest type that can hold the range; otherwise it uses `i64`.
+
+Properties with `type: "number"` are emitted as `f32` when both `minimum` and
+`maximum` are present and within f32 range (approximately ±3.4e38); otherwise
+`f64`. No validation is performed—min/max are used only for type selection.
+Float selection is range-based only; `f32` may lose precision for some decimal
+values.
 
 ### Arrays
 
 Properties with `type: "array"` and an `items` schema are emitted as `Vec<T>` or
-`Option<Vec<T>>`. Supported item types: `string` → `String`, `boolean` → `bool`,
-`integer` → `i64`, `number` → `f64`, `object` → a nested struct, and string
-`enum` → a Rust enum. If `items` is missing or has an unsupported type, the
-property is skipped.
+`Option<Vec<T>>`. If `items` is missing or has an unsupported type, the property
+is skipped.
 
 ### Required vs Optional
 
@@ -64,8 +70,8 @@ level. Required properties are emitted as `T`; others as `Option<T>`. If
 `required` is absent, all properties are treated as optional.
 
 The non-standard per-property `optional` keyword is recognized but **ignored**;
-required vs optional is determined only by the `required` array. Future
-versions may offer strict spec adherence or options for non-standard keywords.
+required vs optional is determined only by the `required` array. Future versions
+may offer strict spec adherence or options for non-standard keywords.
 
 ### default
 
@@ -94,9 +100,7 @@ The `additionalProperties` keyword controls extra keys on an object:
   ignored (default serde behavior).
 - **`additionalProperties: { "type": "string" }`** (or another schema) — Extra
   keys are captured in a flattened `BTreeMap<String, T>` field
-  `additional_properties`, where `T` is the type from the schema (`String`,
-  `i64`, `serde_json::Value`, a nested struct, etc.). The generated code
-  includes `use std::collections::BTreeMap;` when this is used.
+  `additional_properties`, where `T` is the type from the schema.
 
 ### description
 
@@ -105,24 +109,23 @@ whitespace-only descriptions are omitted.
 
 ### Unsupported features
 
-| Feature                                                | Description                                       |
-| ------------------------------------------------------ | ------------------------------------------------- |
-| `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                     |
-| `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization       |
-| `format` (e.g. `uuid4`)                                | Would generate `Uuid` or validation               |
-| `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs            |
+| Feature                                                | Description                                                                                                        |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                                                                                      |
+| `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization                                                                        |
+| `format` (e.g. `uuid4`)                                | Would generate `Uuid` or validation                                                                                |
+| `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs                                                                             |
 | `optional`                                             | Recognized but ignored; required/optional from `required` only. Future: strict mode or options to allow/interpret. |
-| `$id`                                                  | Schema identification/referencing                 |
-| `examples`                                             | Documentation/tests                               |
-| `const`                                                | Single allowed value                              |
-| `not`                                                  | Exclusion                                         |
-| `minProperties` / `maxProperties`                      | Object size constraints                           |
-| `minItems` / `maxItems` / `uniqueItems`                | Array constraints                                 |
-| `exclusiveMinimum` / `exclusiveMaximum` / `multipleOf` | Number constraints                                |
-| `readOnly` / `writeOnly` / `deprecated`                | Metadata                                          |
-| `propertyNames` / `additionalItems`                    | Object/array constraints                          |
-| `minimum` / `maximum`                                  | Number bounds                                     |
-| `null` type / type array                               | Multiple types                                    |
+| `$id`                                                  | Schema identification/referencing                                                                                  |
+| `examples`                                             | Documentation/tests                                                                                                |
+| `const`                                                | Single allowed value                                                                                               |
+| `not`                                                  | Exclusion                                                                                                          |
+| `minProperties` / `maxProperties`                      | Object size constraints                                                                                            |
+| `minItems` / `maxItems` / `uniqueItems`                | Array constraints                                                                                                  |
+| `exclusiveMinimum` / `exclusiveMaximum` / `multipleOf` | Number constraints                                                                                                 |
+| `readOnly` / `writeOnly` / `deprecated`                | Metadata                                                                                                           |
+| `propertyNames` / `additionalItems`                    | Object/array constraints                                                                                           |
+| `null` type / type array                               | Multiple types                                                                                                     |
 
 ## Examples
 
@@ -137,10 +140,10 @@ JSON Schema:
   "additionalProperties": { "type": "string" },
   "properties": {
     "active": { "type": "boolean" },
-    "count": { "type": "integer" },
+    "count": { "type": "integer", "minimum": 0, "maximum": 255 },
     "id": { "type": "string", "description": "Unique identifier." },
     "name": { "type": "string" },
-    "score": { "type": "number" },
+    "score": { "type": "number", "minimum": 0, "maximum": 1 },
     "status": {
       "type": "string",
       "enum": ["active", "inactive"],
@@ -203,14 +206,14 @@ pub struct Record {
     #[serde(flatten)]
     pub additional_properties: BTreeMap<String, String>,
     pub active: Option<bool>,
-    pub count: Option<i64>,
+    pub count: Option<u8>,
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
     /// Unique identifier.
     pub id: String,
     pub name: Option<String>,
     pub nested: Option<NestedInfo>,
-    pub score: Option<f64>,
+    pub score: Option<f32>,
     /// Current status.
     #[serde(default = "default_Record_status")]
     pub status: Option<Status>,

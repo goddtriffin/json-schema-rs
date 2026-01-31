@@ -72,6 +72,7 @@ enum FieldDef {
         optional: bool,
         default: Option<DefaultSpec>,
         description: Option<String>,
+        integer_type: String,
     },
     Number {
         name: String,
@@ -79,6 +80,7 @@ enum FieldDef {
         optional: bool,
         default: Option<DefaultSpec>,
         description: Option<String>,
+        number_type: String,
     },
     AdditionalProperties {
         name: String,
@@ -189,6 +191,66 @@ fn build_enum_variants(enum_values: &[String]) -> Vec<(String, String)> {
     result
 }
 
+/// Choose the smallest Rust integer type that fits the schema's minimum/maximum range.
+/// Returns a type name string: "i8", "u8", "i16", "u16", "i32", "u32", "i64", or "u64".
+/// Falls back to "i64" when min/max are absent, not integers, or invalid.
+pub(crate) fn choose_integer_type(schema: &JsonSchema) -> String {
+    let min_val: Option<i64> = schema.minimum.as_ref().and_then(serde_json::Value::as_i64);
+    let max_val: Option<i64> = schema.maximum.as_ref().and_then(serde_json::Value::as_i64);
+    let (min_val, max_val): (i64, i64) = match (min_val, max_val) {
+        (Some(min_v), Some(max_v)) => (min_v, max_v),
+        _ => return "i64".to_string(),
+    };
+    if min_val > max_val {
+        return "i64".to_string();
+    }
+    if min_val >= 0 {
+        if max_val <= 255 {
+            "u8".to_string()
+        } else if max_val <= 65_535 {
+            "u16".to_string()
+        } else if max_val <= 4_294_967_295 {
+            "u32".to_string()
+        } else {
+            "u64".to_string()
+        }
+    } else if min_val >= -128 && max_val <= 127 {
+        "i8".to_string()
+    } else if min_val >= -32_768 && max_val <= 32_767 {
+        "i16".to_string()
+    } else if min_val >= -2_147_483_648 && max_val <= 2_147_483_647 {
+        "i32".to_string()
+    } else {
+        "i64".to_string()
+    }
+}
+
+/// Choose f32 or f64 based on whether minimum and maximum fit in f32 range.
+/// Returns "f32" only when both bounds are present and within f32 range; otherwise "f64".
+pub(crate) fn choose_number_type(schema: &JsonSchema) -> String {
+    const F32_MIN: f64 = -3.402_823_5e38;
+    const F32_MAX: f64 = 3.402_823_5e38;
+    #[expect(clippy::cast_precision_loss)]
+    let min_opt: Option<f64> = schema
+        .minimum
+        .as_ref()
+        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)));
+    #[expect(clippy::cast_precision_loss)]
+    let max_opt: Option<f64> = schema
+        .maximum
+        .as_ref()
+        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)));
+    let (min_val, max_val): (f64, f64) = match (min_opt, max_opt) {
+        (Some(min_v), Some(max_v)) => (min_v, max_v),
+        _ => return "f64".to_string(),
+    };
+    if min_val >= F32_MIN && max_val <= F32_MAX {
+        "f32".to_string()
+    } else {
+        "f64".to_string()
+    }
+}
+
 /// Resolve `DefaultSpec` from a property's default value.
 /// Returns None if no default, or if the default is unsupported (object, non-empty array, null for required, etc.).
 fn resolve_default_spec(
@@ -223,18 +285,18 @@ fn resolve_default_spec(
                 Some(DefaultSpec::UseTypeDefault)
             }
         }
-        DefaultTypeKind::I64 => {
+        DefaultTypeKind::Integer { type_name } => {
             let n: i64 = dv.as_i64()?;
             if n == 0 {
                 Some(DefaultSpec::UseTypeDefault)
             } else {
                 Some(DefaultSpec::Custom {
                     fn_name,
-                    rust_expr: format!("{n}i64"),
+                    rust_expr: format!("{n}{type_name}"),
                 })
             }
         }
-        DefaultTypeKind::F64 => {
+        DefaultTypeKind::Number { type_name } => {
             #[expect(clippy::cast_precision_loss)]
             let n: f64 = dv.as_f64().or_else(|| dv.as_i64().map(|i| i as f64))?;
             if n == 0.0 {
@@ -242,7 +304,7 @@ fn resolve_default_spec(
             } else {
                 Some(DefaultSpec::Custom {
                     fn_name,
-                    rust_expr: format!("{n}"),
+                    rust_expr: format!("{n}{type_name}"),
                 })
             }
         }
@@ -286,8 +348,8 @@ fn resolve_default_spec(
 /// Type kind for default resolution.
 enum DefaultTypeKind {
     Bool,
-    I64,
-    F64,
+    Integer { type_name: String },
+    Number { type_name: String },
     String,
     Vec,
     Enum { type_name: String },
@@ -316,8 +378,8 @@ fn resolve_array_item_type(property_key: &str, items_schema: &JsonSchema) -> Opt
     match item_type {
         "string" => Some("String".to_string()),
         "boolean" => Some("bool".to_string()),
-        "integer" => Some("i64".to_string()),
-        "number" => Some("f64".to_string()),
+        "integer" => Some(choose_integer_type(items_schema)),
+        "number" => Some(choose_number_type(items_schema)),
         "object" => Some(struct_name_from_property(
             property_key,
             items_schema.title.as_deref(),
@@ -365,8 +427,8 @@ fn resolve_additional_properties_value_type(
     match ap_type {
         "string" => Some("String".to_string()),
         "boolean" => Some("bool".to_string()),
-        "integer" => Some("i64".to_string()),
-        "number" => Some("f64".to_string()),
+        "integer" => Some(choose_integer_type(&ap_schema)),
+        "number" => Some(choose_number_type(&ap_schema)),
         "object" => {
             let nested_name: String = format!("{struct_name}Extra");
             if let Some(ref props) = ap_schema.properties
@@ -509,12 +571,15 @@ fn collect_structs(
                     });
                 }
                 "integer" => {
+                    let integer_type: String = choose_integer_type(prop_schema);
                     let default_spec: Option<DefaultSpec> = resolve_default_spec(
                         match &prop_schema.default {
                             crate::schema::DefaultKeyword::Present(v) => Some(v),
                             crate::schema::DefaultKeyword::Absent => None,
                         },
-                        DefaultTypeKind::I64,
+                        DefaultTypeKind::Integer {
+                            type_name: integer_type.clone(),
+                        },
                         struct_name,
                         &field_rust_name,
                         optional,
@@ -526,15 +591,19 @@ fn collect_structs(
                         optional,
                         default: default_spec,
                         description: prop_description.clone(),
+                        integer_type,
                     });
                 }
                 "number" => {
+                    let number_type: String = choose_number_type(prop_schema);
                     let default_spec: Option<DefaultSpec> = resolve_default_spec(
                         match &prop_schema.default {
                             crate::schema::DefaultKeyword::Present(v) => Some(v),
                             crate::schema::DefaultKeyword::Absent => None,
                         },
-                        DefaultTypeKind::F64,
+                        DefaultTypeKind::Number {
+                            type_name: number_type.clone(),
+                        },
                         struct_name,
                         &field_rust_name,
                         optional,
@@ -546,6 +615,7 @@ fn collect_structs(
                         optional,
                         default: default_spec,
                         description: prop_description.clone(),
+                        number_type,
                     });
                 }
                 "object" => {
@@ -701,6 +771,7 @@ fn emit_enum<W: Write>(enum_def: &EnumDef, writer: &mut W) -> std::io::Result<()
 
 /// Emit default functions for all Custom default specs in the given structs.
 /// Order follows the provided struct names (topological).
+#[expect(clippy::too_many_lines)]
 fn emit_default_functions<W: Write>(
     struct_defs: &BTreeMap<String, StructDef>,
     order: &[String],
@@ -736,25 +807,31 @@ fn emit_default_functions<W: Write>(
                     },
                 ),
                 FieldDef::Integer {
-                    default, optional, ..
+                    default,
+                    optional,
+                    integer_type,
+                    ..
                 } => (
                     default.as_ref(),
                     *optional,
                     if *optional {
-                        "Option<i64>".to_string()
+                        format!("Option<{integer_type}>")
                     } else {
-                        "i64".to_string()
+                        integer_type.clone()
                     },
                 ),
                 FieldDef::Number {
-                    default, optional, ..
+                    default,
+                    optional,
+                    number_type,
+                    ..
                 } => (
                     default.as_ref(),
                     *optional,
                     if *optional {
-                        "Option<f64>".to_string()
+                        format!("Option<{number_type}>")
                     } else {
-                        "f64".to_string()
+                        number_type.clone()
                     },
                 ),
                 FieldDef::Object {
@@ -890,8 +967,13 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 optional,
                 default,
                 description,
+                integer_type,
             } => {
-                let type_str: &str = if *optional { "Option<i64>" } else { "i64" };
+                let type_str: String = if *optional {
+                    format!("Option<{integer_type}>")
+                } else {
+                    integer_type.clone()
+                };
                 emit_field_attrs(
                     writer,
                     name,
@@ -907,8 +989,13 @@ fn emit_struct<W: Write>(struct_def: &StructDef, writer: &mut W) -> std::io::Res
                 optional,
                 default,
                 description,
+                number_type,
             } => {
-                let type_str: &str = if *optional { "Option<f64>" } else { "f64" };
+                let type_str: String = if *optional {
+                    format!("Option<{number_type}>")
+                } else {
+                    number_type.clone()
+                };
                 emit_field_attrs(
                     writer,
                     name,
@@ -1515,5 +1602,135 @@ pub struct EmptyRequired {
         let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
         assert_eq!(expected, actual, "expected output to match exactly");
+    }
+
+    // Exhaustive unit tests for choose_integer_type (one per type path + fallbacks)
+    fn schema_with_min_max(min: Option<i64>, max: Option<i64>) -> JsonSchema {
+        let mut schema_json = serde_json::json!({ "type": "integer" });
+        if let Some(m) = min {
+            schema_json["minimum"] = serde_json::json!(m);
+        }
+        if let Some(m) = max {
+            schema_json["maximum"] = serde_json::json!(m);
+        }
+        serde_json::from_value(schema_json).expect("valid schema")
+    }
+
+    fn schema_number_with_min_max(min: Option<f64>, max: Option<f64>) -> JsonSchema {
+        let mut schema_json = serde_json::json!({ "type": "number" });
+        if let Some(m) = min {
+            schema_json["minimum"] = serde_json::json!(m);
+        }
+        if let Some(m) = max {
+            schema_json["maximum"] = serde_json::json!(m);
+        }
+        serde_json::from_value(schema_json).expect("valid schema")
+    }
+
+    #[test]
+    fn choose_integer_type_returns_i8() {
+        let schema: JsonSchema = schema_with_min_max(Some(-128), Some(127));
+        assert_eq!(choose_integer_type(&schema), "i8");
+    }
+
+    #[test]
+    fn choose_integer_type_returns_u8() {
+        let schema: JsonSchema = schema_with_min_max(Some(0), Some(255));
+        assert_eq!(choose_integer_type(&schema), "u8");
+    }
+
+    #[test]
+    fn choose_integer_type_returns_i16() {
+        let schema: JsonSchema = schema_with_min_max(Some(-32768), Some(32767));
+        assert_eq!(choose_integer_type(&schema), "i16");
+    }
+
+    #[test]
+    fn choose_integer_type_returns_u16() {
+        let schema: JsonSchema = schema_with_min_max(Some(0), Some(65535));
+        assert_eq!(choose_integer_type(&schema), "u16");
+    }
+
+    #[test]
+    fn choose_integer_type_returns_i32() {
+        let schema: JsonSchema = schema_with_min_max(Some(-2_147_483_648), Some(2_147_483_647));
+        assert_eq!(choose_integer_type(&schema), "i32");
+    }
+
+    #[test]
+    fn choose_integer_type_returns_u32() {
+        let schema: JsonSchema = schema_with_min_max(Some(0), Some(4_294_967_295));
+        assert_eq!(choose_integer_type(&schema), "u32");
+    }
+
+    #[test]
+    fn choose_integer_type_returns_i64() {
+        let schema: JsonSchema = schema_with_min_max(Some(-2_147_483_649), Some(2_147_483_647));
+        assert_eq!(choose_integer_type(&schema), "i64");
+    }
+
+    #[test]
+    fn choose_integer_type_returns_u64() {
+        let schema: JsonSchema = schema_with_min_max(Some(0), Some(9_223_372_036_854_775_807));
+        assert_eq!(choose_integer_type(&schema), "u64");
+    }
+
+    #[test]
+    fn choose_integer_type_fallback_when_no_bounds() {
+        let schema: JsonSchema = schema_with_min_max(None, None);
+        assert_eq!(choose_integer_type(&schema), "i64");
+    }
+
+    #[test]
+    fn choose_integer_type_fallback_when_only_minimum() {
+        let schema: JsonSchema = schema_with_min_max(Some(0), None);
+        assert_eq!(choose_integer_type(&schema), "i64");
+    }
+
+    #[test]
+    fn choose_integer_type_fallback_when_only_maximum() {
+        let schema: JsonSchema = schema_with_min_max(None, Some(255));
+        assert_eq!(choose_integer_type(&schema), "i64");
+    }
+
+    #[test]
+    fn choose_integer_type_fallback_when_non_integer_bounds() {
+        let schema_json = serde_json::json!({
+            "type": "integer",
+            "minimum": 1.5,
+            "maximum": 255.5
+        });
+        let schema: JsonSchema = serde_json::from_value(schema_json).expect("valid");
+        assert_eq!(choose_integer_type(&schema), "i64");
+    }
+
+    #[test]
+    fn choose_integer_type_fallback_when_min_gt_max() {
+        let schema: JsonSchema = schema_with_min_max(Some(255), Some(0));
+        assert_eq!(choose_integer_type(&schema), "i64");
+    }
+
+    #[test]
+    fn choose_number_type_returns_f32() {
+        let schema: JsonSchema = schema_number_with_min_max(Some(0.0), Some(1.0));
+        assert_eq!(choose_number_type(&schema), "f32");
+    }
+
+    #[test]
+    fn choose_number_type_returns_f64() {
+        let schema: JsonSchema = schema_number_with_min_max(Some(0.0), Some(1e40));
+        assert_eq!(choose_number_type(&schema), "f64");
+    }
+
+    #[test]
+    fn choose_number_type_f64_when_bounds_missing() {
+        let schema: JsonSchema = schema_number_with_min_max(None, None);
+        assert_eq!(choose_number_type(&schema), "f64");
+    }
+
+    #[test]
+    fn choose_number_type_f64_when_bounds_outside_f32_range() {
+        let schema: JsonSchema = schema_number_with_min_max(Some(-4e38), Some(4e38));
+        assert_eq!(choose_number_type(&schema), "f64");
     }
 }

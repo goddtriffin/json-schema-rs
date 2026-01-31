@@ -112,7 +112,11 @@ To support a new JSON Schema keyword or type:
   actual. **When implementing new features, always update the complex schema and
   its expected output** so the file-based test exercises the new behavior.
 - **Unit tests**: Add `#[cfg(test)]` tests in codegen.rs (or other modules) for
-  feature-specific logic where it makes sense.
+  feature-specific logic where it makes sense. **Unit tests should always be
+  exhaustive**: aim for one unit test per **code path** for the feature (e.g.
+  one test for each possible outcome or branch), plus **opposite pairings** such
+  as success vs failure, enabled vs disabled, bounds present vs absent, or
+  fallback vs non-fallback.
 - **Assertions**: Always compare full expected output against full actual
   output. Never use partial checks like `actual.contains(...)` or
   `!actual.contains(...)`—use `assert_eq!(expected, actual)` with complete
@@ -139,9 +143,9 @@ To support a new JSON Schema keyword or type:
 ### Reference implementations
 
 When implementing a new feature, **always check** how the **json_schema**,
-**schemafy**, and **typify** Rust crates implement it (docs and/or source). Compare
-our approach to theirs to see if our idea is better or worse; document the
-choice in the skill (e.g. under a "learned" subsection) or in the PR. This
+**schemafy**, and **typify** Rust crates implement it (docs and/or source).
+Compare our approach to theirs to see if our idea is better or worse; document
+the choice in the skill (e.g. under a "learned" subsection) or in the PR. This
 reduces duplicated design work and keeps the crate aligned with ecosystem
 conventions where appropriate.
 
@@ -164,11 +168,10 @@ skill up to date and reduces repeated discovery.
   absent, all properties are optional per JSON Schema spec. When `required: []`,
   all properties are optional.
 - **Explicit optional (recognized but ignored):** The per-property `optional`
-  keyword is parsed in schema.rs and explicitly **ignored** in codegen;
-  required vs optional is determined only by the object-level `required`
-  array. This is for future-proofing: strict adherence to the JSON Schema spec
-  and/or settings (e.g. allow non-standard fields, or interpret them) may be
-  added later.
+  keyword is parsed in schema.rs and explicitly **ignored** in codegen; required
+  vs optional is determined only by the object-level `required` array. This is
+  for future-proofing: strict adherence to the JSON Schema spec and/or settings
+  (e.g. allow non-standard fields, or interpret them) may be added later.
 - **File-based expected output**: `complex-schema-expected.rs` must end with a
   trailing newline to match `generate_to_writer` output (each struct ends with
   `writeln!(writer)?`).
@@ -195,11 +198,13 @@ skill up to date and reduces repeated discovery.
 
 ### Numbers (learned)
 
-- **Mapping**: We use fixed `integer` → `i64`, `number` → `f64` (like schemafy).
-  Typify uses `minimum`/`maximum` to choose smaller integral types (u8, i32,
-  etc.); we do not parse number constraints for this PoC.
-- **Arrays**: `resolve_array_item_type` returns `"i64"` / `"f64"` for
-  `items.type` of `integer` / `number`.
+- **Mapping**: We use `minimum` and `maximum` (when both present and valid) to
+  choose the smallest integer type (i8, u8, i16, u16, i32, u32, i64, u64) or
+  float type (f32 vs f64). Fallback: no/min/max or invalid → `i64` for integer,
+  `f64` for number. No validation; type selection only. Float selection is
+  range-based; f32 may lose precision for some decimals.
+- **Arrays**: `resolve_array_item_type` uses `choose_integer_type` /
+  `choose_number_type` for `items.type` of `integer` / `number`.
 
 ### Default support (learned)
 
@@ -208,14 +213,15 @@ skill up to date and reduces repeated discovery.
   `None`, losing the distinction between absent key and `"default": null`.
 - **Two strategies**: `UseTypeDefault` → `#[serde(default)]` when the schema
   value equals the type's Default (false, 0, 0.0, "", [], null for optional).
-  `Custom { fn_name, rust_expr }` → generated function + `#[serde(default =
+  `Custom { fn_name, rust_expr }` → generated function +
+  `#[serde(default =
   "fn")]` for literal defaults.
 - **Optional + null**: For optional fields with `default: null`, use
   `#[serde(default)]` so missing key yields `None`.
 - **Emission order**: Enums first, then default functions (they may reference
   enums), then structs.
-- **Custom default function**: Returns `Some(expr)` for optional fields,
-  `expr` for required. Must be emitted before the struct that uses it.
+- **Custom default function**: Returns `Some(expr)` for optional fields, `expr`
+  for required. Must be emitted before the struct that uses it.
 - **Out of scope**: Object defaults, non-empty array defaults.
 
 ### Description support (learned)

@@ -64,4 +64,10 @@ pub struct JsonSchema {
 
     #[serde(default)]
     pub default: DefaultKeyword,
+
+    #[serde(default)]
+    pub minimum: Option<serde_json::Value>,
+
+    #[serde(default)]
+    pub maximum: Option<serde_json::Value>,
 }

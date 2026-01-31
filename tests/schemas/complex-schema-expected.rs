@@ -54,7 +54,9 @@ pub struct Document {
     /// Author and timestamp.
     pub metadata: Metadata,
     pub published: Option<bool>,
+    pub ratio: Option<f32>,
     pub score: Option<f64>,
+    pub small_count: Option<u8>,
     pub tags: Option<Vec<String>>,
     /// Schema version string.
     pub version: String,
