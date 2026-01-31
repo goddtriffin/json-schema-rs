@@ -63,6 +63,10 @@ The `required` array lists property names that are required at that object
 level. Required properties are emitted as `T`; others as `Option<T>`. If
 `required` is absent, all properties are treated as optional.
 
+The non-standard per-property `optional` keyword is recognized but **ignored**;
+required vs optional is determined only by the `required` array. Future
+versions may offer strict spec adherence or options for non-standard keywords.
+
 ### default
 
 Properties with a `default` value get `#[serde(default)]` or
@@ -107,7 +111,7 @@ whitespace-only descriptions are omitted.
 | `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization       |
 | `format` (e.g. `uuid4`)                                | Would generate `Uuid` or validation               |
 | `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs            |
-| `optional`                                             | Non-standard; similar to omitting from `required` |
+| `optional`                                             | Recognized but ignored; required/optional from `required` only. Future: strict mode or options to allow/interpret. |
 | `$id`                                                  | Schema identification/referencing                 |
 | `examples`                                             | Documentation/tests                               |
 | `const`                                                | Single allowed value                              |

@@ -45,6 +45,14 @@ pub struct JsonSchema {
     #[serde(default)]
     pub required: Option<Vec<String>>,
 
+    /// Non-standard / draft-dependent keyword. We explicitly recognize it so it is
+    /// not treated as an unknown key, but we **ignore** it for codegen; required vs
+    /// optional is determined only by the object-level `required` array. Future
+    /// versions may add strict spec adherence or settings to allow/disallow or
+    /// interpret such fields.
+    #[serde(default)]
+    pub optional: Option<bool>,
+
     #[serde(default)]
     pub r#enum: Option<Vec<serde_json::Value>>,
 

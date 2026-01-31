@@ -163,6 +163,12 @@ skill up to date and reduces repeated discovery.
 - **`required`** is an array of property names at each object schema level. When
   absent, all properties are optional per JSON Schema spec. When `required: []`,
   all properties are optional.
+- **Explicit optional (recognized but ignored):** The per-property `optional`
+  keyword is parsed in schema.rs and explicitly **ignored** in codegen;
+  required vs optional is determined only by the object-level `required`
+  array. This is for future-proofing: strict adherence to the JSON Schema spec
+  and/or settings (e.g. allow non-standard fields, or interpret them) may be
+  added later.
 - **File-based expected output**: `complex-schema-expected.rs` must end with a
   trailing newline to match `generate_to_writer` output (each struct ends with
   `writeln!(writer)?`).
