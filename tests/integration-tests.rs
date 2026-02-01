@@ -1,4 +1,7 @@
-use json_schema_rs::generate_to_writer;
+use json_schema_rs::{
+    GenerateSettings, JsonSchemaGenError, SchemaValidationError, SchemaValidationIssue,
+    SchemaValidationIssueKind, generate_to_writer,
+};
 
 #[test]
 fn string_fields_only() {
@@ -25,7 +28,8 @@ pub struct Foo {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -67,7 +71,8 @@ pub struct Outer {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -113,7 +118,8 @@ pub struct WidgetFile {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -145,7 +151,8 @@ pub struct Mixed {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -179,7 +186,8 @@ pub struct Flags {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -215,7 +223,8 @@ pub struct WithNumbers {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -252,7 +261,8 @@ pub struct WithBounds {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -290,7 +300,8 @@ pub struct WithNumberArrays {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -307,7 +318,8 @@ fn generate_from_file_complex_schema() {
         std::fs::read_to_string(expected_path).expect("read expected output file");
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(&schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(&schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -356,7 +368,8 @@ pub struct Root {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -396,7 +409,8 @@ pub struct Doc {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -434,7 +448,8 @@ pub struct Dedup {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -476,7 +491,8 @@ pub struct StateDoc {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -508,11 +524,13 @@ fn enum_determinism_same_output_regardless_of_input_order() {
     }"#;
 
     let mut output_a: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json_a, &mut output_a).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json_a, &mut output_a, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
     let actual_a: String = String::from_utf8(output_a).expect("output should be valid UTF-8");
 
     let mut output_b: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json_b, &mut output_b).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json_b, &mut output_b, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
     let actual_b: String = String::from_utf8(output_b).expect("output should be valid UTF-8");
 
     assert_eq!(actual_a, actual_b, "enum order should not affect output");
@@ -549,7 +567,8 @@ pub struct WithArrays {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -596,7 +615,8 @@ pub struct DocWithItems {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -639,7 +659,8 @@ pub struct DocWithStatuses {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -670,7 +691,8 @@ pub struct Strict {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -703,7 +725,8 @@ pub struct WithExtras {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -736,7 +759,8 @@ pub struct Counts {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -769,7 +793,8 @@ pub struct Flexible {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -799,7 +824,8 @@ pub struct Flags {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -829,7 +855,8 @@ pub struct Counter {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -863,7 +890,8 @@ pub struct Greeting {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -897,7 +925,8 @@ pub struct Config {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -943,7 +972,8 @@ pub struct Doc {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -977,7 +1007,8 @@ pub struct WithTags {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1012,7 +1043,8 @@ pub struct WithDefault {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1042,7 +1074,8 @@ pub struct OptNull {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1085,7 +1118,8 @@ pub struct Doc {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1116,7 +1150,8 @@ pub struct Record {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1146,7 +1181,8 @@ pub struct Entity {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1175,7 +1211,8 @@ pub struct Item {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1208,7 +1245,8 @@ pub struct Batch {
 ";
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
@@ -1247,9 +1285,123 @@ pub struct Record {
 "#;
 
     let mut output: Vec<u8> = Vec::new();
-    generate_to_writer(schema_json, &mut output).expect("generate_to_writer should succeed");
+    generate_to_writer(schema_json, &mut output, &GenerateSettings::default())
+        .expect("generate_to_writer should succeed");
 
     let actual: String = String::from_utf8(output).expect("output should be valid UTF-8");
 
     assert_eq!(expected, actual, "expected output to match exactly");
+}
+
+// --- Settings and deny_invalid_unknown_json_schema integration tests ---
+
+/// Sorts issues for deterministic comparison. Validation iterates over JSON object
+/// keys (`HashMap`) which is non-deterministic, so issue order can vary.
+fn sorted_issues(err: &SchemaValidationError) -> Vec<SchemaValidationIssue> {
+    let mut issues = err.issues.clone();
+    issues.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)))
+    });
+    issues
+}
+
+#[test]
+fn deny_mode_returns_schema_validation_error_for_unsupported_ref() {
+    let schema_json: &str = r##"{
+        "type": "object",
+        "properties": { "foo": { "type": "string" } },
+        "$ref": "#/definitions/Other"
+    }"##;
+    let settings = GenerateSettings {
+        deny_invalid_unknown_json_schema: true,
+    };
+
+    let mut output: Vec<u8> = Vec::new();
+    let result = generate_to_writer(schema_json, &mut output, &settings);
+
+    let err = result.unwrap_err();
+    let JsonSchemaGenError::SchemaValidation(actual) = err else {
+        panic!("expected SchemaValidation error, got {err:?}");
+    };
+
+    let expected = SchemaValidationError {
+        issues: vec![SchemaValidationIssue {
+            path: "/$ref".to_string(),
+            kind: SchemaValidationIssueKind::UnsupportedKeywordRef,
+        }],
+    };
+
+    assert_eq!(
+        sorted_issues(&expected),
+        sorted_issues(&actual),
+        "expected full SchemaValidationError to match"
+    );
+}
+
+#[test]
+fn deny_mode_collects_multiple_issues() {
+    let schema_json: &str = r##"{
+        "type": "object",
+        "properties": {},
+        "$ref": "#/Foo",
+        "oneOf": [{ "type": "string" }]
+    }"##;
+    let settings = GenerateSettings {
+        deny_invalid_unknown_json_schema: true,
+    };
+
+    let mut output: Vec<u8> = Vec::new();
+    let result = generate_to_writer(schema_json, &mut output, &settings);
+
+    let err = result.unwrap_err();
+    let JsonSchemaGenError::SchemaValidation(actual) = err else {
+        panic!("expected SchemaValidation error, got {err:?}");
+    };
+
+    let expected = SchemaValidationError {
+        issues: vec![
+            SchemaValidationIssue {
+                path: String::new(),
+                kind: SchemaValidationIssueKind::NoStructsToGenerate,
+            },
+            SchemaValidationIssue {
+                path: "/$ref".to_string(),
+                kind: SchemaValidationIssueKind::UnsupportedKeywordRef,
+            },
+            SchemaValidationIssue {
+                path: "/oneOf".to_string(),
+                kind: SchemaValidationIssueKind::UnsupportedKeywordOneOf,
+            },
+        ],
+    };
+
+    assert_eq!(
+        sorted_issues(&expected),
+        sorted_issues(&actual),
+        "expected full SchemaValidationError to match"
+    );
+}
+
+#[test]
+fn default_settings_lenient_schema_with_unsupported_keyword_succeeds() {
+    // With default (lenient) settings, $ref is ignored and generation succeeds.
+    let schema_json: &str = r##"{
+        "type": "object",
+        "title": "Foo",
+        "properties": {
+            "name": { "type": "string" }
+        },
+        "$ref": "#/definitions/Extra"
+    }"##;
+    let settings = GenerateSettings::default();
+    assert!(!settings.deny_invalid_unknown_json_schema);
+
+    let mut output: Vec<u8> = Vec::new();
+    let result = generate_to_writer(schema_json, &mut output, &settings);
+    assert!(
+        result.is_ok(),
+        "with default settings, generation should succeed: {result:?}"
+    );
 }

@@ -7,7 +7,7 @@
 use std::io::{read_to_string, stdin, stdout};
 use std::process;
 
-use json_schema_rs::generate_to_writer;
+use json_schema_rs::{GenerateSettings, generate_to_writer};
 
 fn main() {
     let schema_json: String = match read_to_string(stdin()) {
@@ -18,7 +18,8 @@ fn main() {
         }
     };
 
-    if let Err(e) = generate_to_writer(&schema_json, &mut stdout()) {
+    let settings = GenerateSettings::default();
+    if let Err(e) = generate_to_writer(&schema_json, &mut stdout(), &settings) {
         eprintln!("Error: {e}");
         process::exit(1);
     }

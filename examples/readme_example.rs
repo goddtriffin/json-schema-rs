@@ -35,6 +35,7 @@ const SCHEMA_JSON: &str = r#"{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout: io::Stdout = io::stdout();
-    json_schema_rs::generate_to_writer(SCHEMA_JSON, &mut stdout)?;
+    let settings = json_schema_rs::GenerateSettings::default();
+    json_schema_rs::generate_to_writer(SCHEMA_JSON, &mut stdout, &settings)?;
     Ok(())
 }
