@@ -184,24 +184,26 @@ flowchart LR
 
 ## Determinism and idempotency
 
-TODO: Analyze whether generated output is deterministic and idempotent; note sorting of models/fields and diff behavior on small input changes.
+Generated output is deterministic for a given schema. In `schemafy_lib/src/schema.rs`, `definitions` and `properties` are `BTreeMap<String, Schema>` (and `pattern_properties` is `BTreeMap`), so iteration order is sorted by key. The expander iterates definitions in BTreeMap order (`expand_definitions`) and struct fields from `schema.properties.iter()` (sorted). Type emission order is therefore stable: definition types in sorted order, then inline types as discovered during traversal (properties in sorted order), then the root type. Enum variant order follows the schema’s `enum` array order (a `Vec`), so it is input-order dependent, not sorted. `generate_to_file` runs `rustfmt` on the output, which is deterministic. Repeated runs with the same input produce identical output; small schema changes (e.g. adding a definition or property) produce localized diffs because of the sorted maps.
 
 ## Enum handling
 
-TODO: Analyze duplicate enum entries (e.g. `["a","a"]`) and namespace/case collisions (e.g. `"a"` vs `"A"`); note deduplication and distinct variant generation.
+The library does not deduplicate enum values or disambiguate case collisions. In `schemafy_lib/src/lib.rs`, when expanding an `enum` without `enumNames`, the code iterates over `schema.enum_` (a `Vec`) and derives the Rust variant name with `v.to_pascal_case()` (Inflector). No deduplication is applied: duplicate entries (e.g. `["a", "a"]`) yield two variants both named `A` with the same `#[serde(rename = "a")]`, which produces invalid Rust (duplicate variant names). Case collisions (e.g. `"a"` and `"A"`) both map to PascalCase `A` with no disambiguation (e.g. no `A` and `A_1`), so the generated enum would again have duplicate variant identifiers and would not compile. With `enumNames`, variant names come from the names array and values from `enum_`; duplicate or colliding names in `enumNames` would similarly produce invalid code. The existing fixtures (`tests/enum-names-str.json`, `tests/enum-names-int.json`) do not cover duplicates or case collisions.
 
 ## Reverse generation (Schema from types)
 
-TODO: Determine whether the library can generate JSON Schema from structs/classes/POJOs (code → schema).
+No. The library only generates Rust code from a JSON Schema. The public API (`schemafy_lib::Generator`, `Expander::expand`) and CLI accept a schema file or `Schema` and produce a `TokenStream` or file. There is no API to derive or generate a JSON Schema from Rust structs, and no dependency (e.g. schemars, serde_json_schema) that would support code-first schema generation. The README describes a single direction: "take a JSON schema ... and generate Rust types."
 
 ## Multi-language output
 
-TODO: Determine whether the library generates only Rust or can emit models in other languages.
+Rust only. The generator produces Rust code via `proc_macro2::TokenStream` and `quote!` in `schemafy_lib`; output is either inlined by the proc macro or written to a `.rs` file and formatted with rustfmt. There is no option for another target language (no `--lang`, `--target`, or equivalent in the CLI or `GeneratorBuilder`). Dependencies are Rust-centric (quote, syn, inflector, serde, etc.). The README and CLI describe generating "Rust structs" / "Rust types" from a JSON schema.
 
 ## Model deduplication and $ref/$defs
 
-TODO: Analyze whether structurally identical object definitions in different schema locations are deduped; note interaction with `$defs`/`$ref`.
+**$ref / definitions**: Each entry in `definitions` is expanded once to a named type; `$ref` to `#/definitions/Foo` resolves to that type, so one generated type is reused everywhere the ref appears. No duplicate types for the same definition.
+
+**Inline object schemas**: Structurally identical object shapes defined inline in different locations are not deduped. Inline objects get their type name from `format!("{}{}", self.current_type.to_pascal_case(), self.current_field.to_pascal_case())` in `expand_type_` (e.g. `RootStreetAddress` vs `RootBillingAddress`). Each occurrence is expanded and pushed to `self.types` separately, so two identical inline object schemas in different properties or branches produce two distinct generated structs. The library does not hash or compare schema structure to reuse a single type for identical shapes. Using `$ref` and `definitions` is the supported way to get a single shared type.
 
 ## Validation (schema + JSON → errors)
 
-TODO: Determine whether the library can validate a JSON payload against a JSON Schema and return an error report.
+No. The library is codegen-only: it produces Rust types from a JSON Schema and does not provide an API to validate a JSON payload against a schema. There is no function or CLI that takes (schema, JSON) and returns a list of validation errors. The README states that "no checking such as min_value are done" and only "the structure of the schema is followed"; generated types rely on serde for (de)serialization, with no runtime validation layer. The codebase does not depend on a JSON Schema validator crate. The word "validate" appears only in fixture descriptions (e.g. Vega schema text) and in `generate_tests.rs` in the sense of "data that should validate against the schema" for test data, not as a validation API.
