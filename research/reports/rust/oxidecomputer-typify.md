@@ -187,3 +187,27 @@ flowchart LR
 
 - No built-in benchmarks or criterion in the repo. No documented wall-time or instruction metrics.
 - **Entry points for future benchmarking**: (1) CLI `cargo typify --input schema.json --output out.rs`. (2) Builder: `TypeSpace::new(settings); type_space.add_root_schema(schema); type_space.to_stream()`. (3) Macro runs at compile time (harder to isolate). For fixture-based benchmarks, the CLI or builder `add_root_schema` + `to_stream` are the natural entry points.
+
+## Determinism and idempotency
+
+TODO: Analyze whether generated output is deterministic and idempotent; note sorting of models/fields and diff behavior on small input changes.
+
+## Enum handling
+
+TODO: Analyze duplicate enum entries (e.g. `["a","a"]`) and namespace/case collisions (e.g. `"a"` vs `"A"`); note deduplication and distinct variant generation.
+
+## Reverse generation (Schema from types)
+
+TODO: Determine whether the library can generate JSON Schema from structs/classes/POJOs (code → schema).
+
+## Multi-language output
+
+TODO: Determine whether the library generates only Rust or can emit models in other languages.
+
+## Model deduplication and $ref/$defs
+
+TODO: Analyze whether structurally identical object definitions in different schema locations are deduped; note interaction with `$defs`/`$ref`.
+
+## Validation (schema + JSON → errors)
+
+TODO: Determine whether the library can validate a JSON payload against a JSON Schema and return an error report.

@@ -23,7 +23,7 @@ Analyze one competitor repo and write one research report. Do not compare to “
 
 ## Report sections
 
-Produce every section from the reference template: Metadata, Summary, JSON Schema support, Keyword support table, Constraints, High-level architecture, Medium-level architecture, Low-level details (only where needed), Output and integration, Configuration, Pros/cons, Testability, Performance. The template may be extended later (e.g. extra Performance or Testability subsections) without re-analyzing from scratch.
+Produce every section from the reference template: Metadata, Summary, JSON Schema support, Keyword support table, Constraints, High-level architecture, Medium-level architecture, Low-level details (only where needed), Output and integration, Configuration, Pros/cons, Testability, Performance, Determinism and idempotency, Enum handling, Reverse generation (Schema from types), Multi-language output, Model deduplication and $ref/$defs, Validation (schema + JSON → errors). The template may be extended later (e.g. extra Performance or Testability subsections) without re-analyzing from scratch. Fill each section from repo evidence (code, docs, tests); use "Unknown" or TODO when not yet researched — do not invent answers.
 
 **Diagrams**: Include Mermaid diagrams in High-level architecture and Medium-level architecture (and elsewhere if helpful) to show pipeline, ref resolution, or expansion flow. See [reference.md](reference.md) for diagram conventions (node IDs without spaces, quoted labels for special characters, no HTML or explicit styling).
 

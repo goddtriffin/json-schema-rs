@@ -74,6 +74,30 @@ Copy-paste this structure when writing a competitor research report. Fill every 
 ## Performance
 
 [Any built-in benchmarks, how they measure (wall time, instructions), where to find them. Note entry points useful for future benchmarking (e.g. CLI command, API call) so the library can be run against shared fixtures.]
+
+## Determinism and idempotency
+
+[Whether generated output is deterministic and idempotent. Note: Are models, fields, or other artifacts sorted (e.g. alphabetically) so that repeated invocations with the same input produce identical output? When input changes slightly, do diffs stay minimal (no large reshuffles or reordering)? Derive from code, tests, or docs in the cloned repo. Use "Unknown" or "Not applicable" if evidence is absent.]
+
+## Enum handling
+
+[How the library implements JSON Schema `enum`. Cover: (1) Duplicate entries — e.g. `["a", "a"]` — does the library dedupe, error, or emit duplicate variants? (2) Namespace/case collisions — e.g. `"a"` and `"A"` — does the library produce distinct variants so both are de/serializable and usable without losing either? Derive from code, tests, or docs. Use "Unknown" if evidence is absent.]
+
+## Reverse generation (Schema from types)
+
+[Whether the library can generate JSON Schema definitions from language structs/classes/POJOs (code → schema). If yes, describe the mechanism and scope. If no or unclear, state "No" or "Unknown".]
+
+## Multi-language output
+
+[Whether the library generates models only in its implementation language or can emit code for other languages (e.g. a Rust library generating TypeScript or Go). List supported output languages if multi-language. Use "Unknown" if evidence is absent.]
+
+## Model deduplication and $ref/$defs
+
+[When the same object shape appears in multiple distinct locations in the schema (e.g. identical inline object definitions in two different branches), does the library dedupe into a single generated type or emit separate copies? How does this interact with `$defs` and `$ref` (see [modular JSON Schema](https://json-schema.org/understanding-json-schema/structuring#modular-json-schema-combination))? Derive from code or tests. Use "Unknown" if evidence is absent.]
+
+## Validation (schema + JSON → errors)
+
+[Whether the library can validate a JSON payload against a JSON Schema. Inputs: schema definition and JSON entity. Output: report or list of validation errors. If yes, describe how (e.g. separate API, same binary). If no or only partial, state "No" or describe the gap. Use "Unknown" if evidence is absent.]
 ```
 
 ---
