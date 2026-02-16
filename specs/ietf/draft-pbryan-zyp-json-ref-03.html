@@ -1,0 +1,1324 @@
+
+<!DOCTYPE html>
+
+
+
+
+
+
+
+<html data-bs-theme="auto" lang="en">
+    <head>
+        
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <title>
+            
+                draft-pbryan-zyp-json-ref-03
+            
+        </title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://static.ietf.org/fonts/inter/import.css" rel="stylesheet">
+        <link href="https://static.ietf.org/fonts/noto-sans-mono/import.css" rel="stylesheet">
+        
+            <link rel="stylesheet" href="https://static.ietf.org/dt/12.59.0/ietf/css/document_html_referenced.css">
+            
+            <script type="module" crossorigin="" src="https://static.ietf.org/dt/12.59.0/assets/embedded-3c6cb270.js"></script>
+<link href="https://static.ietf.org/dt/12.59.0/assets/create-pinia-singleton-ff953d85.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+<link href="https://static.ietf.org/dt/12.59.0/assets/Scrollbar-878ae002.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+            <script src="https://static.ietf.org/dt/12.59.0/ietf/js/document_html.js"></script>
+            <script src="https://static.ietf.org/dt/12.59.0/ietf/js/theme.js"></script>
+        
+        <link rel="alternate" type="application/atom+xml" title="Document changes" href="/feed/document-changes/draft-pbryan-zyp-json-ref/">
+        <meta name="description"
+            
+                content="JSON Reference (Internet-Draft, 2013)"
+            >
+        
+
+<link rel="apple-touch-icon"
+      sizes="180x180"
+      href="https://static.ietf.org/dt/12.59.0/ietf/images/ietf-logo-nor-180.png">
+<link rel="icon"
+      sizes="32x32"
+      href="https://static.ietf.org/dt/12.59.0/ietf/images/ietf-logo-nor-32.png">
+<link rel="icon"
+      sizes="16x16"
+      href="https://static.ietf.org/dt/12.59.0/ietf/images/ietf-logo-nor-16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon"
+      href="https://static.ietf.org/dt/12.59.0/ietf/images/ietf-logo-nor-mask.svg"
+      color="#ffffff">
+<meta name="msapplication-TileColor"
+      content="#ffffff">
+<meta name="theme-color"
+      content="#ffffff">
+        
+
+
+
+
+<meta property="og:title" content="JSON Reference">
+<meta property="og:url" content="https://datatracker.ietf.org/doc/html/draft-pbryan-zyp-json-ref-03">
+<link rel="canonical" href="https://datatracker.ietf.org/doc/html/draft-pbryan-zyp-json-ref-03">
+<meta property="og:site_name" content="IETF Datatracker">
+<meta property="og:description" content="JSON Reference allows a JSON value to reference another value in a JSON document.">
+<meta property="og:type" content="article">
+
+<meta property="article:section" content="Individual Internet-Draft">
+
+<meta property="article:author" content="Paul C. Bryan">
+<meta property="article:author" content="Kris Zyp">
+
+
+
+        
+        <style>
+            
+            .diff-form .select2-selection__rendered {
+                direction: rtl;
+                text-align: left;
+            }
+        </style>
+    </head>
+    <body>
+        
+        <noscript><iframe class="status" title="Site status" src="/status/latest"></iframe></noscript>
+<div class="vue-embed" data-component="Status"></div>
+        <div class="btn-toolbar sidebar-toolbar position-fixed top-0 end-0 m-2 m-lg-3 d-print-none">
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm me-1 dropdown-toggle d-flex align-items-center"
+                    id="bd-theme" type="button" aria-expanded="false" data-bs-toggle="dropdown"
+                    aria-label="Toggle theme">
+                        <i class="theme-icon-active bi bi-circle-half"></i>
+                </button>
+
+                <ul class="dropdown-menu" aria-labelledby="bd-theme">
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center"
+                            data-bs-theme-value="light" aria-pressed="false">
+                            <i class="me-2 opacity-50 theme-icon bi bi-sun-fill"></i>
+                            Light<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center"
+                            data-bs-theme-value="dark" aria-pressed="false">
+                            <i class="me-2 opacity-50 theme-icon bi bi-moon-stars-fill"></i>
+                            Dark<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center active"
+                            data-bs-theme-value="auto" aria-pressed="true">
+                            <i class="me-2 opacity-50 theme-icon bi bi-circle-half"></i>
+                            Auto<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm sidebar-toggle"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#sidebar"
+                    aria-expanded="true"
+                    aria-controls="sidebar"
+                    aria-label="Toggle metadata sidebar"
+                    title="Toggle metadata sidebar">
+            <i class="bi bi-arrow-bar-left sidebar-shown"></i>
+            <i class="bi bi-arrow-bar-right sidebar-collapsed"></i>
+            </button>
+        </div>
+        <nav class="navbar bg-light-subtle px-1 fixed-top d-print-none d-md-none">
+            <a class="nav-link ps-1"
+               href="/doc/draft-pbryan-zyp-json-ref/">
+                 
+                    draft-pbryan-zyp-json-ref-03
+                
+                <br class="d-sm-none">
+
+                <span class="ms-sm-3 badge rounded-pill badge-draft">
+                    
+                        None
+                    
+                </span>
+            </a>
+            <button class="navbar-toggler p-1"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#docinfo-collapse"
+                    aria-controls="docinfo-collapse"
+                    aria-expanded="false"
+                    aria-label="Show document information">
+                <span class="navbar-toggler-icon small"></span>
+            </button>
+            <div class="navbar-nav navbar-nav-scroll overscroll-none collapse pt-1" id="docinfo-collapse">
+                <div class="bg-light-subtle p-0">
+                    <table class="table table-sm table-borderless small">
+                        <tbody class="meta align-top">
+                            <tr>
+                                <th scope="row"></th>
+                                <th scope="row">Title</th>
+                                <td class="edit"></td>
+                                <td>JSON Reference</td>
+                            </tr>
+                        </tbody>
+                        
+
+
+
+
+
+
+
+<tbody class="meta align-top ">
+    <tr>
+        <th scope="row">Document</th>
+        <th scope="row">Document type</th>
+        <td class="edit"></td>
+        <td>
+            
+
+
+
+
+
+
+
+    <span class="text-danger">Expired Internet-Draft</span>
+    (individual)
+    
+
+            
+            
+                <div class="badge rounded-pill text-bg-warning">
+                    Expired &amp; archived
+                </div>
+            
+            
+                
+
+
+
+
+    <div class="alert alert-warning small p-2 mt-2" role="alert">
+        This document is an Internet-Draft (I-D).
+        Anyone may submit an I-D to the IETF.
+        This I-D is <strong>not endorsed by the IETF</strong> and has <strong>no formal standing</strong> in the
+        <a href="/doc/rfc2026/">IETF standards process</a>.
+    </div>
+
+
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">Select version</th>
+            <td class="edit"></td>
+            <td>
+                
+
+
+
+    <ul class="revision-list pagination pagination-sm text-center flex-wrap my-0">
+        
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-00"
+                        >
+                            00
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-01"
+                        rel="nofollow">
+                            01
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-02"
+                        rel="nofollow">
+                            02
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item active">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-03"
+                        >
+                            03
+                        </a>
+                    </li>
+                
+            
+            
+        
+    </ul>
+
+            </td>
+        </tr>
+        
+            <tr>
+                <td></td>
+                <th scope="row">Compare versions</th>
+                <td class="edit"></td>
+                <td>
+                    
+
+
+
+<form class="form-horizontal diff-form"
+      action="https://author-tools.ietf.org/iddiff"
+      method="get"
+      target="_blank">
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="From revision"
+                    name="url1">
+                
+                    <option value="draft-pbryan-zyp-json-ref-03">
+                        draft-pbryan-zyp-json-ref-03
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-02" selected>
+                        draft-pbryan-zyp-json-ref-02
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-01">
+                        draft-pbryan-zyp-json-ref-01
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-00">
+                        draft-pbryan-zyp-json-ref-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="To revision"
+                    name="url2">
+                
+                    <option value="draft-pbryan-zyp-json-ref-03" selected>
+                        draft-pbryan-zyp-json-ref-03
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-02">
+                        draft-pbryan-zyp-json-ref-02
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-01">
+                        draft-pbryan-zyp-json-ref-01
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-00">
+                        draft-pbryan-zyp-json-ref-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--html"
+                    name="difftype">
+                Side-by-side
+            </button>
+            
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--hwdiff"
+                    name="difftype">
+                Inline
+            </button>
+
+</form>
+                </td>
+            </tr>
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">Authors</th>
+        <td class="edit">
+            
+        </td>
+        <td>
+            
+            
+                <span ><a 
+           title="Datatracker profile of Paul C. Bryan"
+            href="/person/pbryan@anode.ca" >Paul C. Bryan</a> <a 
+               href="mailto:pbryan%40anode.ca"
+               aria-label="Compose email to pbryan@anode.ca"
+               title="Compose email to pbryan@anode.ca">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Kris Zyp"
+            href="/person/kris@sitepen.com" >Kris Zyp</a> <a 
+               href="mailto:kris%40sitepen.com"
+               aria-label="Compose email to kris@sitepen.com"
+               title="Compose email to kris@sitepen.com">
+                <i class="bi bi-envelope"></i></a></span>
+            
+            
+                <br>
+                <a class="btn btn-primary btn-sm mt-1" href="mailto:draft-pbryan-zyp-json-ref@ietf.org?subject=draft-pbryan-zyp-json-ref" title="Send email to the document authors">Email authors</a>
+            
+        </td>
+    </tr>
+    
+    
+        
+        
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            RFC stream
+        </th>
+        <td class="edit">
+            
+        </td>
+        <td class="text-body-secondary">
+            
+                (None)
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">
+                Intended RFC status
+            </th>
+            <td class="edit">
+                
+            </td>
+            <td>
+                
+                    <span class="text-body-secondary">
+                        (None)
+                    </span>
+                
+            </td>
+        </tr>
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            Other formats
+        </th>
+        <td class="edit">
+        </td>
+        <td>
+            
+                
+    <div class="buttonlist">
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.ietf.org/archive/id/draft-pbryan-zyp-json-ref-03.txt">
+            
+                <i class="bi bi-file-text"></i> txt
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.ietf.org/archive/id/draft-pbryan-zyp-json-ref-03.xml">
+            
+                <i class="bi bi-file-code"></i> xml
+            
+        </a>
+        
+    
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/draft-pbryan-zyp-json-ref/03/bibtex/">
+            
+                <i class="bi bi-file-ruled"></i> bibtex
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/bibxml3/draft-pbryan-zyp-json-ref-03.xml">
+            
+                <i class="bi bi-file-code"></i> bibxml
+            
+        </a>
+        
+    
+</div>
+
+            
+        </td>
+    </tr>
+    
+    
+        
+    
+</tbody>
+                        <tr>
+                            <th scope="row"></th>
+                            <th scope="row"></th>
+                            <td class="edit"></td>
+                            <td>
+                                <a class="btn btn-sm btn-warning mb-3"
+                                target="_blank"
+                                href="https://github.com/ietf-tools/datatracker/issues/new/choose">
+                                    Report a bug
+                                    <i class="bi bi-bug"></i>
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </nav>
+        <div class="row g-0">
+            <div class="col-md-9 d-flex justify-content-center lh-sm"
+                 data-bs-spy="scroll"
+                 data-bs-target="#toc-nav"
+                 data-bs-smooth-scroll="true"
+                 tabindex="0"
+                 id="content">
+                
+                    <div class="rfcmarkup">
+                        <br class="noprint">
+                        <!-- [html-validate-disable-block attr-quotes, void-style, element-permitted-content, heading-level -- FIXME: rfcmarkup/rfc2html generates HTML with issues] -->
+                        <div class="rfcmarkup"><pre>Internet Engineering Task Force                            P. Bryan, Ed.
+Internet-Draft                                            Salesforce.com
+Intended status: Informational                                    K. Zyp
+Expires: March 20, 2013                                    SitePen (USA)
+                                                      September 16, 2012
+
+
+                             <span class="h1">JSON Reference</span>
+                      <span class="h1">draft-pbryan-zyp-json-ref-03</span>
+
+Abstract
+
+   JSON Reference allows a JSON value to reference another value in a
+   JSON document.
+
+Status of this Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of <a href="/doc/html/bcp78">BCP 78</a> and <a href="/doc/html/bcp79">BCP 79</a>.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at <a href="https://datatracker.ietf.org/drafts/current/">http://datatracker.ietf.org/drafts/current/</a>.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as &quot;work in progress.&quot;
+
+   This Internet-Draft will expire on March 20, 2013.
+
+Copyright Notice
+
+   Copyright (c) 2012 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to <a href="/doc/html/bcp78">BCP 78</a> and the IETF Trust&#x27;s Legal
+   Provisions Relating to IETF Documents
+   (<a href="http://trustee.ietf.org/license-info">http://trustee.ietf.org/license-info</a>) in effect on the date of
+   publication of this document.  Please review these documents
+   carefully, as they describe your rights and restrictions with respect
+   to this document.  Code Components extracted from this document must
+   include Simplified BSD License text as described in Section 4.e of
+   the Trust Legal Provisions and are provided without warranty as
+   described in the Simplified BSD License.
+
+
+
+
+
+<span class="grey">Bryan &amp; Zyp              Expires March 20, 2013                 [Page 1]</span></pre>
+<hr class='noprint'/><!--NewPage--><pre class='newpage'><span id="page-2" ></span>
+<span class="grey">Internet-Draft               JSON Reference               September 2012</span>
+
+
+Table of Contents
+
+   <a href="#section-1">1</a>.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . . . <a href="#page-3">3</a>
+   <a href="#section-2">2</a>.  Conventions . . . . . . . . . . . . . . . . . . . . . . . . . . <a href="#page-3">3</a>
+   <a href="#section-3">3</a>.  Syntax  . . . . . . . . . . . . . . . . . . . . . . . . . . . . <a href="#page-3">3</a>
+   <a href="#section-4">4</a>.  Resolution  . . . . . . . . . . . . . . . . . . . . . . . . . . <a href="#page-3">3</a>
+   <a href="#section-5">5</a>.  Error Handling  . . . . . . . . . . . . . . . . . . . . . . . . <a href="#page-4">4</a>
+   <a href="#section-6">6</a>.  IANA Considerations . . . . . . . . . . . . . . . . . . . . . . <a href="#page-4">4</a>
+   <a href="#section-7">7</a>.  Security Considerations . . . . . . . . . . . . . . . . . . . . <a href="#page-4">4</a>
+   <a href="#section-8">8</a>.  Normative References  . . . . . . . . . . . . . . . . . . . . . <a href="#page-4">4</a>
+   <a href="#appendix-A">Appendix A</a>.  Acknowledgements . . . . . . . . . . . . . . . . . . . <a href="#page-4">4</a>
+   <a href="#appendix-B">Appendix B</a>.  Examples . . . . . . . . . . . . . . . . . . . . . . . <a href="#page-5">5</a>
+   Authors&#x27; Addresses  . . . . . . . . . . . . . . . . . . . . . . . . <a href="#page-5">5</a>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<span class="grey">Bryan &amp; Zyp              Expires March 20, 2013                 [Page 2]</span></pre>
+<hr class='noprint'/><!--NewPage--><pre class='newpage'><span id="page-3" ></span>
+<span class="grey">Internet-Draft               JSON Reference               September 2012</span>
+
+
+<span class="h2"><a class="selflink" id="section-1" href="#section-1">1</a>.  Introduction</span>
+
+   This specification defines a JSON [<a href="/doc/html/rfc4627" title="&quot;The application/json Media Type for JavaScript Object Notation (JSON)&quot;">RFC4627</a>] structure which allows a
+   JSON value to reference another value in a JSON document.  This
+   provides the basis for transclusion in JSON: the use of a target
+   resource as an effective substitute for the reference.
+
+
+<span class="h2"><a class="selflink" id="section-2" href="#section-2">2</a>.  Conventions</span>
+
+   The key words &quot;MUST&quot;, &quot;MUST NOT&quot;, &quot;REQUIRED&quot;, &quot;SHALL&quot;, &quot;SHALL NOT&quot;,
+   &quot;SHOULD&quot;, &quot;SHOULD NOT&quot;, &quot;RECOMMENDED&quot;, &quot;MAY&quot;, and &quot;OPTIONAL&quot; in this
+   document are to be interpreted as described in [<a href="/doc/html/rfc2119" title="&quot;Key words for use in RFCs to Indicate Requirement Levels&quot;">RFC2119</a>].
+
+
+<span class="h2"><a class="selflink" id="section-3" href="#section-3">3</a>.  Syntax</span>
+
+   A JSON Reference is a JSON object, which contains a member named
+   &quot;$ref&quot;, which has a JSON string value.  Example:
+
+   { &quot;$ref&quot;: &quot;http://example.com/example.json#/foo/bar&quot; }
+
+   If a JSON value does not have these characteristics, then it SHOULD
+   NOT be interpreted as a JSON Reference.
+
+   The &quot;$ref&quot; string value contains a URI [<a href="/doc/html/rfc3986" title="&quot;Uniform Resource Identifier (URI): Generic Syntax&quot;">RFC3986</a>], which identifies
+   the location of the JSON value being referenced.  It is an error
+   condition if the string value does not conform to URI syntax rules.
+   Any members other than &quot;$ref&quot; in a JSON Reference object SHALL be
+   ignored.
+
+
+<span class="h2"><a class="selflink" id="section-4" href="#section-4">4</a>.  Resolution</span>
+
+   Resolution of a JSON Reference object SHOULD yield the referenced
+   JSON value.  Implementations MAY choose to replace the reference with
+   the referenced value.
+
+   If the URI contained in the JSON Reference value is a relative URI,
+   then the base URI resolution MUST be calculated according to
+   <a href="/doc/html/rfc3986#section-5.2">[RFC3986], section&nbsp;5.2</a>.  Resolution is performed relative to the
+   referring document.
+
+   If a URI contains a fragment identifier, then the fragment should be
+   resolved per the fragment resolution mechansim of the referrant
+   document.  If the representation of the referrant document is JSON,
+   then the fragment identifier SHOULD be interpreted as a
+   [<a href="#ref-JSON-Pointer">JSON-Pointer</a>].
+
+
+
+<span class="grey">Bryan &amp; Zyp              Expires March 20, 2013                 [Page 3]</span></pre>
+<hr class='noprint'/><!--NewPage--><pre class='newpage'><span id="page-4" ></span>
+<span class="grey">Internet-Draft               JSON Reference               September 2012</span>
+
+
+<span class="h2"><a class="selflink" id="section-5" href="#section-5">5</a>.  Error Handling</span>
+
+   In the event of an error condition, evaluation of the JSON Reference
+   SHOULD fail to complete.
+
+
+<span class="h2"><a class="selflink" id="section-6" href="#section-6">6</a>.  IANA Considerations</span>
+
+   This draft includes no request to IANA.
+
+
+<span class="h2"><a class="selflink" id="section-7" href="#section-7">7</a>.  Security Considerations</span>
+
+   A JSON Reference is not guaranteed to resolve to a JSON value.
+   Implementations of this specification SHOULD take appropriate
+   precautions.
+
+   Documents containing JSON References can be structured to resolve
+   cyclically.  Implementations SHOULD include appropriate checks to
+   prevent such structures from resulting in infinite recursion or
+   iteration.
+
+
+<span class="h2"><a class="selflink" id="section-8" href="#section-8">8</a>.  Normative References</span>
+
+   [<a id="ref-JSON-Pointer">JSON-Pointer</a>]
+              Bryan, P., Zyp, K., and M. Nottingham, &quot;JSON Pointer&quot;,
+              <a href="/doc/html/draft-ietf-appsawg-json-pointer-04">draft-ietf-appsawg-json-pointer-04</a> (work in progress),
+              September 2012.
+
+   [<a id="ref-RFC2119">RFC2119</a>]  Bradner, S., &quot;Key words for use in RFCs to Indicate
+              Requirement Levels&quot;, <a href="/doc/html/bcp14">BCP 14</a>, <a href="/doc/html/rfc2119">RFC 2119</a>, March 1997.
+
+   [<a id="ref-RFC3986">RFC3986</a>]  Berners-Lee, T., Fielding, R., and L. Masinter, &quot;Uniform
+              Resource Identifier (URI): Generic Syntax&quot;, STD 66,
+              <a href="/doc/html/rfc3986">RFC 3986</a>, January 2005.
+
+   [<a id="ref-RFC4627">RFC4627</a>]  Crockford, D., &quot;The application/json Media Type for
+              JavaScript Object Notation (JSON)&quot;, <a href="/doc/html/rfc4627">RFC 4627</a>, July 2006.
+
+
+<span class="h2"><a class="selflink" id="appendix-A" href="#appendix-A">Appendix A</a>.  Acknowledgements</span>
+
+   The following individuals contributed ideas, feedback and wording to
+   this specification:
+
+      Bob Aman, Francis Galiegue.
+
+
+
+
+<span class="grey">Bryan &amp; Zyp              Expires March 20, 2013                 [Page 4]</span></pre>
+<hr class='noprint'/><!--NewPage--><pre class='newpage'><span id="page-5" ></span>
+<span class="grey">Internet-Draft               JSON Reference               September 2012</span>
+
+
+<span class="h2"><a class="selflink" id="appendix-B" href="#appendix-B">Appendix B</a>.  Examples</span>
+
+   TBD.
+
+
+Authors&#x27; Addresses
+
+   Paul C. Bryan (editor)
+   Salesforce.com
+
+   Phone: +1 604 783 1481
+   Email: pbryan@anode.ca
+
+
+   Kris Zyp
+   SitePen (USA)
+
+   Phone: +1 650 968 8787
+   Email: kris@sitepen.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Bryan &amp; Zyp              Expires March 20, 2013                 [Page 5]
+</pre></div>
+                    </div>
+                
+            </div>
+            <div class="d-print-none col-md-3 bg-light-subtle collapse show" id="sidebar">
+                <div class="position-fixed border-start sidebar overflow-scroll overscroll-none no-scrollbar">
+                    <div class="d-flex flex-column vh-100 pt-2 pt-lg-3 ps-3 pl-md-2 pl-lg-3">
+                        <div>
+                            <a class="btn btn-primary btn-sm" href="/doc/draft-pbryan-zyp-json-ref/">Datatracker</a>
+                            <p class="fw-bold pt-2">
+                                
+                                    draft-pbryan-zyp-json-ref-03
+                                
+                                <br>
+                                
+
+
+
+
+
+
+
+    <span class="text-danger">Expired Internet-Draft</span>
+    (individual)
+    
+
+                            </p>
+                        </div>
+                        
+                        <ul class="nav nav-tabs nav-fill small me-2" role="tablist">
+                            <li class="nav-item" role="presentation" title="Document information">
+                                <button class="nav-link px-2"
+                                        id="docinfo-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#docinfo-tab-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="docinfo-tab-pane"
+                                        aria-selected="true">
+                                    <i class="bi bi-info-circle"></i><span class="d-none d-md-block d-xl-inline ms-xl-1">Info</span>
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation" title="Table of contents">
+                                <button class="nav-link px-2"
+                                        id="toc-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#toc-tab-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="toc-tab-pane"
+                                        aria-selected="false">
+                                    <i class="bi bi-list-ol"></i><span class="d-none d-md-block d-xl-inline ms-xl-1">Contents</span>
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation" title="Preferences">
+                                <button class="nav-link px-2"
+                                        id="pref-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#pref-tab-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="pref-tab-pane"
+                                        aria-selected="false">
+                                    <i class="bi bi-gear"></i><span class="d-none d-md-block d-xl-inline ms-xl-1">Prefs</span>
+                                </button>
+                            </li>
+                        </ul>
+                        <div class="overflow-auto tab-content pt-2 me-2">
+                            <div class="tab-pane"
+                                 id="docinfo-tab-pane"
+                                 role="tabpanel"
+                                 aria-labelledby="docinfo-tab"
+                                 tabindex="0">
+                                <table class="table table-sm table-borderless">
+                                    
+
+
+
+
+
+
+
+<tbody class="meta align-top ">
+    <tr>
+        <th scope="row">Document</th>
+        <th scope="row">Document type</th>
+        <td class="edit"></td>
+        <td>
+            
+
+
+
+
+
+
+
+    <span class="text-danger">Expired Internet-Draft</span>
+    (individual)
+    
+
+            
+            
+                <div class="badge rounded-pill text-bg-warning">
+                    Expired &amp; archived
+                </div>
+            
+            
+                
+
+
+
+
+    <div class="alert alert-warning small p-2 mt-2" role="alert">
+        This document is an Internet-Draft (I-D).
+        Anyone may submit an I-D to the IETF.
+        This I-D is <strong>not endorsed by the IETF</strong> and has <strong>no formal standing</strong> in the
+        <a href="/doc/rfc2026/">IETF standards process</a>.
+    </div>
+
+
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">Select version</th>
+            <td class="edit"></td>
+            <td>
+                
+
+
+
+    <ul class="revision-list pagination pagination-sm text-center flex-wrap my-0">
+        
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-00"
+                        >
+                            00
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-01"
+                        rel="nofollow">
+                            01
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-02"
+                        rel="nofollow">
+                            02
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item active">
+                        <a class="page-link"
+                        href="/doc/html/draft-pbryan-zyp-json-ref-03"
+                        >
+                            03
+                        </a>
+                    </li>
+                
+            
+            
+        
+    </ul>
+
+            </td>
+        </tr>
+        
+            <tr>
+                <td></td>
+                <th scope="row">Compare versions</th>
+                <td class="edit"></td>
+                <td>
+                    
+
+
+
+<form class="form-horizontal diff-form"
+      action="https://author-tools.ietf.org/iddiff"
+      method="get"
+      target="_blank">
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="From revision"
+                    name="url1">
+                
+                    <option value="draft-pbryan-zyp-json-ref-03">
+                        draft-pbryan-zyp-json-ref-03
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-02" selected>
+                        draft-pbryan-zyp-json-ref-02
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-01">
+                        draft-pbryan-zyp-json-ref-01
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-00">
+                        draft-pbryan-zyp-json-ref-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="To revision"
+                    name="url2">
+                
+                    <option value="draft-pbryan-zyp-json-ref-03" selected>
+                        draft-pbryan-zyp-json-ref-03
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-02">
+                        draft-pbryan-zyp-json-ref-02
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-01">
+                        draft-pbryan-zyp-json-ref-01
+                        
+                    </option>
+                
+                    <option value="draft-pbryan-zyp-json-ref-00">
+                        draft-pbryan-zyp-json-ref-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--html"
+                    name="difftype">
+                Side-by-side
+            </button>
+            
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--hwdiff"
+                    name="difftype">
+                Inline
+            </button>
+
+</form>
+                </td>
+            </tr>
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">Authors</th>
+        <td class="edit">
+            
+        </td>
+        <td>
+            
+            
+                <span ><a 
+           title="Datatracker profile of Paul C. Bryan"
+            href="/person/pbryan@anode.ca" >Paul C. Bryan</a> <a 
+               href="mailto:pbryan%40anode.ca"
+               aria-label="Compose email to pbryan@anode.ca"
+               title="Compose email to pbryan@anode.ca">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Kris Zyp"
+            href="/person/kris@sitepen.com" >Kris Zyp</a> <a 
+               href="mailto:kris%40sitepen.com"
+               aria-label="Compose email to kris@sitepen.com"
+               title="Compose email to kris@sitepen.com">
+                <i class="bi bi-envelope"></i></a></span>
+            
+            
+                <br>
+                <a class="btn btn-primary btn-sm mt-1" href="mailto:draft-pbryan-zyp-json-ref@ietf.org?subject=draft-pbryan-zyp-json-ref" title="Send email to the document authors">Email authors</a>
+            
+        </td>
+    </tr>
+    
+    
+        
+        
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            RFC stream
+        </th>
+        <td class="edit">
+            
+        </td>
+        <td class="text-body-secondary">
+            
+                (None)
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">
+                Intended RFC status
+            </th>
+            <td class="edit">
+                
+            </td>
+            <td>
+                
+                    <span class="text-body-secondary">
+                        (None)
+                    </span>
+                
+            </td>
+        </tr>
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            Other formats
+        </th>
+        <td class="edit">
+        </td>
+        <td>
+            
+                
+    <div class="buttonlist">
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.ietf.org/archive/id/draft-pbryan-zyp-json-ref-03.txt">
+            
+                <i class="bi bi-file-text"></i> txt
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.ietf.org/archive/id/draft-pbryan-zyp-json-ref-03.xml">
+            
+                <i class="bi bi-file-code"></i> xml
+            
+        </a>
+        
+    
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/draft-pbryan-zyp-json-ref/03/bibtex/">
+            
+                <i class="bi bi-file-ruled"></i> bibtex
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/bibxml3/draft-pbryan-zyp-json-ref-03.xml">
+            
+                <i class="bi bi-file-code"></i> bibxml
+            
+        </a>
+        
+    
+</div>
+
+            
+        </td>
+    </tr>
+    
+    
+        
+    
+</tbody>
+                                </table>
+                                <a class="btn btn-sm btn-warning mb-3"
+                                target="_blank"
+                                href="https://github.com/ietf-tools/datatracker/issues/new/choose">
+                                    Report a datatracker bug
+                                    <i class="bi bi-bug"></i>
+                                </a>
+                            </div>
+                            <div class="tab-pane mb-5"
+                                 id="toc-tab-pane"
+                                 role="tabpanel"
+                                 aria-labelledby="toc-tab"
+                                 tabindex="0">
+                                <nav class="nav nav-pills flex-column small" id="toc-nav">
+                                </nav>
+                            </div>
+                            <div class="tab-pane mb-5 small"
+                                 id="pref-tab-pane"
+                                 role="tabpanel"
+                                 aria-labelledby="pref-tab"
+                                 tabindex="0">
+                                <label class="form-label fw-bold mb-2">Show sidebar by default</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="sidebar" id="on-radio">
+                                    <label class="btn btn-outline-primary" for="on-radio">Yes</label>
+                                    <input type="radio" class="btn-check" name="sidebar" id="off-radio">
+                                    <label class="btn btn-outline-primary" for="off-radio">No</label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2">Tab to show by default</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="deftab" id="docinfo-radio">
+                                    <label class="btn btn-outline-primary" for="docinfo-radio">
+                                        <i class="bi bi-info-circle me-1"></i>Info
+                                    </label>
+                                    <input type="radio" class="btn-check" name="deftab" id="toc-radio">
+                                    <label class="btn btn-outline-primary" for="toc-radio">
+                                        <i class="bi bi-list-ol me-1"></i>Contents
+                                    </label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2">HTMLization configuration</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="htmlconf" id="txt-radio">
+                                    <label class="btn btn-outline-primary" for="txt-radio" title="This is the traditional HTMLization method.">
+                                        <i class="bi bi-badge-sd me-1"></i>HTMLize the plaintext
+                                    </label>
+                                    <input type="radio" class="btn-check" name="htmlconf" id="html-radio">
+                                    <label class="btn btn-outline-primary" for="html-radio" title="This is the modern HTMLization method.">
+                                        <i class="bi bi-badge-hd me-1"></i>Plaintextify the HTML
+                                    </label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2" for="ptsize">Maximum font size</label>
+                                <input type="range" class="form-range" min="7" max="16" id="ptsize" oninput="ptdemo.value = ptsize.value">
+                                <label class="form-label fw-bold mt-4 mb-2">Page dependencies</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="pagedeps" id="inline-radio">
+                                    <label class="btn btn-outline-primary" for="inline-radio" title="Generate larger, standalone web pages that do not require network access to render.">
+                                        <i class="bi bi-box me-1"></i>Inline
+                                    </label>
+                                    <input type="radio" class="btn-check" name="pagedeps" id="reference-radio">
+                                    <label class="btn btn-outline-primary" for="reference-radio" title="Generate regular web pages that require network access to render.">
+                                        <i class="bi bi-link-45deg me-1"></i>Reference
+                                    </label>
+                                </div>
+                                <label class="form-label fw-bold mt-4 mb-2">Citation links</label>
+                                <div class="btn-group-vertical btn-group-sm d-flex" role="group">
+                                    <input type="radio" class="btn-check" name="reflinks" id="refsection-radio">
+                                    <label class="btn btn-outline-primary" for="refsection-radio" title="Citation links go to the reference section.">
+                                        <i class="bi bi-arrow-clockwise"></i> Go to reference section
+                                    </label>
+                                    <input type="radio" class="btn-check" name="reflinks" id="citation-radio">
+                                    <label class="btn btn-outline-primary" for="citation-radio" title="Citation links go directly to the cited document.">
+                                        <i class="bi bi-link-45deg me-1"></i>Go to linked document
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+<script>
+  var _paq = window._paq || [];
+  
+  _paq.push(['disableCookies']);
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//analytics.ietf.org/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', 7]);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.type='text/javascript'; g.async=true; g.defer=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<noscript><p><img src="//analytics.ietf.org/matomo.php?idsite=7" style="border:0;" alt="" /></p></noscript>
+
+    <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9cef22284a017a73',t:'MTc3MTI2NjgwNy4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

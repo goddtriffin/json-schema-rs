@@ -103,6 +103,12 @@ To support a new JSON Schema keyword or type:
 
 ## Contribution Guidelines
 
+### Git
+
+- **Never run `git add`, `git commit`, or `git push`.** The maintainer will
+  always handle version control themselves. Make edits and leave staging and
+  commits to them.
+
 ### Testing
 
 - **Inlined tests**: Most tests have input and expected output inlined in the
