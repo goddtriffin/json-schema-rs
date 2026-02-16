@@ -1,0 +1,92 @@
+# Report template and keyword source
+
+Copy-paste this structure when writing a competitor research report. Fill every section from the cloned repo and vendored specs only.
+
+---
+
+## Report structure (template)
+
+```markdown
+# <Library name> — Research report
+
+## Metadata
+
+- **Library name**:
+- **Repo URL**:
+- **Clone path**: `research/repos/<lang>/<name>/`
+- **Language**:
+- **License**:
+
+## Summary
+
+[One paragraph: schema → codegen, target language(s).]
+
+## JSON Schema support
+
+[Which drafts/versions (e.g. draft-04, 2019-09, 2020-12); full vs subset.]
+
+## Keyword support table
+
+[One row per keyword. Columns: Keyword | Implemented (yes / no / partial) | Notes. Derive keyword list from vendored meta-schemas; see “Keyword list source” below.]
+
+| Keyword | Implemented | Notes |
+|---------|-------------|-------|
+| ...     | ...         | ...   |
+
+## Constraints
+
+[Does it use validation keywords only for structure, or also enforce constraints (minLength, minItems, etc.) in generated code or at runtime?]
+
+## High-level architecture
+
+[Main components, pipeline: parse schema → intermediate → emit code.]
+
+## Medium-level architecture
+
+[Key modules/classes, data structures, how $ref is resolved.]
+
+## Low-level details
+
+[Only where necessary for important features; link to keyword table or medium-level section.]
+
+## Output and integration
+
+- **Vendored vs build-dir**: [Checked-in output vs gitignored build dir; configurable?]
+- **API vs CLI**: [Library, CLI, or both; macros vs builder/codegen API.]
+- **Writer model**: [File-only vs generic writer (e.g. Write, Vec<u8>, String).]
+
+## Configuration
+
+[Model/serialization settings, naming, map types, optional deps (e.g. uuid, chrono).]
+
+## Pros/cons
+
+[Technical decisions, trade-offs, strengths/weaknesses.]
+
+## Testability
+
+[How the project is tested (unit, integration, fixtures); how to run its tests; notes on running our generator against their test schemas later.]
+
+## Performance
+
+[Any built-in benchmarks, how they measure (wall time, instructions), where to find them.]
+```
+
+---
+
+## Keyword list source
+
+Build the keyword table from **vendored specs only**. For draft 2020-12, use the meta-schema files under:
+
+- `specs/json-schema.org/draft/2020-12/meta/core.json`
+- `specs/json-schema.org/draft/2020-12/meta/applicator.json`
+- `specs/json-schema.org/draft/2020-12/meta/validation.json`
+- `specs/json-schema.org/draft/2020-12/meta/meta-data.json`
+- `specs/json-schema.org/draft/2020-12/meta/unevaluated.json`
+- `specs/json-schema.org/draft/2020-12/meta/format-annotation.json`
+- `specs/json-schema.org/draft/2020-12/meta/format-assertion.json`
+- `specs/json-schema.org/draft/2020-12/meta/content.json`
+
+Collect the union of all `properties` keys from these JSON files (and from `$defs` where they define schema keywords). For libraries that target older drafts (e.g. draft-04, 2019-09), add or use keywords from the corresponding meta-schemas under `specs/json-schema.org/` for that draft.
+
+Do not invent keywords; every row in the table must correspond to a keyword from the vendored meta-schemas.

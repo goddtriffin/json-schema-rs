@@ -3,6 +3,7 @@
 .vscode/
 target/
 bin/
+research/repos/
 
 # files
 .DS_Store
