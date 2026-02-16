@@ -25,6 +25,10 @@ Analyze one competitor repo and write one research report. Do not compare to “
 
 Produce every section from the reference template: Metadata, Summary, JSON Schema support, Keyword support table, Constraints, High-level architecture, Medium-level architecture, Low-level details (only where needed), Output and integration, Configuration, Pros/cons, Testability, Performance. The template may be extended later (e.g. extra Performance or Testability subsections) without re-analyzing from scratch.
 
+**Diagrams**: Include Mermaid diagrams in High-level architecture and Medium-level architecture (and elsewhere if helpful) to show pipeline, ref resolution, or expansion flow. See [reference.md](reference.md) for diagram conventions (node IDs without spaces, quoted labels for special characters, no HTML or explicit styling).
+
+**Report purpose**: Reports are standalone; use them first. Fall back to the cloned repo only when deeper implementation detail is needed.
+
 ## Rules
 
 - No comparison to this repo’s implementation. Describe the competitor only.

@@ -2,6 +2,10 @@
 
 Copy-paste this structure when writing a competitor research report. Fill every section from the cloned repo and vendored specs only.
 
+**Report purpose**: Research reports are standalone knowledge. Use them first to answer questions about a library; fall back to the cloned repo only when deeper implementation detail is needed.
+
+**Diagrams**: Include Mermaid diagrams in architecture sections (e.g. High-level architecture, Medium-level architecture) where they clarify the narrative. Use valid Mermaid: node IDs with no spaces (camelCase, PascalCase, or underscores); double-quote labels that contain special characters; no HTML in labels; no explicit colors or styling.
+
 ---
 
 ## Report structure (template)
@@ -39,11 +43,11 @@ Copy-paste this structure when writing a competitor research report. Fill every 
 
 ## High-level architecture
 
-[Main components, pipeline: parse schema → intermediate → emit code.]
+[Main components, pipeline: parse schema → intermediate → emit code. Include a Mermaid diagram (e.g. flowchart) of the pipeline where it helps.]
 
 ## Medium-level architecture
 
-[Key modules/classes, data structures, how $ref is resolved.]
+[Key modules/classes, data structures, how $ref is resolved. Include Mermaid diagram(s) where they clarify ref resolution or expansion flow.]
 
 ## Low-level details
 
@@ -69,7 +73,7 @@ Copy-paste this structure when writing a competitor research report. Fill every 
 
 ## Performance
 
-[Any built-in benchmarks, how they measure (wall time, instructions), where to find them.]
+[Any built-in benchmarks, how they measure (wall time, instructions), where to find them. Note entry points useful for future benchmarking (e.g. CLI command, API call) so the library can be run against shared fixtures.]
 ```
 
 ---
