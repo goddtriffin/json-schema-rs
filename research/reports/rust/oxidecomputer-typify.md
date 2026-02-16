@@ -190,24 +190,26 @@ flowchart LR
 
 ## Determinism and idempotency
 
-TODO: Analyze whether generated output is deterministic and idempotent; note sorting of models/fields and diff behavior on small input changes.
+Generated output is deterministic. In `typify-impl/src/output.rs`, `OutputSpace` stores items in a `BTreeMap<(OutputSpaceMod, String), TokenStream>` keyed by module and `order_hint` (the type name). Emission order is therefore sorted by type name within each module. In `typify-impl/src/structs.rs`, struct properties are explicitly sorted by name (`properties.sort_by(|a, b| a.name.cmp(&b.name))`) with a comment "to ensure a deterministic result." Enum variant order follows the schema’s enum array (input order). TypeSpace uses `BTreeMap` for `definitions`, `id_to_entry`, `name_to_id`, and `ref_to_id`; definition iteration order from `RootSchema.definitions` (schemars) may vary by map implementation, but the final emitted order is dominated by `OutputSpace`’s sorted keys, so types appear in stable alphabetical order by name. Repeated runs with the same input produce identical output; small schema changes produce localized diffs.
 
 ## Enum handling
 
-TODO: Analyze duplicate enum entries (e.g. `["a","a"]`) and namespace/case collisions (e.g. `"a"` vs `"A"`); note deduplication and distinct variant generation.
+The library does not deduplicate enum values; it panics when it cannot produce unique Rust variant names. In `typify-impl/src/type_entry.rs`, `TypeEntryEnum::from_metadata` sets each variant’s `ident_name` from `sanitize(&variant.raw_name, Case::Pascal)`. If variants are not unique after that (or after a second attempt that replaces non-identifier characters with `"X"`), the code panics with "Failed to make unique variant names for [raw names]". Duplicate entries (e.g. `["a", "a"]`) therefore yield two variants both with ident_name `"A"` and trigger this panic. Case collisions (e.g. `"a"` and `"A"`) both become `"A"` in PascalCase with no disambiguation (e.g. no `A` and `A_1`), so the code also panics. There is no deduplication of enum values before building variants in `convert_enum_string` (`typify-impl/src/convert.rs`). The `rust-collisions` fixture tests Rust keyword/type name conflicts, not enum value duplicates or case collisions.
 
 ## Reverse generation (Schema from types)
 
-TODO: Determine whether the library can generate JSON Schema from structs/classes/POJOs (code → schema).
+No. The library only generates Rust code from a JSON Schema. The public API (`TypeSpace::add_root_schema`, `add_ref_types`, `to_stream`) and CLI accept a schema (or path) and produce a `TokenStream` or file. There is no API to generate a JSON Schema from Rust types. The codebase uses `schemars::JsonSchema` in tests and in generated code (e.g. optional `derives = [schemars::JsonSchema]` on output) so that generated types can be serialized to a schema for testing or downstream use; that is not typify generating schema from arbitrary user types. The README and docs describe a single direction: schema → Rust types.
 
 ## Multi-language output
 
-TODO: Determine whether the library generates only Rust or can emit models in other languages.
+Rust only. The generator produces Rust code via `proc_macro2::TokenStream` and `quote` in typify-impl; `TypeSpace::to_stream()` builds an `OutputSpace` and returns a token stream written to a file or inlined by the macro. There is no option for another target language (no `--lang`, `--target`, or equivalent in the cargo-typify CLI or `TypeSpaceSettings`). Dependencies are Rust-centric (schemars, quote, heck, etc.). The README and CLI describe generating Rust types from a JSON schema.
 
 ## Model deduplication and $ref/$defs
 
-TODO: Analyze whether structurally identical object definitions in different schema locations are deduped; note interaction with `$defs`/`$ref`.
+**$ref / definitions**: Fragment-only `$ref` and `definitions` are resolved; each definition is assigned a `TypeId` and converted once; refs resolve via `ref_to_id.get(&ref_key)`. One definition yields one generated type reused wherever the ref appears.
+
+**Inline object schemas**: Structurally identical object shapes defined inline in different locations are not deduped. Inline objects receive a type name from context (e.g. parent type + field name in `struct_members` / `struct_property`). In `assign_type` (`typify-impl/src/lib.rs`), types with a name use `name_to_id`; only one type per name is stored, so the same name reuses the same `TypeId`, but inline types in different properties or branches get different context-derived names (e.g. `RootStreetAddress` vs `RootBillingAddress`) and thus different type entries. The `type_to_id` path deduplicates only unnamed/built-in details (e.g. shared `String`, `Vec`), not user-defined struct shapes. Using `$ref` and definitions is the supported way to get a single shared type.
 
 ## Validation (schema + JSON → errors)
 
-TODO: Determine whether the library can validate a JSON payload against a JSON Schema and return an error report.
+No. The library is codegen-only and does not provide an API to validate a JSON payload against a JSON Schema and return a list of errors. The `validate` module (`typify-impl/src/validate.rs`) implements `schema_value_validate`, which checks a single value against a schema (const_value, enum_values, instance_type); it is used internally for merge and compatibility checks, not as a user-facing (schema + JSON document) → error report API. There is no CLI or public function that takes a schema and a JSON file and prints validation errors. Generated types use serde for (de)serialization; optional validation (e.g. string pattern via regress) is embedded in generated code, not exposed as a standalone validator.
