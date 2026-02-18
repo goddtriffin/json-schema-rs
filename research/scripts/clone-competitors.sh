@@ -55,6 +55,7 @@ fi
 git_clone_or_pull "python" "python-jsonschema-jsonschema" "https://github.com/python-jsonschema/jsonschema"
 git_clone_or_pull "python" "koxudaxi-datamodel-code-generator" "https://github.com/koxudaxi/datamodel-code-generator"
 git_clone_or_pull "python" "horejsek-python-fastjsonschema" "https://github.com/horejsek/python-fastjsonschema"
+git_clone_or_pull "python" "pydantic-pydantic" "https://github.com/pydantic/pydantic"
 
 # Go
 git_clone_or_pull "go" "santhosh-tekuri-jsonschema" "https://github.com/santhosh-tekuri/jsonschema"
