@@ -1,105 +1,46 @@
 ---
 name: contribution-guide
-description: Use when contributing to the json-schema-rs crat (adding features, fixing bugs, understanding code layout, etc). For user-facing information (what the crate supports, how to use it), see the [README](json-schema-rs/README.md).
+description: Use when contributing to the json-schema-rs crate (adding features, fixing bugs, understanding code layout, researching specs and competitors). For user-facing information (what the crate supports, how to use it), see the [README](README.md).
 ---
 
 # json-schema-rs (contribution guide)
 
 Supported and unsupported features are documented in the
-[README](json-schema-rs/README.md). This skill focuses on **how to contribute**
+[README](README.md). This skill focuses on **how to contribute**
 to the crate.
 
 ## Purpose and Philosophy
 
-The json-schema-rs crate has two goals:
+The json-schema-rs crate provides **three tools**:
 
-1. **Generate Rust structs** from JSON Schema files (current)
-2. **Validate data** against a JSON Schema file (future)
+1. **JSON Schema → Rust struct** (codegen): generate Rust types from a JSON Schema.
+2. **Rust struct → JSON Schema** (reverse codegen): generate a JSON Schema from Rust types.
+3. **JSON Schema validator**: two inputs—JSON Schema definition and JSON instance—output validation result.
+
+**For every feature we develop, update, or fix, implement it for each of these three tools** where the feature applies (some features may apply to only one or two tools).
+
+### Our top values
+
+Our number-one values drive design decisions and how we rank competitors. Best libraries align with these:
+
+- **Spec-adherence**: behavior matches the JSON Schema specification(s) we support.
+- **Determinism**: same input always produces same output; stable ordering (e.g. alphabetical).
+- **Performance**: efficient algorithms and data structures; avoid unnecessary work.
+- **Testability**: core APIs work with in-memory writers (e.g. `Vec<u8>`) and test doubles, not only file I/O.
+- **Benchmarks**: we maintain benchmarks so we can measure and guard performance.
 
 ### Design Principles
 
-- **Testability-first**: `generate_to_writer<W: Write>` is the core API. Tests
-  use `Vec<u8>` or `Cursor<Vec<u8>>` without file I/O.
-- **Deterministic output**: Uses `BTreeMap` for alphabetical struct and field
-  ordering. Same input always produces same output.
-- **Custom JSON Schema structs**: Only model fields needed for the PoC. Use
-  serde deserialization with `#[serde(default)]` for optional fields.
-- **Custom error enum**: `JsonSchemaGenError` with manual `Debug`, `Display`,
-  `Error`, and `From` impls. Do not use thiserror.
+- **Testability-first**: Core APIs should work with writers (e.g. `Vec<u8>` or `Cursor<Vec<u8>>`) so tests avoid file I/O.
+- **Deterministic output**: Use stable ordering (e.g. `BTreeMap` for alphabetical struct and field ordering). Same input always produces same output.
+- **Schema model**: Only model schema fields we need. Use serde with `#[serde(default)]` and `Option` for optional keys.
+- **Errors**: Use a custom error enum with manual `Debug`, `Display`, `Error`, and `From` impls (no thiserror unless the project adopts it).
 
 ## Architecture
 
-For public API and feature set, see the [README](json-schema-rs/README.md).
+Architecture will be documented as the three tools are built. We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. For public API and feature set, see the [README](README.md).
 
-```mermaid
-flowchart TD
-    subgraph PublicAPI [Public API]
-        FromFile[generate_from_file]
-    end
-    subgraph Core [Core - Testable]
-        ToWriter[generate_to_writer]
-    end
-    subgraph Inputs [Inputs]
-        SchemaFile[JSON Schema file]
-        SchemaStr[JSON Schema string]
-    end
-    subgraph Outputs [Outputs]
-        FileOut[File on disk]
-        VecOut["Vec u8 in memory"]
-    end
-    SchemaFile --> FromFile
-    FromFile --> ToWriter
-    SchemaStr --> ToWriter
-    ToWriter --> FileOut
-    ToWriter --> VecOut
-```
-
-- **`generate_to_writer`** is the single source of truth. `generate_from_file`
-  is a thin wrapper that reads the schema file and calls `generate_to_writer`
-  with a `File`.
-- **schema.rs**: `JsonSchema` struct with `BTreeMap<String, Box<JsonSchema>>`
-  for recursive properties, `r#enum: Option<Vec<serde_json::Value>>` for enum
-  support.
-- **codegen.rs**: `collect_structs` (recursive traversal), `emission_order`
-  (topological sort for nested-first output), `emit_struct` (writes Rust code),
-  `emit_enum` (writes Rust enums). Enums emitted first (alphabetically), then
-  structs.
-- **Naming**: Struct name from `title` if present and non-empty, else PascalCase
-  of property key. Field sanitization: replace `-` with `_`. Add
-  `#[serde(rename = "...")]` when Rust field name differs from JSON key.
-
-### Code organization
-
-| Module       | Responsibility                                                                                                                                  |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lib.rs`     | Public API: `generate_to_writer`, `generate_from_file`. Re-exports `JsonSchemaGenError`, `JsonSchema`.                                          |
-| `schema.rs`  | Serde-deserializable JSON Schema types. Add new schema keywords here when extending support.                                                    |
-| `codegen.rs` | Struct/enum collection, emission order (topological sort), and Rust code emission. Extend `collect_structs` and `emit_*` when adding new types. |
-| `error.rs`   | `JsonSchemaGenError` enum and `From` impls. No thiserror.                                                                                       |
-| `main.rs`    | CLI binary (`json-schema-gen`); reads input path, writes output path.                                                                           |
-
-### Where to add new support
-
-To support a new JSON Schema keyword or type:
-
-1. **schema.rs**: Add fields to `JsonSchema` if the new keyword must be parsed.
-   Use `#[serde(default)]` and `Option` so extra keys are ignored.
-2. **codegen.rs**: In `collect_structs` (and helpers), handle the new
-   type/keyword—e.g. match on the new `type` value or read the new field. If the
-   new type produces new structs or enums, ensure they are collected and
-   included in emission order. Extend `emit_struct` / `emit_enum` or add new
-   `emit_*` functions if you introduce new output shapes.
-3. **Tests**: Add or extend tests in `tests/integration-tests.rs` (inlined
-   schema + expected output). **Always update**
-   `tests/schemas/complex-schema.json` and
-   `tests/schemas/complex-schema-expected.rs` so the file-based test covers the
-   new behavior. Use full `assert_eq!(expected, actual)`; no partial checks.
-4. **README example and examples directory**: Keep the README’s example (the
-   JSON Schema and "Generated Rust" blocks) and the examples directory in sync.
-   When adding a new feature, update **both** the README example and
-   `examples/readme_example_schema.json` / `examples/readme_example.rs` to
-   demonstrate it. The README example and the examples directory should stay
-   consistent with each other and with supported features.
+Code layout will be defined as the crate is rebuilt. When adding support for a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples—without assuming specific file names.
 
 ## Contribution Guidelines
 
@@ -113,22 +54,21 @@ To support a new JSON Schema keyword or type:
 
 - **Inlined tests**: Most tests have input and expected output inlined in the
   test method (no file loading).
-- **File-based test**: One test (complex schema) reads schema and expected
-  output from files; generates actual output in memory; compares expected vs
-  actual. **When implementing new features, always update the complex schema and
-  its expected output** so the file-based test exercises the new behavior.
-- **Unit tests**: Add `#[cfg(test)]` tests in codegen.rs (or other modules) for
-  feature-specific logic where it makes sense. **Unit tests should always be
-  exhaustive**: aim for one unit test per **code path** for the feature (e.g.
-  one test for each possible outcome or branch), plus **opposite pairings** such
-  as success vs failure, enabled vs disabled, bounds present vs absent, or
-  fallback vs non-fallback.
+- **File-based test**: When the test suite includes file-based tests (schema +
+  expected output), **always update those files** when implementing new features
+  so the file-based test exercises the new behavior.
+- **Unit tests**: Add `#[cfg(test)]` tests in the relevant module(s) for
+  feature-specific logic. **Unit tests should always be exhaustive**: aim for
+  one unit test per **code path** for the feature (e.g. one test for each
+  possible outcome or branch), plus **opposite pairings** such as success vs
+  failure, enabled vs disabled, bounds present vs absent, or fallback vs
+  non-fallback.
 - **Assertions**: Always compare full expected output against full actual
   output. Never use partial checks like `actual.contains(...)` or
   `!actual.contains(...)`—use `assert_eq!(expected, actual)` with complete
   expected strings.
-- **Integration tests**: Tests live in `tests/integration-tests.rs` and use the
-  public API.
+- **Integration tests**: Integration tests use the public API; keep them in the
+  integration test module.
 
 ### Code Conventions
 
@@ -141,32 +81,54 @@ To support a new JSON Schema keyword or type:
 
 ### Adding New JSON Schema Support
 
-- Add fields to `JsonSchema` in schema.rs only when needed for the PoC.
-- Use `#[serde(default)]` and `Option` so extra keys in the JSON are ignored.
-- For unsupported types, ignore rather than fail (PoC behavior; future versions
-  will hard-fail).
+- Add schema model fields only when needed; use `#[serde(default)]` and `Option`
+  so extra keys in the JSON are ignored.
+- For unsupported types, decide project policy (ignore vs fail); document in the
+  skill or README.
 
-### Reference implementations
+### JSON Schema spec research
 
-When implementing a new feature, **always check** how the **json_schema**,
-**schemafy**, and **typify** Rust crates implement it (docs and/or source).
-Compare our approach to theirs to see if our idea is better or worse; document
-the choice in the skill (e.g. under a "learned" subsection) or in the PR. This
-reduces duplicated design work and keeps the crate aligned with ecosystem
-conventions where appropriate.
+For every feature we develop, update, or fix:
 
-- **json_schema**: Schema representation and validation (not codegen). Use for
-  how schema concepts are modeled (e.g. `SimpleTypes::Integer` vs `Number`).
-- **schemafy**: JSON Schema → Rust codegen; simple fixed type mappings.
-- **typify**: JSON Schema → Rust codegen; uses `minimum`/`maximum` for
-  constraint-based integer type selection (u8, i32, etc.).
+- **Research the latest JSON Schema spec** (e.g. draft 2020-12) in `specs/`.
+  Understand how the feature is defined and how it behaves.
+- **Research all older JSON Schema specs** we care about, using **only vendored
+  specs** under `specs/`. Do not rely on the web for spec text. If specs are
+  missing, the maintainer runs `make vendor_specs` (or fixes the spec
+  download script).
+
+### Competitor research for each feature
+
+For every feature we develop, update, or fix:
+
+- **Find all libraries** (across the researched languages) that implement that
+  feature. Research reports live under `research/reports/<lang>/{org}-{repo}.md`.
+- **Rank them** from best to worst according to **our top values** (spec-adherence,
+  determinism, performance, testability, benchmarks—see Purpose and Philosophy).
+- **Focus on the best one or two libraries**; do not copy patterns from badly
+  architected or non-spec-aligned implementations.
+- **When learning how a library implements the feature:**
+  - **Read its research report first.** Reports are the primary knowledge source.
+  - If you need high-granularity detail, **then** read the actual code in the
+    cloned repo (e.g. `research/repos/<lang>/<name>/`).
+  - **Contribute back to the research report:**
+    - If a preexisting section is missing details for this feature, add those
+      details to that section.
+    - If the report has **no section** that covers this feature, add a new
+      section so we remember it for future comparison and learning.
+
+See the **competitor-json-schema-codegen-analysis** skill for how reports are
+produced and the report template (in that skill’s reference.md).
 
 ### Post-Feature Knowledge Capture
 
-At the end of development for a new feature, add any knowledge learned during
-that work session back to this skill. Examples: edge cases, design decisions,
-pitfalls, or conventions that would help future contributors. This keeps the
-skill up to date and reduces repeated discovery.
+At the end of development for a new feature, add **high-level** knowledge back
+to this skill (and to research reports when applicable). Capture **abstract
+ideas and rules**: edge-case principles, design trade-offs, conventions. **Do
+not** capture low-level or highly specialized implementation details here—**code
+is the source of truth** for the literal behavior. If we need the exact
+behavior later, we read the code; the contribution guide stores the rules and
+reasoning that help future contributors.
 
 ### Required vs Optional (learned)
 
@@ -174,23 +136,22 @@ skill up to date and reduces repeated discovery.
   absent, all properties are optional per JSON Schema spec. When `required: []`,
   all properties are optional.
 - **Explicit optional (recognized but ignored):** The per-property `optional`
-  keyword is parsed in schema.rs and explicitly **ignored** in codegen; required
-  vs optional is determined only by the object-level `required` array. This is
-  for future-proofing: strict adherence to the JSON Schema spec and/or settings
-  (e.g. allow non-standard fields, or interpret them) may be added later.
-- **File-based expected output**: `complex-schema-expected.rs` must end with a
-  trailing newline to match `generate_to_writer` output (each struct ends with
-  `writeln!(writer)?`).
-- **Field ordering**: BTreeMap yields alphabetical order by property key (e.g.,
-  `optional_field` before `required_field`).
+  keyword may be parsed in the schema model and explicitly **ignored** in
+  code generation; required vs optional is determined only by the object-level
+  `required` array. This is for future-proofing: strict adherence to the JSON
+  Schema spec and/or settings may be added later.
+- **File-based expected output**: When comparing generated output to an expected
+  file, the expected file must match the generator’s output exactly (e.g.
+  trailing newlines if the generator emits them).
+- **Field ordering**: Use stable ordering (e.g. BTreeMap yields alphabetical
+  order by property key).
 
 ### Enum support (learned)
 
 - **`enum`** in JSON Schema: array of allowed values. Only string enums
   supported; non-string values fall back to `String`.
-- **Variant naming**: `to_rust_variant_name` produces PascalCase (first char
-  uppercase, rest lowercase per word). Invalid identifiers (e.g., `"123"`) get
-  `E` prefix.
+- **Variant naming**: Produce PascalCase (first char uppercase, rest lowercase
+  per word). Invalid identifiers (e.g. `"123"`) get an `E` prefix.
 - **Collision handling**: When multiple JSON values map to same Rust variant
   name (e.g., `"PENDING"`, `"pending"`, `"Pending"` all -> `Pending`), append
   `_0`, `_1`, `_2` to **all** colliding variants.
@@ -209,14 +170,14 @@ skill up to date and reduces repeated discovery.
   float type (f32 vs f64). Fallback: no/min/max or invalid → `i64` for integer,
   `f64` for number. No validation; type selection only. Float selection is
   range-based; f32 may lose precision for some decimals.
-- **Arrays**: `resolve_array_item_type` uses `choose_integer_type` /
-  `choose_number_type` for `items.type` of `integer` / `number`.
+- **Arrays**: For `items.type` of `integer` or `number`, use the same
+  integer/number type selection logic as for standalone numeric schemas.
 
 ### Default support (learned)
 
-- **Schema model**: Use `DefaultKeyword` (Absent | Present(Value)) in schema.rs
-  to preserve JSON `null`. Serde deserializes `Option<Value>` with null as
-  `None`, losing the distinction between absent key and `"default": null`.
+- **Schema model**: Preserve JSON `null` in the default value (e.g. Absent vs
+  Present(Value)). Serde deserializes `Option<Value>` with null as `None`,
+  losing the distinction between absent key and `"default": null`.
 - **Two strategies**: `UseTypeDefault` → `#[serde(default)]` when the schema
   value equals the type's Default (false, 0, 0.0, "", [], null for optional).
   `Custom { fn_name, rust_expr }` → generated function +
@@ -225,61 +186,38 @@ skill up to date and reduces repeated discovery.
 - **Optional + null**: For optional fields with `default: null`, use
   `#[serde(default)]` so missing key yields `None`.
 - **Emission order**: Enums first, then default functions (they may reference
-  enums), then structs.
+  enums), then structs (or equivalent for the tool).
 - **Custom default function**: Returns `Some(expr)` for optional fields, `expr`
-  for required. Must be emitted before the struct that uses it.
+  for required. Emit before the struct (or type) that uses it.
 - **Out of scope**: Object defaults, non-empty array defaults.
 
 ### Description support (learned)
 
 - **Normalization**: Empty or whitespace-only `description` is treated as
-  absent; use `normalize_description()` so we do not emit blank `///` lines.
-- **Multi-line**: Emit one `///` line per line of text via
-  `description.trim().lines()`. Field doc comments use a 4-space prefix
-  (`emit_doc_comment(..., "    ")`) so they align with the field line.
+  absent; do not emit blank doc lines.
+- **Multi-line**: Emit one doc line per line of text (e.g. `description.trim().lines()`).
+  Field doc comments use an appropriate prefix so they align with the field line.
 - **Placement**: Object schema `description` → struct doc; enum schema
   `description` → enum doc; property schema `description` → field doc (same
   schema used for the property, including nested object descriptions on the
   field that references that object).
 
-## CLI and Makefile (for contributors)
+## README.md
 
-Use these to run the generator locally when testing changes.
+The repo’s **root-level README.md** must always be kept up-to-date. It should
+communicate: **our tools** (Schema→Rust, Rust→Schema, validator), **features**
+(what each tool supports), **which JSON Schema specs we adhere to** (draft
+versions), and any other information developers need to use the Rust library.
+Aim for **succinct, maximally insightful** content. When adding or changing
+features or spec support, update the README so users and contributors always
+see an accurate picture.
 
-### Binary
+## Repository layout
 
-- **Name**: `json-schema-gen`
-- **Usage**: `./target/release/json-schema-gen <input_path> <output_path>`
-- **Args**: Input path to JSON Schema file, output path for generated Rust file.
+- **Vendored JSON Schema specs**: `specs/`
+- **Competitor clones**: `research/repos/<lang>/<name>/`
+- **Research reports**: `research/reports/<lang>/{org}-{repo}.md`
 
-### Makefile Target
-
-```bash
-make json_schema_gen input=<path-to-json-schema> output=<path-to-rust-output>
-```
-
-- Requires both `input` and `output` variables. Fails with usage help if either
-  is missing.
-- Builds in release mode.
-- Runs the binary with the provided paths after building.
-
-**Example:**
-
-```bash
-make json_schema_gen input=json-schema-rs/tests/schemas/complex-schema.json output=output.rs
-```
-
-## Key Files
-
-| File                                                      | Purpose                                                                   |
-| --------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `json-schema-rs/src/lib.rs`                               | Public API: `generate_to_writer`, `generate_from_file`                    |
-| `json-schema-rs/src/codegen.rs`                           | Struct collection, emission order, code generation                        |
-| `json-schema-rs/src/schema.rs`                            | Custom JSON Schema structs (serde-deserializable)                         |
-| `json-schema-rs/src/error.rs`                             | `JsonSchemaGenError` enum                                                 |
-| `json-schema-rs/src/main.rs`                              | CLI binary                                                                |
-| `json-schema-rs/tests/integration-tests.rs`               | Integration tests                                                         |
-| `json-schema-rs/tests/schemas/complex-schema.json`        | File-based test input; update when adding features                        |
-| `json-schema-rs/tests/schemas/complex-schema-expected.rs` | File-based test expected output; update when adding features              |
-| `json-schema-rs/examples/readme_example_schema.json`      | Example schema; keep in sync with README example and readme_example.rs    |
-| `json-schema-rs/examples/readme_example.rs`               | Example binary (inlined schema); keep in sync with README and schema file |
+Key source files will be listed in this skill or the README as the crate is
+re-established. CLI and build commands will be documented when each tool has a
+stable interface.
