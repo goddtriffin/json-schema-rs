@@ -13,7 +13,7 @@ Analyze one competitor repo and write one research report. Do not compare to “
 
 ## JSON Schema source
 
-- Use **only** vendored specs under **specs/** (repository root). Never use the web for JSON Schema specification details. If specs are missing or outdated, the maintainer runs `make vendor-specs` (or fixes `specs/download.sh`).
+- Use **only** vendored specs under **specs/** (repository root). Never use the web for JSON Schema specification details. If specs are missing or outdated, the maintainer runs `make vendor_specs` (or fixes `specs/download.sh`).
 - **Keyword table**: Derive the list of allowed keywords from the vendored meta-schemas. Do not invent keywords. Use the canonical list from `specs/json-schema.org/draft/2020-12/meta/` (and other drafts if the library targets them). See [reference.md](reference.md) for the exact meta-schema files. Optionally run `research/scripts/list_keywords.sh` if present to get the canonical keyword list.
 
 ## Output

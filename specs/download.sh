@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vendor JSON Schema specifications from json-schema.org and IETF.
-# Run from repo root: ./specs/download.sh  or  make vendor-specs
+# Run from repo root: ./specs/download.sh  or  make vendor_specs
 # All URLs and destination paths are hard-coded below for easy refresh and updates.
 
 set -e

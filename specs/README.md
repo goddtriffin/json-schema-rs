@@ -21,7 +21,7 @@ depending on external URLs.
 From the **repository root** run:
 
 ```bash
-make vendor-specs
+make vendor_specs
 ```
 
 or:

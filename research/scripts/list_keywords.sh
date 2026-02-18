@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 META_DIR="$REPO_ROOT/specs/json-schema.org/draft/2020-12/meta"
 
 if [ ! -d "$META_DIR" ]; then
-  echo "Meta dir not found: $META_DIR (run make vendor-specs?)" >&2
+  echo "Meta dir not found: $META_DIR (run make vendor_specs?)" >&2
   exit 1
 fi
 

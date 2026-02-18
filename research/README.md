@@ -10,7 +10,7 @@ This directory holds cloned competitor repos, research reports, benchmark fixtur
 JSON Schema specifications are vendored in the repo under **specs/** (not here). To refresh them run:
 
 ```bash
-make vendor-specs
+make vendor_specs
 ```
 
 from the repository root.
