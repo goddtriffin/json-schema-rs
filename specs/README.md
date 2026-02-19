@@ -11,8 +11,10 @@ depending on external URLs.
 - **`json-schema.org/`** — Specification documents (HTML, PDF, TXT),
   meta-schemas (JSON), output schemas/examples, and release notes for drafts 00
   through 07, 2019-09, and 2020-12.
-- **`ietf/`** — IETF Internet-Drafts: Relative JSON Pointer and JSON Reference
-  (HTML).
+- **`ietf/`** — RFC 6901 (JSON Pointer, TXT) and IETF Internet-Drafts: Relative
+  JSON Pointer and JSON Reference (HTML). JSON Pointer is used by JSON Schema for
+  fragment identification; the `JsonPointer` type in code follows RFC 6901 for
+  encoding and decoding.
 - **`download.sh`** — Script that downloads all of the above. URLs and
   destination paths are hard-coded in the script.
 

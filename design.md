@@ -21,6 +21,12 @@ The crate provides **three tools**:
 
 We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. Code layout: workspace crates `json_schema_rs/` (lib, core logic) and `json_schema_to_rust_cli/` (CLI). When adding a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples.
 
+### JSON Schema validator
+
+The validator takes the same **Schema** type used by codegen and a JSON instance (`serde_json::Value`) and returns `Result<(), Vec<ValidationError>>` (type alias **ValidationResult**). It collects **all** validation errors (no fail-fast) and returns them at the end. Inputs: `&Schema`, `&Value`. Output: `Ok(())` when valid, `Err(errors)` when invalid.
+
+**Supported keywords:** `type` (object, string), `required`, `properties` (recursive). Does not resolve `$ref` or `$defs`; additional properties are allowed. The validator reuses the same Schema struct as codegen; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same Schema model would be used.
+
 ### Our top values
 
 These drive design decisions and how we rank competitors:

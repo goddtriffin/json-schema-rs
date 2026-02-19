@@ -72,7 +72,8 @@ Schema model, codegen/validation behavior, tests, examples. Follow Contribution 
 
 ### Code Conventions
 
-- Do not add docs or comments that frame the project as a "minimal first pass," "not yet feature complete," or similar. Use durable wording: document what is implemented and what is ignored; avoid temporal phrasing (e.g. "in this release," "not yet implemented") in user-facing docs and code.
+- **Durable wording only:** Never use temporal or minimal phrasing in docs or comments. Do not say "first pass," "in this pass," "keywords supported in this pass," "not yet implemented," "not yet feature complete," or "in this release." Document what is implemented and what is ignored; avoid framing by release or phase.
+- **Rust conventions and style:** We often review competitor libraries implemented in other languages; our library is written in Rust and **must** adhere to standard Rust conventions, coding style, and best practices. Follow the Rust API Guidelines, idiomatic Rust (e.g. use `Result` for fallible operations, prefer enums over stringly-typed errors, use standard types and traits), and project lint/format rules. Do not mirror non-Rust idioms from competitors when they conflict with Rust conventions.
 - Run `make lint test` before completing any changes.
 - Use `#[expect]` not `#[allow]` for Clippy overrides.
 - Never fail silently; log errors internally (customer-facing message can differ).
