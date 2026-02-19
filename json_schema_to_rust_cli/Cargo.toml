@@ -22,3 +22,4 @@ workspace = true
 
 [dependencies]
 json-schema-rs = { path = "../json_schema_rs" }
+serde_json.workspace = true

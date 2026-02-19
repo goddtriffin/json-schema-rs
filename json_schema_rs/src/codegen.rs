@@ -1,0 +1,350 @@
+//! Code generation: schema → Rust source written to a writer.
+
+use crate::error::Error;
+use crate::schema::Schema;
+use std::collections::BTreeSet;
+use std::io::Write;
+
+/// Sanitize a JSON property key to a Rust field identifier (`snake_case`; replace `-` with `_`).
+/// Does not change case; only replaces invalid characters. Result is safe for use as a field name.
+fn sanitize_field_name(key: &str) -> String {
+    let s: String = key
+        .chars()
+        .map(|c| if c == '-' { '_' } else { c })
+        .collect();
+    if s.is_empty() {
+        return "empty".to_string();
+    }
+    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return format!("field_{s}");
+    }
+    if s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+        return s;
+    }
+    s.chars()
+        .map(|c| {
+            if c == '_' || c.is_ascii_alphanumeric() {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Convert a name to `PascalCase` for struct names (e.g. "address" -> "Address").
+fn to_pascal_case(name: &str) -> String {
+    let mut out = String::new();
+    let mut capitalize_next = true;
+    for c in name.chars() {
+        if c == '_' || c == '-' || c == ' ' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            out.extend(c.to_uppercase());
+            capitalize_next = false;
+        } else {
+            out.push(c);
+        }
+    }
+    if out.is_empty() {
+        "Unnamed".to_string()
+    } else if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("N{out}")
+    } else {
+        out
+    }
+}
+
+/// Ensure a struct name is a valid Rust identifier (`PascalCase`; prefix if starts with digit).
+fn sanitize_struct_name(s: &str) -> String {
+    let pascal = to_pascal_case(s);
+    if pascal.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("N{pascal}")
+    } else {
+        pascal
+    }
+}
+
+/// One struct to emit: name and the object schema (root or nested).
+struct StructToEmit {
+    name: String,
+    schema: Schema,
+}
+
+/// Collect all object schemas that need a struct in topological order (children before parents).
+fn collect_structs(
+    schema: &Schema,
+    from_key: Option<&str>,
+    out: &mut Vec<StructToEmit>,
+    seen: &mut BTreeSet<String>,
+) {
+    if !schema.is_object_with_properties() {
+        return;
+    }
+    let name = schema
+        .title
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+        .map(sanitize_struct_name)
+        .or_else(|| from_key.map(sanitize_struct_name))
+        .unwrap_or_else(|| "Root".to_string());
+
+    let name_key = name.clone();
+    if seen.contains(&name_key) {
+        return;
+    }
+    seen.insert(name_key);
+
+    for (key, sub) in &schema.properties {
+        if sub.is_object_with_properties() {
+            collect_structs(sub, Some(key.as_str()), out, seen);
+        }
+    }
+
+    out.push(StructToEmit {
+        name,
+        schema: schema.clone(),
+    });
+}
+
+/// Emit a single struct's fields to `out`.
+fn emit_struct_fields(schema: &Schema, out: &mut impl Write) -> Result<(), Error> {
+    let required_set: BTreeSet<&str> = schema
+        .required
+        .as_ref()
+        .map(|r| r.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    for (key, prop_schema) in &schema.properties {
+        let field_name = sanitize_field_name(key);
+        let needs_rename = field_name != *key;
+
+        if prop_schema.is_string() {
+            let ty = if required_set.contains(key.as_str()) {
+                "String".to_string()
+            } else {
+                "Option<String>".to_string()
+            };
+            if needs_rename {
+                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            writeln!(out, "    pub {field_name}: {ty},")?;
+        } else if prop_schema.is_object_with_properties() {
+            let nested_name = prop_schema
+                .title
+                .as_deref()
+                .filter(|t| !t.trim().is_empty())
+                .map_or_else(|| to_pascal_case(key), sanitize_struct_name);
+            let ty = if required_set.contains(key.as_str()) {
+                nested_name.clone()
+            } else {
+                format!("Option<{nested_name}>")
+            };
+            if needs_rename {
+                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            writeln!(out, "    pub {field_name}: {ty},")?;
+        }
+    }
+    Ok(())
+}
+
+/// Generate Rust source from a parsed schema and write it to `out`.
+///
+/// Root schema must have `type: "object"` and non-empty `properties`.
+///
+/// # Errors
+///
+/// Returns [`Error::RootNotObject`] if the root schema is not an object with properties.
+/// Returns [`Error::Io`] on write failure.
+pub fn generate_rust(schema: &Schema, out: &mut impl Write) -> Result<(), Error> {
+    if !schema.is_object_with_properties() {
+        return Err(Error::RootNotObject);
+    }
+
+    let mut structs: Vec<StructToEmit> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    collect_structs(schema, None, &mut structs, &mut seen);
+
+    writeln!(
+        out,
+        "//! Generated by json-schema-rs. Do not edit manually."
+    )?;
+    writeln!(out)?;
+    writeln!(out, "use serde::{{Deserialize, Serialize}};")?;
+    writeln!(out)?;
+
+    for st in &structs {
+        writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
+        writeln!(out, "pub struct {} {{", st.name)?;
+        emit_struct_fields(&st.schema, out)?;
+        writeln!(out, "}}")?;
+        writeln!(out)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generate_rust, sanitize_field_name, to_pascal_case};
+    use crate::schema::Schema;
+    use std::io::Cursor;
+
+    #[test]
+    fn sanitize_field_name_replaces_hyphen() {
+        assert_eq!(sanitize_field_name("foo-bar"), "foo_bar");
+    }
+
+    #[test]
+    fn sanitize_field_name_unchanged_valid() {
+        assert_eq!(sanitize_field_name("first_name"), "first_name");
+    }
+
+    #[test]
+    fn test_to_pascal_case() {
+        assert_eq!(to_pascal_case("address"), "Address");
+        assert_eq!(to_pascal_case("street_address"), "StreetAddress");
+    }
+
+    #[test]
+    fn root_not_object_errors() {
+        let schema = Schema::default();
+        let mut out = Cursor::new(Vec::new());
+        let err = generate_rust(&schema, &mut out).unwrap_err();
+        assert!(matches!(err, crate::error::Error::RootNotObject));
+    }
+
+    #[test]
+    fn root_object_empty_properties_errors() {
+        let schema = Schema {
+            type_: Some("object".to_string()),
+            ..Default::default()
+        };
+        let mut out = Cursor::new(Vec::new());
+        let err = generate_rust(&schema, &mut out).unwrap_err();
+        assert!(matches!(err, crate::error::Error::RootNotObject));
+    }
+
+    #[test]
+    fn single_string_property() {
+        let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let mut out = Cursor::new(Vec::new());
+        generate_rust(&schema, &mut out).unwrap();
+        let got = String::from_utf8(out.into_inner()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Root {
+    pub name: Option<String>,
+}
+
+";
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn required_field_emits_without_option() {
+        let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let mut out = Cursor::new(Vec::new());
+        generate_rust(&schema, &mut out).unwrap();
+        let got = String::from_utf8(out.into_inner()).unwrap();
+        assert!(got.contains("pub id: String,"));
+        assert!(!got.contains("Option<String>"));
+    }
+
+    #[test]
+    fn nested_object_and_rename() {
+        let json = r#"{
+          "type": "object",
+          "properties": {
+            "first_name": { "type": "string" },
+            "address": {
+              "type": "object",
+              "properties": {
+                "street_address": { "type": "string" },
+                "city": { "type": "string" }
+              }
+            }
+          }
+        }"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let mut out = Cursor::new(Vec::new());
+        generate_rust(&schema, &mut out).unwrap();
+        let got = String::from_utf8(out.into_inner()).unwrap();
+        // Nested struct first (Address), then Root
+        assert!(got.contains("pub struct Address {"));
+        assert!(got.contains("pub struct Root {"));
+        let addr_pos = got.find("pub struct Address").unwrap();
+        let root_pos = got.find("pub struct Root").unwrap();
+        assert!(addr_pos < root_pos);
+        // Alphabetical fields in Address: city, street_address
+        assert!(got.contains("pub city: Option<String>"));
+        assert!(got.contains("pub street_address: Option<String>"));
+        // Root has address: Option<Address> and first_name: Option<String>
+        assert!(got.contains("pub address: Option<Address>"));
+        assert!(got.contains("pub first_name: Option<String>"));
+    }
+
+    #[test]
+    fn full_example_from_plan() {
+        let json = r#"{
+          "type": "object",
+          "properties": {
+            "first_name": { "type": "string" },
+            "last_name": { "type": "string" },
+            "birthday": { "type": "string" },
+            "address": {
+              "type": "object",
+              "properties": {
+                "street_address": { "type": "string" },
+                "city": { "type": "string" },
+                "state": { "type": "string" },
+                "country": { "type": "string" }
+              }
+            }
+          }
+        }"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let mut out = Cursor::new(Vec::new());
+        generate_rust(&schema, &mut out).unwrap();
+        let got = String::from_utf8(out.into_inner()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Address {
+    pub city: Option<String>,
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub street_address: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Root {
+    pub address: Option<Address>,
+    pub birthday: Option<String>,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+}
+
+";
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn field_rename_when_key_differs_from_identifier() {
+        let json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let mut out = Cursor::new(Vec::new());
+        generate_rust(&schema, &mut out).unwrap();
+        let got = String::from_utf8(out.into_inner()).unwrap();
+        assert!(got.contains("#[serde(rename = \"foo-bar\")]"));
+        assert!(got.contains("pub foo_bar: Option<String>"));
+    }
+}

@@ -1,0 +1,68 @@
+For each of these TODO items, check what every other competitor library does, choose the best approach.
+
+- implement a standalone function to sanitize/normalize Rust model names (e.g. PascalCase).
+  Compare against all other libraries for other programming languages to see what kinds of edge
+  cases they're covering that we might not know about. Most importantly analyze the competitor
+  Rust crates to see how they make sure that generated model names are actually valid Rust
+  struct/enum/etc identifiers, and how they handle name/namespace collisions, etc. We should have
+  extensive unit tests here.
+  As part of this, do libraries which generate models/classes/structs/POJOs/etc from JSON Schema
+  use the field name as the model's Name, or does it use the JSON Schema "title" field as the
+  model's Name. Which one is used by default, and which one is used as the fallback? Gather this
+  data from across all relevant competitor repos. (My opinion is that we may want to default to
+  field name, with a fallback to "title" if necessary. This should be configurable via Settings.)
+- implement refs/defs (and figure out if there's a way that this will tie into the "deduplicate
+  identical definitions" idea that's mentioned beneath this idea. Maybe they're implemented as
+  part of the same system)
+- implement the ability to dedupe generated structs. Aka, if the given JSON Schema definition has
+  multiple different object definitions which are literally identical in every way (have the same
+  amount of fields which are of the same types which have the same constraints and descriptions etc)
+  then we should figure out if we could check for that, and generate only a single Rust model
+  which satisfies all of the duplicate object definitions (instead of generating multiple identical
+  Rust structs)
+- figure out how to test that our generated Rust structs actually compile properly.
+  Somehow we need to take JSON Schema definitions and emit Rust structs as files on disk or something,
+  then attempt to use the generated models in a test program or something in order to test if our library
+  even works or not. This is different than testing/asserting against a known-good string - because
+  how do we even know if the known-good string works correctly? We need to actually test against the
+  code that we're generating.
+- implement the json-schema-rs library in such a way that we can generate models in any language,
+  not just Rust. We should have some sort of trait which defines the contract for how this library
+  works, and it should take our intermediate json schema representation as input,
+  and spit out a Vec<u8> of the generated models in the target language. We'll then have our own
+  struct which implements and satisfies the interface and specifically generates Rust models.
+- figure out how to automatically run benchmarks for our library, and do the same for all relevant
+  competitor libraries. It must be automated after running a single Makefile target command.
+  It should spit out individual results for the relevant metrics of our library, the same for
+  competitor libraries, and then compare them all against each other to clearly mark a winner
+  for each given category.
+- let's create a new root-level "design" dir to hold our knowledge bank of features that our library
+  supports. We should have individual Markdown files for each specific JSON Schema feature/field.
+  e.g. we should have a "high level architecture" markdown file which roughly describes how we've
+  designed our library's architecture.
+  e.g. we should have a "strings" Markdown file to remember how we went about implementing strings
+  in our library. This should also contain information regarding how every single available
+  JSON Schema specification has mentioned that Strings should be implemented. We should then compare
+  how the spec has changed between each version, and ultimately implement how the most recent spec
+  has defined how strings should function. We should note down all of this inside this "strings"
+  markdown file. And if there are any differences in how different specs declare strings should work,
+  then we should offer a Setting/Config which can enable/disable functionality based on a specific version.
+  e.g. we should have Markdown files, 1 for every JSON Schema feature/field, which mimics how we
+  described the "strings" markdown file should work.
+- if we have any kind of recursion, let's implement it as iterative approach rather than a literal
+  recursion algorithm (don't want to be impacted via stack overflow issues or related issues)
+- figure out how to generatr rust via macros using this same lib
+- why do we need these Schema impl functions? is_object_with_properties, is_string, is_required.
+  Do they really need to be a part of the public API? Just want to learn and understand.
+- Please refactor all tests such that they always have an "expected" variable, an "actual" variable,
+  and a single assert which compares them. I greatly prefer to not test subsets of the "actual" variable,
+  because I want the test function to test the whole scenario together. Every unit test should basically
+  only ever have like one assert (but I'm sure there are exceptions). Please document this in the
+  contribution guide.
+- support UUIDs
+- support integer fields being generated as the smallest possible Rust integer type that fits the range
+  using minimum/maximum bounds: i8, u8, i16, u16, etc. Do the same thing for number fields being
+  generated as f32/f64 if minimum/maximum are set accordingly, otherwise fallback to f64.
+- implement Enums as Rust Enums instead of Rust Strings. Handle collisions (multiple JSON values
+  mapping to the same name) with suffixes like `_0` and `_1`. If an enum name starts with an invalid char
+  (like a non-letter), prefix it with `E`.

@@ -1,0 +1,147 @@
+//! In-memory representation of JSON Schema for codegen.
+
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
+/// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
+/// First type in the array is used; codegen uses `object` and `string`.
+fn deserialize_type_optional<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TypeOrArray {
+        Single(String),
+        Array(Vec<String>),
+    }
+    let value: TypeOrArray = Deserialize::deserialize(deserializer)?;
+    let first = match value {
+        TypeOrArray::Single(s) => Some(s),
+        TypeOrArray::Array(a) => a.into_iter().next(),
+    };
+    Ok(first)
+}
+
+/// Schema model used for code generation.
+#[derive(Debug, Clone, Default)]
+pub struct Schema {
+    /// Schema type; `object` and `string` drive codegen; others are ignored.
+    pub type_: Option<String>,
+
+    /// Object properties (only when type is "object"). Default empty; use `BTreeMap` for stable ordering.
+    pub properties: BTreeMap<String, Schema>,
+
+    /// Required property names at this object level. When absent, all properties are optional.
+    pub required: Option<Vec<String>>,
+
+    /// Used for struct naming when present (`PascalCase`).
+    pub title: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for Schema {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SchemaHelper {
+            #[serde(default, deserialize_with = "deserialize_type_optional")]
+            #[serde(rename = "type")]
+            type_: Option<String>,
+            #[serde(default)]
+            properties: Option<BTreeMap<String, Schema>>,
+            #[serde(default)]
+            required: Option<Vec<String>>,
+            #[serde(default)]
+            title: Option<String>,
+        }
+        let h: SchemaHelper = SchemaHelper::deserialize(deserializer)?;
+        Ok(Schema {
+            type_: h.type_,
+            properties: h.properties.unwrap_or_default(),
+            required: h.required,
+            title: h.title,
+        })
+    }
+}
+
+impl Schema {
+    /// Returns true if this schema is an object with properties (for codegen).
+    #[must_use]
+    pub fn is_object_with_properties(&self) -> bool {
+        self.type_.as_deref() == Some("object") && !self.properties.is_empty()
+    }
+
+    /// Returns true if this schema is type "string".
+    #[must_use]
+    pub fn is_string(&self) -> bool {
+        self.type_.as_deref() == Some("string")
+    }
+
+    /// Returns true if the given property name is required at this object level.
+    #[must_use]
+    pub fn is_required(&self, name: &str) -> bool {
+        self.required
+            .as_ref()
+            .is_some_and(|r| r.iter().any(|s| s == name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Schema;
+
+    #[test]
+    fn deserialize_minimal_object_schema() {
+        let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
+        let schema: Schema = serde_json::from_str(json).expect("parse");
+        assert_eq!(schema.type_.as_deref(), Some("object"));
+        assert_eq!(schema.properties.len(), 1);
+        let a = schema.properties.get("a").unwrap();
+        assert_eq!(a.type_.as_deref(), Some("string"));
+        assert!(schema.required.is_none());
+    }
+
+    #[test]
+    fn deserialize_with_required() {
+        let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
+        let schema: Schema = serde_json::from_str(json).expect("parse");
+        assert!(schema.is_required("x"));
+        assert!(!schema.is_required("y"));
+    }
+
+    #[test]
+    fn deserialize_ignores_unknown_keys() {
+        let json =
+            r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
+        let schema: Schema = serde_json::from_str(json).expect("parse");
+        assert_eq!(schema.type_.as_deref(), Some("object"));
+        assert!(schema.properties.is_empty());
+    }
+
+    #[test]
+    fn deserialize_type_array_takes_first() {
+        let json = r#"{"type":["string", "null"],"properties":{}}"#;
+        let schema: Schema = serde_json::from_str(json).expect("parse");
+        assert_eq!(schema.type_.as_deref(), Some("string"));
+    }
+
+    #[test]
+    fn is_object_with_properties() {
+        let mut s = Schema::default();
+        assert!(!s.is_object_with_properties());
+        s.type_ = Some("object".to_string());
+        assert!(!s.is_object_with_properties());
+        s.properties.insert("x".to_string(), Schema::default());
+        assert!(s.is_object_with_properties());
+    }
+
+    #[test]
+    fn is_string() {
+        let mut s = Schema::default();
+        assert!(!s.is_string());
+        s.type_ = Some("string".to_string());
+        assert!(s.is_string());
+    }
+}
