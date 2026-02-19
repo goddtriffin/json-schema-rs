@@ -3,7 +3,7 @@
 //! Collects every validation error (no fail-fast) and returns them in a single result.
 
 use crate::json_pointer::JsonPointer;
-use crate::schema::Schema;
+use crate::json_schema::JsonSchema;
 use serde_json::Value;
 use std::fmt;
 
@@ -77,17 +77,17 @@ pub type ValidationResult = Result<(), Vec<ValidationError>>;
 /// # Example
 ///
 /// ```
-/// use json_schema_rs::{Schema, validate};
+/// use json_schema_rs::{JsonSchema, validate};
 /// use serde_json::json;
 ///
-/// let schema: Schema = serde_json::from_str(r#"{"type":"object","properties":{"name":{"type":"string"}}}"#).unwrap();
+/// let schema: JsonSchema = serde_json::from_str(r#"{"type":"object","properties":{"name":{"type":"string"}}}"#).unwrap();
 /// let instance = json!({"name": "Alice"});
 /// let result = validate(&schema, &instance);
 /// assert!(result.is_ok());
 /// ```
-pub fn validate(schema: &Schema, instance: &Value) -> ValidationResult {
+pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
     let mut errors: Vec<ValidationError> = Vec::new();
-    let mut stack: Vec<(&Schema, &Value, JsonPointer)> = Vec::new();
+    let mut stack: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
     stack.push((schema, instance, JsonPointer::root()));
 
     while let Some((schema, instance, instance_path)) = stack.pop() {
@@ -111,7 +111,7 @@ pub fn validate(schema: &Schema, instance: &Value) -> ValidationResult {
                     }
                 }
                 // Push in reverse order so we pop in schema properties order (first key first).
-                let mut pending: Vec<(&Schema, &Value, JsonPointer)> = Vec::new();
+                let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
                 for (key, sub_schema) in &schema.properties {
                     if let Some(value) = obj.get(key) {
                         let path = instance_path.push(key);
@@ -142,7 +142,7 @@ pub fn validate(schema: &Schema, instance: &Value) -> ValidationResult {
                             }
                         }
                     }
-                    let mut pending: Vec<(&Schema, &Value, JsonPointer)> = Vec::new();
+                    let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
                     for (key, sub_schema) in &schema.properties {
                         if let Some(value) = obj.get(key) {
                             let path = instance_path.push(key);
@@ -168,15 +168,15 @@ pub fn validate(schema: &Schema, instance: &Value) -> ValidationResult {
 mod tests {
     use super::{ValidationError, validate};
     use crate::json_pointer::JsonPointer;
-    use crate::schema::Schema;
+    use crate::json_schema::JsonSchema;
     use serde_json::json;
     use std::collections::BTreeMap;
 
     fn schema_object_with_required(
         required: Vec<&str>,
-        properties: BTreeMap<String, Schema>,
-    ) -> Schema {
-        Schema {
+        properties: BTreeMap<String, JsonSchema>,
+    ) -> JsonSchema {
+        JsonSchema {
             type_: Some("object".to_string()),
             properties,
             required: Some(required.into_iter().map(String::from).collect()),
@@ -190,14 +190,14 @@ mod tests {
             let mut m = BTreeMap::new();
             m.insert(
                 "a".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "b".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -215,7 +215,7 @@ mod tests {
             let mut m = BTreeMap::new();
             m.insert(
                 "name".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn wrong_type_string_instead_of_object() {
-        let schema = Schema {
+        let schema: JsonSchema = JsonSchema {
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn wrong_type_object_instead_of_string() {
-        let schema = Schema {
+        let schema: JsonSchema = JsonSchema {
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -272,13 +272,13 @@ mod tests {
             let mut m = BTreeMap::new();
             m.insert(
                 "address".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("object".to_string()),
                     properties: {
                         let mut inner = BTreeMap::new();
                         inner.insert(
                             "city".to_string(),
-                            Schema {
+                            JsonSchema {
                                 type_: Some("string".to_string()),
                                 ..Default::default()
                             },
@@ -307,7 +307,7 @@ mod tests {
             let mut m = BTreeMap::new();
             m.insert(
                 "opt".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -325,21 +325,21 @@ mod tests {
             let mut m = BTreeMap::new();
             m.insert(
                 "a".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "b".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "c".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -375,20 +375,20 @@ mod tests {
             let mut m = BTreeMap::new();
             m.insert(
                 "x".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "nested".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("object".to_string()),
                     properties: {
                         let mut inner = BTreeMap::new();
                         inner.insert(
                             "y".to_string(),
-                            Schema {
+                            JsonSchema {
                                 type_: Some("string".to_string()),
                                 ..Default::default()
                             },
@@ -418,13 +418,13 @@ mod tests {
     #[test]
     fn deeply_nested_instance_does_not_stack_overflow() {
         const DEPTH: usize = 200;
-        let mut inner: Schema = Schema {
+        let mut inner: JsonSchema = JsonSchema {
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "value".to_string(),
-                    Schema {
+                    JsonSchema {
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -435,7 +435,7 @@ mod tests {
             title: None,
         };
         for _ in 0..DEPTH {
-            let mut wrap: Schema = Schema {
+            let mut wrap: JsonSchema = JsonSchema {
                 type_: Some("object".to_string()),
                 properties: BTreeMap::new(),
                 required: Some(vec!["child".to_string()]),
@@ -470,7 +470,7 @@ mod tests {
             let mut m = BTreeMap::new();
             m.insert(
                 "a/b".to_string(),
-                Schema {
+                JsonSchema {
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },

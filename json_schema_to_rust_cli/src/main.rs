@@ -1,6 +1,6 @@
 //! CLI: read JSON Schema from stdin, write generated Rust to stdout.
 
-use json_schema_rs::{Schema, generate_rust};
+use json_schema_rs::{JsonSchema, generate_rust};
 use std::io::{self, Read, Write};
 
 fn main() {
@@ -9,7 +9,7 @@ fn main() {
         eprintln!("error: failed to read stdin");
         std::process::exit(1);
     }
-    let schema: Schema = match serde_json::from_slice(&input) {
+    let schema: JsonSchema = match serde_json::from_slice(&input) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: invalid JSON Schema: {e}");

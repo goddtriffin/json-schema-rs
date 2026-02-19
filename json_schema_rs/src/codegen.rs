@@ -1,7 +1,7 @@
 //! Code generation: schema → Rust source written to a writer.
 
 use crate::error::Error;
-use crate::schema::Schema;
+use crate::json_schema::JsonSchema;
 use std::collections::BTreeSet;
 use std::io::Write;
 
@@ -68,13 +68,13 @@ fn sanitize_struct_name(s: &str) -> String {
 /// One struct to emit: name and the object schema (root or nested).
 struct StructToEmit {
     name: String,
-    schema: Schema,
+    schema: JsonSchema,
 }
 
 /// Collect all object schemas that need a struct in topological order (children before parents).
 /// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
 fn collect_structs(
-    schema: &Schema,
+    schema: &JsonSchema,
     from_key: Option<&str>,
     out: &mut Vec<StructToEmit>,
     seen: &mut BTreeSet<String>,
@@ -84,15 +84,15 @@ fn collect_structs(
     }
 
     // Phase 1: iterative post-order DFS to collect (schema, from_key) so children come before parents.
-    let mut post_order: Vec<(Schema, Option<String>)> = Vec::new();
-    let mut stack: Vec<(Schema, Option<String>, usize)> = Vec::new();
+    let mut post_order: Vec<(JsonSchema, Option<String>)> = Vec::new();
+    let mut stack: Vec<(JsonSchema, Option<String>, usize)> = Vec::new();
     stack.push((schema.clone(), from_key.map(String::from), 0));
 
     while let Some((schema_node, from_key_opt, index)) = stack.pop() {
         let keys: Vec<String> = schema_node.properties.keys().cloned().collect();
         if index < keys.len() {
             let key: String = keys.get(index).unwrap().clone();
-            let child: Schema = schema_node.properties.get(&key).unwrap().clone();
+            let child: JsonSchema = schema_node.properties.get(&key).unwrap().clone();
             stack.push((schema_node, from_key_opt, index + 1));
             if child.is_object_with_properties() {
                 stack.push((child, Some(key), 0));
@@ -125,7 +125,7 @@ fn collect_structs(
 }
 
 /// Emit a single struct's fields to `out`.
-fn emit_struct_fields(schema: &Schema, out: &mut impl Write) -> Result<(), Error> {
+fn emit_struct_fields(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
     for (key, prop_schema) in &schema.properties {
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
@@ -168,7 +168,7 @@ fn emit_struct_fields(schema: &Schema, out: &mut impl Write) -> Result<(), Error
 ///
 /// Returns [`Error::RootNotObject`] if the root schema is not an object with properties.
 /// Returns [`Error::Io`] on write failure.
-pub fn generate_rust(schema: &Schema, out: &mut impl Write) -> Result<(), Error> {
+pub fn generate_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
     if !schema.is_object_with_properties() {
         return Err(Error::RootNotObject);
     }
@@ -199,7 +199,7 @@ pub fn generate_rust(schema: &Schema, out: &mut impl Write) -> Result<(), Error>
 #[cfg(test)]
 mod tests {
     use super::{generate_rust, sanitize_field_name, to_pascal_case};
-    use crate::schema::Schema;
+    use crate::json_schema::JsonSchema;
     use std::io::Cursor;
 
     #[test]
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn root_not_object_errors() {
-        let schema = Schema::default();
+        let schema = JsonSchema::default();
         let mut out = Cursor::new(Vec::new());
         let actual = generate_rust(&schema, &mut out).unwrap_err();
         assert!(matches!(actual, crate::error::Error::RootNotObject));
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn root_object_empty_properties_errors() {
-        let schema = Schema {
+        let schema = JsonSchema {
             type_: Some("object".to_string()),
             ..Default::default()
         };
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn single_string_property() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
-        let schema: Schema = serde_json::from_str(json).unwrap();
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let mut out = Cursor::new(Vec::new());
         generate_rust(&schema, &mut out).unwrap();
         let actual = String::from_utf8(out.into_inner()).unwrap();
@@ -272,7 +272,7 @@ pub struct Root {
     #[test]
     fn required_field_emits_without_option() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
-        let schema: Schema = serde_json::from_str(json).unwrap();
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let mut out = Cursor::new(Vec::new());
         generate_rust(&schema, &mut out).unwrap();
         let actual = String::from_utf8(out.into_inner()).unwrap();
@@ -304,7 +304,7 @@ pub struct Root {
             }
           }
         }"#;
-        let schema: Schema = serde_json::from_str(json).unwrap();
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let mut out = Cursor::new(Vec::new());
         generate_rust(&schema, &mut out).unwrap();
         let actual = String::from_utf8(out.into_inner()).unwrap();
@@ -347,7 +347,7 @@ pub struct Root {
             }
           }
         }"#;
-        let schema: Schema = serde_json::from_str(json).unwrap();
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let mut out = Cursor::new(Vec::new());
         generate_rust(&schema, &mut out).unwrap();
         let actual = String::from_utf8(out.into_inner()).unwrap();
@@ -378,13 +378,13 @@ pub struct Root {
     #[test]
     fn deeply_nested_schema_does_not_stack_overflow() {
         const DEPTH: usize = 150;
-        let mut inner: Schema = Schema {
+        let mut inner: JsonSchema = JsonSchema {
             type_: Some("object".to_string()),
             properties: {
                 let mut m = std::collections::BTreeMap::new();
                 m.insert(
                     "value".to_string(),
-                    Schema {
+                    JsonSchema {
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -395,7 +395,7 @@ pub struct Root {
             title: Some("Leaf".to_string()),
         };
         for i in (0..DEPTH).rev() {
-            let mut wrap: Schema = Schema {
+            let mut wrap: JsonSchema = JsonSchema {
                 type_: Some("object".to_string()),
                 properties: std::collections::BTreeMap::new(),
                 required: None,
@@ -421,7 +421,7 @@ pub struct Root {
     #[test]
     fn field_rename_when_key_differs_from_identifier() {
         let json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
-        let schema: Schema = serde_json::from_str(json).unwrap();
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let mut out = Cursor::new(Vec::new());
         generate_rust(&schema, &mut out).unwrap();
         let actual = String::from_utf8(out.into_inner()).unwrap();

@@ -25,12 +25,12 @@ where
 
 /// Schema model used for code generation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Schema {
+pub struct JsonSchema {
     /// Schema type; `object` and `string` drive codegen; others are ignored.
     pub type_: Option<String>,
 
     /// Object properties (only when type is "object"). Default empty; use `BTreeMap` for stable ordering.
-    pub properties: BTreeMap<String, Schema>,
+    pub properties: BTreeMap<String, JsonSchema>,
 
     /// Required property names at this object level. When absent, all properties are optional.
     pub required: Option<Vec<String>>,
@@ -39,25 +39,25 @@ pub struct Schema {
     pub title: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for Schema {
+impl<'de> Deserialize<'de> for JsonSchema {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct SchemaHelper {
+        struct JsonSchemaHelper {
             #[serde(default, deserialize_with = "deserialize_type_optional")]
             #[serde(rename = "type")]
             type_: Option<String>,
             #[serde(default)]
-            properties: Option<BTreeMap<String, Schema>>,
+            properties: Option<BTreeMap<String, JsonSchema>>,
             #[serde(default)]
             required: Option<Vec<String>>,
             #[serde(default)]
             title: Option<String>,
         }
-        let h: SchemaHelper = SchemaHelper::deserialize(deserializer)?;
-        Ok(Schema {
+        let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
+        Ok(JsonSchema {
             type_: h.type_,
             properties: h.properties.unwrap_or_default(),
             required: h.required,
@@ -66,7 +66,7 @@ impl<'de> Deserialize<'de> for Schema {
     }
 }
 
-impl Schema {
+impl JsonSchema {
     /// Returns true if this schema is an object with properties (for codegen).
     #[must_use]
     pub(crate) fn is_object_with_properties(&self) -> bool {
@@ -90,19 +90,19 @@ impl Schema {
 
 #[cfg(test)]
 mod tests {
-    use super::Schema;
+    use super::JsonSchema;
     use std::collections::BTreeMap;
 
     #[test]
     fn deserialize_simple_object_schema() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
-        let expected: Schema = Schema {
+        let expected: JsonSchema = JsonSchema {
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
-                    Schema {
+                    JsonSchema {
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -112,27 +112,27 @@ mod tests {
             required: None,
             title: None,
         };
-        let actual: Schema = serde_json::from_str(json).expect("parse");
+        let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn deserialize_with_required() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
-        let expected: Schema = Schema {
+        let expected: JsonSchema = JsonSchema {
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "x".to_string(),
-                    Schema {
+                    JsonSchema {
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
                 );
                 m.insert(
                     "y".to_string(),
-                    Schema {
+                    JsonSchema {
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -142,7 +142,7 @@ mod tests {
             required: Some(vec!["x".to_string()]),
             title: None,
         };
-        let actual: Schema = serde_json::from_str(json).expect("parse");
+        let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
     }
 
@@ -150,32 +150,32 @@ mod tests {
     fn deserialize_ignores_unknown_keys() {
         let json =
             r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
-        let expected: Schema = Schema {
+        let expected: JsonSchema = JsonSchema {
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
             title: None,
         };
-        let actual: Schema = serde_json::from_str(json).expect("parse");
+        let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn deserialize_type_array_takes_first() {
         let json = r#"{"type":["string", "null"],"properties":{}}"#;
-        let expected: Schema = Schema {
+        let expected: JsonSchema = JsonSchema {
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
             title: None,
         };
-        let actual: Schema = serde_json::from_str(json).expect("parse");
+        let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn is_object_with_properties() {
-        let mut s = Schema::default();
+        let mut s = JsonSchema::default();
         let actual = [
             s.is_object_with_properties(),
             {
@@ -183,7 +183,7 @@ mod tests {
                 s.is_object_with_properties()
             },
             {
-                s.properties.insert("x".to_string(), Schema::default());
+                s.properties.insert("x".to_string(), JsonSchema::default());
                 s.is_object_with_properties()
             },
         ];
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn is_string() {
-        let mut s = Schema::default();
+        let mut s = JsonSchema::default();
         let actual = [s.is_string(), {
             s.type_ = Some("string".to_string());
             s.is_string()

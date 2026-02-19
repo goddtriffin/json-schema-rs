@@ -69,19 +69,19 @@ json-schema-rs = "0.0.4"
 Parse a schema and generate Rust to a writer:
 
 ```rust
-use json_schema_rs::{generate_rust, Schema};
+use json_schema_rs::{generate_rust, JsonSchema};
 
-let schema: Schema = serde_json::from_str(schema_json)?;
+let schema: JsonSchema = serde_json::from_str(schema_json)?;
 generate_rust(&schema, &mut output)?;
 ```
 
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
 
 ```rust
-use json_schema_rs::{validate, Schema};
+use json_schema_rs::{validate, JsonSchema};
 use serde_json::Value;
 
-let schema: Schema = serde_json::from_str(schema_json)?;
+let schema: JsonSchema = serde_json::from_str(schema_json)?;
 let instance: Value = serde_json::from_str(instance_json)?;
 let result = validate(&schema, &instance);
 if let Err(errors) = result {

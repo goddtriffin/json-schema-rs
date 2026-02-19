@@ -23,9 +23,9 @@ We have three separate pipelines: Schema→Rust, Rust→Schema, and the validato
 
 ### JSON Schema validator
 
-The validator takes the same **Schema** type used by codegen and a JSON instance (`serde_json::Value`) and returns `Result<(), Vec<ValidationError>>` (type alias **ValidationResult**). It collects **all** validation errors (no fail-fast) and returns them at the end. Inputs: `&Schema`, `&Value`. Output: `Ok(())` when valid, `Err(errors)` when invalid.
+The validator takes the same **JsonSchema** type used by codegen and a JSON instance (`serde_json::Value`) and returns `Result<(), Vec<ValidationError>>` (type alias **ValidationResult**). It collects **all** validation errors (no fail-fast) and returns them at the end. Inputs: `&JsonSchema`, `&Value`. Output: `Ok(())` when valid, `Err(errors)` when invalid.
 
-**Supported keywords:** `type` (object, string), `required`, `properties` (recursive). Does not resolve `$ref` or `$defs`; additional properties are allowed. The validator reuses the same Schema struct as codegen; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same Schema model would be used.
+**Supported keywords:** `type` (object, string), `required`, `properties` (recursive). Does not resolve `$ref` or `$defs`; additional properties are allowed. The validator reuses the same JsonSchema struct as codegen; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same schema model would be used.
 
 ### Our top values
 
@@ -44,6 +44,10 @@ These drive design decisions and how we rank competitors:
 - **Schema model**: Only model schema fields we need. Use serde with `#[serde(default)]` and `Option` for optional keys.
 - **Errors**: Use a custom error enum with manual `Debug`, `Display`, `Error`, and `From` impls (no thiserror unless the project adopts it).
 - **No literal recursion**: Use an explicit stack (or queue) and iterative loops instead of recursive calls so depth is limited by heap, not call stack. Avoids stack overflow on deeply nested schemas or instances.
+
+### Schema model: struct vs enum
+
+We represent the in-memory schema as a **struct** (`JsonSchema`) with optional fields, not as a Rust enum of schema subtypes (e.g. `ObjectSchema | StringSchema | ...`). Rationale: the JSON Schema spec defines a schema as a **single JSON object with optional keys**; a struct mirrors that shape and keeps deserialization simple. By contrast, `serde_json::Value` is an enum because a JSON *value* is exactly one of several mutually exclusive kinds (Null, Bool, Number, String, Array, Object)—a different domain. Competitor Rust libraries (e.g. schemafy, typify/schemars) use either a typed struct or an untyped Value wrapper; none use an enum of schema subtypes. Using an enum would complicate deserialization and duplicate shared metadata (e.g. title) across variants without clear benefit for our supported keyword subset.
 
 ---
 
@@ -147,7 +151,7 @@ TODO.
 
 ### type
 
-We support a single type string or an array of types (draft 2020-12 style); we take the **first** type. `object` and `string` drive codegen today; other types are ignored. See schema model in `json_schema_rs/src/schema.rs` and codegen in `json_schema_rs/src/codegen.rs`.
+We support a single type string or an array of types (draft 2020-12 style); we take the **first** type. `object` and `string` drive codegen today; other types are ignored. See schema model in `json_schema_rs/src/json_schema.rs` and codegen in `json_schema_rs/src/codegen.rs`.
 
 **Spec version quirks:** (placeholder or blank)
 
@@ -169,7 +173,7 @@ TODO. (Planned: JSON Schema `enum` = array of allowed values. Only string enums 
 
 ### properties
 
-We use `properties` to build structs: each property becomes a struct field. Property keys are sanitized for Rust (e.g. `-` → `_`). When the Rust field name differs from the JSON key, we emit `#[serde(rename = "...")]`. Object schemas are traversed recursively; each object with `properties` yields a Rust struct. See `schema.rs` and `codegen.rs`.
+We use `properties` to build structs: each property becomes a struct field. Property keys are sanitized for Rust (e.g. `-` → `_`). When the Rust field name differs from the JSON key, we emit `#[serde(rename = "...")]`. Object schemas are traversed recursively; each object with `properties` yields a Rust struct. See `json_schema.rs` and `codegen.rs`.
 
 **Spec version quirks:** (placeholder or blank)
 

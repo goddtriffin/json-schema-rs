@@ -6,11 +6,11 @@
 pub mod codegen;
 pub mod error;
 pub mod json_pointer;
-pub mod schema;
+pub mod json_schema;
 pub mod validation;
 
 pub use codegen::generate_rust;
 pub use error::Error;
 pub use json_pointer::{JsonPointer, JsonPointerError};
-pub use schema::Schema;
+pub use json_schema::JsonSchema;
 pub use validation::{ValidationError, ValidationResult, validate};
