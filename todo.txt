@@ -36,8 +36,6 @@ For each of these TODO items, check what every other competitor library does, ch
   It should spit out individual results for the relevant metrics of our library, the same for
   competitor libraries, and then compare them all against each other to clearly mark a winner
   for each given category.
-- if we have any kind of recursion, let's implement it as iterative approach rather than a literal
-  recursion algorithm (don't want to be impacted via stack overflow issues or related issues)
 - figure out how to generatr rust via macros using this same lib
 - support UUIDs
 - support integer fields being generated as the smallest possible Rust integer type that fits the range

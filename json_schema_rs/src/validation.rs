@@ -87,57 +87,19 @@ pub type ValidationResult = Result<(), Vec<ValidationError>>;
 /// ```
 pub fn validate(schema: &Schema, instance: &Value) -> ValidationResult {
     let mut errors: Vec<ValidationError> = Vec::new();
-    validate_at(schema, instance, &JsonPointer::root(), &mut errors);
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
-}
+    let mut stack: Vec<(&Schema, &Value, JsonPointer)> = Vec::new();
+    stack.push((schema, instance, JsonPointer::root()));
 
-/// Recursive validation: append all errors to `errors`, never return early.
-fn validate_at(
-    schema: &Schema,
-    instance: &Value,
-    instance_path: &JsonPointer,
-    errors: &mut Vec<ValidationError>,
-) {
-    let expected_type: Option<&str> = schema.type_.as_deref();
-    match expected_type {
-        Some("object") => {
-            let Some(obj) = instance.as_object() else {
-                errors.push(ValidationError::ExpectedObject {
-                    instance_path: instance_path.clone(),
-                });
-                return;
-            };
-            if let Some(ref required) = schema.required {
-                for name in required {
-                    if !obj.contains_key(name) {
-                        errors.push(ValidationError::MissingRequired {
-                            instance_path: instance_path.push(name),
-                            property: name.clone(),
-                        });
-                    }
-                }
-            }
-            for (key, sub_schema) in &schema.properties {
-                if let Some(value) = obj.get(key) {
-                    let path = instance_path.push(key);
-                    validate_at(sub_schema, value, &path, errors);
-                }
-            }
-        }
-        Some("string") => {
-            if !instance.is_string() {
-                errors.push(ValidationError::ExpectedString {
-                    instance_path: instance_path.clone(),
-                });
-            }
-        }
-        None | Some(_) => {
-            // Type absent or not enforced: validate required/properties when instance is object
-            if let Some(obj) = instance.as_object() {
+    while let Some((schema, instance, instance_path)) = stack.pop() {
+        let expected_type: Option<&str> = schema.type_.as_deref();
+        match expected_type {
+            Some("object") => {
+                let Some(obj) = instance.as_object() else {
+                    errors.push(ValidationError::ExpectedObject {
+                        instance_path: instance_path.clone(),
+                    });
+                    continue;
+                };
                 if let Some(ref required) = schema.required {
                     for name in required {
                         if !obj.contains_key(name) {
@@ -148,14 +110,57 @@ fn validate_at(
                         }
                     }
                 }
+                // Push in reverse order so we pop in schema properties order (first key first).
+                let mut pending: Vec<(&Schema, &Value, JsonPointer)> = Vec::new();
                 for (key, sub_schema) in &schema.properties {
                     if let Some(value) = obj.get(key) {
                         let path = instance_path.push(key);
-                        validate_at(sub_schema, value, &path, errors);
+                        pending.push((sub_schema, value, path));
+                    }
+                }
+                for item in pending.into_iter().rev() {
+                    stack.push(item);
+                }
+            }
+            Some("string") => {
+                if !instance.is_string() {
+                    errors.push(ValidationError::ExpectedString {
+                        instance_path: instance_path.clone(),
+                    });
+                }
+            }
+            None | Some(_) => {
+                // Type absent or not enforced: validate required/properties when instance is object
+                if let Some(obj) = instance.as_object() {
+                    if let Some(ref required) = schema.required {
+                        for name in required {
+                            if !obj.contains_key(name) {
+                                errors.push(ValidationError::MissingRequired {
+                                    instance_path: instance_path.push(name),
+                                    property: name.clone(),
+                                });
+                            }
+                        }
+                    }
+                    let mut pending: Vec<(&Schema, &Value, JsonPointer)> = Vec::new();
+                    for (key, sub_schema) in &schema.properties {
+                        if let Some(value) = obj.get(key) {
+                            let path = instance_path.push(key);
+                            pending.push((sub_schema, value, path));
+                        }
+                    }
+                    for item in pending.into_iter().rev() {
+                        stack.push(item);
                     }
                 }
             }
         }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 
@@ -408,6 +413,55 @@ mod tests {
         let paths: Vec<&str> = errs.iter().map(|e| e.instance_path().as_str()).collect();
         assert!(paths.contains(&"/x"));
         assert!(paths.contains(&"/nested/y"));
+    }
+
+    #[test]
+    fn deeply_nested_instance_does_not_stack_overflow() {
+        const DEPTH: usize = 200;
+        let mut inner: Schema = Schema {
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "value".to_string(),
+                    Schema {
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            required: Some(vec!["value".to_string()]),
+            title: None,
+        };
+        for _ in 0..DEPTH {
+            let mut wrap: Schema = Schema {
+                type_: Some("object".to_string()),
+                properties: BTreeMap::new(),
+                required: Some(vec!["child".to_string()]),
+                title: None,
+            };
+            wrap.properties.insert("child".to_string(), inner);
+            inner = wrap;
+        }
+        let mut instance_value: serde_json::Value = {
+            let mut leaf = serde_json::Map::new();
+            leaf.insert(
+                "value".to_string(),
+                serde_json::Value::String("ok".to_string()),
+            );
+            serde_json::Value::Object(leaf)
+        };
+        for _ in 0..DEPTH {
+            let mut obj = serde_json::Map::new();
+            obj.insert("child".to_string(), instance_value);
+            instance_value = serde_json::Value::Object(obj);
+        }
+        let result = validate(&inner, &instance_value);
+        assert!(
+            result.is_ok(),
+            "deep validation must not overflow: {result:?}"
+        );
     }
 
     #[test]

@@ -43,6 +43,7 @@ These drive design decisions and how we rank competitors:
 - **Deterministic output**: Use stable ordering (e.g. `BTreeMap` for alphabetical struct and field ordering). Same input always produces same output.
 - **Schema model**: Only model schema fields we need. Use serde with `#[serde(default)]` and `Option` for optional keys.
 - **Errors**: Use a custom error enum with manual `Debug`, `Display`, `Error`, and `From` impls (no thiserror unless the project adopts it).
+- **No literal recursion**: Use an explicit stack (or queue) and iterative loops instead of recursive calls so depth is limited by heap, not call stack. Avoids stack overflow on deeply nested schemas or instances.
 
 ---
 

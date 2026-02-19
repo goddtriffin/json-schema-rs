@@ -72,6 +72,7 @@ struct StructToEmit {
 }
 
 /// Collect all object schemas that need a struct in topological order (children before parents).
+/// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
 fn collect_structs(
     schema: &Schema,
     from_key: Option<&str>,
@@ -81,30 +82,46 @@ fn collect_structs(
     if !schema.is_object_with_properties() {
         return;
     }
-    let name = schema
-        .title
-        .as_deref()
-        .filter(|t| !t.trim().is_empty())
-        .map(sanitize_struct_name)
-        .or_else(|| from_key.map(sanitize_struct_name))
-        .unwrap_or_else(|| "Root".to_string());
 
-    let name_key = name.clone();
-    if seen.contains(&name_key) {
-        return;
-    }
-    seen.insert(name_key);
+    // Phase 1: iterative post-order DFS to collect (schema, from_key) so children come before parents.
+    let mut post_order: Vec<(Schema, Option<String>)> = Vec::new();
+    let mut stack: Vec<(Schema, Option<String>, usize)> = Vec::new();
+    stack.push((schema.clone(), from_key.map(String::from), 0));
 
-    for (key, sub) in &schema.properties {
-        if sub.is_object_with_properties() {
-            collect_structs(sub, Some(key.as_str()), out, seen);
+    while let Some((schema_node, from_key_opt, index)) = stack.pop() {
+        let keys: Vec<String> = schema_node.properties.keys().cloned().collect();
+        if index < keys.len() {
+            let key: String = keys.get(index).unwrap().clone();
+            let child: Schema = schema_node.properties.get(&key).unwrap().clone();
+            stack.push((schema_node, from_key_opt, index + 1));
+            if child.is_object_with_properties() {
+                stack.push((child, Some(key), 0));
+            }
+        } else {
+            post_order.push((schema_node, from_key_opt));
         }
     }
 
-    out.push(StructToEmit {
-        name,
-        schema: schema.clone(),
-    });
+    // Phase 2: emit in post-order, dedupe by name (first occurrence wins).
+    for (schema_node, from_key_opt) in post_order {
+        let name: String = schema_node
+            .title
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .map(sanitize_struct_name)
+            .or_else(|| from_key_opt.as_deref().map(sanitize_struct_name))
+            .unwrap_or_else(|| "Root".to_string());
+
+        if seen.contains(&name) {
+            continue;
+        }
+        seen.insert(name.clone());
+
+        out.push(StructToEmit {
+            name,
+            schema: schema_node,
+        });
+    }
 }
 
 /// Emit a single struct's fields to `out`.
@@ -356,6 +373,49 @@ pub struct Root {
 
 ";
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deeply_nested_schema_does_not_stack_overflow() {
+        const DEPTH: usize = 150;
+        let mut inner: Schema = Schema {
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = std::collections::BTreeMap::new();
+                m.insert(
+                    "value".to_string(),
+                    Schema {
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            required: None,
+            title: Some("Leaf".to_string()),
+        };
+        for i in (0..DEPTH).rev() {
+            let mut wrap: Schema = Schema {
+                type_: Some("object".to_string()),
+                properties: std::collections::BTreeMap::new(),
+                required: None,
+                title: Some(format!("Level{i}")),
+            };
+            wrap.properties.insert("child".to_string(), inner);
+            inner = wrap;
+        }
+        let mut out = Cursor::new(Vec::new());
+        let actual = generate_rust(&inner, &mut out);
+        assert!(actual.is_ok(), "deep schema must not overflow");
+        let output: String = String::from_utf8(out.into_inner()).unwrap();
+        assert!(
+            output.contains("pub struct Level0"),
+            "output must contain root struct"
+        );
+        assert!(
+            output.contains("pub struct Leaf"),
+            "output must contain leaf struct"
+        );
     }
 
     #[test]

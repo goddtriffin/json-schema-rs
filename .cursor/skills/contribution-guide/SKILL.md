@@ -78,6 +78,8 @@ Schema model, codegen/validation behavior, tests, examples. Follow Contribution 
 - Use `#[expect]` not `#[allow]` for Clippy overrides.
 - Never fail silently; log errors internally (customer-facing message can differ).
 - Follow existing patterns: custom Error enum, BTreeMap for ordering, explicit type annotations on all variables.
+- **No literal recursion:** Prefer an iterative approach (explicit stack or queue) instead of recursive calls so the crate is not vulnerable to stack overflow on deep inputs. If recursion is needed conceptually, implement it with a loop and a stack.
+- **Todo list hygiene:** When an idea from `todo.txt` is implemented, remove that entry from `todo.txt` after the implementation is complete.
 
 ### Adding New JSON Schema Support
 
