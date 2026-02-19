@@ -94,7 +94,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn deserialize_minimal_object_schema() {
+    fn deserialize_simple_object_schema() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
         let expected: Schema = Schema {
             type_: Some("object".to_string()),

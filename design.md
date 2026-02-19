@@ -5,7 +5,7 @@ This document is the **design and architecture knowledge bank** for the json-sch
 - **One section per feature/keyword** (or sub-sections for related keywords). Research uses **only vendored specs** under `specs/` (draft-00 through 2020-12)—no reliance on the web.
 - Related features are grouped (e.g. string constraints under Strings, number constraints under Numbers). Each section can have **Spec version quirks** sub-sections for differences between drafts; we implement per the latest supported spec and may expose version-based config where behavior differs.
 
-**Currently implemented:** type (object, string), properties, required, title. All other keywords in this document are TODO or planned. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
+Implemented keywords: type (object, string), properties, required, title. Other keywords are documented in the sections below. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
 
 ---
 
@@ -140,7 +140,7 @@ TODO.
 
 ### type
 
-We support a single type string or an array of types (draft 2020-12 style); we take the **first** type. `object` and `string` drive codegen today; other types are not yet implemented. See schema model in `json_schema_rs/src/schema.rs` and codegen in `json_schema_rs/src/codegen.rs`.
+We support a single type string or an array of types (draft 2020-12 style); we take the **first** type. `object` and `string` drive codegen today; other types are ignored. See schema model in `json_schema_rs/src/schema.rs` and codegen in `json_schema_rs/src/codegen.rs`.
 
 **Spec version quirks:** (placeholder or blank)
 

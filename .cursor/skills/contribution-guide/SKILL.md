@@ -51,7 +51,7 @@ Schema model, codegen/validation behavior, tests, examples. Follow Contribution 
 
 ### After implementing
 
-1. **Update design.md** — Keep track of which features we've implemented. Add or update the relevant section(s) with our implementation notes, spec version quirks, and any "Currently implemented" summary so design.md stays the single source of truth.
+1. **Update design.md** — Keep track of which features we've implemented. Add or update the relevant section(s) with our implementation notes, spec version quirks, and any implementation status or keyword summary so design.md stays the single source of truth.
 2. **Update the research report** — If you learned something new about a competitor (from a cloned repo or elsewhere) that isn't already covered by the research report, add or update the report so we retain that knowledge for next time.
 3. **Update README** — If the change is user-visible (new feature, new keyword support), update the README (see Resources: README.md).
 
@@ -72,6 +72,7 @@ Schema model, codegen/validation behavior, tests, examples. Follow Contribution 
 
 ### Code Conventions
 
+- Do not add docs or comments that frame the project as a "minimal first pass," "not yet feature complete," or similar. Use durable wording: document what is implemented and what is ignored; avoid temporal phrasing (e.g. "in this release," "not yet implemented") in user-facing docs and code.
 - Run `make lint test` before completing any changes.
 - Use `#[expect]` not `#[allow]` for Clippy overrides.
 - Never fail silently; log errors internally (customer-facing message can differ).
