@@ -63,10 +63,17 @@ Code layout will be defined as the crate is rebuilt. When adding support for a n
   possible outcome or branch), plus **opposite pairings** such as success vs
   failure, enabled vs disabled, bounds present vs absent, or fallback vs
   non-fallback.
-- **Assertions**: Always compare full expected output against full actual
-  output. Never use partial checks like `actual.contains(...)` or
-  `!actual.contains(...)`—use `assert_eq!(expected, actual)` with complete
-  expected strings.
+- **Test shape**: Prefer **one assertion per test**. Each test should have an
+  `expected` value, an `actual` value, and a single comparison (e.g.
+  `assert_eq!(expected, actual)`). Test the **whole scenario**: avoid asserting
+  on subsets of `actual` (e.g. no `actual.contains(...)` or checking only one
+  field); compare the full value so the test validates the entire behavior.
+  **Exceptions**: When the type does not support `PartialEq` (e.g. some error
+  types), use a single `assert!(matches!(actual, ...))` with a named `actual`;
+  document the expected variant in a comment if helpful.
+- **Assertions**: Always use named `expected` and `actual` and a single
+  comparison; for string output use full expected strings and
+  `assert_eq!(expected, actual)`.
 - **Integration tests**: Integration tests use the public API; keep them in the
   integration test module.
 

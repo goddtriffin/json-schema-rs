@@ -24,7 +24,7 @@ where
 }
 
 /// Schema model used for code generation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Schema {
     /// Schema type; `object` and `string` drive codegen; others are ignored.
     pub type_: Option<String>,
@@ -91,57 +91,114 @@ impl Schema {
 #[cfg(test)]
 mod tests {
     use super::Schema;
+    use std::collections::BTreeMap;
 
     #[test]
     fn deserialize_minimal_object_schema() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
-        let schema: Schema = serde_json::from_str(json).expect("parse");
-        assert_eq!(schema.type_.as_deref(), Some("object"));
-        assert_eq!(schema.properties.len(), 1);
-        let a = schema.properties.get("a").unwrap();
-        assert_eq!(a.type_.as_deref(), Some("string"));
-        assert!(schema.required.is_none());
+        let expected: Schema = Schema {
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "a".to_string(),
+                    Schema {
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            required: None,
+            title: None,
+        };
+        let actual: Schema = serde_json::from_str(json).expect("parse");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn deserialize_with_required() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
-        let schema: Schema = serde_json::from_str(json).expect("parse");
-        assert!(schema.is_required("x"));
-        assert!(!schema.is_required("y"));
+        let expected: Schema = Schema {
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "x".to_string(),
+                    Schema {
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m.insert(
+                    "y".to_string(),
+                    Schema {
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            required: Some(vec!["x".to_string()]),
+            title: None,
+        };
+        let actual: Schema = serde_json::from_str(json).expect("parse");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn deserialize_ignores_unknown_keys() {
         let json =
             r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
-        let schema: Schema = serde_json::from_str(json).expect("parse");
-        assert_eq!(schema.type_.as_deref(), Some("object"));
-        assert!(schema.properties.is_empty());
+        let expected: Schema = Schema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let actual: Schema = serde_json::from_str(json).expect("parse");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn deserialize_type_array_takes_first() {
         let json = r#"{"type":["string", "null"],"properties":{}}"#;
-        let schema: Schema = serde_json::from_str(json).expect("parse");
-        assert_eq!(schema.type_.as_deref(), Some("string"));
+        let expected: Schema = Schema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let actual: Schema = serde_json::from_str(json).expect("parse");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn is_object_with_properties() {
         let mut s = Schema::default();
-        assert!(!s.is_object_with_properties());
-        s.type_ = Some("object".to_string());
-        assert!(!s.is_object_with_properties());
-        s.properties.insert("x".to_string(), Schema::default());
-        assert!(s.is_object_with_properties());
+        let actual = [
+            s.is_object_with_properties(),
+            {
+                s.type_ = Some("object".to_string());
+                s.is_object_with_properties()
+            },
+            {
+                s.properties.insert("x".to_string(), Schema::default());
+                s.is_object_with_properties()
+            },
+        ];
+        let expected = [false, false, true];
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn is_string() {
         let mut s = Schema::default();
-        assert!(!s.is_string());
-        s.type_ = Some("string".to_string());
-        assert!(s.is_string());
+        let actual = [s.is_string(), {
+            s.type_ = Some("string".to_string());
+            s.is_string()
+        }];
+        let expected = [false, true];
+        assert_eq!(expected, actual);
     }
 }
