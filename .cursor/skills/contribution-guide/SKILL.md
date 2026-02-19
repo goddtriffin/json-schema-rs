@@ -58,11 +58,12 @@ Code layout will be defined as the crate is rebuilt. When adding support for a n
   expected output), **always update those files** when implementing new features
   so the file-based test exercises the new behavior.
 - **Unit tests**: Add `#[cfg(test)]` tests in the relevant module(s) for
-  feature-specific logic. **Unit tests should always be exhaustive**: aim for
-  one unit test per **code path** for the feature (e.g. one test for each
-  possible outcome or branch), plus **opposite pairings** such as success vs
-  failure, enabled vs disabled, bounds present vs absent, or fallback vs
-  non-fallback.
+  feature-specific logic. **Always write exhaustive unit tests** so that every
+  new feature is fully verified. At a minimum, have unit tests that cover
+  **success and failure conditions**, and **edge cases** that you are aware of.
+  Aim for one unit test per **code path** (e.g. one test for each possible
+  outcome or branch), plus **opposite pairings** such as success vs failure,
+  enabled vs disabled, bounds present vs absent, or fallback vs non-fallback.
 - **Test shape**: Prefer **one assertion per test**. Each test should have an
   `expected` value, an `actual` value, and a single comparison (e.g.
   `assert_eq!(expected, actual)`). Test the **whole scenario**: avoid asserting
