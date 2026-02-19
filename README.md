@@ -5,8 +5,7 @@
 
 A Rust library for JSON Schema tooling: **Schema→Rust** codegen (generate Rust
 types from a JSON Schema), **Rust→Schema** reverse codegen, and a **validator**.
-The repo provides the `json-schema-rs` library and the
-`json-schema-to-rust-cli` CLI. We target JSON Schema draft 2020-12. The repo vendors specs for every published draft: draft-00, draft-01, draft-02, draft-03, draft-04, draft-06, draft-07, 2019-09, and 2020-12. For supported keywords,
+The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We target JSON Schema draft 2020-12. The repo vendors specs for every published draft: draft-00, draft-01, draft-02, draft-03, draft-04, draft-06, draft-07, 2019-09, and 2020-12. For supported keywords,
 implementation details, and design philosophy, see [design.md](design.md).
 
 ## Example
@@ -93,8 +92,7 @@ if let Err(errors) = result {
 
 ## Running the binary
 
-Build and run the CLI (reads a JSON Schema from stdin, writes generated Rust to
-stdout):
+Build and run the CLI:
 
 **Build:**
 
@@ -102,13 +100,23 @@ stdout):
 cargo build --release
 ```
 
-The binary is at `target/release/json-schema-to-rust-cli`.
+The binary is at `target/release/jsonschemars`.
 
-**Run:**
+**Generate Rust from a JSON Schema** (schema from stdin, output to stdout or a file):
 
 ```bash
-json-schema-to-rust-cli < schema.json > output.rs
+jsonschemars generate rust < schema.json > models.rs
 ```
+
+With an output file: `jsonschemars generate rust -o models.rs < schema.json`
+
+**Validate a JSON payload against a schema** (schema via `-s`, payload from stdin or `-p`):
+
+```bash
+jsonschemars validate -s schema.json < payload.json
+```
+
+Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use `-s -` to read the schema from stdin (payload then from `-p` or stdin).
 
 ## Alternative libraries
 

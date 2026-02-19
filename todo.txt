@@ -44,15 +44,3 @@ For each of these TODO items, check what every other competitor library does, ch
 - implement Enums as Rust Enums instead of Rust Strings. Handle collisions (multiple JSON values
   mapping to the same name) with suffixes like `_0` and `_1`. If an enum name starts with an invalid char
   (like a non-letter), prefix it with `E`.
-- merge json_schema_to_rust_cli binary sub-crate back into the original/sole json-schema-rs sub-crate.
-  The json-schema-rs crate should have its own binary file which is a CLI tool to perform all the tasks
-  that the library exposes, which is namely: JSON Schema to Rust tool, JSON Schema validator tool.
-  The CLI should have commands for each, something like `jsonschemars generate rust < schema.json > models.rs`
-  (where "jsonschemars" is the name of the binary, "generate" is the command for generating models
-  from JSON Schema, "rust" is the specific language to generate models in, "< schema.json" is the
-  mechanism for pushing a JSON Schema definition into the CLI via STDIN, and "> models.rs" is the
-  mechanism for pasting out the generated models to a file). An example of the other tool being available
-  via this CLI would be: `jsonschemars validate < schema.json < json-payload.json` (where "jsonschemars"
-  is the CLI, "validate" is the command to validate a JSON payload against a given JSON Schema definition,
-  and we'll need some mechanism to provide 2 pieces of input (JSON Schema definition, JSON payload) because
-  the one I've provided is not correct currently.)

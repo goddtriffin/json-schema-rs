@@ -8,7 +8,7 @@
 
 **Tools to measure** (when implemented):
 
-- Our crate (e.g. `json-schema-to-rust-cli` or `make … input=… output=…`)
+- Our crate (e.g. `jsonschemars` or `make … input=… output=…`)
 - schemafy (e.g. `cargo typify` or schemafy’s CLI)
 - typify (e.g. `cargo typify …`)
 - Other competitors per `research/repos/<lang>/`

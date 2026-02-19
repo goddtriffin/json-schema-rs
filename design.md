@@ -19,7 +19,7 @@ The crate provides **three tools**:
 
 **For every feature we develop, implement it for each of these three tools** where the feature applies.
 
-We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. Code layout: workspace crates `json_schema_rs/` (lib, core logic) and `json_schema_to_rust_cli/` (CLI). When adding a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples.
+We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. Code layout: a single workspace crate `json_schema_rs/` that provides both the library and the `jsonschemars` CLI binary. When adding a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples.
 
 ### JSON Schema validator
 
