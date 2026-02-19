@@ -1,30 +1,29 @@
-[package]
-name = "json-schema-rs"
+[workspace]
+members = ["json_schema_rs", "json_schema_to_rust_cli"]
+resolver = "2"
+
+[workspace.package]
 version = "0.0.4"
 edition = "2024"
 rust-version = "1.93"
 authors = ["Todd Everett Griffin <tgriffin115@gmail.com>"]
+readme = "README.md"
 repository = "https://github.com/goddtriffin/json-schema-rs"
 homepage = "https://www.toddgriffin.me/"
 description = "A Rust library to generate Rust structs from JSON Schema."
-license = "MIT"
+license-file = "LICENSE"
 keywords = ["json", "schema", "json-schema", "rust", "structs"]
-categories = ["web-programming", "parsing"]
-include = ["**/*.rs", "Cargo.toml", ".clippy.toml", "LICENSE", "README.md"]
+categories = ["parsing"]
+exclude = [".idea/*", ".github/*"]
 
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "json-schema-gen"
-path = "src/main.rs"
-
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = { level = "forbid", priority = 0 }
 unfulfilled_lint_expectations = { level = "forbid", priority = 1 }
+unused = { level = "deny", priority = -1 }
 
-[lints.clippy]
+[workspace.lints.clippy]
 allow_attributes = { level = "forbid", priority = 1 }
+multiple_crate_versions = { level = "allow", priority = 1 }
 nursery = { level = "allow", priority = 0 }
 all = { level = "deny", priority = -1 }
 correctness = { level = "deny", priority = -1 }
@@ -35,7 +34,7 @@ perf = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
 
-[dependencies]
+[workspace.dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 uuid = "1.20.0"

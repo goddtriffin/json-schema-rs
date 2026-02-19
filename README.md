@@ -3,7 +3,9 @@
 [![Version](https://img.shields.io/crates/v/json-schema-rs)](https://crates.io/crates/json-schema-rs)
 [![Docs](https://docs.rs/json-schema-rs/badge.svg)](https://docs.rs/json-schema-rs)
 
-A Rust library to generate Rust structs from JSON Schema.
+A Rust library to generate Rust structs from JSON Schema. This repo is a Cargo
+workspace: the `json-schema-rs` library (core logic) and the
+`json-schema-to-rust-cli` CLI (Schema→Rust frontend) are separate crates.
 
 ## Features
 
@@ -234,7 +236,7 @@ pub struct Record {
 
 ## Running the binary
 
-The crate includes a CLI binary `json-schema-gen` that reads a JSON Schema from
+The crate includes a CLI binary `json-schema-to-rust-cli` that reads a JSON Schema from
 stdin and writes generated Rust code to stdout.
 
 **Build the binary:**
@@ -243,18 +245,18 @@ stdin and writes generated Rust code to stdout.
 cargo build --release
 ```
 
-The binary is at `target/release/json-schema-gen`.
+The binary is at `target/release/json-schema-to-rust-cli`.
 
 **Run it:**
 
 ```bash
-json-schema-gen < schema.json > output.rs
+json-schema-to-rust-cli < schema.json > output.rs
 ```
 
 Or pipe from another command:
 
 ```bash
-cat schema.json | json-schema-gen > output.rs
+cat schema.json | json-schema-to-rust-cli > output.rs
 ```
 
 ## Alternative libraries

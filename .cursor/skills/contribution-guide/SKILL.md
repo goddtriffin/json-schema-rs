@@ -214,6 +214,9 @@ see an accurate picture.
 
 ## Repository layout
 
+- **Workspace crates**: `json_schema_rs/` (lib — core logic),
+  `json_schema_to_rust_cli/` (CLI — Schema→Rust frontend). Root `Cargo.toml`
+  defines the workspace only.
 - **Vendored JSON Schema specs**: `specs/`
 - **Competitor clones**: `research/repos/<lang>/<name>/`
 - **Research reports**: `research/reports/<lang>/{org}-{repo}.md`
