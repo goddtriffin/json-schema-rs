@@ -36,19 +36,6 @@ For each of these TODO items, check what every other competitor library does, ch
   It should spit out individual results for the relevant metrics of our library, the same for
   competitor libraries, and then compare them all against each other to clearly mark a winner
   for each given category.
-- let's create a new root-level "design" dir to hold our knowledge bank of features that our library
-  supports. We should have individual Markdown files for each specific JSON Schema feature/field.
-  e.g. we should have a "high level architecture" markdown file which roughly describes how we've
-  designed our library's architecture.
-  e.g. we should have a "strings" Markdown file to remember how we went about implementing strings
-  in our library. This should also contain information regarding how every single available
-  JSON Schema specification has mentioned that Strings should be implemented. We should then compare
-  how the spec has changed between each version, and ultimately implement how the most recent spec
-  has defined how strings should function. We should note down all of this inside this "strings"
-  markdown file. And if there are any differences in how different specs declare strings should work,
-  then we should offer a Setting/Config which can enable/disable functionality based on a specific version.
-  e.g. we should have Markdown files, 1 for every JSON Schema feature/field, which mimics how we
-  described the "strings" markdown file should work.
 - if we have any kind of recursion, let's implement it as iterative approach rather than a literal
   recursion algorithm (don't want to be impacted via stack overflow issues or related issues)
 - figure out how to generatr rust via macros using this same lib
