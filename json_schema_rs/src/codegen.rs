@@ -109,18 +109,12 @@ fn collect_structs(
 
 /// Emit a single struct's fields to `out`.
 fn emit_struct_fields(schema: &Schema, out: &mut impl Write) -> Result<(), Error> {
-    let required_set: BTreeSet<&str> = schema
-        .required
-        .as_ref()
-        .map(|r| r.iter().map(String::as_str).collect())
-        .unwrap_or_default();
-
     for (key, prop_schema) in &schema.properties {
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
         if prop_schema.is_string() {
-            let ty = if required_set.contains(key.as_str()) {
+            let ty = if schema.is_required(key) {
                 "String".to_string()
             } else {
                 "Option<String>".to_string()
@@ -135,7 +129,7 @@ fn emit_struct_fields(schema: &Schema, out: &mut impl Write) -> Result<(), Error
                 .as_deref()
                 .filter(|t| !t.trim().is_empty())
                 .map_or_else(|| to_pascal_case(key), sanitize_struct_name);
-            let ty = if required_set.contains(key.as_str()) {
+            let ty = if schema.is_required(key) {
                 nested_name.clone()
             } else {
                 format!("Option<{nested_name}>")

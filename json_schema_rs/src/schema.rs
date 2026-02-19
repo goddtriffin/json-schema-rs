@@ -69,19 +69,19 @@ impl<'de> Deserialize<'de> for Schema {
 impl Schema {
     /// Returns true if this schema is an object with properties (for codegen).
     #[must_use]
-    pub fn is_object_with_properties(&self) -> bool {
+    pub(crate) fn is_object_with_properties(&self) -> bool {
         self.type_.as_deref() == Some("object") && !self.properties.is_empty()
     }
 
     /// Returns true if this schema is type "string".
     #[must_use]
-    pub fn is_string(&self) -> bool {
+    pub(crate) fn is_string(&self) -> bool {
         self.type_.as_deref() == Some("string")
     }
 
     /// Returns true if the given property name is required at this object level.
     #[must_use]
-    pub fn is_required(&self, name: &str) -> bool {
+    pub(crate) fn is_required(&self, name: &str) -> bool {
         self.required
             .as_ref()
             .is_some_and(|r| r.iter().any(|s| s == name))

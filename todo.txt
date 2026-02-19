@@ -52,8 +52,6 @@ For each of these TODO items, check what every other competitor library does, ch
 - if we have any kind of recursion, let's implement it as iterative approach rather than a literal
   recursion algorithm (don't want to be impacted via stack overflow issues or related issues)
 - figure out how to generatr rust via macros using this same lib
-- why do we need these Schema impl functions? is_object_with_properties, is_string, is_required.
-  Do they really need to be a part of the public API? Just want to learn and understand.
 - Please refactor all tests such that they always have an "expected" variable, an "actual" variable,
   and a single assert which compares them. I greatly prefer to not test subsets of the "actual" variable,
   because I want the test function to test the whole scenario together. Every unit test should basically
