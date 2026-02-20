@@ -74,6 +74,33 @@ let schema: JsonSchema = serde_json::from_str(schema_json)?;
 generate_rust(&schema, &mut output)?;
 ```
 
+## Using the macro (compile-time codegen)
+
+The **`generate_rust_schema!`** macro generates Rust types at compile time and **inlines** them at the call site (no file is written). Add the macro crate:
+
+```toml
+[dependencies]
+json-schema-rs = "0.0.4"
+json-schema-rs-macro = "0.0.4"
+```
+
+Then use any of these forms:
+
+- **Single file path** (relative to your crate root, i.e. `CARGO_MANIFEST_DIR`):
+
+  `generate_rust_schema!("path/to/schema.json")`
+
+- **Multiple file paths:**  
+  `generate_rust_schema!("a.json", "b.json")`
+
+- **Single inline JSON Schema string:**  
+  `generate_rust_schema!(r#"{"type":"object", "properties": {...}}"#)`
+
+- **Multiple inline JSON Schema strings:**  
+  `generate_rust_schema!(r#"..."#, r#"..."#)`
+
+When you pass **multiple** schemas (paths or inline), each schema’s types are emitted in a **separate Rust module** to avoid name collisions: one module per JSON Schema. Module names come from the file stem for paths (e.g. `simple` from `simple.json`) or `schema_0`, `schema_1`, … for inline strings. Use the generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
+
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
 
 ```rust
@@ -117,6 +144,8 @@ jsonschemars validate -s schema.json < payload.json
 ```
 
 Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use `-s -` to read the schema from stdin (payload then from `-p` or stdin).
+
+To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of using the macro, use the library API from a `build.rs` script and then `include!(concat!(env!("OUT_DIR"), "/generated.rs"))` in your crate.
 
 ## Alternative libraries
 

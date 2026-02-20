@@ -1,5 +1,5 @@
 [workspace]
-members = ["json_schema_rs"]
+members = ["json_schema_rs", "json_schema_rs_macro"]
 resolver = "2"
 
 [workspace.package]

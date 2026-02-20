@@ -1,5 +1,5 @@
 [package]
-name = "json-schema-rs"
+name = "json-schema-rs-macro"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,28 +7,21 @@ authors.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description.workspace = true
+description = "Procedural macro generate_rust_schema! for json-schema-rs"
 license-file.workspace = true
 keywords.workspace = true
 categories.workspace = true
-exclude.workspace = true
 
 [lib]
 path = "src/lib.rs"
-
-[[bin]]
-name = "jsonschemars"
-path = "src/main.rs"
+proc-macro = true
 
 [lints]
 workspace = true
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-serde.workspace = true
+json-schema-rs = { path = "../json_schema_rs" }
+proc-macro2 = "1"
+quote = "1"
 serde_json.workspace = true
-uuid.workspace = true
-
-[dev-dependencies]
-json-schema-rs-macro = { path = "../json_schema_rs_macro" }
-tempfile = "3"
+syn = "2"

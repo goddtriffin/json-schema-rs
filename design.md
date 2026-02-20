@@ -19,7 +19,7 @@ The crate provides **three tools**:
 
 **For every feature we develop, implement it for each of these three tools** where the feature applies.
 
-We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. Code layout: a single workspace crate `json_schema_rs/` that provides both the library and the `jsonschemars` CLI binary. When adding a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples.
+We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. Code layout: workspace crates `json_schema_rs/` (library and `jsonschemars` CLI binary) and `json_schema_rs_macro/` (proc-macro `generate_rust_schema!` for compile-time codegen). When adding a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples.
 
 ### JSON Schema validator
 
@@ -52,6 +52,8 @@ We represent the in-memory schema as a **struct** (`JsonSchema`) with optional f
 ### Codegen backends
 
 Codegen is built around a **swappable backend** trait: input is the intermediate `JsonSchema`, output is generated source as `Vec<u8>`. The trait `CodegenBackend` has a single method, `generate(&self, schema: &JsonSchema) -> Result<Vec<u8>, Error>`. The **CLI** matches on the language argument and calls the corresponding backend (e.g. `RustBackend::generate`); the library exposes the trait and concrete backends (e.g. `RustBackend`). The only implementation today is **Rust** (`RustBackend`), which emits serde-compatible Rust structs. The public API `generate_rust(schema, out)` is preserved and delegates to `RustBackend`. **Adding another language:** implement `CodegenBackend` for a new type (e.g. `PythonBackend`), add a match arm in the CLI’s `run_generate` for the language name (case-insensitive), and update the "supported" text in the unsupported-language error message (e.g. "supported: rust, python").
+
+**Codegen entry points:** (1) **CLI** — schema from stdin or file, output to stdout or file. (2) **Library** — `generate_rust(schema, &mut impl Write)` or `RustBackend::generate(schema)` returning `Vec<u8>`; callers can write to a file, `Vec<u8>`, or any `Write`. (3) **Macro** — the `json-schema-rs-macro` crate provides `generate_rust_schema!(...)`, which runs at compile time and **inlines** the generated Rust at the call site (no file output). Macro input: one or more string literals (file paths relative to `CARGO_MANIFEST_DIR`, or inline JSON Schema strings). When multiple schemas are given, each schema’s types are emitted in a **separate Rust module** (one module per JSON Schema): module name from file stem for paths, or `schema_0`, `schema_1`, … for inline. The macro uses the same `RustBackend::generate` path (bytes → parse as Rust → token stream) so behavior matches the CLI and library.
 
 ---
 
