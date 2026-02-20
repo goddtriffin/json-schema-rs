@@ -1,7 +1,8 @@
 //! Public API for parsing JSON Schema with configurable settings.
 
-use crate::json_schema::{JsonSchema, SchemaIngestionError, parse_strict_slice, parse_strict_str};
-use crate::json_schema_settings::JsonSchemaSettings;
+use super::error::SchemaIngestionError;
+use super::schema::{JsonSchema, parse_strict_slice, parse_strict_str};
+use super::settings::JsonSchemaSettings;
 
 /// Parse a JSON Schema from a string with the given settings.
 ///
@@ -45,8 +46,8 @@ pub fn parse_schema_from_slice(
 
 #[cfg(test)]
 mod tests {
+    use super::JsonSchemaSettings;
     use super::parse_schema;
-    use crate::json_schema_settings::JsonSchemaSettings;
 
     #[test]
     fn parse_lenient_accepts_unknown_keys() {

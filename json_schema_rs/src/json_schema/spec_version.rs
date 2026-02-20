@@ -1,10 +1,10 @@
 //! JSON Schema specification version.
 
-use crate::json_schema_settings::JsonSchemaSettings;
+use super::settings::JsonSchemaSettings;
 
 /// JSON Schema specification version. One variant per vendored spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JsonSchemaSpecVersion {
+pub enum SpecVersion {
     Draft00,
     Draft01,
     Draft02,
@@ -17,7 +17,7 @@ pub enum JsonSchemaSpecVersion {
     Draft202012,
 }
 
-impl JsonSchemaSpecVersion {
+impl SpecVersion {
     /// Returns [`JsonSchemaSettings`] tuned for this spec version.
     /// Callers can use the builder to override individual options.
     #[must_use]
@@ -30,11 +30,11 @@ impl JsonSchemaSpecVersion {
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonSchemaSettings, JsonSchemaSpecVersion};
+    use super::{JsonSchemaSettings, SpecVersion};
 
     #[test]
     fn spec_version_returns_settings() {
-        let settings: JsonSchemaSettings = JsonSchemaSpecVersion::Draft07.default_schema_settings();
+        let settings: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
         assert!(!settings.disallow_unknown_fields);
     }
 }
