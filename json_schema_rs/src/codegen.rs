@@ -1,9 +1,36 @@
-//! Code generation: schema → Rust source written to a writer.
+//! Code generation: schema → source in a target language.
+//!
+//! A [`CodegenBackend`] takes the intermediate [`JsonSchema`] and returns generated
+//! source as bytes. The CLI matches on the language argument and calls the
+//! appropriate backend (e.g. [`RustBackend::generate`]).
 
 use crate::error::Error;
 use crate::json_schema::JsonSchema;
 use std::collections::BTreeSet;
-use std::io::Write;
+use std::io::{Cursor, Write};
+
+/// Contract for a codegen backend: schema in, generated source bytes out.
+pub trait CodegenBackend {
+    /// Generate model source from the given schema. Returns UTF-8 encoded bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RootNotObject`] if the root schema is not an object with properties.
+    /// Returns [`Error::Io`] on write failure.
+    fn generate(&self, schema: &JsonSchema) -> Result<Vec<u8>, Error>;
+}
+
+/// Backend that emits Rust structs (serde-compatible).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RustBackend;
+
+impl CodegenBackend for RustBackend {
+    fn generate(&self, schema: &JsonSchema) -> Result<Vec<u8>, Error> {
+        let mut out = Cursor::new(Vec::new());
+        emit_rust(schema, &mut out)?;
+        Ok(out.into_inner())
+    }
+}
 
 /// Sanitize a JSON property key to a Rust field identifier (`snake_case`; replace `-` with `_`).
 /// Does not change case; only replaces invalid characters. Result is safe for use as a field name.
@@ -160,15 +187,8 @@ fn emit_struct_fields(schema: &JsonSchema, out: &mut impl Write) -> Result<(), E
     Ok(())
 }
 
-/// Generate Rust source from a parsed schema and write it to `out`.
-///
-/// Root schema must have `type: "object"` and non-empty `properties`.
-///
-/// # Errors
-///
-/// Returns [`Error::RootNotObject`] if the root schema is not an object with properties.
-/// Returns [`Error::Io`] on write failure.
-pub fn generate_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
+/// Emit Rust source from a parsed schema to `out`. Used by [`RustBackend`] and [`generate_rust`].
+fn emit_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
     if !schema.is_object_with_properties() {
         return Err(Error::RootNotObject);
     }
@@ -196,9 +216,22 @@ pub fn generate_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Er
     Ok(())
 }
 
+/// Generate Rust source from a parsed schema and write it to `out`.
+///
+/// Root schema must have `type: "object"` and non-empty `properties`.
+///
+/// # Errors
+///
+/// Returns [`Error::RootNotObject`] if the root schema is not an object with properties.
+/// Returns [`Error::Io`] on write failure.
+pub fn generate_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
+    let bytes: Vec<u8> = RustBackend.generate(schema)?;
+    out.write_all(&bytes).map_err(Error::Io)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{generate_rust, sanitize_field_name, to_pascal_case};
+    use super::{CodegenBackend, RustBackend, generate_rust, sanitize_field_name, to_pascal_case};
     use crate::json_schema::JsonSchema;
     use std::io::Cursor;
 
@@ -436,6 +469,19 @@ pub struct Root {
 }
 
 "#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rust_backend_generate_same_as_generate_rust() {
+        let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let expected: Vec<u8> = {
+            let mut out = Cursor::new(Vec::new());
+            generate_rust(&schema, &mut out).unwrap();
+            out.into_inner()
+        };
+        let actual: Vec<u8> = RustBackend.generate(&schema).unwrap();
         assert_eq!(expected, actual);
     }
 }

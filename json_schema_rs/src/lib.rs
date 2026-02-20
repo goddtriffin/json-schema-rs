@@ -9,7 +9,7 @@ pub mod json_pointer;
 pub mod json_schema;
 pub mod validation;
 
-pub use codegen::generate_rust;
+pub use codegen::{CodegenBackend, RustBackend, generate_rust};
 pub use error::Error;
 pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::JsonSchema;

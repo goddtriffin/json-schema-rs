@@ -1,7 +1,7 @@
 //! CLI for json-schema-rs: generate Rust from JSON Schema, validate JSON against a schema.
 
 use clap::{Arg, Command};
-use json_schema_rs::{JsonSchema, generate_rust, validate};
+use json_schema_rs::{CodegenBackend, JsonSchema, RustBackend, validate};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -34,16 +34,22 @@ fn read_payload_from_path(path: &PathBuf) -> Result<serde_json::Value, String> {
     read_payload_from_reader(f)
 }
 
-fn run_generate_rust(output: Option<PathBuf>) -> Result<(), String> {
+fn run_generate(lang: &str, output: Option<PathBuf>) -> Result<(), String> {
+    if !lang.eq_ignore_ascii_case("rust") {
+        return Err(format!("unsupported language: {lang}; supported: rust"));
+    }
     let schema: JsonSchema = read_schema_from_reader(io::stdin())?;
+    let bytes: Vec<u8> = RustBackend.generate(&schema).map_err(|e| e.to_string())?;
     if let Some(p) = output {
         let mut f = File::create(&p).map_err(|e| format!("failed to create output file: {e}"))?;
-        generate_rust(&schema, &mut f).map_err(|e| e.to_string())?;
+        f.write_all(&bytes)
+            .map_err(|e| format!("failed to write output: {e}"))?;
         f.flush()
             .map_err(|e| format!("failed to flush output: {e}"))?;
     } else {
         let mut out = io::stdout();
-        generate_rust(&schema, &mut out).map_err(|e| e.to_string())?;
+        out.write_all(&bytes)
+            .map_err(|e| format!("failed to write output: {e}"))?;
         out.flush()
             .map_err(|e| format!("failed to flush output: {e}"))?;
     }
@@ -72,17 +78,19 @@ fn main() {
         .about("JSON Schema tooling: generate Rust types, validate JSON")
         .subcommand(
             Command::new("generate")
-                .about("Generate code from a JSON Schema")
-                .subcommand(
-                    Command::new("rust")
-                        .about("Generate Rust structs from a JSON Schema (schema from stdin, output to stdout or -o file)")
-                        .arg(
-                            Arg::new("output")
-                                .short('o')
-                                .long("output")
-                                .value_name("FILE")
-                                .help("Write output to FILE instead of stdout"),
-                        ),
+                .about("Generate code from a JSON Schema (schema from stdin, output to stdout or -o file)")
+                .arg(
+                    Arg::new("lang")
+                        .required(true)
+                        .value_name("LANG")
+                        .help("Target language (e.g. rust)"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("FILE")
+                        .help("Write output to FILE instead of stdout"),
                 ),
         )
         .subcommand(
@@ -108,15 +116,14 @@ fn main() {
 
     let result = match matches.subcommand() {
         Some(("generate", gen_m)) => {
-            if let Some(("rust", rust_m)) = gen_m.subcommand() {
-                let output: Option<PathBuf> = rust_m
-                    .get_one::<String>("output")
-                    .map(|s| PathBuf::from(s.as_str()));
-                run_generate_rust(output)
-            } else {
-                eprintln!("expected subcommand: rust");
-                std::process::exit(1);
-            }
+            let lang: &str = gen_m
+                .get_one::<String>("lang")
+                .map(String::as_str)
+                .expect("required LANG");
+            let output: Option<PathBuf> = gen_m
+                .get_one::<String>("output")
+                .map(|s| PathBuf::from(s.as_str()));
+            run_generate(lang, output)
         }
         Some(("validate", val_m)) => {
             let schema: PathBuf = val_m

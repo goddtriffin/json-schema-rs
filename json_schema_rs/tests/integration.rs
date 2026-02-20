@@ -64,6 +64,27 @@ pub struct Root {
 }
 
 #[test]
+fn cli_generate_unsupported_language_exit_nonzero_and_stderr() {
+    let schema_json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
+    let mut child = Command::new(jsonschemars_bin())
+        .args(["generate", "python"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn jsonschemars");
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), schema_json.as_bytes())
+        .expect("write schema");
+    let output = child.wait_with_output().expect("wait jsonschemars");
+    assert!(!output.status.success(), "generate python should fail");
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(
+        stderr.contains("unsupported"),
+        "stderr should mention unsupported language: {stderr}"
+    );
+}
+
+#[test]
 fn cli_validate_valid_payload_exit_zero() {
     let schema_json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
     let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");

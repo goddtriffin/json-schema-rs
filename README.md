@@ -102,7 +102,7 @@ cargo build --release
 
 The binary is at `target/release/jsonschemars`.
 
-**Generate Rust from a JSON Schema** (schema from stdin, output to stdout or a file):
+**Generate code from a JSON Schema** (schema from stdin, output to stdout or a file). You specify the target language as the first argument to `generate`; only **rust** is supported today. The design allows adding more languages without changing the CLI.
 
 ```bash
 jsonschemars generate rust < schema.json > models.rs

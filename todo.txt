@@ -26,11 +26,6 @@ For each of these TODO items, check what every other competitor library does, ch
   even works or not. This is different than testing/asserting against a known-good string - because
   how do we even know if the known-good string works correctly? We need to actually test against the
   code that we're generating.
-- implement the json-schema-rs library in such a way that we can generate models in any language,
-  not just Rust. We should have some sort of trait which defines the contract for how this library
-  works, and it should take our intermediate json schema representation as input,
-  and spit out a Vec<u8> of the generated models in the target language. We'll then have our own
-  struct which implements and satisfies the interface and specifically generates Rust models.
 - figure out how to automatically run benchmarks for our library, and do the same for all relevant
   competitor libraries. It must be automated after running a single Makefile target command.
   It should spit out individual results for the relevant metrics of our library, the same for

@@ -49,6 +49,10 @@ These drive design decisions and how we rank competitors:
 
 We represent the in-memory schema as a **struct** (`JsonSchema`) with optional fields, not as a Rust enum of schema subtypes (e.g. `ObjectSchema | StringSchema | ...`). Rationale: the JSON Schema spec defines a schema as a **single JSON object with optional keys**; a struct mirrors that shape and keeps deserialization simple. By contrast, `serde_json::Value` is an enum because a JSON *value* is exactly one of several mutually exclusive kinds (Null, Bool, Number, String, Array, Object)—a different domain. Competitor Rust libraries (e.g. schemafy, typify/schemars) use either a typed struct or an untyped Value wrapper; none use an enum of schema subtypes. Using an enum would complicate deserialization and duplicate shared metadata (e.g. title) across variants without clear benefit for our supported keyword subset.
 
+### Codegen backends
+
+Codegen is built around a **swappable backend** trait: input is the intermediate `JsonSchema`, output is generated source as `Vec<u8>`. The trait `CodegenBackend` has a single method, `generate(&self, schema: &JsonSchema) -> Result<Vec<u8>, Error>`. The **CLI** matches on the language argument and calls the corresponding backend (e.g. `RustBackend::generate`); the library exposes the trait and concrete backends (e.g. `RustBackend`). The only implementation today is **Rust** (`RustBackend`), which emits serde-compatible Rust structs. The public API `generate_rust(schema, out)` is preserved and delegates to `RustBackend`. **Adding another language:** implement `CodegenBackend` for a new type (e.g. `PythonBackend`), add a match arm in the CLI’s `run_generate` for the language name (case-insensitive), and update the "supported" text in the unsupported-language error message (e.g. "supported: rust, python").
+
 ---
 
 ## 1. Core / identification

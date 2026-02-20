@@ -26,8 +26,8 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::RootNotObject => None,
             Error::Io(e) => Some(e),
+            Error::RootNotObject => None,
         }
     }
 }
