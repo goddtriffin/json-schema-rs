@@ -27,6 +27,10 @@ The validator takes the same **JsonSchema** type used by codegen and a JSON inst
 
 **Supported keywords:** `type` (object, string), `required`, `properties` (recursive). Does not resolve `$ref` or `$defs`; additional properties are allowed. The validator reuses the same JsonSchema struct as codegen; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same schema model would be used.
 
+### Official JSON Schema Test Suite
+
+We run the [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) via an integration test that validates against all test data in the suite. The suite lives at **`research/json-schema-test-suite/`** (gitignored). Cloning is a **manual prerequisite**: run `make vendor_test_suite` to clone or update it. The test **hard-fails** if the suite directory is missing, with a message to run that command. The test is **ignored** by default and runs only when explicitly executed (e.g. `make test_json_schema_suite` or `cargo test --test json_schema_test_suite -- --ignored`); once we pass 100%, it can be re-enabled in the standard test run. Tests that rely on **remotes** or **`$ref`** resolution (e.g. `refRemote.json`) fail until we support `$ref`.
+
 ### Our top values
 
 These drive design decisions and how we rank competitors:

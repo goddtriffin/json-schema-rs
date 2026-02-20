@@ -158,6 +158,12 @@ TODO
 Please submit an issue or bug request if the library needs updating.
 
 - **Commands:** `make lint`, `make test`, `make fix`
+- **Official JSON Schema Test Suite:** To run the library against the full
+  [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite),
+  run `make vendor_test_suite` once to clone it into `research/json-schema-test-suite/`
+  (gitignored), then `make test_json_schema_suite` to run the suite. The test is
+  ignored by default and only runs when invoked explicitly; it hard-fails if the
+  suite directory is missing.
 - **Implementation and philosophy:** If you're curious how something was
   implemented or the philosophy behind our approach, see [design.md](design.md).
 

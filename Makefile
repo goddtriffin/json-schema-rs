@@ -57,3 +57,11 @@ research_benchmark: ## (stub) run benchmarks against research/benchmark/fixtures
 research_harvest_tests: ## (stub) harvest test schemas from competitor repos; not yet implemented
 	@echo "Not implemented. See research/test-harvest/README.md for the plan."
 	@exit 1
+
+.PHONY: vendor_test_suite
+vendor_test_suite: ## clone or update JSON Schema Test Suite into research/json-schema-test-suite/
+	@./research/scripts/clone-json-schema-test-suite.sh
+
+.PHONY: test_json_schema_suite
+test_json_schema_suite: ## run the official JSON Schema Test Suite (ignored test); run make vendor_test_suite first
+	cargo test --test json_schema_test_suite json_schema_test_suite -- --ignored

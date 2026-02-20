@@ -4,6 +4,7 @@
 target/
 bin/
 research/repos/
+research/json-schema-test-suite/
 
 # files
 .DS_Store
