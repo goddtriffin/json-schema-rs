@@ -1,7 +1,7 @@
 //! Parse a JSON Schema and print generated Rust to stdout.
 
 use json_schema_rs::{JsonSchema, generate_rust};
-use std::io;
+use std::io::{self, Write};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let json = r#"{
@@ -12,6 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }"#;
     let schema: JsonSchema = serde_json::from_str(json)?;
-    generate_rust(&schema, &mut io::stdout())?;
+    let bytes = generate_rust(&[schema])?;
+    io::stdout().write_all(&bytes[0])?;
     Ok(())
 }

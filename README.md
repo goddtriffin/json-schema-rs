@@ -65,13 +65,14 @@ Add to your `Cargo.toml`:
 json-schema-rs = "0.0.4"
 ```
 
-Parse a schema and generate Rust to a writer:
+Parse one or more schemas and generate Rust (one buffer per schema):
 
 ```rust
 use json_schema_rs::{generate_rust, JsonSchema};
 
 let schema: JsonSchema = serde_json::from_str(schema_json)?;
-generate_rust(&schema, &mut output)?;
+let bytes_list = generate_rust(&[schema])?;
+// bytes_list.len() == 1; write bytes_list[0] to a file or stdout
 ```
 
 ## Using the macro (compile-time codegen)
@@ -129,15 +130,15 @@ cargo build --release
 
 The binary is at `target/release/jsonschemars`.
 
-**Generate code from a JSON Schema** (schema from stdin, output to stdout or a file). You specify the target language as the first argument to `generate`; only **rust** is supported today. The design allows adding more languages without changing the CLI.
+**Generate code from one or more JSON Schemas.** The `generate` command takes one or more INPUTs (file paths, directory paths—recursively searched for `.json` files—or `-` for one schema from stdin) and writes generated `.rs` files under the required `-o` output directory, mirroring the input path structure. Only **rust** is supported today.
 
 ```bash
-jsonschemars generate rust < schema.json > models.rs
+jsonschemars generate rust -o out/ schema.json
+jsonschemars generate rust -o out/ dir1/ dir2/ foo.json
+jsonschemars generate rust -o out/ -   # one schema from stdin → out/stdin.rs
 ```
 
-With an output file: `jsonschemars generate rust -o models.rs < schema.json`
-
-**Validate a JSON payload against a schema** (schema via `-s`, payload from stdin or `-p`):
+**Validate a JSON payload against a schema** (one schema, one payload; schema via `-s`, payload from stdin or `-p`):
 
 ```bash
 jsonschemars validate -s schema.json < payload.json
@@ -145,7 +146,7 @@ jsonschemars validate -s schema.json < payload.json
 
 Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use `-s -` to read the schema from stdin (payload then from `-p` or stdin).
 
-To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of using the macro, use the library API from a `build.rs` script and then `include!(concat!(env!("OUT_DIR"), "/generated.rs"))` in your crate.
+To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of using the macro, use the library API from a `build.rs` script: `let bytes = generate_rust(&[schema])?;` then write `bytes[0]` to a path and `include!` it in your crate.
 
 ## Alternative libraries
 

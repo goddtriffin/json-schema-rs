@@ -78,8 +78,10 @@ fn generate_rust_schema_impl(
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|_| syn::Error::new(Span::call_site(), "CARGO_MANIFEST_DIR not set"))?;
 
-    let backend = json_schema_rs::RustBackend;
-    let mut modules = Vec::new();
+    let mut schemas: Vec<json_schema_rs::JsonSchema> =
+        Vec::with_capacity(schema_inputs.literals.len());
+    let mut mod_names: Vec<(String, proc_macro2::Span)> =
+        Vec::with_capacity(schema_inputs.literals.len());
 
     for (index, lit) in schema_inputs.literals.iter().enumerate() {
         let s = lit.value();
@@ -97,21 +99,25 @@ fn generate_rust_schema_impl(
 
         let schema: json_schema_rs::JsonSchema = serde_json::from_str(&json_str)
             .map_err(|e| syn::Error::new(lit.span(), format!("invalid JSON Schema: {e}")))?;
+        schemas.push(schema);
+        mod_names.push((mod_name, lit.span()));
+    }
 
-        let bytes = backend
-            .generate(&schema)
-            .map_err(|e| syn::Error::new(lit.span(), format!("codegen failed: {e}")))?;
+    let backend = json_schema_rs::RustBackend;
+    let bytes_list: Vec<Vec<u8>> = backend
+        .generate(&schemas)
+        .map_err(|e| syn::Error::new(Span::call_site(), format!("codegen failed: {e}")))?;
 
-        let rust_str = String::from_utf8(bytes).map_err(|e| {
-            syn::Error::new(lit.span(), format!("generated code was not UTF-8: {e}"))
-        })?;
+    let mut modules = Vec::new();
+    for ((mod_name, span), bytes) in mod_names.into_iter().zip(bytes_list) {
+        let rust_str = String::from_utf8(bytes)
+            .map_err(|e| syn::Error::new(span, format!("generated code was not UTF-8: {e}")))?;
 
-        let file: syn::File = syn::parse_str(&rust_str).map_err(|e| {
-            syn::Error::new(lit.span(), format!("generated Rust did not parse: {e}"))
-        })?;
+        let file: syn::File = syn::parse_str(&rust_str)
+            .map_err(|e| syn::Error::new(span, format!("generated Rust did not parse: {e}")))?;
 
         let items = &file.items;
-        let mod_ident = syn::Ident::new(&mod_name, lit.span());
+        let mod_ident = syn::Ident::new(&mod_name, span);
         modules.push(quote! {
             pub mod #mod_ident {
                 #(#items)*

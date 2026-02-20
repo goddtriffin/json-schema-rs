@@ -9,15 +9,16 @@ use crate::json_schema::JsonSchema;
 use std::collections::BTreeSet;
 use std::io::{Cursor, Write};
 
-/// Contract for a codegen backend: schema in, generated source bytes out.
+/// Contract for a codegen backend: schemas in, one generated source buffer per schema out.
 pub trait CodegenBackend {
-    /// Generate model source from the given schema. Returns UTF-8 encoded bytes.
+    /// Generate model source for each schema. Returns one UTF-8 encoded byte buffer per schema.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RootNotObject`] if the root schema is not an object with properties.
+    /// Returns [`Error::RootNotObject`] if a root schema is not an object with properties.
     /// Returns [`Error::Io`] on write failure.
-    fn generate(&self, schema: &JsonSchema) -> Result<Vec<u8>, Error>;
+    /// Returns [`Error::Batch`] with index when one schema in the batch fails.
+    fn generate(&self, schemas: &[JsonSchema]) -> Result<Vec<Vec<u8>>, Error>;
 }
 
 /// Backend that emits Rust structs (serde-compatible).
@@ -25,10 +26,17 @@ pub trait CodegenBackend {
 pub struct RustBackend;
 
 impl CodegenBackend for RustBackend {
-    fn generate(&self, schema: &JsonSchema) -> Result<Vec<u8>, Error> {
-        let mut out = Cursor::new(Vec::new());
-        emit_rust(schema, &mut out)?;
-        Ok(out.into_inner())
+    fn generate(&self, schemas: &[JsonSchema]) -> Result<Vec<Vec<u8>>, Error> {
+        let mut results: Vec<Vec<u8>> = Vec::with_capacity(schemas.len());
+        for (index, schema) in schemas.iter().enumerate() {
+            let mut out = Cursor::new(Vec::new());
+            emit_rust(schema, &mut out).map_err(|e| Error::Batch {
+                index,
+                source: Box::new(e),
+            })?;
+            results.push(out.into_inner());
+        }
+        Ok(results)
     }
 }
 
@@ -187,7 +195,7 @@ fn emit_struct_fields(schema: &JsonSchema, out: &mut impl Write) -> Result<(), E
     Ok(())
 }
 
-/// Emit Rust source from a parsed schema to `out`. Used by [`RustBackend`] and [`generate_rust`].
+/// Emit Rust source from a parsed schema to `out`. Used by [`RustBackend::generate`].
 fn emit_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
     if !schema.is_object_with_properties() {
         return Err(Error::RootNotObject);
@@ -216,24 +224,25 @@ fn emit_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
     Ok(())
 }
 
-/// Generate Rust source from a parsed schema and write it to `out`.
+/// Generate Rust source from one or more parsed schemas.
 ///
-/// Root schema must have `type: "object"` and non-empty `properties`.
+/// Returns one byte buffer per schema; each buffer is UTF-8 Rust source. Root of each schema
+/// must have `type: "object"` and non-empty `properties`.
 ///
 /// # Errors
 ///
-/// Returns [`Error::RootNotObject`] if the root schema is not an object with properties.
+/// Returns [`Error::RootNotObject`] if a root schema is not an object with properties.
 /// Returns [`Error::Io`] on write failure.
-pub fn generate_rust(schema: &JsonSchema, out: &mut impl Write) -> Result<(), Error> {
-    let bytes: Vec<u8> = RustBackend.generate(schema)?;
-    out.write_all(&bytes).map_err(Error::Io)
+/// Returns [`Error::Batch`] with index when one schema in the batch fails.
+pub fn generate_rust(schemas: &[JsonSchema]) -> Result<Vec<Vec<u8>>, Error> {
+    RustBackend.generate(schemas)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CodegenBackend, RustBackend, generate_rust, sanitize_field_name, to_pascal_case};
+    use crate::error::Error;
     use crate::json_schema::JsonSchema;
-    use std::io::Cursor;
 
     #[test]
     fn sanitize_field_name_replaces_hyphen() {
@@ -265,30 +274,33 @@ mod tests {
 
     #[test]
     fn root_not_object_errors() {
-        let schema = JsonSchema::default();
-        let mut out = Cursor::new(Vec::new());
-        let actual = generate_rust(&schema, &mut out).unwrap_err();
-        assert!(matches!(actual, crate::error::Error::RootNotObject));
+        let schema: JsonSchema = JsonSchema::default();
+        let actual = generate_rust(&[schema]).unwrap_err();
+        assert!(matches!(actual, Error::Batch { index: 0, .. }));
+        if let Error::Batch { source, .. } = actual {
+            assert!(matches!(*source, Error::RootNotObject));
+        }
     }
 
     #[test]
     fn root_object_empty_properties_errors() {
-        let schema = JsonSchema {
+        let schema: JsonSchema = JsonSchema {
             type_: Some("object".to_string()),
             ..Default::default()
         };
-        let mut out = Cursor::new(Vec::new());
-        let actual = generate_rust(&schema, &mut out).unwrap_err();
-        assert!(matches!(actual, crate::error::Error::RootNotObject));
+        let actual = generate_rust(&[schema]).unwrap_err();
+        assert!(matches!(actual, Error::Batch { index: 0, .. }));
+        if let Error::Batch { source, .. } = actual {
+            assert!(matches!(*source, Error::RootNotObject));
+        }
     }
 
     #[test]
     fn single_string_property() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let mut out = Cursor::new(Vec::new());
-        generate_rust(&schema, &mut out).unwrap();
-        let actual = String::from_utf8(out.into_inner()).unwrap();
+        let bytes = generate_rust(&[schema]).unwrap();
+        let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
@@ -306,9 +318,8 @@ pub struct Root {
     fn required_field_emits_without_option() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let mut out = Cursor::new(Vec::new());
-        generate_rust(&schema, &mut out).unwrap();
-        let actual = String::from_utf8(out.into_inner()).unwrap();
+        let bytes = generate_rust(&[schema]).unwrap();
+        let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
@@ -338,9 +349,8 @@ pub struct Root {
           }
         }"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let mut out = Cursor::new(Vec::new());
-        generate_rust(&schema, &mut out).unwrap();
-        let actual = String::from_utf8(out.into_inner()).unwrap();
+        let bytes = generate_rust(&[schema]).unwrap();
+        let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
@@ -381,9 +391,8 @@ pub struct Root {
           }
         }"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let mut out = Cursor::new(Vec::new());
-        generate_rust(&schema, &mut out).unwrap();
-        let actual = String::from_utf8(out.into_inner()).unwrap();
+        let bytes = generate_rust(&[schema]).unwrap();
+        let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
@@ -437,10 +446,10 @@ pub struct Root {
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;
         }
-        let mut out = Cursor::new(Vec::new());
-        let actual = generate_rust(&inner, &mut out);
+        let actual = generate_rust(&[inner]);
         assert!(actual.is_ok(), "deep schema must not overflow");
-        let output: String = String::from_utf8(out.into_inner()).unwrap();
+        let bytes = actual.unwrap();
+        let output: String = String::from_utf8(bytes[0].clone()).unwrap();
         assert!(
             output.contains("pub struct Level0"),
             "output must contain root struct"
@@ -455,9 +464,8 @@ pub struct Root {
     fn field_rename_when_key_differs_from_identifier() {
         let json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let mut out = Cursor::new(Vec::new());
-        generate_rust(&schema, &mut out).unwrap();
-        let actual = String::from_utf8(out.into_inner()).unwrap();
+        let bytes = generate_rust(&[schema]).unwrap();
+        let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
@@ -473,15 +481,37 @@ pub struct Root {
     }
 
     #[test]
-    fn rust_backend_generate_same_as_generate_rust() {
+    fn generate_rust_one_schema_returns_one_buffer() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let expected: Vec<u8> = {
-            let mut out = Cursor::new(Vec::new());
-            generate_rust(&schema, &mut out).unwrap();
-            out.into_inner()
-        };
-        let actual: Vec<u8> = RustBackend.generate(&schema).unwrap();
-        assert_eq!(expected, actual);
+        let bytes = generate_rust(std::slice::from_ref(&schema)).unwrap();
+        let expected: Vec<Vec<u8>> = RustBackend.generate(&[schema]).unwrap();
+        assert_eq!(expected, bytes);
+        assert_eq!(1, bytes.len());
+    }
+
+    #[test]
+    fn generate_rust_two_schemas_returns_two_buffers() {
+        let json1 = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
+        let json2 = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
+        let s1: JsonSchema = serde_json::from_str(json1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(json2).unwrap();
+        let bytes = generate_rust(&[s1.clone(), s2.clone()]).unwrap();
+        let expected = RustBackend.generate(&[s1, s2]).unwrap();
+        assert_eq!(expected, bytes);
+        assert_eq!(2, bytes.len());
+        let out1 = String::from_utf8(bytes[0].clone()).unwrap();
+        let out2 = String::from_utf8(bytes[1].clone()).unwrap();
+        assert!(out1.contains("pub a: Option<String>") || out1.contains("pub a:"));
+        assert!(out2.contains("pub b: Option<String>") || out2.contains("pub b:"));
+    }
+
+    #[test]
+    fn batch_error_includes_index() {
+        let valid = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
+        let invalid: JsonSchema = JsonSchema::default();
+        let s1: JsonSchema = serde_json::from_str(valid).unwrap();
+        let actual = generate_rust(&[s1, invalid]).unwrap_err();
+        assert!(matches!(actual, Error::Batch { index: 1, .. }));
     }
 }
