@@ -4,7 +4,12 @@
 //! source as bytes. The CLI matches on the language argument and calls the
 //! appropriate backend (e.g. the Rust backend).
 
-use crate::code_gen_settings::CodeGenSettings;
+mod rust_backend;
+mod settings;
+
+pub use rust_backend::{RustBackend, generate_rust};
+pub use settings::{CodeGenSettings, CodeGenSettingsBuilder, ModelNameSource};
+
 use crate::error::Error;
 use crate::json_schema::JsonSchema;
 

@@ -1,7 +1,7 @@
 //! Rust codegen backend: emits serde-compatible Rust structs from JSON Schema.
 
-use crate::code_gen::CodeGenBackend;
-use crate::code_gen_settings::{CodeGenSettings, ModelNameSource};
+use super::CodeGenBackend;
+use super::settings::{CodeGenSettings, ModelNameSource};
 use crate::error::Error;
 use crate::json_schema::JsonSchema;
 use crate::sanitize::{sanitize_field_name, sanitize_struct_name};
@@ -213,7 +213,7 @@ pub fn generate_rust(
 #[cfg(test)]
 mod tests {
     use super::{CodeGenBackend, RustBackend, generate_rust};
-    use crate::code_gen_settings::{CodeGenSettings, ModelNameSource};
+    use crate::code_gen::settings::{CodeGenSettings, ModelNameSource};
     use crate::error::Error;
     use crate::json_schema::JsonSchema;
 
