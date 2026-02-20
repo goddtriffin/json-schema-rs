@@ -2,6 +2,7 @@
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
 /// First type in the array is used; codegen uses `object` and `string`.
@@ -86,6 +87,110 @@ impl JsonSchema {
             .as_ref()
             .is_some_and(|r| r.iter().any(|s| s == name))
     }
+}
+
+/// Error when parsing (ingesting) a JSON Schema with the given settings.
+#[derive(Debug)]
+pub enum SchemaIngestionError {
+    /// JSON or serde error (invalid JSON, wrong types, etc.).
+    Serde(serde_json::Error),
+    /// An unknown key was present and strict ingestion was enabled.
+    UnknownField {
+        /// The unknown key name.
+        key: String,
+        /// JSON Pointer or path to the schema object that contained the key.
+        path: String,
+    },
+}
+
+impl fmt::Display for SchemaIngestionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SchemaIngestionError::Serde(e) => write!(f, "invalid JSON Schema: {e}"),
+            SchemaIngestionError::UnknownField { key, path } => {
+                write!(f, "unknown schema key \"{key}\" at {path}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SchemaIngestionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SchemaIngestionError::Serde(e) => Some(e),
+            SchemaIngestionError::UnknownField { .. } => None,
+        }
+    }
+}
+
+impl From<serde_json::Error> for SchemaIngestionError {
+    fn from(e: serde_json::Error) -> Self {
+        SchemaIngestionError::Serde(e)
+    }
+}
+
+/// Strict schema helper: same shape as our schema model but with `#[serde(deny_unknown_fields)]`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictJsonSchemaHelper {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_type_optional_strict",
+        rename = "type"
+    )]
+    type_: Option<String>,
+    #[serde(default)]
+    properties: Option<BTreeMap<String, StrictJsonSchemaHelper>>,
+    #[serde(default)]
+    required: Option<Vec<String>>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+fn deserialize_type_optional_strict<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TypeOrArray {
+        Single(String),
+        Array(Vec<String>),
+    }
+    let value: TypeOrArray = Deserialize::deserialize(deserializer)?;
+    let first = match value {
+        TypeOrArray::Single(s) => Some(s),
+        TypeOrArray::Array(a) => a.into_iter().next(),
+    };
+    Ok(first)
+}
+
+fn strict_helper_to_schema(h: StrictJsonSchemaHelper) -> JsonSchema {
+    let properties: BTreeMap<String, JsonSchema> = h
+        .properties
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, strict_helper_to_schema(v)))
+        .collect();
+    JsonSchema {
+        type_: h.type_,
+        properties,
+        required: h.required,
+        title: h.title,
+    }
+}
+
+/// Strict parse from string. Used by the public parser when `disallow_unknown_fields` is true.
+pub(crate) fn parse_strict_str(json: &str) -> Result<JsonSchema, SchemaIngestionError> {
+    let helper: StrictJsonSchemaHelper = serde_json::from_str(json)?;
+    Ok(strict_helper_to_schema(helper))
+}
+
+/// Strict parse from slice. Used by the public parser when `disallow_unknown_fields` is true.
+pub(crate) fn parse_strict_slice(slice: &[u8]) -> Result<JsonSchema, SchemaIngestionError> {
+    let helper: StrictJsonSchemaHelper =
+        serde_json::from_slice(slice).map_err(SchemaIngestionError::Serde)?;
+    Ok(strict_helper_to_schema(helper))
 }
 
 #[cfg(test)]

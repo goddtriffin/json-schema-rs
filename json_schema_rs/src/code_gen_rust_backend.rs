@@ -1,82 +1,27 @@
-//! Code generation: schema → source in a target language.
-//!
-//! A [`CodegenBackend`] takes the intermediate [`JsonSchema`] and returns generated
-//! source as bytes. The CLI matches on the language argument and calls the
-//! appropriate backend (e.g. [`RustBackend::generate`]).
+//! Rust codegen backend: emits serde-compatible Rust structs from JSON Schema.
 
+use crate::code_gen::CodeGenBackend;
+use crate::code_gen_settings::{CodeGenSettings, ModelNameSource};
 use crate::error::Error;
 use crate::json_schema::JsonSchema;
 use crate::sanitize::{sanitize_field_name, sanitize_struct_name};
 use std::collections::BTreeSet;
 use std::io::{Cursor, Write};
 
-/// How to choose the generated struct/type name when both `title` and property key are available.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ModelNameSource {
-    /// Use `title` first, then property key, then `"Root"` for the root schema. (Current behavior.)
-    #[default]
-    TitleFirst,
-    /// Use property key first, then `title`, then `"Root"` for the root schema.
-    PropertyKeyFirst,
-}
-
-/// Options for Rust code generation.
-#[derive(Debug, Clone)]
-pub struct RustCodegenOptions {
-    /// Which source to prefer for struct/type names: title or property key.
-    pub model_name_source: ModelNameSource,
-}
-
-impl Default for RustCodegenOptions {
-    fn default() -> Self {
-        Self {
-            model_name_source: ModelNameSource::TitleFirst,
-        }
-    }
-}
-
-impl RustCodegenOptions {
-    /// Prefer property key over title for struct names (fallback to title, then `"Root"`).
-    #[must_use]
-    pub fn with_property_key_first(mut self) -> Self {
-        self.model_name_source = ModelNameSource::PropertyKeyFirst;
-        self
-    }
-}
-
-/// Contract for a codegen backend: schemas in, one generated source buffer per schema out.
-pub trait CodegenBackend {
-    /// Generate model source for each schema. Returns one UTF-8 encoded byte buffer per schema.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::RootNotObject`] if a root schema is not an object with properties.
-    /// Returns [`Error::Io`] on write failure.
-    /// Returns [`Error::Batch`] with index when one schema in the batch fails.
-    fn generate(&self, schemas: &[JsonSchema]) -> Result<Vec<Vec<u8>>, Error>;
-}
-
 /// Backend that emits Rust structs (serde-compatible).
 #[derive(Debug, Clone, Default)]
-pub struct RustBackend {
-    /// Codegen options (model name source, etc.).
-    pub options: RustCodegenOptions,
-}
+pub struct RustBackend;
 
-impl RustBackend {
-    /// Create a backend with the given options.
-    #[must_use]
-    pub fn new(options: RustCodegenOptions) -> Self {
-        Self { options }
-    }
-}
-
-impl CodegenBackend for RustBackend {
-    fn generate(&self, schemas: &[JsonSchema]) -> Result<Vec<Vec<u8>>, Error> {
+impl CodeGenBackend for RustBackend {
+    fn generate(
+        &self,
+        schemas: &[JsonSchema],
+        settings: &CodeGenSettings,
+    ) -> Result<Vec<Vec<u8>>, Error> {
         let mut results: Vec<Vec<u8>> = Vec::with_capacity(schemas.len());
         for (index, schema) in schemas.iter().enumerate() {
             let mut out = Cursor::new(Vec::new());
-            emit_rust(schema, &mut out, &self.options).map_err(|e| Error::Batch {
+            emit_rust(schema, &mut out, settings).map_err(|e| Error::Batch {
                 index,
                 source: Box::new(e),
             })?;
@@ -92,17 +37,17 @@ struct StructToEmit {
     schema: JsonSchema,
 }
 
-/// Compute struct/type name from title, property key, and root fallback per options.
+/// Compute struct/type name from title, property key, and root fallback per settings.
 fn struct_name_from(
     title: Option<&str>,
     from_key: Option<&str>,
     is_root: bool,
-    options: &RustCodegenOptions,
+    settings: &CodeGenSettings,
 ) -> String {
     let title_trimmed: Option<&str> = title.filter(|t| !t.trim().is_empty()).map(str::trim);
     let from_key_s: Option<&str> = from_key;
 
-    let (first, second) = match options.model_name_source {
+    let (first, second) = match settings.model_name_source {
         ModelNameSource::TitleFirst => (title_trimmed, from_key_s),
         ModelNameSource::PropertyKeyFirst => (from_key_s, title_trimmed),
     };
@@ -126,7 +71,7 @@ fn collect_structs(
     from_key: Option<&str>,
     out: &mut Vec<StructToEmit>,
     seen: &mut BTreeSet<String>,
-    options: &RustCodegenOptions,
+    settings: &CodeGenSettings,
 ) {
     if !schema.is_object_with_properties() {
         return;
@@ -162,7 +107,7 @@ fn collect_structs(
             schema_node.title.as_deref(),
             from_key_opt.as_deref(),
             is_root,
-            options,
+            settings,
         );
 
         if seen.contains(&name) {
@@ -181,7 +126,7 @@ fn collect_structs(
 fn emit_struct_fields(
     schema: &JsonSchema,
     out: &mut impl Write,
-    options: &RustCodegenOptions,
+    settings: &CodeGenSettings,
 ) -> Result<(), Error> {
     for (key, prop_schema) in &schema.properties {
         let field_name = sanitize_field_name(key);
@@ -199,7 +144,7 @@ fn emit_struct_fields(
             writeln!(out, "    pub {field_name}: {ty},")?;
         } else if prop_schema.is_object_with_properties() {
             let nested_name: String =
-                struct_name_from(prop_schema.title.as_deref(), Some(key), false, options);
+                struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings);
             let ty = if schema.is_required(key) {
                 nested_name.clone()
             } else {
@@ -218,7 +163,7 @@ fn emit_struct_fields(
 fn emit_rust(
     schema: &JsonSchema,
     out: &mut impl Write,
-    options: &RustCodegenOptions,
+    settings: &CodeGenSettings,
 ) -> Result<(), Error> {
     if !schema.is_object_with_properties() {
         return Err(Error::RootNotObject);
@@ -226,7 +171,7 @@ fn emit_rust(
 
     let mut structs: Vec<StructToEmit> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    collect_structs(schema, None, &mut structs, &mut seen, options);
+    collect_structs(schema, None, &mut structs, &mut seen, settings);
 
     writeln!(
         out,
@@ -239,7 +184,7 @@ fn emit_rust(
     for st in &structs {
         writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
         writeln!(out, "pub struct {} {{", st.name)?;
-        emit_struct_fields(&st.schema, out, options)?;
+        emit_struct_fields(&st.schema, out, settings)?;
         writeln!(out, "}}")?;
         writeln!(out)?;
     }
@@ -247,48 +192,40 @@ fn emit_rust(
     Ok(())
 }
 
-/// Generate Rust source from one or more parsed schemas (default options: title first for struct names).
+/// Generate Rust source from one or more parsed schemas.
 ///
-/// Returns one byte buffer per schema; each buffer is UTF-8 Rust source. Root of each schema
-/// must have `type: "object"` and non-empty `properties`.
-///
-/// # Errors
-///
-/// Returns [`Error::RootNotObject`] if a root schema is not an object with properties.
-/// Returns [`Error::Io`] on write failure.
-/// Returns [`Error::Batch`] with index when one schema in the batch fails.
-pub fn generate_rust(schemas: &[JsonSchema]) -> Result<Vec<Vec<u8>>, Error> {
-    RustBackend::default().generate(schemas)
-}
-
-/// Generate Rust source with the given options (e.g. property key first for struct names).
-///
-/// Same as [`generate_rust`] but uses the provided [`RustCodegenOptions`].
+/// Callers must pass `settings` (use [`CodeGenSettings::builder`] and call [`CodeGenSettingsBuilder::build`]
+/// for all-default settings). Returns one byte buffer per schema; each buffer is UTF-8 Rust source.
+/// Root of each schema must have `type: "object"` and non-empty `properties`.
 ///
 /// # Errors
 ///
 /// Returns [`Error::RootNotObject`] if a root schema is not an object with properties.
 /// Returns [`Error::Io`] on write failure.
 /// Returns [`Error::Batch`] with index when one schema in the batch fails.
-pub fn generate_rust_with_options(
+pub fn generate_rust(
     schemas: &[JsonSchema],
-    options: &RustCodegenOptions,
+    settings: &CodeGenSettings,
 ) -> Result<Vec<Vec<u8>>, Error> {
-    RustBackend::new(options.clone()).generate(schemas)
+    RustBackend.generate(schemas, settings)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CodegenBackend, RustBackend, RustCodegenOptions, generate_rust, generate_rust_with_options,
-    };
+    use super::{CodeGenBackend, RustBackend, generate_rust};
+    use crate::code_gen_settings::{CodeGenSettings, ModelNameSource};
     use crate::error::Error;
     use crate::json_schema::JsonSchema;
+
+    fn default_settings() -> CodeGenSettings {
+        CodeGenSettings::builder().build()
+    }
 
     #[test]
     fn root_not_object_errors() {
         let schema: JsonSchema = JsonSchema::default();
-        let actual = generate_rust(&[schema]).unwrap_err();
+        let settings: CodeGenSettings = default_settings();
+        let actual = generate_rust(&[schema], &settings).unwrap_err();
         assert!(matches!(actual, Error::Batch { index: 0, .. }));
         if let Error::Batch { source, .. } = actual {
             assert!(matches!(*source, Error::RootNotObject));
@@ -301,7 +238,8 @@ mod tests {
             type_: Some("object".to_string()),
             ..Default::default()
         };
-        let actual = generate_rust(&[schema]).unwrap_err();
+        let settings: CodeGenSettings = default_settings();
+        let actual = generate_rust(&[schema], &settings).unwrap_err();
         assert!(matches!(actual, Error::Batch { index: 0, .. }));
         if let Error::Batch { source, .. } = actual {
             assert!(matches!(*source, Error::RootNotObject));
@@ -312,7 +250,8 @@ mod tests {
     fn single_string_property() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let bytes = generate_rust(&[schema]).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let bytes = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
@@ -331,7 +270,8 @@ pub struct Root {
     fn required_field_emits_without_option() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let bytes = generate_rust(&[schema]).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let bytes = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
@@ -362,7 +302,8 @@ pub struct Root {
           }
         }"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let bytes = generate_rust(&[schema]).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let bytes = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
@@ -404,7 +345,8 @@ pub struct Root {
           }
         }"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let bytes = generate_rust(&[schema]).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let bytes = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r"//! Generated by json-schema-rs. Do not edit manually.
 
@@ -459,7 +401,8 @@ pub struct Root {
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;
         }
-        let actual = generate_rust(&[inner]);
+        let settings: CodeGenSettings = default_settings();
+        let actual = generate_rust(&[inner], &settings);
         assert!(actual.is_ok(), "deep schema must not overflow");
         let bytes = actual.unwrap();
         let output: String = String::from_utf8(bytes[0].clone()).unwrap();
@@ -477,7 +420,8 @@ pub struct Root {
     fn field_rename_when_key_differs_from_identifier() {
         let json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let bytes = generate_rust(&[schema]).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let bytes = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(bytes[0].clone()).unwrap();
         let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
 
@@ -497,8 +441,9 @@ pub struct Root {
     fn generate_rust_one_schema_returns_one_buffer() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let bytes = generate_rust(std::slice::from_ref(&schema)).unwrap();
-        let expected: Vec<Vec<u8>> = RustBackend::default().generate(&[schema]).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let bytes = generate_rust(std::slice::from_ref(&schema), &settings).unwrap();
+        let expected: Vec<Vec<u8>> = RustBackend.generate(&[schema], &settings).unwrap();
         assert_eq!(expected, bytes);
         assert_eq!(1, bytes.len());
     }
@@ -507,8 +452,10 @@ pub struct Root {
     fn property_key_first_uses_key_over_title_for_nested_struct() {
         let json = r#"{"type":"object","properties":{"address":{"type":"object","title":"FooBar","properties":{"city":{"type":"string"}}}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let options: RustCodegenOptions = RustCodegenOptions::default().with_property_key_first();
-        let bytes = generate_rust_with_options(&[schema], &options).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .model_name_source(ModelNameSource::PropertyKeyFirst)
+            .build();
+        let bytes = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(bytes[0].clone()).unwrap();
         assert!(
             actual.contains("pub struct Address "),
@@ -526,8 +473,9 @@ pub struct Root {
         let json2 = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
         let s1: JsonSchema = serde_json::from_str(json1).unwrap();
         let s2: JsonSchema = serde_json::from_str(json2).unwrap();
-        let bytes = generate_rust(&[s1.clone(), s2.clone()]).unwrap();
-        let expected = RustBackend::default().generate(&[s1, s2]).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let bytes = generate_rust(&[s1.clone(), s2.clone()], &settings).unwrap();
+        let expected = RustBackend.generate(&[s1, s2], &settings).unwrap();
         assert_eq!(expected, bytes);
         assert_eq!(2, bytes.len());
         let out1 = String::from_utf8(bytes[0].clone()).unwrap();
@@ -541,7 +489,8 @@ pub struct Root {
         let valid = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
         let invalid: JsonSchema = JsonSchema::default();
         let s1: JsonSchema = serde_json::from_str(valid).unwrap();
-        let actual = generate_rust(&[s1, invalid]).unwrap_err();
+        let settings: CodeGenSettings = default_settings();
+        let actual = generate_rust(&[s1, invalid], &settings).unwrap_err();
         assert!(matches!(actual, Error::Batch { index: 1, .. }));
     }
 }

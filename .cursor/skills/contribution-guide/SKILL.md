@@ -94,4 +94,4 @@ Schema model, codegen/validation behavior, tests, examples. Follow Contribution 
 - **Research reports**: `research/reports/<lang>/{org}-{repo}.md`
 - **Design and architecture**: `design.md` (repo root)
 
-Key source files are in `json_schema_rs/src/` (e.g. `schema.rs`, `codegen.rs`, `error.rs`). CLI and build commands are documented in the README.
+Key source files are in `json_schema_rs/src/` (e.g. `json_schema.rs`, `code_gen.rs`, `code_gen_rust_backend.rs`, `code_gen_settings.rs`, `error.rs`). CLI and build commands are documented in the README.

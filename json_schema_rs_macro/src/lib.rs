@@ -5,8 +5,8 @@
 //! `generate_rust_schema!("path/to/schema.json")` or
 //! `generate_rust_schema!(r#"{"type":"object", ...}"#)`.
 
-use json_schema_rs::CodegenBackend;
 use json_schema_rs::sanitize::module_name_from_path;
+use json_schema_rs::{CodeGenBackend, CodeGenSettings, JsonSchemaSettings, parse_schema};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -65,15 +65,17 @@ fn generate_rust_schema_impl(
             (contents, name)
         };
 
-        let schema: json_schema_rs::JsonSchema = serde_json::from_str(&json_str)
+        let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let schema: json_schema_rs::JsonSchema = parse_schema(&json_str, &schema_settings)
             .map_err(|e| syn::Error::new(lit.span(), format!("invalid JSON Schema: {e}")))?;
         schemas.push(schema);
         mod_names.push((mod_name, lit.span()));
     }
 
-    let backend = json_schema_rs::RustBackend::default();
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let backend = json_schema_rs::RustBackend;
     let bytes_list: Vec<Vec<u8>> = backend
-        .generate(&schemas)
+        .generate(&schemas, &code_gen_settings)
         .map_err(|e| syn::Error::new(Span::call_site(), format!("codegen failed: {e}")))?;
 
     let mut modules = Vec::new();

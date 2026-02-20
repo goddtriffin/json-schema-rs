@@ -2,7 +2,10 @@
 
 use clap::{Arg, Command};
 use json_schema_rs::sanitize::{sanitize_output_relative, sanitize_path_component};
-use json_schema_rs::{JsonSchema, RustCodegenOptions, generate_rust_with_options, validate};
+use json_schema_rs::{
+    CodeGenSettings, JsonSchema, JsonSchemaSettings, ModelNameSource, generate_rust,
+    parse_schema_from_slice, validate,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -10,19 +13,25 @@ use std::path::{Path, PathBuf};
 
 const STDIN_OUTPUT_NAME: &str = "stdin.rs";
 
-fn read_schema_from_reader<R: Read>(mut r: R) -> Result<JsonSchema, String> {
+fn read_schema_from_reader<R: Read>(
+    mut r: R,
+    schema_settings: &JsonSchemaSettings,
+) -> Result<JsonSchema, String> {
     let mut buf: Vec<u8> = Vec::new();
     r.read_to_end(&mut buf)
         .map_err(|e| format!("failed to read schema: {e}"))?;
-    serde_json::from_slice(&buf).map_err(|e| format!("invalid JSON Schema: {e}"))
+    parse_schema_from_slice(&buf, schema_settings).map_err(|e| e.to_string())
 }
 
-fn read_schema_from_path(path: &PathBuf) -> Result<JsonSchema, String> {
+fn read_schema_from_path(
+    path: &PathBuf,
+    schema_settings: &JsonSchemaSettings,
+) -> Result<JsonSchema, String> {
     if path.as_os_str() == "-" {
-        read_schema_from_reader(io::stdin())
+        read_schema_from_reader(io::stdin(), schema_settings)
     } else {
         let f = File::open(path).map_err(|e| format!("failed to open schema file: {e}"))?;
-        read_schema_from_reader(f)
+        read_schema_from_reader(f, schema_settings)
     }
 }
 
@@ -175,7 +184,8 @@ fn run_generate(
     lang: &str,
     inputs: &[String],
     output_dir: &Path,
-    struct_name_from: Option<&str>,
+    jss_disallow_unknown_fields: bool,
+    cgs_model_name_source: Option<&str>,
 ) -> Result<(), String> {
     if !lang.eq_ignore_ascii_case("rust") {
         return Err(format!("unsupported language: {lang}; supported: rust"));
@@ -190,16 +200,25 @@ fn run_generate(
         return Err("no JSON Schema files found (look for .json in directories)".to_string());
     }
 
-    let options: RustCodegenOptions = match struct_name_from {
-        Some("property-key") => RustCodegenOptions::default().with_property_key_first(),
-        _ => RustCodegenOptions::default(),
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .disallow_unknown_fields(jss_disallow_unknown_fields)
+        .build();
+    let code_gen_settings: CodeGenSettings = {
+        let mut b = CodeGenSettings::builder();
+        if let Some(src) = cgs_model_name_source {
+            b = b.model_name_source(match src {
+                "property-key" => ModelNameSource::PropertyKeyFirst,
+                _ => ModelNameSource::TitleFirst,
+            });
+        }
+        b.build()
     };
 
     // Standalone ingestion step: try every file, log each failure to stderr, do not short-circuit.
     let mut successful: Vec<(JsonSchema, PathBuf)> = Vec::with_capacity(entries.len());
     let mut had_errors = false;
     for (input_path, output_relative) in &entries {
-        match read_schema_from_path(input_path) {
+        match read_schema_from_path(input_path, &schema_settings) {
             Ok(schema) => successful.push((schema, output_relative.clone())),
             Err(e) => {
                 let path_display = if input_path.as_os_str() == "-" {
@@ -221,7 +240,7 @@ fn run_generate(
 
     let (schemas, output_relatives): (Vec<JsonSchema>, Vec<PathBuf>) =
         successful.into_iter().unzip();
-    let bytes_list = generate_rust_with_options(&schemas, &options).map_err(|e| e.to_string())?;
+    let bytes_list = generate_rust(&schemas, &code_gen_settings).map_err(|e| e.to_string())?;
     assert_eq!(
         bytes_list.len(),
         output_relatives.len(),
@@ -246,8 +265,15 @@ fn run_generate(
     Ok(())
 }
 
-fn run_validate(schema_path: &PathBuf, payload_path: Option<PathBuf>) -> Result<(), String> {
-    let schema: JsonSchema = read_schema_from_path(schema_path)?;
+fn run_validate(
+    schema_path: &PathBuf,
+    payload_path: Option<PathBuf>,
+    jss_disallow_unknown_fields: bool,
+) -> Result<(), String> {
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .disallow_unknown_fields(jss_disallow_unknown_fields)
+        .build();
+    let schema: JsonSchema = read_schema_from_path(schema_path, &schema_settings)?;
     let instance: serde_json::Value = match payload_path {
         Some(p) => read_payload_from_path(&p)?,
         None => read_payload_from_reader(io::stdin())?,
@@ -263,6 +289,7 @@ fn run_validate(schema_path: &PathBuf, payload_path: Option<PathBuf>) -> Result<
     }
 }
 
+#[expect(clippy::too_many_lines)]
 fn main() {
     let cmd = Command::new("jsonschemars")
         .about("JSON Schema tooling: generate Rust types, validate JSON")
@@ -291,11 +318,17 @@ fn main() {
                         .help("JSON Schema file(s), directory(ies) to search for .json, or \"-\" for stdin"),
                 )
                 .arg(
-                    Arg::new("struct-name-from")
-                        .long("struct-name-from")
+                    Arg::new("jss-disallow-unknown-fields")
+                        .long("jss-disallow-unknown-fields")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("JSON Schema Settings: reject schema definitions with unknown keys"),
+                )
+                .arg(
+                    Arg::new("cgs-model-name-source")
+                        .long("cgs-model-name-source")
                         .value_name("SOURCE")
-                        .value_parser(["title", "property-key"])
-                        .help("Use title or property-key as the primary source for struct/type names (default: title)"),
+                        .value_parser(["title-first", "property-key"])
+                        .help("Codegen Settings: primary source for struct/type names (default: title-first)"),
                 ),
         )
         .subcommand(
@@ -315,6 +348,12 @@ fn main() {
                         .long("payload")
                         .value_name("FILE")
                         .help("Path to the JSON payload to validate. If omitted, read from stdin."),
+                )
+                .arg(
+                    Arg::new("jss-disallow-unknown-fields")
+                        .long("jss-disallow-unknown-fields")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("JSON Schema Settings: reject schema definitions with unknown keys"),
                 ),
         );
     let matches = cmd.get_matches();
@@ -333,10 +372,17 @@ fn main() {
                 .get_many::<String>("inputs")
                 .map(|it| it.map(String::from).collect())
                 .unwrap_or_default();
-            let struct_name_from: Option<&str> = gen_m
-                .get_one::<String>("struct-name-from")
+            let jss_disallow_unknown_fields: bool = gen_m.get_flag("jss-disallow-unknown-fields");
+            let cgs_model_name_source: Option<&str> = gen_m
+                .get_one::<String>("cgs-model-name-source")
                 .map(String::as_str);
-            run_generate(lang, &inputs, &output_dir, struct_name_from)
+            run_generate(
+                lang,
+                &inputs,
+                &output_dir,
+                jss_disallow_unknown_fields,
+                cgs_model_name_source,
+            )
         }
         Some(("validate", val_m)) => {
             let schema: PathBuf = val_m
@@ -346,7 +392,8 @@ fn main() {
             let payload: Option<PathBuf> = val_m
                 .get_one::<String>("payload")
                 .map(|s| PathBuf::from(s.as_str()));
-            run_validate(&schema, payload)
+            let jss_disallow_unknown_fields: bool = val_m.get_flag("jss-disallow-unknown-fields");
+            run_validate(&schema, payload, jss_disallow_unknown_fields)
         }
         _ => {
             eprintln!("expected subcommand: generate or validate");

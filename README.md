@@ -70,12 +70,16 @@ json-schema-rs = "0.0.4"
 Parse one or more schemas and generate Rust (one buffer per schema):
 
 ```rust
-use json_schema_rs::{generate_rust, JsonSchema};
+use json_schema_rs::{parse_schema, CodeGenSettings, JsonSchemaSettings, ModelNameSource, generate_rust};
 
-let schema: JsonSchema = serde_json::from_str(schema_json)?;
-let bytes_list = generate_rust(&[schema])?;
+let schema_settings = JsonSchemaSettings::builder().build();
+let schema = parse_schema(schema_json, &schema_settings)?;
+let code_gen_settings = CodeGenSettings::builder().build();
+let bytes_list = generate_rust(&[schema], &code_gen_settings)?;
 // bytes_list.len() == 1; write bytes_list[0] to a file or stdout
 ```
+
+Use `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject schema definitions with unknown keys. Use `CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()` to prefer property keys over `title` for struct names. CLI: `--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or `property-key`.
 
 ## Using the macro (compile-time codegen)
 
@@ -148,7 +152,7 @@ jsonschemars validate -s schema.json < payload.json
 
 Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use `-s -` to read the schema from stdin (payload then from `-p` or stdin).
 
-To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of using the macro, use the library API from a `build.rs` script: `let bytes = generate_rust(&[schema])?;` then write `bytes[0]` to a path and `include!` it in your crate.
+To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of using the macro, use the library API from a `build.rs` script: `let bytes = generate_rust(&[schema], &CodeGenSettings::builder().build())?;` then write `bytes[0]` to a path and `include!` it in your crate.
 
 ## Alternative libraries
 

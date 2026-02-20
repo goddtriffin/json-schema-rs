@@ -1,6 +1,6 @@
 //! Parse a JSON Schema and print generated Rust to stdout.
 
-use json_schema_rs::{JsonSchema, generate_rust};
+use json_schema_rs::{CodeGenSettings, JsonSchemaSettings, generate_rust, parse_schema};
 use std::io::{self, Write};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,8 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "email": { "type": "string" }
         }
     }"#;
-    let schema: JsonSchema = serde_json::from_str(json)?;
-    let bytes = generate_rust(&[schema])?;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema = parse_schema(json, &schema_settings)?;
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let bytes = generate_rust(&[schema], &code_gen_settings)?;
     io::stdout().write_all(&bytes[0])?;
     Ok(())
 }
