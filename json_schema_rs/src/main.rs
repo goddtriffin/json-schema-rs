@@ -1,6 +1,7 @@
 //! CLI for json-schema-rs: generate Rust from JSON Schema, validate JSON against a schema.
 
 use clap::{Arg, Command};
+use json_schema_rs::sanitize::{sanitize_output_relative, sanitize_path_component};
 use json_schema_rs::{JsonSchema, generate_rust, validate};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -8,52 +9,6 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 const STDIN_OUTPUT_NAME: &str = "stdin.rs";
-
-/// Maps a path component (file stem or dir name) to a Rust-valid identifier.
-/// Replaces `-` with `_` and any character not in `[a-zA-Z0-9_]` with `_`.
-/// If the result is empty or starts with a digit, returns a valid fallback.
-fn sanitize_path_component(component: &str) -> String {
-    let s: String = component
-        .chars()
-        .map(|c| {
-            if c == '-' || c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .replace('-', "_");
-    if s.is_empty() {
-        return "schema".to_string();
-    }
-    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        return format!("_{s}");
-    }
-    s
-}
-
-/// Builds the sanitized output relative path (e.g. `sub_dir/schema_2.rs`) from a relative path (e.g. `sub-dir/schema-2.json`).
-fn sanitize_output_relative(relative: &Path) -> PathBuf {
-    let components: Vec<_> = relative.components().collect();
-    let mut out = PathBuf::new();
-    for (i, comp) in components.iter().enumerate() {
-        let os = comp.as_os_str();
-        let s = os.to_string_lossy();
-        let is_last = i == components.len() - 1;
-        if is_last {
-            let stem = Path::new(s.as_ref())
-                .file_stem()
-                .and_then(|st| st.to_str())
-                .unwrap_or("schema");
-            let name = format!("{}.rs", sanitize_path_component(stem));
-            out.push(name);
-        } else {
-            out.push(sanitize_path_component(s.as_ref()));
-        }
-    }
-    out
-}
 
 fn read_schema_from_reader<R: Read>(mut r: R) -> Result<JsonSchema, String> {
     let mut buf: Vec<u8> = Vec::new();
@@ -388,57 +343,6 @@ fn main() {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn sanitize_path_component_hyphen_to_underscore() {
-        let expected = "schema_1";
-        let actual = sanitize_path_component("schema-1");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn sanitize_path_component_unchanged_valid() {
-        let expected = "sub_dir";
-        let actual = sanitize_path_component("sub_dir");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn sanitize_path_component_empty_fallback() {
-        let expected = "schema";
-        let actual = sanitize_path_component("");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn sanitize_path_component_only_hyphens_becomes_underscores() {
-        let expected = "___";
-        let actual = sanitize_path_component("---");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn sanitize_path_component_starts_with_digit_prefixed() {
-        let expected = "_123";
-        let actual = sanitize_path_component("123");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn sanitize_output_relative_single_file() {
-        let relative = Path::new("schema-1.json");
-        let actual = sanitize_output_relative(relative);
-        let expected = PathBuf::from("schema_1.rs");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn sanitize_output_relative_nested() {
-        let relative = Path::new("sub-dir/schema-2.json");
-        let actual = sanitize_output_relative(relative);
-        let expected = PathBuf::from("sub_dir/schema_2.rs");
-        assert_eq!(expected, actual);
-    }
 
     #[test]
     fn mod_rs_content_by_dir_single_root_file() {

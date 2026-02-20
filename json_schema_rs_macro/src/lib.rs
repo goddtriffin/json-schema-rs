@@ -6,6 +6,7 @@
 //! `generate_rust_schema!(r#"{"type":"object", ...}"#)`.
 
 use json_schema_rs::CodegenBackend;
+use json_schema_rs::sanitize::module_name_from_path;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -27,39 +28,6 @@ impl Parse for SchemaInputs {
         }
         Ok(SchemaInputs { literals })
     }
-}
-
-/// Sanitize a string to a valid Rust module name (`snake_case`, no leading digit).
-fn module_name_from_path(path: &str) -> String {
-    let stem = std::path::Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("schema");
-    sanitize_module_name(stem)
-}
-
-fn sanitize_module_name(s: &str) -> String {
-    let s: String = s
-        .chars()
-        .map(|c| {
-            if c == '-' || c == '.' || c == ' ' {
-                '_'
-            } else {
-                c
-            }
-        })
-        .filter(|c| *c == '_' || c.is_ascii_alphanumeric())
-        .collect();
-    if s.is_empty() {
-        return "schema".to_string();
-    }
-    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        return format!("schema_{s}");
-    }
-    if s == "crate" || s == "self" || s == "super" {
-        return format!("{s}_mod");
-    }
-    s
 }
 
 #[proc_macro]

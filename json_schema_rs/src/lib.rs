@@ -7,6 +7,7 @@ pub mod codegen;
 pub mod error;
 pub mod json_pointer;
 pub mod json_schema;
+pub mod sanitize;
 pub mod validation;
 
 pub use codegen::{CodegenBackend, RustBackend, generate_rust};

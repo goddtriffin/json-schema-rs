@@ -38,6 +38,3 @@ For each of these TODO items, check what every other competitor library does, ch
 - implement Enums as Rust Enums instead of Rust Strings. Handle collisions (multiple JSON values
   mapping to the same name) with suffixes like `_0` and `_1`. If an enum name starts with an invalid char
   (like a non-letter), prefix it with `E`.
-- lets create a new Rust file where we store 100% of all sanitization methods.
-  e.g. sanitizing: Rust struct names, Rust enum names, Rust file names, rust field names, etc
-  This can be a single place where they all live, as opposed to being strewn all over the place.

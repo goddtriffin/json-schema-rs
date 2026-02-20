@@ -6,6 +6,7 @@
 
 use crate::error::Error;
 use crate::json_schema::JsonSchema;
+use crate::sanitize::{sanitize_field_name, sanitize_struct_name, to_pascal_case};
 use std::collections::BTreeSet;
 use std::io::{Cursor, Write};
 
@@ -37,66 +38,6 @@ impl CodegenBackend for RustBackend {
             results.push(out.into_inner());
         }
         Ok(results)
-    }
-}
-
-/// Sanitize a JSON property key to a Rust field identifier (`snake_case`; replace `-` with `_`).
-/// Does not change case; only replaces invalid characters. Result is safe for use as a field name.
-fn sanitize_field_name(key: &str) -> String {
-    let s: String = key
-        .chars()
-        .map(|c| if c == '-' { '_' } else { c })
-        .collect();
-    if s.is_empty() {
-        return "empty".to_string();
-    }
-    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        return format!("field_{s}");
-    }
-    if s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
-        return s;
-    }
-    s.chars()
-        .map(|c| {
-            if c == '_' || c.is_ascii_alphanumeric() {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// Convert a name to `PascalCase` for struct names (e.g. "address" -> "Address").
-fn to_pascal_case(name: &str) -> String {
-    let mut out = String::new();
-    let mut capitalize_next = true;
-    for c in name.chars() {
-        if c == '_' || c == '-' || c == ' ' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            out.extend(c.to_uppercase());
-            capitalize_next = false;
-        } else {
-            out.push(c);
-        }
-    }
-    if out.is_empty() {
-        "Unnamed".to_string()
-    } else if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("N{out}")
-    } else {
-        out
-    }
-}
-
-/// Ensure a struct name is a valid Rust identifier (`PascalCase`; prefix if starts with digit).
-fn sanitize_struct_name(s: &str) -> String {
-    let pascal = to_pascal_case(s);
-    if pascal.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("N{pascal}")
-    } else {
-        pascal
     }
 }
 
@@ -240,37 +181,9 @@ pub fn generate_rust(schemas: &[JsonSchema]) -> Result<Vec<Vec<u8>>, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodegenBackend, RustBackend, generate_rust, sanitize_field_name, to_pascal_case};
+    use super::{CodegenBackend, RustBackend, generate_rust};
     use crate::error::Error;
     use crate::json_schema::JsonSchema;
-
-    #[test]
-    fn sanitize_field_name_replaces_hyphen() {
-        let expected = "foo_bar";
-        let actual = sanitize_field_name("foo-bar");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn sanitize_field_name_unchanged_valid() {
-        let expected = "first_name";
-        let actual = sanitize_field_name("first_name");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn to_pascal_case_address() {
-        let expected = "Address";
-        let actual = to_pascal_case("address");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn to_pascal_case_street_address() {
-        let expected = "StreetAddress";
-        let actual = to_pascal_case("street_address");
-        assert_eq!(expected, actual);
-    }
 
     #[test]
     fn root_not_object_errors() {
