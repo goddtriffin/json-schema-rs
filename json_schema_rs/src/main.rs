@@ -2,7 +2,7 @@
 
 use clap::{Arg, Command};
 use json_schema_rs::sanitize::{sanitize_output_relative, sanitize_path_component};
-use json_schema_rs::{JsonSchema, generate_rust, validate};
+use json_schema_rs::{JsonSchema, RustCodegenOptions, generate_rust_with_options, validate};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -171,7 +171,12 @@ fn write_mod_rs_files(output_dir: &Path, output_relatives: &[PathBuf]) -> Result
     Ok(())
 }
 
-fn run_generate(lang: &str, inputs: &[String], output_dir: &Path) -> Result<(), String> {
+fn run_generate(
+    lang: &str,
+    inputs: &[String],
+    output_dir: &Path,
+    struct_name_from: Option<&str>,
+) -> Result<(), String> {
     if !lang.eq_ignore_ascii_case("rust") {
         return Err(format!("unsupported language: {lang}; supported: rust"));
     }
@@ -184,6 +189,11 @@ fn run_generate(lang: &str, inputs: &[String], output_dir: &Path) -> Result<(), 
     if entries.is_empty() {
         return Err("no JSON Schema files found (look for .json in directories)".to_string());
     }
+
+    let options: RustCodegenOptions = match struct_name_from {
+        Some("property-key") => RustCodegenOptions::default().with_property_key_first(),
+        _ => RustCodegenOptions::default(),
+    };
 
     // Standalone ingestion step: try every file, log each failure to stderr, do not short-circuit.
     let mut successful: Vec<(JsonSchema, PathBuf)> = Vec::with_capacity(entries.len());
@@ -211,7 +221,7 @@ fn run_generate(lang: &str, inputs: &[String], output_dir: &Path) -> Result<(), 
 
     let (schemas, output_relatives): (Vec<JsonSchema>, Vec<PathBuf>) =
         successful.into_iter().unzip();
-    let bytes_list = generate_rust(&schemas).map_err(|e| e.to_string())?;
+    let bytes_list = generate_rust_with_options(&schemas, &options).map_err(|e| e.to_string())?;
     assert_eq!(
         bytes_list.len(),
         output_relatives.len(),
@@ -279,6 +289,13 @@ fn main() {
                         .value_name("INPUT")
                         .num_args(1..)
                         .help("JSON Schema file(s), directory(ies) to search for .json, or \"-\" for stdin"),
+                )
+                .arg(
+                    Arg::new("struct-name-from")
+                        .long("struct-name-from")
+                        .value_name("SOURCE")
+                        .value_parser(["title", "property-key"])
+                        .help("Use title or property-key as the primary source for struct/type names (default: title)"),
                 ),
         )
         .subcommand(
@@ -316,7 +333,10 @@ fn main() {
                 .get_many::<String>("inputs")
                 .map(|it| it.map(String::from).collect())
                 .unwrap_or_default();
-            run_generate(lang, &inputs, &output_dir)
+            let struct_name_from: Option<&str> = gen_m
+                .get_one::<String>("struct-name-from")
+                .map(String::as_str);
+            run_generate(lang, &inputs, &output_dir, struct_name_from)
         }
         Some(("validate", val_m)) => {
             let schema: PathBuf = val_m

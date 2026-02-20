@@ -71,7 +71,7 @@ fn generate_rust_schema_impl(
         mod_names.push((mod_name, lit.span()));
     }
 
-    let backend = json_schema_rs::RustBackend;
+    let backend = json_schema_rs::RustBackend::default();
     let bytes_list: Vec<Vec<u8>> = backend
         .generate(&schemas)
         .map_err(|e| syn::Error::new(Span::call_site(), format!("codegen failed: {e}")))?;

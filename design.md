@@ -61,6 +61,34 @@ Codegen is built around a **swappable backend** trait: input is a slice of `Json
 
 **Future: shared module / dedupe.** The multi-schema API and CLI output layout are designed so that cross-schema deduplication can later emit a shared module (e.g. `shared.rs`) and per-schema modules that use it; no change to CLI arguments.
 
+### Rust codegen: name sanitization
+
+All functions that produce valid Rust identifiers (struct names, field names, module names, path components) live in **`json_schema_rs/src/sanitize.rs`** as a single source of truth.
+
+**Functions and roles:**
+
+- **`to_pascal_case(name)`** — Converts to PascalCase for type names. Splits on `_`, `-`, space; capitalizes each word. Empty → `"Unnamed"`; leading digit → `N{out}`. Non-ASCII → `_`.
+- **`sanitize_struct_name(s)`** — Type/struct/enum names. Uses `to_pascal_case`; then if result is Rust keyword `Self`, appends `_` → `Self_`. Leading digit already prefixed in `to_pascal_case`.
+- **`sanitize_field_name(key)`** — Field identifiers (snake_case). Replaces `-` with `_`; invalid chars → `_`. Empty → `"empty"`; leading digit → `field_{s}`; single `_` → `"empty"`. Rust strict/reserved keywords (e.g. `type`, `self`) get trailing `_` (e.g. `type_`). Codegen emits `#[serde(rename = "...")]` when field name differs from JSON key. Non-ASCII → `_`.
+- **`sanitize_module_name(s)`** — Module names. Replaces `-`, `.`, space with `_`; keeps `[a-zA-Z0-9_]`. Empty → `"schema"`; leading digit → `schema_{s}`; reserved `crate`/`self`/`super` → `{s}_mod`. Non-ASCII → `_`.
+- **`sanitize_path_component(component)`** — File stem or dir name for output paths. Replaces `-` and non-`[a-zA-Z0-9_]` with `_`. Empty → `"schema"`; leading digit → `_{s}`. Non-ASCII → `_`.
+- **`sanitize_output_relative(relative)`**, **`module_name_from_path(path)`** — Build on the above.
+
+**Rules summary:**
+
+| Rule | Type/struct | Field | Module | Path component |
+|------|-------------|-------|--------|----------------|
+| Empty | `Unnamed` | `empty` | `schema` | `schema` |
+| Leading digit | `N{out}` | `field_{s}` | `schema_{s}` | `_{s}` |
+| Invalid/non-ASCII | `_` (in PascalCase input) | `_` | `_` filtered | `_` |
+| Rust keyword | `Self` → `Self_` | keyword → `{kw}_` | `crate`/`self`/`super` → `{s}_mod` | — |
+
+**Stability guarantee:** Sanitizer output is deterministic and intended to be stable across versions. Any change will be documented and rare (e.g. security or spec compliance). Unit tests lock golden input→output pairs (e.g. `"type"` → field `type_`, struct `Type`; `"self"` → struct `Self_`).
+
+**Competitor comparison:** Typify uses heck + custom sanitize; enum variant uniqueness via replacing non-identifier chars with `"X"`; rust-collisions fixture for keywords. schemafy uses Inflector for Pascal/snake; Rust keywords and invalid identifiers escaped with trailing underscore and serde rename. We use a single module, explicit keyword set (strict + reserved from the Rust Reference), and trailing `_` for type (`Self`) and field keywords so generated code is always valid without raw identifiers.
+
+**Duplicate struct names:** When two schemas (or title vs property key) produce the same sanitized struct name, codegen currently keeps the first occurrence and skips the second (“first wins”). Future work may add disambiguation (e.g. numeric suffix) or explicit failure.
+
 ---
 
 ## 1. Core / identification
@@ -351,7 +379,15 @@ TODO (number/integer).
 
 ### title
 
-We use `title` for struct naming (PascalCase). If missing or empty, the root struct is named `Root` and nested structs are named from the property key (e.g. `address` → `Address`).
+We use `title` for struct naming (PascalCase) when **model name source** is default (title first). If missing or empty, the root struct is named `Root` and nested structs are named from the property key (e.g. `address` → `Address`). The primary source (title vs property key) is **configurable**; see **Model name source** below.
+
+**Spec version quirks:** (placeholder or blank)
+
+#### Model name source (configurable)
+
+**Default:** `TitleFirst` — struct/type name from `title` if non-empty, else property key, else `"Root"` (root only). **Option:** `PropertyKeyFirst` — property key first, then `title`, then `"Root"`. Set via [`RustCodegenOptions::with_property_key_first`], library [`generate_rust_with_options`], or CLI `--struct-name-from property-key`. Macro uses default (title first).
+
+**Competitor summary:** Most codegen libraries use title as primary, then fallback to ref fragment / $id / property name (e.g. Typify, quicktype, PHP wol-soft, Python datamodel-code-gen, Kotlin, C#). schemafy (Rust) does not use title; type names from property/parent+field only. go omissis and jsonschema2pojo make the choice configurable (e.g. `struct-name-from-title`, `isUseTitleAsClassname()`). We match that by offering both orders and defaulting to title first for backward compatibility.
 
 **Spec version quirks:** (placeholder or blank)
 

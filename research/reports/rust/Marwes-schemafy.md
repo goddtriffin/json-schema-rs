@@ -144,6 +144,7 @@ flowchart LR
 - **Expansion flow**: `expand` (or `expand_root`) calls `expand_schema` for the root or iterates definitions. `expand_schema` first expands nested definitions, then either: (1) struct (from properties / additionalProperties: false), (2) enum (from enum), or (3) type alias. Field types come from `expand_type` → `expand_type_`, which handles ref_, anyOf (special one-or-many), oneOf, multi-type with null, and single type (string, integer, boolean, number, object, array). Recursive types get `Box<T>`. `allOf` is merged before this so that properties/required/type are combined into one schema view.
 
 - **Naming**: Inflector used for PascalCase/snake_case; Rust keywords and invalid identifiers are escaped (e.g. trailing underscore, serde rename). Type names for inline objects use current type name + field name in PascalCase.
+- **Model name source**: Title not used; type names from property/parent+field only (e.g. RootStreetAddress). Not configurable.
 
 ## Low-level details
 

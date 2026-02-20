@@ -1,16 +1,5 @@
 For each of these TODO items, check what every other competitor library does, choose the best approach.
 
-- implement a standalone function to sanitize/normalize Rust model names (e.g. PascalCase).
-  Compare against all other libraries for other programming languages to see what kinds of edge
-  cases they're covering that we might not know about. Most importantly analyze the competitor
-  Rust crates to see how they make sure that generated model names are actually valid Rust
-  struct/enum/etc identifiers, and how they handle name/namespace collisions, etc. We should have
-  extensive unit tests here.
-  As part of this, do libraries which generate models/classes/structs/POJOs/etc from JSON Schema
-  use the field name as the model's Name, or does it use the JSON Schema "title" field as the
-  model's Name. Which one is used by default, and which one is used as the fallback? Gather this
-  data from across all relevant competitor repos. (My opinion is that we may want to default to
-  field name, with a fallback to "title" if necessary. This should be configurable via Settings.)
 - implement refs/defs (and figure out if there's a way that this will tie into the "deduplicate
   identical definitions" idea that's mentioned beneath this idea. Maybe they're implemented as
   part of the same system)

@@ -10,7 +10,10 @@ pub mod json_schema;
 pub mod sanitize;
 pub mod validation;
 
-pub use codegen::{CodegenBackend, RustBackend, generate_rust};
+pub use codegen::{
+    CodegenBackend, ModelNameSource, RustBackend, RustCodegenOptions, generate_rust,
+    generate_rust_with_options,
+};
 pub use error::Error;
 pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::JsonSchema;

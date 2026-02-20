@@ -168,6 +168,7 @@ flowchart LR
 
 - **TypeSpaceSettings**: `with_map_type` (HashMap, BTreeMap, IndexMap, etc.), `with_unknown_crates` (Allow/Generate/Deny), `with_crate`/crates for x-rust-type; optional derives and attrs; struct_builder.
 - **Naming**: heck for case conversion; sanitize for Rust identifiers; title and ref fragment used for type names.
+- **Model name source**: Title and ref fragment used for type names; inline objects use parent + field name. Not configurable.
 - **Optional dependencies**: Generated code may require `uuid`, `chrono`, `regress`, `serde_json`; TypeSpace reports `uses_uuid()`, `uses_chrono()`, etc. Conversion overrides (macro `convert`) allow substituting types for schema shapes (e.g. custom UUID type).
 - **Patch/replace**: Macro `patch` for rename and extra derives per type; `replace` to use an existing type instead of generating one.
 
