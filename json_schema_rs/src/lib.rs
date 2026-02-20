@@ -11,7 +11,7 @@ pub mod json_schema_parser;
 pub mod json_schema_settings;
 pub mod json_schema_spec_version;
 pub mod sanitize;
-pub mod validation;
+pub mod validator;
 
 pub use code_gen::{
     CodeGenBackend, CodeGenSettings, CodeGenSettingsBuilder, ModelNameSource, RustBackend,
@@ -23,4 +23,4 @@ pub use json_schema::{JsonSchema, SchemaIngestionError};
 pub use json_schema_parser::{parse_schema, parse_schema_from_slice};
 pub use json_schema_settings::{JsonSchemaSettings, JsonSchemaSettingsBuilder};
 pub use json_schema_spec_version::JsonSchemaSpecVersion;
-pub use validation::{ValidationError, ValidationResult, validate};
+pub use validator::{ValidationError, ValidationResult, validate};

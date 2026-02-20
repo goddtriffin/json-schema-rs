@@ -2,66 +2,12 @@
 //!
 //! Collects every validation error (no fail-fast) and returns them in a single result.
 
+mod error;
+pub use error::{ValidationError, ValidationResult};
+
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::JsonSchema;
 use serde_json::Value;
-use std::fmt;
-
-/// A single validation failure: kind and instance location.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValidationError {
-    /// Schema had `type: "object"` but the instance was not an object.
-    ExpectedObject {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
-    },
-    /// Schema had `type: "string"` but the instance was not a string.
-    ExpectedString {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
-    },
-    /// A property listed in `required` was absent.
-    MissingRequired {
-        /// JSON Pointer to the object (parent of the missing property).
-        instance_path: JsonPointer,
-        /// The required property name that was missing.
-        property: String,
-    },
-}
-
-impl ValidationError {
-    /// Returns the instance path for this error.
-    #[must_use]
-    pub fn instance_path(&self) -> &JsonPointer {
-        match self {
-            ValidationError::ExpectedObject { instance_path }
-            | ValidationError::ExpectedString { instance_path }
-            | ValidationError::MissingRequired { instance_path, .. } => instance_path,
-        }
-    }
-}
-
-impl fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let location = self.instance_path().display_root_or_path();
-        match self {
-            ValidationError::ExpectedObject { .. } => {
-                write!(f, "{location}: expected object")
-            }
-            ValidationError::ExpectedString { .. } => {
-                write!(f, "{location}: expected string")
-            }
-            ValidationError::MissingRequired { property, .. } => {
-                write!(f, "{location}: missing required property \"{property}\"")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ValidationError {}
-
-/// Result of validation: `Ok(())` when valid, `Err(errors)` when invalid.
-pub type ValidationResult = Result<(), Vec<ValidationError>>;
 
 /// Validates a JSON instance against a schema. Collects **all** validation errors
 /// and returns them in a single result (no fail-fast).
