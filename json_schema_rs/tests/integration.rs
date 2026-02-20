@@ -182,6 +182,166 @@ fn cli_generate_rust_dir_recursive_mirrors_structure() {
         child_rs.contains("pub y: Option<String>"),
         "nested/child.rs should have field y"
     );
+    let root_mod = std::fs::read_to_string(out_dir.path().join("mod.rs")).expect("read mod.rs");
+    let nested_mod = std::fs::read_to_string(out_dir.path().join("nested").join("mod.rs"))
+        .expect("read nested/mod.rs");
+    assert!(
+        root_mod.contains("pub mod nested;") && root_mod.contains("pub mod root;"),
+        "root mod.rs should re-export nested and root: {root_mod}"
+    );
+    assert!(
+        nested_mod.contains("pub mod child;"),
+        "nested/mod.rs should re-export child: {nested_mod}"
+    );
+}
+
+#[test]
+fn cli_generate_rust_ingestion_single_failure_logs_path_and_exits_nonzero() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let bad_path = temp_dir.path().join("bad.json");
+    std::fs::write(&bad_path, r#"{"type":"object","properties":{}"#).expect("write invalid json");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            bad_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(!output.status.success(), "should exit non-zero");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bad.json"),
+        "stderr should contain failing file path: {stderr}"
+    );
+    assert!(
+        stderr.contains("invalid JSON Schema") || stderr.contains("EOF"),
+        "stderr should contain error reason: {stderr}"
+    );
+}
+
+#[test]
+fn cli_generate_rust_ingestion_multiple_failures_logs_all_and_exits_nonzero() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let bad1 = temp_dir.path().join("bad1.json");
+    let bad2 = temp_dir.path().join("bad2.json");
+    std::fs::write(&bad1, r#"{"type":"object"#).expect("write bad1");
+    std::fs::write(&bad2, r"not json").expect("write bad2");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            bad1.to_str().unwrap(),
+            bad2.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(!output.status.success(), "should exit non-zero");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_bad1 = stderr.contains("bad1.json");
+    let expected_bad2 = stderr.contains("bad2.json");
+    assert!(
+        expected_bad1 && expected_bad2,
+        "stderr should contain both failing file paths; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn cli_generate_rust_ingestion_partial_success_no_output_written() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let good_path = temp_dir.path().join("good.json");
+    let bad_path = temp_dir.path().join("bad.json");
+    std::fs::write(
+        &good_path,
+        r#"{"type":"object","properties":{"x":{"type":"string"}}}"#,
+    )
+    .expect("write good");
+    std::fs::write(&bad_path, r#"{"type":"object"#).expect("write bad");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            good_path.to_str().unwrap(),
+            bad_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(!output.status.success(), "should exit non-zero");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bad.json"),
+        "stderr should log failing file: {stderr}"
+    );
+    let good_rs = out_dir.path().join("good.rs");
+    assert!(
+        !good_rs.exists(),
+        "no output should be written when any ingestion fails: {good_rs:?} should not exist"
+    );
+}
+
+#[test]
+fn cli_generate_rust_hyphenated_paths_sanitized_and_mod_rs_emitted() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let sub_dir = temp_dir.path().join("sub-dir");
+    std::fs::create_dir_all(&sub_dir).expect("create sub-dir");
+    std::fs::write(
+        temp_dir.path().join("schema-1.json"),
+        r#"{"type":"object","properties":{"a":{"type":"string"}}}"#,
+    )
+    .expect("write schema-1");
+    std::fs::write(
+        sub_dir.join("schema-2.json"),
+        r#"{"type":"object","properties":{"b":{"type":"string"}}}"#,
+    )
+    .expect("write schema-2");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let schema_1_rs = out_dir.path().join("schema_1.rs");
+    let sub_dir_schema_2 = out_dir.path().join("sub_dir").join("schema_2.rs");
+    assert!(
+        schema_1_rs.exists(),
+        "schema_1.rs should exist (sanitized from schema-1.json)"
+    );
+    assert!(
+        sub_dir_schema_2.exists(),
+        "sub_dir/schema_2.rs should exist (sanitized path)"
+    );
+    let root_mod = std::fs::read_to_string(out_dir.path().join("mod.rs")).expect("read mod.rs");
+    let expected_root =
+        root_mod.contains("pub mod schema_1;") && root_mod.contains("pub mod sub_dir;");
+    assert!(
+        expected_root,
+        "root mod.rs should declare schema_1 and sub_dir: {root_mod}"
+    );
+    let sub_dir_mod = std::fs::read_to_string(out_dir.path().join("sub_dir").join("mod.rs"))
+        .expect("read sub_dir/mod.rs");
+    assert!(
+        sub_dir_mod.contains("pub mod schema_2;"),
+        "sub_dir/mod.rs should declare schema_2: {sub_dir_mod}"
+    );
 }
 
 #[test]

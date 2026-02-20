@@ -130,7 +130,7 @@ cargo build --release
 
 The binary is at `target/release/jsonschemars`.
 
-**Generate code from one or more JSON Schemas.** The `generate` command takes one or more INPUTs (file paths, directory paths—recursively searched for `.json` files—or `-` for one schema from stdin) and writes generated `.rs` files under the required `-o` output directory, mirroring the input path structure. Only **rust** is supported today.
+**Generate code from one or more JSON Schemas.** The `generate` command takes one or more INPUTs (file paths, directory paths—recursively searched for `.json` files—or `-` for one schema from stdin) and writes generated `.rs` files under the required `-o` output directory. Output file and directory names are **sanitized** for Rust (e.g. hyphens to underscores), and each directory includes a `mod.rs` so the output is a valid Rust module tree. If any schema file fails to read, every failure is logged to stderr with its path and the command exits without writing output. Only **rust** is supported today. See [design.md](design.md) for details.
 
 ```bash
 jsonschemars generate rust -o out/ schema.json
