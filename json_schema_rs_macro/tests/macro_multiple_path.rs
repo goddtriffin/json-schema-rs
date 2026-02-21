@@ -1,8 +1,8 @@
-//! Integration test: `generate_rust_schema!` with multiple file paths.
+//! Integration test: `json_schema_to_rust!` with multiple file paths.
 
-use json_schema_rs_macro::generate_rust_schema;
+use json_schema_rs_macro::json_schema_to_rust;
 
-generate_rust_schema!("tests/fixtures/simple.json", "tests/fixtures/other.json");
+json_schema_to_rust!("tests/fixtures/simple.json", "tests/fixtures/other.json");
 
 #[test]
 fn expanded_code_compiles_and_both_modules_exist() {

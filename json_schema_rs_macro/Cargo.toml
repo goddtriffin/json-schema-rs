@@ -7,7 +7,7 @@ authors.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Procedural macro generate_rust_schema! for json-schema-rs"
+description = "Procedural macro json_schema_to_rust! for json-schema-rs"
 license-file.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -25,3 +25,6 @@ proc-macro2 = "1"
 quote = "1"
 serde_json.workspace = true
 syn = "2"
+
+[dev-dependencies]
+serde.workspace = true

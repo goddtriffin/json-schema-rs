@@ -1,8 +1,8 @@
-//! Integration test: `generate_rust_schema!` with multiple inline JSON Schema strings.
+//! Integration test: `json_schema_to_rust!` with multiple inline JSON Schema strings.
 
-use json_schema_rs_macro::generate_rust_schema;
+use json_schema_rs_macro::json_schema_to_rust;
 
-generate_rust_schema!(
+json_schema_to_rust!(
     r#"{"type":"object","properties":{"a":{"type":"string"}}}"#,
     r#"{"type":"object","properties":{"b":{"type":"string"}},"required":["b"]}"#
 );

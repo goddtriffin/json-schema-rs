@@ -83,7 +83,7 @@ Use `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to rej
 
 ## Using the macro (compile-time codegen)
 
-The **`generate_rust_schema!`** macro generates Rust types at compile time and **inlines** them at the call site (no file is written). Add the macro crate:
+The **`json_schema_to_rust!`** macro generates Rust types at compile time and **inlines** them at the call site (no file is written). Add both crates:
 
 ```toml
 [dependencies]
@@ -91,20 +91,20 @@ json-schema-rs = "0.0.4"
 json-schema-rs-macro = "0.0.4"
 ```
 
-Then use any of these forms:
+Then `use json_schema_rs_macro::json_schema_to_rust` and use any of these forms:
 
 - **Single file path** (relative to your crate root, i.e. `CARGO_MANIFEST_DIR`):
 
-  `generate_rust_schema!("path/to/schema.json")`
+  `json_schema_to_rust!("path/to/schema.json")`
 
 - **Multiple file paths:**  
-  `generate_rust_schema!("a.json", "b.json")`
+  `json_schema_to_rust!("a.json", "b.json")`
 
 - **Single inline JSON Schema string:**  
-  `generate_rust_schema!(r#"{"type":"object", "properties": {...}}"#)`
+  `json_schema_to_rust!(r#"{"type":"object", "properties": {...}}"#)`
 
 - **Multiple inline JSON Schema strings:**  
-  `generate_rust_schema!(r#"..."#, r#"..."#)`
+  `json_schema_to_rust!(r#"..."#, r#"..."#)`
 
 When you pass **multiple** schemas (paths or inline), each schema’s types are emitted in a **separate Rust module** to avoid name collisions: one module per JSON Schema. Module names come from the file stem for paths (e.g. `simple` from `simple.json`) or `schema_0`, `schema_1`, … for inline strings. Use the generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
 

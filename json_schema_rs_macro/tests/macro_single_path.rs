@@ -1,8 +1,8 @@
-//! Integration test: `generate_rust_schema!` with a single file path.
+//! Integration test: `json_schema_to_rust!` with a single file path.
 
-use json_schema_rs_macro::generate_rust_schema;
+use json_schema_rs_macro::json_schema_to_rust;
 
-generate_rust_schema!("tests/fixtures/simple.json");
+json_schema_to_rust!("tests/fixtures/simple.json");
 
 #[test]
 fn expanded_code_compiles_and_root_exists() {

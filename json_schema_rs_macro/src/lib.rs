@@ -1,9 +1,9 @@
-//! Procedural macro `generate_rust_schema!` for compile-time codegen from JSON Schema.
+//! Procedural macro `json_schema_to_rust!` for compile-time codegen from JSON Schema.
 //!
-//! Use with the `json-schema-rs` crate: add both `json-schema-rs` and
-//! `json-schema-rs-macro` to your dependencies, then invoke
-//! `generate_rust_schema!("path/to/schema.json")` or
-//! `generate_rust_schema!(r#"{"type":"object", ...}"#)`.
+//! Use with the `json-schema-rs` crate: add `json-schema-rs` with the `macro` feature
+//! (or add `json-schema-rs-macro` directly), then invoke
+//! `json_schema_to_rust!("path/to/schema.json")` or
+//! `json_schema_to_rust!(r#"{"type":"object", ...}"#)`.
 
 use json_schema_rs::sanitizers::module_name_from_path;
 use json_schema_rs::{CodeGenBackend, CodeGenSettings, JsonSchemaSettings, parse_schema};
@@ -31,15 +31,15 @@ impl Parse for SchemaInputs {
 }
 
 #[proc_macro]
-pub fn generate_rust_schema(input: TokenStream) -> TokenStream {
-    let result = generate_rust_schema_impl(input.into());
+pub fn json_schema_to_rust(input: TokenStream) -> TokenStream {
+    let result = json_schema_to_rust_impl(input.into());
     match result {
         Ok(stream) => proc_macro::TokenStream::from(stream),
         Err(e) => syn::Error::to_compile_error(&e).into(),
     }
 }
 
-fn generate_rust_schema_impl(
+fn json_schema_to_rust_impl(
     input: proc_macro2::TokenStream,
 ) -> SynResult<proc_macro2::TokenStream> {
     let schema_inputs: SchemaInputs = syn::parse2(input)?;

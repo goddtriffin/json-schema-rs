@@ -30,5 +30,4 @@ serde_json.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-json-schema-rs-macro = { path = "../json_schema_rs_macro" }
 tempfile = "3"
