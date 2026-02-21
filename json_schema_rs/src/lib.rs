@@ -4,17 +4,15 @@
 //! to a writer. Supported keywords and types are documented in the README.
 
 pub mod code_gen;
-pub mod error;
 pub mod json_pointer;
 pub mod json_schema;
 pub mod sanitize;
 pub mod validator;
 
 pub use code_gen::{
-    CodeGenBackend, CodeGenSettings, CodeGenSettingsBuilder, ModelNameSource, RustBackend,
-    generate_rust,
+    CodeGenBackend, CodeGenError, CodeGenResult, CodeGenSettings, CodeGenSettingsBuilder,
+    ModelNameSource, RustBackend, generate_rust,
 };
-pub use error::Error;
 pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::{
     JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,

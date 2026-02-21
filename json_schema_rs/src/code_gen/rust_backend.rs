@@ -1,8 +1,9 @@
 //! Rust codegen backend: emits serde-compatible Rust structs from JSON Schema.
 
 use super::CodeGenBackend;
+use super::CodeGenError;
+use super::CodeGenResult;
 use super::settings::{CodeGenSettings, ModelNameSource};
-use crate::error::Error;
 use crate::json_schema::JsonSchema;
 use crate::sanitize::{sanitize_field_name, sanitize_struct_name};
 use std::collections::BTreeSet;
@@ -17,11 +18,11 @@ impl CodeGenBackend for RustBackend {
         &self,
         schemas: &[JsonSchema],
         settings: &CodeGenSettings,
-    ) -> Result<Vec<Vec<u8>>, Error> {
+    ) -> CodeGenResult<Vec<Vec<u8>>> {
         let mut results: Vec<Vec<u8>> = Vec::with_capacity(schemas.len());
         for (index, schema) in schemas.iter().enumerate() {
             let mut out = Cursor::new(Vec::new());
-            emit_rust(schema, &mut out, settings).map_err(|e| Error::Batch {
+            emit_rust(schema, &mut out, settings).map_err(|e| CodeGenError::Batch {
                 index,
                 source: Box::new(e),
             })?;
@@ -127,7 +128,7 @@ fn emit_struct_fields(
     schema: &JsonSchema,
     out: &mut impl Write,
     settings: &CodeGenSettings,
-) -> Result<(), Error> {
+) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
@@ -164,9 +165,9 @@ fn emit_rust(
     schema: &JsonSchema,
     out: &mut impl Write,
     settings: &CodeGenSettings,
-) -> Result<(), Error> {
+) -> CodeGenResult<()> {
     if !schema.is_object_with_properties() {
-        return Err(Error::RootNotObject);
+        return Err(CodeGenError::RootNotObject);
     }
 
     let mut structs: Vec<StructToEmit> = Vec::new();
@@ -200,21 +201,21 @@ fn emit_rust(
 ///
 /// # Errors
 ///
-/// Returns [`Error::RootNotObject`] if a root schema is not an object with properties.
-/// Returns [`Error::Io`] on write failure.
-/// Returns [`Error::Batch`] with index when one schema in the batch fails.
+/// Returns [`CodeGenError::RootNotObject`] if a root schema is not an object with properties.
+/// Returns [`CodeGenError::Io`] on write failure.
+/// Returns [`CodeGenError::Batch`] with index when one schema in the batch fails.
 pub fn generate_rust(
     schemas: &[JsonSchema],
     settings: &CodeGenSettings,
-) -> Result<Vec<Vec<u8>>, Error> {
+) -> CodeGenResult<Vec<Vec<u8>>> {
     RustBackend.generate(schemas, settings)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::CodeGenError;
     use super::{CodeGenBackend, RustBackend, generate_rust};
     use crate::code_gen::settings::{CodeGenSettings, ModelNameSource};
-    use crate::error::Error;
     use crate::json_schema::JsonSchema;
 
     fn default_settings() -> CodeGenSettings {
@@ -226,9 +227,9 @@ mod tests {
         let schema: JsonSchema = JsonSchema::default();
         let settings: CodeGenSettings = default_settings();
         let actual = generate_rust(&[schema], &settings).unwrap_err();
-        assert!(matches!(actual, Error::Batch { index: 0, .. }));
-        if let Error::Batch { source, .. } = actual {
-            assert!(matches!(*source, Error::RootNotObject));
+        assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
+        if let CodeGenError::Batch { source, .. } = actual {
+            assert!(matches!(*source, CodeGenError::RootNotObject));
         }
     }
 
@@ -240,9 +241,9 @@ mod tests {
         };
         let settings: CodeGenSettings = default_settings();
         let actual = generate_rust(&[schema], &settings).unwrap_err();
-        assert!(matches!(actual, Error::Batch { index: 0, .. }));
-        if let Error::Batch { source, .. } = actual {
-            assert!(matches!(*source, Error::RootNotObject));
+        assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
+        if let CodeGenError::Batch { source, .. } = actual {
+            assert!(matches!(*source, CodeGenError::RootNotObject));
         }
     }
 
@@ -491,6 +492,6 @@ pub struct Root {
         let s1: JsonSchema = serde_json::from_str(valid).unwrap();
         let settings: CodeGenSettings = default_settings();
         let actual = generate_rust(&[s1, invalid], &settings).unwrap_err();
-        assert!(matches!(actual, Error::Batch { index: 1, .. }));
+        assert!(matches!(actual, CodeGenError::Batch { index: 1, .. }));
     }
 }
