@@ -9,12 +9,6 @@ For each of these TODO items, check what every other competitor library does, ch
   then we should figure out if we could check for that, and generate only a single Rust model
   which satisfies all of the duplicate object definitions (instead of generating multiple identical
   Rust structs)
-- figure out how to test that our generated Rust structs actually compile properly.
-  Somehow we need to take JSON Schema definitions and emit Rust structs as files on disk or something,
-  then attempt to use the generated models in a test program or something in order to test if our library
-  even works or not. This is different than testing/asserting against a known-good string - because
-  how do we even know if the known-good string works correctly? We need to actually test against the
-  code that we're generating.
 - figure out how to automatically run benchmarks for our library, and do the same for all relevant
   competitor libraries. It must be automated after running a single Makefile target command.
   It should spit out individual results for the relevant metrics of our library, the same for

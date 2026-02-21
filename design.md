@@ -65,6 +65,8 @@ Codegen is built around a **swappable backend** trait in **`code_gen/mod.rs`**: 
 
 **Future: shared module / dedupe.** The multi-schema API and CLI output layout are designed so that cross-schema deduplication can later emit a shared module (e.g. `shared.rs`) and per-schema modules that use it; no change to CLI arguments.
 
+**Codegen tests: compile and deserialize.** We verify that generated Rust compiles and that serde deserialization works by writing generated code into a temporary Cargo crate (edition 2024, lib + binary), running `cargo build`, then running a binary that deserializes a fixed JSON string into the generated type(s). Integration tests in **`json_schema_rs/tests/integration.rs`** cover three layouts: single-schema (`generated_rust_single_schema_builds_and_deserializes`), multi-schema (`generated_rust_multi_schema_builds_and_deserializes`), and nested modules (`generated_rust_nested_modules_builds_and_deserializes`). Each test asserts both build and run succeed.
+
 ### Rust codegen: name sanitization
 
 All functions that produce valid Rust identifiers (struct names, field names, module names, path components) live in **`json_schema_rs/src/sanitizers.rs`** as a single source of truth.
