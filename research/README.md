@@ -7,10 +7,4 @@ This directory holds cloned competitor repos, research reports, benchmark fixtur
 - **benchmark/** — Shared JSON Schema fixtures and (future) harness for measuring performance. See `benchmark/README.md`.
 - **test-harvest/** — (Future) Harvested test inputs from other repos. See `test-harvest/README.md`.
 
-JSON Schema specifications are vendored in the repo under **specs/** (not here). To refresh them run:
-
-```bash
-make vendor_specs
-```
-
-from the repository root.
+JSON Schema specifications are **downloaded** via `make vendor_specs` (not stored in the repo). They appear under **specs/** after you run that command from the repository root. Report wording like "vendored draft 2020-12 meta-schemas" refers to this same local specs directory populated by the download script.

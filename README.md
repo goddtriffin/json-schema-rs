@@ -5,7 +5,7 @@
 
 A Rust library for JSON Schema tooling: **Schema→Rust** codegen (generate Rust
 types from a JSON Schema), **Rust→Schema** reverse codegen, and a **validator**.
-The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We target JSON Schema draft 2020-12. The repo vendors specs for every published draft: draft-00, draft-01, draft-02, draft-03, draft-04, draft-06, draft-07, 2019-09, and 2020-12. For supported keywords,
+The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We target JSON Schema draft 2020-12. A script downloads specs for every published draft (draft-00 through 2020-12); run `make vendor_specs` to fetch them locally—specs are not stored in the repo. For supported keywords,
 implementation details, and design philosophy, see [design.md](design.md). Generated
 struct and field names are always valid Rust identifiers (reserved words and
 invalid characters are escaped; see design.md for sanitization rules).

@@ -21,7 +21,7 @@ The json-schema-rs crate provides **three tools**:
 
 When implementing a feature, use these resources. Each is described by **what it is**, **how to use it**, and **when to use it**.
 
-- **Vendored JSON Schema specs** (`specs/`) — *What:* Offline copy of JSON Schema drafts (draft-00 through 2020-12). *How:* Read HTML/JSON under `specs/json-schema.org/`; run `./research/scripts/list_keywords.sh` from repo root for the canonical keyword list. Use **only** vendored specs—no web. If specs are missing, the maintainer runs `make vendor_specs`. *When:* At the start of every feature (understand how the keyword is defined and how it behaves in each draft); when documenting spec-version quirks in design.md.
+- **JSON Schema specs** (`specs/`) — *What:* Local copy of JSON Schema drafts (draft-00 through 2020-12), obtained by running `make vendor_specs` (or `./specs/download.sh`). They are gitignored and not in the repo. *How:* Read HTML/JSON under `specs/json-schema.org/`; run `./research/scripts/list_keywords.sh` from repo root for the canonical keyword list. Use **only** these local specs—no web. If specs are missing, run `make vendor_specs`. *When:* At the start of every feature (understand how the keyword is defined and how it behaves in each draft); when documenting spec-version quirks in design.md.
 
 - **Research reports** (`research/reports/<lang>/{org}-{repo}.md`) — *What:* Structured reports on competitor libraries (what they support, how they implement features). *How:* Read the report for the feature you're implementing; rank approaches by our values (see design.md); add or update sections when you learn something new. *When:* When implementing a feature (see how others did it before writing code); after implementing (contribute back so the report stays the knowledge source). See the **competitor-json-schema-codegen-analysis** skill for how reports are produced and the report template.
 
@@ -39,7 +39,7 @@ When implementing a feature, use these resources. Each is described by **what it
 
 - **design.md** — Our design and implementation notes for the keyword/feature; what's already implemented vs TODO; spec version quirks.
 - **README.md** — What we currently expose to users; which specs we support; how the library is presented.
-- **Vendored JSON Schema specs** (`specs/`) — How the keyword is defined and how it behaves in each draft we care about.
+- **JSON Schema specs** (`specs/`) — How the keyword is defined and how it behaves in each draft we care about. Download with `make vendor_specs`; they are gitignored.
 - **Competitor research reports** (`research/reports/<lang>/{org}-{repo}.md`) — How other libraries implement this feature; rank by our values (design.md).
 - **Locally cloned competitor repos** (`research/repos/<lang>/<name>/`) — When the research report lacks detail, read the source for code-level insight.
 
@@ -89,7 +89,7 @@ Schema model, codegen/validation behavior, tests, examples. Follow Contribution 
 ## Repository layout
 
 - **Workspace**: Single crate `json_schema_rs/` (library and `jsonschemars` CLI binary). Root `Cargo.toml` defines the workspace only.
-- **Vendored JSON Schema specs**: `specs/`
+- **JSON Schema specs** (downloaded via `make vendor_specs`, gitignored): `specs/`
 - **Competitor clones**: `research/repos/<lang>/<name>/`
 - **Research reports**: `research/reports/<lang>/{org}-{repo}.md`
 - **Design and architecture**: `design.md` (repo root)

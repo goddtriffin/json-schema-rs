@@ -6,6 +6,10 @@ bin/
 research/repos/
 research/json-schema-test-suite/
 
+# Specs are downloaded via make vendor_specs (./specs/download.sh), not stored in repo
+specs/ietf/
+specs/json-schema.org/
+
 # files
 .DS_Store
 Cargo.lock

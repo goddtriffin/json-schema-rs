@@ -1,10 +1,11 @@
-# Vendored JSON Schema specifications
+# JSON Schema specifications (local copy)
 
-This directory contains a local copy of every published JSON Schema
+This directory holds a **local copy** of every published JSON Schema
 specification from [json-schema.org](https://json-schema.org/specification) and
-related IETF drafts (Relative JSON Pointer, JSON Reference). The files are
-vendored so the repo is self-contained and can be used offline or without
-depending on external URLs.
+related IETF drafts (Relative JSON Pointer, JSON Reference). The spec files
+are **not** committed to the repo—they are gitignored. Contributors run
+`make vendor_specs` or `./specs/download.sh` from the repository root to
+download them; the result is a local, offline-capable copy under `specs/`.
 
 ## Contents
 
@@ -18,7 +19,7 @@ depending on external URLs.
 - **`download.sh`** — Script that downloads all of the above. URLs and
   destination paths are hard-coded in the script.
 
-## Updating (refreshing) vendored specs
+## Updating (refreshing) the local spec copy
 
 From the **repository root** run:
 
@@ -32,9 +33,9 @@ or:
 ./specs/download.sh
 ```
 
-This re-downloads every file from the canonical URLs. If json-schema.org or IETF
-change URLs in the future, edit the URLs in `specs/download.sh` and run the
-script again.
+This re-downloads every file from the canonical URLs. The downloaded files are
+gitignored and are not committed. If json-schema.org or IETF change URLs in the
+future, edit the URLs in `specs/download.sh` and run the script again.
 
 ## Adding new specs
 
