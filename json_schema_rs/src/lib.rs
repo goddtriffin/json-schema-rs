@@ -6,7 +6,7 @@
 pub mod code_gen;
 pub mod json_pointer;
 pub mod json_schema;
-pub mod sanitize;
+pub mod sanitizers;
 pub mod validator;
 
 pub use code_gen::{

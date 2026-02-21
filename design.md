@@ -67,7 +67,7 @@ Codegen is built around a **swappable backend** trait in **`code_gen/mod.rs`**: 
 
 ### Rust codegen: name sanitization
 
-All functions that produce valid Rust identifiers (struct names, field names, module names, path components) live in **`json_schema_rs/src/sanitize.rs`** as a single source of truth.
+All functions that produce valid Rust identifiers (struct names, field names, module names, path components) live in **`json_schema_rs/src/sanitizers.rs`** as a single source of truth.
 
 **Functions and roles:**
 

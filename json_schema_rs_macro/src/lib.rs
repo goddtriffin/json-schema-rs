@@ -5,7 +5,7 @@
 //! `generate_rust_schema!("path/to/schema.json")` or
 //! `generate_rust_schema!(r#"{"type":"object", ...}"#)`.
 
-use json_schema_rs::sanitize::module_name_from_path;
+use json_schema_rs::sanitizers::module_name_from_path;
 use json_schema_rs::{CodeGenBackend, CodeGenSettings, JsonSchemaSettings, parse_schema};
 use proc_macro::TokenStream;
 use proc_macro2::Span;

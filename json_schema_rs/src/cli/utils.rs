@@ -1,6 +1,6 @@
 //! CLI helpers: schema/payload I/O, schema file discovery, mod.rs emission.
 
-use json_schema_rs::sanitize::{sanitize_output_relative, sanitize_path_component};
+use json_schema_rs::sanitizers::{sanitize_output_relative, sanitize_path_component};
 use json_schema_rs::{JsonSchema, JsonSchemaSettings, parse_schema_from_slice};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};

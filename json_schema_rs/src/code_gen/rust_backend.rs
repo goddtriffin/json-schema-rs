@@ -5,7 +5,7 @@ use super::CodeGenError;
 use super::CodeGenResult;
 use super::settings::{CodeGenSettings, ModelNameSource};
 use crate::json_schema::JsonSchema;
-use crate::sanitize::{sanitize_field_name, sanitize_struct_name};
+use crate::sanitizers::{sanitize_field_name, sanitize_struct_name};
 use std::collections::BTreeSet;
 use std::io::{Cursor, Write};
 
