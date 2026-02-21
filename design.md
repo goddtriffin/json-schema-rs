@@ -67,6 +67,37 @@ Codegen is built around a **swappable backend** trait in **`code_gen/mod.rs`**: 
 
 **Codegen tests: compile and deserialize.** We verify that generated Rust compiles and that serde deserialization works by writing generated code into a temporary Cargo crate (edition 2024, lib + binary), running `cargo build`, then running a binary that deserializes a fixed JSON string into the generated type(s). Integration tests in **`json_schema_rs/tests/integration.rs`** cover three layouts: single-schema (`generated_rust_single_schema_builds_and_deserializes`), multi-schema (`generated_rust_multi_schema_builds_and_deserializes`), and nested modules (`generated_rust_nested_modules_builds_and_deserializes`). Each test asserts both build and run succeed.
 
+### Codegen tests: scenario × frontend
+
+We test each **codegen scenario** (a named situation: e.g. single required string, nested object, hyphenated key, dedupe) across every **applicable** codegen frontend so behavior stays in lockstep for every consumer entry point. See the contribution guide (Testing → Codegen scenario × frontend coverage) for the requirement. When adding a new scenario, add tests for all applicable frontends; when adding a new frontend, add tests for all existing scenarios that apply. Keep the matrix below up to date.
+
+**Frontends:**
+
+| Frontend | What it tests | Where tests live |
+|----------|----------------|------------------|
+| Golden string | Library API: `parse_schema` + `generate_rust`; assert full generated string equals expected. | `json_schema_rs/src/code_gen/rust_backend.rs` (unit), `json_schema_rs/tests/integration.rs` (e.g. `integration_parse_and_generate`) |
+| CLI | Run `jsonschemars generate rust -o DIR <inputs>`; assert exit code and output file contents. | `json_schema_rs/tests/integration.rs` (`cli_generate_rust_*`) |
+| Generated Rust build + deserialize | Generate code, write to temp Cargo crate, `cargo build`, `cargo run` with `serde_json::from_str` into generated types. | `json_schema_rs/tests/integration.rs` (`generated_rust_*_builds_and_deserializes`) |
+| Macro | `json_schema_to_rust!(...)` (inline and/or path); expanded code compiles and types/values behave as expected. | `json_schema_rs_macro/tests/` (`macro_single_inline`, `macro_single_path`, `macro_multiple_inline`, `macro_multiple_path`) |
+
+**Scenario × frontend matrix** (Y = covered, N = not covered, — = not applicable):
+
+| Scenario | Golden (unit) | Golden (integration) | CLI | Build+deserialize | Macro |
+|----------|---------------|------------------------|-----|-------------------|-------|
+| Single schema, required string | Y | Y | Y | Y | Y |
+| Single schema, optional string | Y | Y | Y | Y | Y (single_path) |
+| Nested object (single schema) | Y | Y | Y | Y | Y |
+| Two flat schemas | Y | — | Y | Y | Y |
+| Nested dir layout (root + nested/child) | — | — | Y | Y | — |
+| Hyphenated property key (foo-bar) | Y | Y | Y | Y | Y |
+| Hyphenated paths (schema-1, sub-dir) | — | — | Y | Y | — |
+| Dedupe (two identical schemas) | Y | — | Y | Y | — |
+| Model name source (property-key) | Y | — | Y | Y | — |
+| Root not object / empty object error | Y | Y | — | — | — |
+| Batch error index | Y | — | — | — | — |
+| CLI ingestion errors | — | — | Y | — | — |
+| Deep nesting (no stack overflow) | Y | — | Y | Y | — |
+
 ### Rust codegen: name sanitization
 
 All functions that produce valid Rust identifiers (struct names, field names, module names, path components) live in **`json_schema_rs/src/sanitizers.rs`** as a single source of truth.
