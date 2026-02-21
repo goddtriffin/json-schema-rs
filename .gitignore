@@ -7,8 +7,10 @@ research/repos/
 research/json-schema-test-suite/
 
 # Specs are downloaded via make vendor_specs (./specs/download.sh), not stored in repo
-specs/ietf/
-specs/json-schema.org/
+specs/ietf/*
+!specs/ietf/.gitkeep
+specs/json-schema.org/*
+!specs/json-schema.org/.gitkeep
 
 # files
 .DS_Store
