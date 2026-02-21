@@ -10,13 +10,22 @@ mod settings;
 
 pub use error::{CodeGenError, CodeGenResult};
 pub use rust_backend::{RustBackend, generate_rust};
-pub use settings::{CodeGenSettings, CodeGenSettingsBuilder, ModelNameSource};
+pub use settings::{CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, ModelNameSource};
 
 use crate::json_schema::JsonSchema;
 
-/// Contract for a codegen backend: schemas in, one generated source buffer per schema out.
+/// Output of Rust code generation: optional shared buffer plus one buffer per input schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerateRustOutput {
+    /// When dedupe is enabled and at least one struct is shared across schemas, contains the shared struct definitions. Otherwise `None`.
+    pub shared: Option<Vec<u8>>,
+    /// One UTF-8 Rust source buffer per input schema; length equals number of schemas.
+    pub per_schema: Vec<Vec<u8>>,
+}
+
+/// Contract for a codegen backend: schemas in, [`GenerateRustOutput`] with optional shared buffer and per-schema buffers.
 pub trait CodeGenBackend {
-    /// Generate model source for each schema. Returns one UTF-8 encoded byte buffer per schema.
+    /// Generate model source for each schema. Returns shared buffer (if any) and one buffer per schema.
     ///
     /// # Errors
     ///
@@ -27,5 +36,5 @@ pub trait CodeGenBackend {
         &self,
         schemas: &[JsonSchema],
         settings: &CodeGenSettings,
-    ) -> CodeGenResult<Vec<Vec<u8>>>;
+    ) -> CodeGenResult<GenerateRustOutput>;
 }

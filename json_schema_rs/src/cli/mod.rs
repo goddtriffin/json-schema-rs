@@ -47,6 +47,13 @@ pub fn run() {
                         .value_name("SOURCE")
                         .value_parser(["title-first", "property-key"])
                         .help("Codegen Settings: primary source for struct/type names (default: title-first)"),
+                )
+                .arg(
+                    Arg::new("cgs-dedupe-mode")
+                        .long("cgs-dedupe-mode")
+                        .value_name("MODE")
+                        .value_parser(["disabled", "functional", "full"])
+                        .help("Codegen Settings: dedupe identical object schemas (default: full)"),
                 ),
         )
         .subcommand(
@@ -94,12 +101,16 @@ pub fn run() {
             let cgs_model_name_source: Option<&str> = gen_m
                 .get_one::<String>("cgs-model-name-source")
                 .map(String::as_str);
+            let cgs_dedupe_mode: Option<&str> = gen_m
+                .get_one::<String>("cgs-dedupe-mode")
+                .map(String::as_str);
             generate::run_generate(
                 lang,
                 &inputs,
                 &output_dir,
                 jss_disallow_unknown_fields,
                 cgs_model_name_source,
+                cgs_dedupe_mode,
             )
         }
         Some(("validate", val_m)) => {

@@ -204,6 +204,7 @@ flowchart TB
 
 ## Model deduplication and $ref/$defs
 
+- **json-schema-rs**: We implement optional **structural** deduplication (modes Functional/Full, default Full) within and across schemas; shared structs are emitted in a single shared buffer. See design.md.
 - **Same shape in multiple places**: The generator deduplicates by schema identity. `generateDeclaredType` checks `declsBySchema[t]` and `getDeclByEqualSchema(scope.string(), t)` (structural equality via go-cmp). So the same inline object shape in two branches can map to the same generated type if processed with the same scope/name and equal schema.
 - **$defs / $ref**: Each `$defs` entry is generated once (in definition order); `$ref` to `#/$defs/name` or `file#/$defs/name` resolves to that declaration (same file) or to the type in the referenced file’s output (cross-file). Referenced definitions are generated in their schema’s output; no inlining of refs. Nested `$defs` (e.g. `#/$defs/A/$defs/B`) are not supported; extractRefNames only handles top-level definition name after `/$defs/` or `/definitions/`.
 

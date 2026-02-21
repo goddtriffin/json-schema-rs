@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
     let schema = parse_schema(json, &schema_settings)?;
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let bytes = generate_rust(&[schema], &code_gen_settings)?;
-    io::stdout().write_all(&bytes[0])?;
+    let output = generate_rust(&[schema], &code_gen_settings)?;
+    io::stdout().write_all(&output.per_schema[0])?;
     Ok(())
 }

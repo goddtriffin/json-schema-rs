@@ -2,18 +2,20 @@
 
 use super::utils::{collect_schema_entries, read_schema_from_path, write_mod_rs_files};
 use json_schema_rs::{
-    CodeGenSettings, JsonSchema, JsonSchemaSettings, ModelNameSource, generate_rust,
+    CodeGenSettings, DedupeMode, JsonSchema, JsonSchemaSettings, ModelNameSource, generate_rust,
 };
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[expect(clippy::too_many_lines)]
 pub(crate) fn run_generate(
     lang: &str,
     inputs: &[String],
     output_dir: &Path,
     jss_disallow_unknown_fields: bool,
     cgs_model_name_source: Option<&str>,
+    cgs_dedupe_mode: Option<&str>,
 ) -> Result<(), String> {
     if !lang.eq_ignore_ascii_case("rust") {
         return Err(format!("unsupported language: {lang}; supported: rust"));
@@ -37,6 +39,13 @@ pub(crate) fn run_generate(
             b = b.model_name_source(match src {
                 "property-key" => ModelNameSource::PropertyKeyFirst,
                 _ => ModelNameSource::TitleFirst,
+            });
+        }
+        if let Some(mode) = cgs_dedupe_mode {
+            b = b.dedupe_mode(match mode {
+                "disabled" => DedupeMode::Disabled,
+                "functional" => DedupeMode::Functional,
+                _ => DedupeMode::Full,
             });
         }
         b.build()
@@ -68,14 +77,28 @@ pub(crate) fn run_generate(
 
     let (schemas, output_relatives): (Vec<JsonSchema>, Vec<PathBuf>) =
         successful.into_iter().unzip();
-    let bytes_list = generate_rust(&schemas, &code_gen_settings).map_err(|e| e.to_string())?;
+    let output = generate_rust(&schemas, &code_gen_settings).map_err(|e| e.to_string())?;
     assert_eq!(
-        bytes_list.len(),
+        output.per_schema.len(),
         output_relatives.len(),
         "codegen output count"
     );
 
-    for (output_relative, bytes) in output_relatives.iter().zip(bytes_list.iter()) {
+    let per_schema_bytes: Vec<Vec<u8>> = if output.shared.is_some() {
+        output
+            .per_schema
+            .iter()
+            .map(|bytes| {
+                let s = String::from_utf8_lossy(bytes);
+                let replaced = s.replace("pub use crate::", "pub use crate::shared::");
+                replaced.into_bytes()
+            })
+            .collect()
+    } else {
+        output.per_schema.clone()
+    };
+
+    for (output_relative, bytes) in output_relatives.iter().zip(per_schema_bytes.iter()) {
         let out_path = output_dir.join(output_relative);
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)
@@ -89,6 +112,20 @@ pub(crate) fn run_generate(
             .map_err(|e| format!("failed to flush {}: {e}", out_path.display()))?;
     }
 
-    write_mod_rs_files(output_dir, &output_relatives)?;
+    let mod_relatives: Vec<PathBuf> = if let Some(shared_bytes) = &output.shared {
+        let shared_path = output_dir.join("shared.rs");
+        let mut f = fs::File::create(&shared_path)
+            .map_err(|e| format!("failed to create {}: {e}", shared_path.display()))?;
+        f.write_all(shared_bytes)
+            .map_err(|e| format!("failed to write {}: {e}", shared_path.display()))?;
+        f.flush()
+            .map_err(|e| format!("failed to flush {}: {e}", shared_path.display()))?;
+        let mut all_files = vec![PathBuf::from("shared.rs")];
+        all_files.extend(output_relatives.iter().cloned());
+        all_files
+    } else {
+        output_relatives.clone()
+    };
+    write_mod_rs_files(output_dir, &mod_relatives)?;
     Ok(())
 }

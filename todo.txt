@@ -3,12 +3,6 @@ For each of these TODO items, check what every other competitor library does, ch
 - implement refs/defs (and figure out if there's a way that this will tie into the "deduplicate
   identical definitions" idea that's mentioned beneath this idea. Maybe they're implemented as
   part of the same system)
-- implement the ability to dedupe generated structs. Aka, if the given JSON Schema definition has
-  multiple different object definitions which are literally identical in every way (have the same
-  amount of fields which are of the same types which have the same constraints and descriptions etc)
-  then we should figure out if we could check for that, and generate only a single Rust model
-  which satisfies all of the duplicate object definitions (instead of generating multiple identical
-  Rust structs)
 - figure out how to automatically run benchmarks for our library, and do the same for all relevant
   competitor libraries. It must be automated after running a single Makefile target command.
   It should spit out individual results for the relevant metrics of our library, the same for

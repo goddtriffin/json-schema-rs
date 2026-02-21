@@ -74,14 +74,31 @@ fn json_schema_to_rust_impl(
 
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let backend = json_schema_rs::RustBackend;
-    let bytes_list: Vec<Vec<u8>> = backend
+    let output: json_schema_rs::GenerateRustOutput = backend
         .generate(&schemas, &code_gen_settings)
         .map_err(|e| syn::Error::new(Span::call_site(), format!("codegen failed: {e}")))?;
 
     let mut modules = Vec::new();
-    for ((mod_name, span), bytes) in mod_names.into_iter().zip(bytes_list) {
-        let rust_str = String::from_utf8(bytes)
+    if let Some(shared_bytes) = &output.shared {
+        let rust_str = String::from_utf8(shared_bytes.clone()).map_err(|e| {
+            syn::Error::new(Span::call_site(), format!("shared code was not UTF-8: {e}"))
+        })?;
+        let file: syn::File = syn::parse_str(&rust_str).map_err(|e| {
+            syn::Error::new(Span::call_site(), format!("shared Rust did not parse: {e}"))
+        })?;
+        let items = &file.items;
+        modules.push(quote! {
+            pub mod shared {
+                #(#items)*
+            }
+        });
+    }
+    for ((mod_name, span), bytes) in mod_names.into_iter().zip(output.per_schema) {
+        let mut rust_str = String::from_utf8(bytes)
             .map_err(|e| syn::Error::new(span, format!("generated code was not UTF-8: {e}")))?;
+        if output.shared.is_some() {
+            rust_str = rust_str.replace("use crate::", "use crate::shared::");
+        }
 
         let file: syn::File = syn::parse_str(&rust_str)
             .map_err(|e| syn::Error::new(span, format!("generated Rust did not parse: {e}")))?;

@@ -67,19 +67,20 @@ Add to your `Cargo.toml`:
 json-schema-rs = "0.0.4"
 ```
 
-Parse one or more schemas and generate Rust (one buffer per schema):
+Parse one or more schemas and generate Rust (one buffer per schema, plus an optional shared buffer when dedupe finds identical shapes):
 
 ```rust
-use json_schema_rs::{parse_schema, CodeGenSettings, JsonSchemaSettings, ModelNameSource, generate_rust};
+use json_schema_rs::{parse_schema, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
 
 let schema_settings = JsonSchemaSettings::builder().build();
 let schema = parse_schema(schema_json, &schema_settings)?;
 let code_gen_settings = CodeGenSettings::builder().build();
-let bytes_list = generate_rust(&[schema], &code_gen_settings)?;
-// bytes_list.len() == 1; write bytes_list[0] to a file or stdout
+let output = generate_rust(&[schema], &code_gen_settings)?;
+// output.per_schema.len() == 1; write output.per_schema[0] to a file or stdout
+// When dedupe finds shared structs, output.shared is Some(shared_rust_code)
 ```
 
-Use `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject schema definitions with unknown keys. Use `CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()` to prefer property keys over `title` for struct names. CLI: `--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or `property-key`.
+Structurally identical object schemas are deduplicated by default (one generated struct per shape, emitted in a shared buffer). Use `CodeGenSettings::builder().dedupe_mode(DedupeMode::Disabled).build()` to turn this off, or `DedupeMode::Functional` to compare only functional fields (see [design.md](design.md)). Use `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject schema definitions with unknown keys. Use `CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()` to prefer property keys over `title` for struct names. CLI: `--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or `property-key`, `--cgs-dedupe-mode disabled|functional|full`.
 
 ## Using the macro (compile-time codegen)
 
