@@ -1,13 +1,14 @@
 //! JSON Schema parsing, model, and settings.
 
 pub mod error;
+#[expect(clippy::module_inception)]
+pub mod json_schema;
 pub mod parser;
-pub mod schema;
 pub mod settings;
 pub mod spec_version;
 
-pub use error::SchemaIngestionError;
+pub use error::{JsonSchemaParseError, JsonSchemaParseResult};
+pub use json_schema::JsonSchema;
 pub use parser::{parse_schema, parse_schema_from_slice};
-pub use schema::JsonSchema;
 pub use settings::{JsonSchemaSettings, JsonSchemaSettingsBuilder};
 pub use spec_version::SpecVersion;

@@ -1,10 +1,10 @@
-//! Errors when parsing (ingesting) JSON Schema.
+//! Errors when parsing JSON Schema.
 
 use std::fmt;
 
-/// Error when parsing (ingesting) a JSON Schema with the given settings.
+/// Error when parsing a JSON Schema with the given settings.
 #[derive(Debug)]
-pub enum SchemaIngestionError {
+pub enum JsonSchemaParseError {
     /// JSON or serde error (invalid JSON, wrong types, etc.).
     Serde(serde_json::Error),
     /// An unknown key was present and strict ingestion was enabled.
@@ -16,28 +16,31 @@ pub enum SchemaIngestionError {
     },
 }
 
-impl fmt::Display for SchemaIngestionError {
+/// Result type for JSON Schema parsing operations.
+pub type JsonSchemaParseResult<T> = Result<T, JsonSchemaParseError>;
+
+impl fmt::Display for JsonSchemaParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SchemaIngestionError::Serde(e) => write!(f, "invalid JSON Schema: {e}"),
-            SchemaIngestionError::UnknownField { key, path } => {
+            JsonSchemaParseError::Serde(e) => write!(f, "invalid JSON Schema: {e}"),
+            JsonSchemaParseError::UnknownField { key, path } => {
                 write!(f, "unknown schema key \"{key}\" at {path}")
             }
         }
     }
 }
 
-impl std::error::Error for SchemaIngestionError {
+impl std::error::Error for JsonSchemaParseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            SchemaIngestionError::Serde(e) => Some(e),
-            SchemaIngestionError::UnknownField { .. } => None,
+            JsonSchemaParseError::Serde(e) => Some(e),
+            JsonSchemaParseError::UnknownField { .. } => None,
         }
     }
 }
 
-impl From<serde_json::Error> for SchemaIngestionError {
+impl From<serde_json::Error> for JsonSchemaParseError {
     fn from(e: serde_json::Error) -> Self {
-        SchemaIngestionError::Serde(e)
+        JsonSchemaParseError::Serde(e)
     }
 }

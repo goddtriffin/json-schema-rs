@@ -195,7 +195,7 @@ TODO.
 
 ### type
 
-We support a single type string or an array of types (draft 2020-12 style); we take the **first** type. `object` and `string` drive codegen today; other types are ignored. See schema model in `json_schema_rs/src/json_schema.rs` and Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`.
+We support a single type string or an array of types (draft 2020-12 style); we take the **first** type. `object` and `string` drive codegen today; other types are ignored. See schema model in `json_schema_rs/src/json_schema/json_schema.rs` and Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`.
 
 **Spec version quirks:** (placeholder or blank)
 
@@ -217,7 +217,7 @@ TODO. (Planned: JSON Schema `enum` = array of allowed values. Only string enums 
 
 ### properties
 
-We use `properties` to build structs: each property becomes a struct field. Property keys are sanitized for Rust (e.g. `-` → `_`). When the Rust field name differs from the JSON key, we emit `#[serde(rename = "...")]`. Object schemas are traversed recursively; each object with `properties` yields a Rust struct. See `json_schema.rs` and `code_gen/rust_backend.rs`.
+We use `properties` to build structs: each property becomes a struct field. Property keys are sanitized for Rust (e.g. `-` → `_`). When the Rust field name differs from the JSON key, we emit `#[serde(rename = "...")]`. Object schemas are traversed recursively; each object with `properties` yields a Rust struct. See `json_schema/json_schema.rs` and `code_gen/rust_backend.rs`.
 
 **Spec version quirks:** (placeholder or blank)
 

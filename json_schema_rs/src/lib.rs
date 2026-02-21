@@ -17,7 +17,7 @@ pub use code_gen::{
 pub use error::Error;
 pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::{
-    JsonSchema, JsonSchemaSettings, JsonSchemaSettingsBuilder, SchemaIngestionError, SpecVersion,
-    parse_schema, parse_schema_from_slice,
+    JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,
+    JsonSchemaSettingsBuilder, SpecVersion, parse_schema, parse_schema_from_slice,
 };
 pub use validator::{ValidationError, ValidationResult, validate};
