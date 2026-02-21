@@ -84,6 +84,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 
 | Scenario | Golden (unit) | Golden (integration) | CLI | Build+deserialize | Macro |
 |----------|---------------|------------------------|-----|-------------------|-------|
+| type: object (root and nested) | Y | Y | Y | Y | Y |
 | Single schema, required string | Y | Y | Y | Y | Y |
 | Single schema, optional string | Y | Y | Y | Y | Y (single_path) |
 | Nested object (single schema) | Y | Y | Y | Y | Y |
@@ -228,9 +229,16 @@ TODO.
 
 ### type
 
-We support a single type string or an array of types (draft 2020-12 style); we take the **first** type. `object` and `string` drive codegen today; other types are ignored. See schema model in `json_schema_rs/src/json_schema/json_schema.rs` and Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`.
+The JSON Schema `type` keyword constrains the instance to one or more primitive types. In the spec it can be a **string** (single type) or an **array of type strings** (instance valid if it matches any listed type). Primitive type names are consistent across drafts: `array`, `boolean`, `integer`, `null`, `number`, `object`, `string`.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We accept both a single type string and an array of type strings at parse time; we store and use only the **first** type. `object` and `string` drive codegen; other types are ignored for codegen but can be used for validation. We do not support draft-03 style array elements that are schema objects (we only interpret type-name strings). See schema model in `json_schema_rs/src/json_schema/json_schema.rs`, parser in `json_schema_rs/src/json_schema/parser.rs`, Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`, and validator in `json_schema_rs/src/validator/mod.rs`.
+
+**Limitation (type array):** When the schema has `"type": ["object", "null"]` (or any array of types), we treat it as the first type only. Validation requires the instance to match that single type; we do not implement "instance valid if it matches any type in the array" (e.g. `null` would fail for `["object", "null"]`). This can be implemented in the future if needed.
+
+**Spec version quirks:**
+
+- **Draft-03:** The `type` keyword may be a string or an array. When it is an array, elements may be **type strings or schema objects** (nested schemas). We do not support schema objects in the type array; we only accept type-name strings.
+- **Draft-04 and later:** The type array is restricted to **type strings only** (no schema objects). Array must have at least one element; elements must be unique. Same primitive type names in all drafts.
 
 ### const
 
@@ -248,6 +256,11 @@ TODO. (Planned: JSON Schema `enum` = array of allowed values. Only string enums 
 
 ## 5. Objects
 
+### type: "object"
+
+When a schema has `"type": "object"`, the instance must be a JSON object (a mapping of string keys to values). This meaning is **identical across all JSON Schema drafts** (draft-00 through 2020-12). We use it in codegen (root and nested schemas must have `type: "object"` and `properties` to generate a struct) and in the validator (when `type_ == Some("object")`, we require `instance.as_object().is_some()` and then validate `required` and `properties`). If the schema has `"type": ["object", "null"]`, we store only the first type (`object`) and validate accordingly; see the type-array limitation under **type** above.
+
+**Spec version quirks:** None for the meaning of "object"; the only draft differences are in the format of the `type` keyword (string vs array, and draft-03 array may contain schema objects), documented under **type**.
 ### properties
 
 We use `properties` to build structs: each property becomes a struct field. Property keys are sanitized for Rust (e.g. `-` → `_`). When the Rust field name differs from the JSON key, we emit `#[serde(rename = "...")]`. Object schemas are traversed recursively; each object with `properties` yields a Rust struct. See `json_schema/json_schema.rs` and `code_gen/rust_backend.rs`.

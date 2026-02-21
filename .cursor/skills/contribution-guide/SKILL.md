@@ -55,6 +55,24 @@ Schema model, codegen/validation behavior, tests, examples. Follow Contribution 
 2. **Update the research report** — If you learned something new about a competitor (from a cloned repo or elsewhere) that isn't already covered by the research report, add or update the report so we retain that knowledge for next time.
 3. **Update README** — If the change is user-visible (new feature, new keyword support), update the README (see Resources: README.md).
 
+### When implementing a new JSON Schema feature or updating/verifying an existing one
+
+Follow these steps for **every** new JSON Schema feature and for **every** update or verification of an existing feature (e.g. a keyword or related behavior like `type: "object"`):
+
+1. **Spec audit:** Check the keyword (and related behavior) against **all** JSON Schema specifications we support (draft-00 through 2020-12) using **only** the local specs under `specs/` (`make vendor_specs`). Document how the keyword is defined and how it behaves in each relevant draft.
+2. **design.md:** Fill out the feature's section in design.md: "Our implementation" and **"Spec version quirks"** (and any subsections, e.g. for `type` and `type: "object"`). Note any differences between spec versions.
+3. **Settings and SpecVersion:** If different spec versions handle the feature differently, capture that in **settings** (e.g. options under `JsonSchemaSettings` or validator/codegen settings). Ensure the **SpecVersion** enum's `default_schema_settings()` (and any other version-driven API) returns the correct settings for each spec version.
+4. **Default = latest spec:** Ensure default settings (e.g. `JsonSchemaSettings::builder().build()`) target the **latest** JSON Schema specification we support (Draft 2020-12) unless a different spec version is explicitly provided.
+5. **All tools:** Implement or update the feature for **every applicable tool**: JSON Schema → Rust codegen (and all frontends: library golden, CLI, generated Rust build + deserialize, macro), and the **validator**. Add tests for each; update the codegen scenario × frontend matrix in design.md when adding scenarios or frontends.
+
+**Checklist** (copy when starting a new feature or verification):
+
+- [ ] Spec audit (local specs only; draft-00 through 2020-12)
+- [ ] design.md: Our implementation + Spec version quirks
+- [ ] Settings/SpecVersion if spec versions differ
+- [ ] Default settings = Draft 2020-12
+- [ ] All tools: codegen (all frontends) + validator; tests; scenario × frontend matrix
+
 ## Contribution Guidelines
 
 ### Git

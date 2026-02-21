@@ -1,7 +1,11 @@
 //! JSON Schema ingestion settings.
 
 /// Settings that affect how JSON Schema definitions are ingested (parsed).
-/// Default values match the latest spec (Draft202012) defaults.
+///
+/// Default values from [`JsonSchemaSettingsBuilder::build`] target **JSON Schema
+/// Draft 2020-12**. When no spec version is explicitly provided, use
+/// `JsonSchemaSettings::builder().build()`; it is equivalent to
+/// [`SpecVersion::Draft202012.default_schema_settings()`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonSchemaSettings {
     /// When `true`, schema ingestion fails if any schema object contains keys

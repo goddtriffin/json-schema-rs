@@ -213,6 +213,80 @@ mod tests {
     }
 
     #[test]
+    fn wrong_type_object_with_number() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(42);
+        let result = validate(&schema, &instance);
+        let expected = vec![ValidationError::ExpectedObject {
+            instance_path: JsonPointer::root(),
+        }];
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), expected);
+    }
+
+    #[test]
+    fn wrong_type_object_with_null() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(null);
+        let result = validate(&schema, &instance);
+        let expected = vec![ValidationError::ExpectedObject {
+            instance_path: JsonPointer::root(),
+        }];
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), expected);
+    }
+
+    #[test]
+    fn wrong_type_object_with_array() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!([1, 2]);
+        let result = validate(&schema, &instance);
+        let expected = vec![ValidationError::ExpectedObject {
+            instance_path: JsonPointer::root(),
+        }];
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), expected);
+    }
+
+    #[test]
+    fn no_type_but_properties_object_instance_valid() {
+        let schema: JsonSchema = JsonSchema {
+            type_: None,
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "name".to_string(),
+                    JsonSchema {
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            required: Some(vec!["name".to_string()]),
+            title: None,
+        };
+        let instance = json!({"name": "Alice"});
+        let result = validate(&schema, &instance);
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn nested_object_validation() {
         let schema = schema_object_with_required(vec!["address"], {
             let mut m = BTreeMap::new();

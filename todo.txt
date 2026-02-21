@@ -1,8 +1,5 @@
 For each of these TODO items, check what every other competitor library does, choose the best approach.
 
-- implement refs/defs (and figure out if there's a way that this will tie into the "deduplicate
-  identical definitions" idea that's mentioned beneath this idea. Maybe they're implemented as
-  part of the same system)
 - figure out how to automatically run benchmarks for our library, and do the same for all relevant
   competitor libraries. It must be automated after running a single Makefile target command.
   It should spit out individual results for the relevant metrics of our library, the same for
