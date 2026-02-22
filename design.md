@@ -231,14 +231,15 @@ TODO.
 
 The JSON Schema `type` keyword constrains the instance to one or more primitive types. In the spec it can be a **string** (single type) or an **array of type strings** (instance valid if it matches any listed type). Primitive type names are consistent across drafts: `array`, `boolean`, `integer`, `null`, `number`, `object`, `string`.
 
-**Our implementation:** We accept both a single type string and an array of type strings at parse time; we store and use only the **first** type. `object` and `string` drive codegen; other types are ignored for codegen but can be used for validation. We do not support draft-03 style array elements that are schema objects (we only interpret type-name strings). See schema model in `json_schema_rs/src/json_schema/json_schema.rs`, parser in `json_schema_rs/src/json_schema/parser.rs`, Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`, and validator in `json_schema_rs/src/validator/mod.rs`.
+**Our implementation:** We accept both a single type string and an array of type strings at parse time; we store and use only the **first** type. `object` and `string` drive codegen; other types are ignored for codegen but can be used for validation. We do not support draft-03 style array elements that are schema objects (we only interpret type-name strings). See schema model in `json_schema_rs/src/json_schema/json_schema.rs`, parser in `json_schema_rs/src/json_schema/parser.rs`, Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`, and validator in `json_schema_rs/src/validator/mod.rs`. For type `"string"` specifically, see **7. Strings** below.
 
 **Limitation (type array):** When the schema has `"type": ["object", "null"]` (or any array of types), we treat it as the first type only. Validation requires the instance to match that single type; we do not implement "instance valid if it matches any type in the array" (e.g. `null` would fail for `["object", "null"]`). This can be implemented in the future if needed.
 
 **Spec version quirks:**
 
+- **Draft-00, 01, 02:** The `type` keyword may be a string or an array. In the meta-schema, array items may be a type string or a schema object (`$ref`). We accept type-name strings only; we do not support schema objects in the type array.
 - **Draft-03:** The `type` keyword may be a string or an array. When it is an array, elements may be **type strings or schema objects** (nested schemas). We do not support schema objects in the type array; we only accept type-name strings.
-- **Draft-04 and later:** The type array is restricted to **type strings only** (no schema objects). Array must have at least one element; elements must be unique. Same primitive type names in all drafts.
+- **Draft-04 and later:** The type array is restricted to **type strings only** (no schema objects). Array must have at least one element; elements must be unique. Same primitive type names in all drafts (simpleTypes: array, boolean, integer, null, number, object, string). Draft-05 has no schema.json in our vendor (PDFs only); type behavior matches draft-04/06 for our purposes.
 
 ### const
 
@@ -361,9 +362,11 @@ TODO.
 
 ### Strings (type: "string")
 
-We emit properties with `type: "string"` as `String`. No string validation keywords (minLength, maxLength, pattern) are implemented yet.
+When a schema has `"type": "string"` (or `"type": ["string", ...]` with string first), the instance must be a JSON string. This meaning is **identical across all JSON Schema drafts** (draft-00 through 2020-12).
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We parse both a single type string `"string"` and an array whose first element is `"string"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("string")`, we require the instance to be a JSON string (`instance.is_string()`); non-strings produce `ValidationError::ExpectedString`. We do not apply any string constraints (minLength, maxLength, pattern, format). Codegen: properties with `type: "string"` emit Rust `String` or `Option<String>` (with `#[serde(rename = "...")]` when the field name differs from the JSON key). See schema model `is_string()` in `json_schema_rs/src/json_schema/json_schema.rs`, parser in `json_schema_rs/src/json_schema/parser.rs`, validator in `json_schema_rs/src/validator/mod.rs`, and Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`. Reverse codegen is not implemented; when it is, Rust `String` should emit `"type": "string"`.
+
+**Spec version quirks:** None for the **meaning** of type `"string"` (instance must be a string). The only draft differences are in the **form** of the `type` keyword (string vs array, and draft-03 array may contain schema objects), documented under **4. Type and value constraints → type**.
 
 #### minLength
 

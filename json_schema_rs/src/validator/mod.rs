@@ -112,7 +112,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{ValidationError, validate};
+    use super::{ValidationError, ValidationResult, validate};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
     use serde_json::json;
@@ -151,8 +151,9 @@ mod tests {
             m
         });
         let instance = json!({"a": "x", "b": "y"});
-        let result = validate(&schema, &instance);
-        assert!(result.is_ok());
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -169,13 +170,12 @@ mod tests {
             m
         });
         let instance = json!({});
-        let result = validate(&schema, &instance);
-        let expected = vec![ValidationError::MissingRequired {
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
             instance_path: JsonPointer::root().push("name"),
             property: "name".to_string(),
-        }];
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), expected);
+        }]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -187,12 +187,39 @@ mod tests {
             title: None,
         };
         let instance = json!("not an object");
-        let result = validate(&schema, &instance);
-        let expected = vec![ValidationError::ExpectedObject {
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
-        }];
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), expected);
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_string_valid_nonempty() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!("ok");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_string_valid_empty() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!("");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -204,12 +231,75 @@ mod tests {
             title: None,
         };
         let instance = json!({"x": 1});
-        let result = validate(&schema, &instance);
-        let expected = vec![ValidationError::ExpectedString {
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root(),
-        }];
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), expected);
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn wrong_type_number_instead_of_string() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(42);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn wrong_type_null_instead_of_string() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(null);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn wrong_type_boolean_instead_of_string() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(true);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn wrong_type_array_instead_of_string() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!([1, 2]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -221,12 +311,11 @@ mod tests {
             title: None,
         };
         let instance = json!(42);
-        let result = validate(&schema, &instance);
-        let expected = vec![ValidationError::ExpectedObject {
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
-        }];
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), expected);
+        }]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -238,12 +327,11 @@ mod tests {
             title: None,
         };
         let instance = json!(null);
-        let result = validate(&schema, &instance);
-        let expected = vec![ValidationError::ExpectedObject {
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
-        }];
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), expected);
+        }]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -255,12 +343,11 @@ mod tests {
             title: None,
         };
         let instance = json!([1, 2]);
-        let result = validate(&schema, &instance);
-        let expected = vec![ValidationError::ExpectedObject {
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
-        }];
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), expected);
+        }]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -282,8 +369,9 @@ mod tests {
             title: None,
         };
         let instance = json!({"name": "Alice"});
-        let result = validate(&schema, &instance);
-        assert!(result.is_ok());
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -312,13 +400,12 @@ mod tests {
             m
         });
         let instance = json!({"address": {}});
-        let result = validate(&schema, &instance);
-        let expected = vec![ValidationError::MissingRequired {
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
             instance_path: JsonPointer::root().push("address").push("city"),
             property: "city".to_string(),
-        }];
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), expected);
+        }]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -335,8 +422,9 @@ mod tests {
             m
         });
         let instance = json!({});
-        let result = validate(&schema, &instance);
-        assert!(result.is_ok());
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -367,26 +455,22 @@ mod tests {
             m
         });
         let instance = json!({});
-        let result = validate(&schema, &instance);
-        assert!(result.is_err());
-        let errs = result.unwrap_err();
-        assert_eq!(
-            errs.len(),
-            3,
-            "must collect all three required-property errors"
-        );
-        assert!(
-            matches!(errs[0], ValidationError::MissingRequired { property: ref p, .. } if p == "a")
-        );
-        assert_eq!(errs[0].instance_path().as_str(), "/a");
-        assert!(
-            matches!(errs[1], ValidationError::MissingRequired { property: ref p, .. } if p == "b")
-        );
-        assert_eq!(errs[1].instance_path().as_str(), "/b");
-        assert!(
-            matches!(errs[2], ValidationError::MissingRequired { property: ref p, .. } if p == "c")
-        );
-        assert_eq!(errs[2].instance_path().as_str(), "/c");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::MissingRequired {
+                instance_path: JsonPointer::root().push("a"),
+                property: "a".to_string(),
+            },
+            ValidationError::MissingRequired {
+                instance_path: JsonPointer::root().push("b"),
+                property: "b".to_string(),
+            },
+            ValidationError::MissingRequired {
+                instance_path: JsonPointer::root().push("c"),
+                property: "c".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -422,17 +506,18 @@ mod tests {
             m
         });
         let instance = json!({"nested": {}});
-        let result = validate(&schema, &instance);
-        assert!(result.is_err());
-        let errs = result.unwrap_err();
-        assert_eq!(
-            errs.len(),
-            2,
-            "missing required x and missing required nested.y"
-        );
-        let paths: Vec<&str> = errs.iter().map(|e| e.instance_path().as_str()).collect();
-        assert!(paths.contains(&"/x"));
-        assert!(paths.contains(&"/nested/y"));
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::MissingRequired {
+                instance_path: JsonPointer::root().push("x"),
+                property: "x".to_string(),
+            },
+            ValidationError::MissingRequired {
+                instance_path: JsonPointer::root().push("nested").push("y"),
+                property: "y".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -477,11 +562,9 @@ mod tests {
             obj.insert("child".to_string(), instance_value);
             instance_value = serde_json::Value::Object(obj);
         }
-        let result = validate(&inner, &instance_value);
-        assert!(
-            result.is_ok(),
-            "deep validation must not overflow: {result:?}"
-        );
+        let actual: ValidationResult = validate(&inner, &instance_value);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -498,11 +581,10 @@ mod tests {
             m
         });
         let instance = json!({"a/b": 123});
-        let result = validate(&schema, &instance);
-        assert!(result.is_err());
-        let errs = result.unwrap_err();
-        assert_eq!(errs.len(), 1);
-        assert_eq!(errs[0].instance_path().as_str(), "/a~1b");
-        assert!(matches!(errs[0], ValidationError::ExpectedString { .. }));
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::try_from("/a~1b").unwrap(),
+        }]);
+        assert_eq!(expected, actual);
     }
 }
