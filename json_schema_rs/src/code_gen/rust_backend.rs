@@ -109,6 +109,28 @@ fn compare_option_vec(a: Option<&Vec<String>>, b: Option<&Vec<String>>) -> Order
     }
 }
 
+/// Emits `#[derive(..., ToJsonSchema)]` and optional `#[to_json_schema(title = "...")]` for a struct.
+/// Uses `json_schema_rs_macro::ToJsonSchema` so generated code compiles when the macro crate is a dependency.
+fn emit_struct_derive_and_attrs(
+    out: &mut impl Write,
+    name: &str,
+    schema: &JsonSchema,
+) -> CodeGenResult<()> {
+    writeln!(
+        out,
+        "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
+    )?;
+    if let Some(ref t) = schema.title {
+        let t = t.trim();
+        if !t.is_empty() {
+            let escaped = t.replace('\\', "\\\\").replace('"', "\\\"");
+            writeln!(out, "#[to_json_schema(title = \"{escaped}\")]")?;
+        }
+    }
+    writeln!(out, "pub struct {name} {{")?;
+    Ok(())
+}
+
 impl DedupeKey {
     #[expect(clippy::only_used_in_recursion)]
     fn from_schema(schema: &JsonSchema, mode: DedupeMode) -> Self {
@@ -340,8 +362,7 @@ fn generate_rust_with_dedupe(
         writeln!(out, "use serde::{{Deserialize, Serialize}};")?;
         writeln!(out)?;
         for (name, schema) in &shared_structs {
-            writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
-            writeln!(out, "pub struct {name} {{")?;
+            emit_struct_derive_and_attrs(&mut out, name, schema)?;
             emit_struct_fields_with_resolver(
                 schema,
                 &mut out,
@@ -426,8 +447,7 @@ fn generate_rust_with_dedupe(
                 writeln!(buf).ok();
             }
             for (name, schema) in &local_structs {
-                writeln!(buf, "#[derive(Debug, Clone, Serialize, Deserialize)]").ok();
-                writeln!(buf, "pub struct {name} {{").ok();
+                emit_struct_derive_and_attrs(&mut buf, name, schema).ok();
                 emit_struct_fields_with_resolver(
                     schema,
                     &mut buf,
@@ -591,8 +611,7 @@ fn emit_rust(
     writeln!(out)?;
 
     for st in &structs {
-        writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
-        writeln!(out, "pub struct {} {{", st.name)?;
+        emit_struct_derive_and_attrs(out, &st.name, &st.schema)?;
         emit_struct_fields(&st.schema, out, settings)?;
         writeln!(out, "}}")?;
         writeln!(out)?;
@@ -666,7 +685,7 @@ mod tests {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub name: Option<String>,
 }
@@ -686,7 +705,7 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: String,
 }
@@ -718,13 +737,13 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Address {
     pub city: Option<String>,
     pub street_address: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub address: Option<Address>,
     pub first_name: Option<String>,
@@ -761,7 +780,7 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Address {
     pub city: Option<String>,
     pub country: Option<String>,
@@ -769,7 +788,7 @@ pub struct Address {
     pub street_address: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub address: Option<Address>,
     pub birthday: Option<String>,
@@ -836,7 +855,7 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,

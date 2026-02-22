@@ -6,6 +6,7 @@
 pub mod code_gen;
 pub mod json_pointer;
 pub mod json_schema;
+pub mod reverse_code_gen;
 pub mod sanitizers;
 pub mod validator;
 
@@ -18,4 +19,5 @@ pub use json_schema::{
     JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,
     JsonSchemaSettingsBuilder, SpecVersion, parse_schema, parse_schema_from_slice,
 };
+pub use reverse_code_gen::ToJsonSchema;
 pub use validator::{ValidationError, ValidationResult, validate};

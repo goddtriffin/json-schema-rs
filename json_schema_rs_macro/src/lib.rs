@@ -1,17 +1,23 @@
-//! Procedural macro `json_schema_to_rust!` for compile-time codegen from JSON Schema.
+//! Procedural macro `json_schema_to_rust!` and derive `ToJsonSchema` for json-schema-rs.
 //!
 //! Use with the `json-schema-rs` crate: add `json-schema-rs` with the `macro` feature
 //! (or add `json-schema-rs-macro` directly), then invoke
 //! `json_schema_to_rust!("path/to/schema.json")` or
 //! `json_schema_to_rust!(r#"{"type":"object", ...}"#)`.
+//!
+//! For reverse codegen (Rust → JSON Schema), use `#[derive(ToJsonSchema)]` with optional
+//! `#[to_json_schema(title = "...")]` on the struct and `#[serde(rename = "...")]` on fields.
 
+mod derive;
+
+use derive::expand_to_json_schema;
 use json_schema_rs::sanitizers::module_name_from_path;
 use json_schema_rs::{CodeGenBackend, CodeGenSettings, JsonSchemaSettings, parse_schema};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{LitStr, Result as SynResult, Token};
+use syn::{DeriveInput, LitStr, Result as SynResult, Token};
 
 /// Parse one or more string literals (paths or inline JSON).
 struct SchemaInputs {
@@ -27,6 +33,15 @@ impl Parse for SchemaInputs {
             literals.push(input.parse()?);
         }
         Ok(SchemaInputs { literals })
+    }
+}
+
+#[proc_macro_derive(ToJsonSchema, attributes(to_json_schema, json_schema))]
+pub fn derive_to_json_schema(input: TokenStream) -> TokenStream {
+    let input: DeriveInput = syn::parse_macro_input!(input as DeriveInput);
+    match expand_to_json_schema(input) {
+        Ok(stream) => stream.into(),
+        Err(e) => e.to_compile_error().into(),
     }
 }
 

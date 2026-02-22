@@ -65,7 +65,7 @@ fn cli_generate_rust_single_file_to_output_dir() {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: String,
 }
@@ -378,7 +378,7 @@ fn cli_generate_rust_optional_string() {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub name: Option<String>,
 }
@@ -454,7 +454,7 @@ fn cli_generate_rust_hyphenated_property_key() {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
@@ -665,7 +665,7 @@ fn integration_parse_and_generate() {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: String,
 }
@@ -686,7 +686,7 @@ fn integration_parse_and_generate_optional_string() {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub name: Option<String>,
 }
@@ -719,13 +719,13 @@ fn integration_parse_and_generate_nested_object() {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Address {
     pub city: Option<String>,
     pub street_address: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub address: Option<Address>,
     pub first_name: Option<String>,
@@ -747,7 +747,7 @@ fn integration_parse_and_generate_hyphenated_property() {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(rename = "foo-bar")]
     pub foo_bar: Option<String>,
@@ -758,6 +758,58 @@ pub struct Root {
 }
 
 #[test]
+fn round_trip_generated_rust_json_schema_matches_original() {
+    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id"],"title":"Root"}"#;
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let original: JsonSchema = parse_schema(schema_json, &settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output =
+        generate_rust(std::slice::from_ref(&original), &code_gen_settings).expect("generate");
+    let generated = output.per_schema[0].clone();
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let src = temp_dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src");
+
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
+    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
+    let main_rs = r#"
+fn main() {
+    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
+    let schema = compile_test::Root::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let settings = JsonSchemaSettings::builder().build();
+    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, reparsed, "round-trip Root::json_schema() must match");
+}
+"#;
+    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+
+    let build = Command::new("cargo")
+        .args(["build"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "cargo build failed: stderr={}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new("cargo")
+        .args(["run", "--bin", "run"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "cargo run failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn integration_parse_and_generate_root_not_object_errors() {
     let json = r#"{"type":"string"}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
@@ -765,6 +817,39 @@ fn integration_parse_and_generate_root_not_object_errors() {
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let actual = generate_rust(&[schema], &code_gen_settings);
     assert!(actual.is_err(), "root not object should error");
+}
+
+/// Cargo.toml content for a temp crate that compiles generated Rust (needs json-schema-rs and macro for `ToJsonSchema` derive).
+fn temp_crate_cargo_toml_with_reverse_codegen() -> String {
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR set by Cargo");
+    let workspace_root = std::path::Path::new(&manifest_dir)
+        .parent()
+        .expect("workspace root");
+    let json_schema_rs_path = workspace_root.join("json_schema_rs");
+    let macro_path = workspace_root.join("json_schema_rs_macro");
+    format!(
+        r#"[package]
+name = "compile_test"
+version = "0.0.1"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "run"
+path = "src/main.rs"
+
+[dependencies]
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+json-schema-rs = {{ path = "{}" }}
+json-schema-rs-macro = {{ path = "{}" }}
+"#,
+        json_schema_rs_path.display(),
+        macro_path.display()
+    )
 }
 
 /// Builds map: directory path (relative) -> set of module names. Root is `PathBuf::new()`; subdirs e.g. "nested".
@@ -815,22 +900,7 @@ fn generated_rust_single_schema_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
     let main_rs = r##"fn main() {
@@ -882,22 +952,7 @@ fn generated_rust_nested_modules_builds_and_deserializes() {
     let nested_src = src.join("nested");
     fs::create_dir_all(&nested_src).expect("create src and nested");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
 
     let root_modules = by_dir.get(&PathBuf::new()).expect("root entry");
@@ -964,22 +1019,7 @@ fn generated_rust_multi_schema_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), "pub mod a;\npub mod b;\n").expect("write lib.rs");
     fs::write(src.join("a.rs"), &output.per_schema[0]).expect("write a.rs");
@@ -1027,22 +1067,7 @@ fn generated_rust_optional_string_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
     let main_rs = r##"fn main() {
@@ -1090,22 +1115,7 @@ fn generated_rust_nested_object_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
     let main_rs = r##"fn main() {
@@ -1154,22 +1164,7 @@ fn generated_rust_hyphenated_property_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
     let main_rs = r##"fn main() {
@@ -1217,22 +1212,7 @@ fn generated_rust_hyphenated_paths_builds_and_deserializes() {
     let sub_dir_src = src.join("sub_dir");
     fs::create_dir_all(&sub_dir_src).expect("create src and sub_dir");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), "pub mod schema_1;\npub mod sub_dir;\n").expect("write lib.rs");
     fs::write(src.join("schema_1.rs"), &output.per_schema[0]).expect("write schema_1.rs");
@@ -1290,22 +1270,7 @@ fn generated_rust_dedupe_two_identical_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(
         src.join("lib.rs"),
@@ -1366,22 +1331,7 @@ fn generated_rust_model_name_source_property_key_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
     let main_rs = r##"fn main() {
@@ -1454,22 +1404,7 @@ fn generated_rust_deep_nesting_builds_and_deserializes() {
     let src = temp_dir.path().join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = r#"[package]
-name = "compile_test"
-version = "0.0.1"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "run"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-"#;
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
     let main_rs = r##"fn main() {

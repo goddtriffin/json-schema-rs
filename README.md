@@ -41,7 +41,7 @@ Generated Rust:
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Address {
     pub city: Option<String>,
     pub country: Option<String>,
@@ -49,7 +49,7 @@ pub struct Address {
     pub street_address: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub address: Option<Address>,
     pub birthday: Option<String>,
@@ -57,6 +57,8 @@ pub struct Root {
     pub last_name: Option<String>,
 }
 ```
+
+Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()` returns a `JsonSchema`). Serialize to JSON with `String::try_from(&schema)` or `Vec::<u8>::try_from(&schema)`. See [design.md](design.md) for reverse codegen details.
 
 ## Using the library
 
@@ -108,6 +110,8 @@ Then `use json_schema_rs_macro::json_schema_to_rust` and use any of these forms:
   `json_schema_to_rust!(r#"..."#, r#"..."#)`
 
 When you pass **multiple** schemas (paths or inline), each schema’s types are emitted in a **separate Rust module** to avoid name collisions: one module per JSON Schema. Module names come from the file stem for paths (e.g. `simple` from `simple.json`) or `schema_0`, `schema_1`, … for inline strings. Use the generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
+
+**Reverse codegen (Rust → JSON Schema).** Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()`). Hand-written structs can use `#[derive(ToJsonSchema)]` from `json_schema_rs_macro` with optional `#[to_json_schema(title = "...")]`. Convert a schema to JSON with `String::try_from(&schema)` or `.try_into()`. Add **json-schema-rs-macro** when using the derive. Details: [design.md](design.md).
 
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
 
