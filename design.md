@@ -5,7 +5,7 @@ This document is the **design and architecture knowledge bank** for the json-sch
 - **One section per feature/keyword** (or sub-sections for related keywords). Research uses **only** the local specs under `specs/` (draft-00 through 2020-12)—download them with `make vendor_specs`; they are gitignored and not in the repo. No reliance on the web.
 - Related features are grouped (e.g. string constraints under Strings, number constraints under Numbers). Each section can have **Spec version quirks** sub-sections for differences between drafts; we implement per the latest supported spec and may expose version-based config where behavior differs.
 
-Implemented keywords: type (object, string, integer, number), properties, required, title. Other keywords are documented in the sections below. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
+Implemented keywords: type (object, string, integer, number), properties, required, title, enum. Other keywords are documented in the sections below. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
 
 ---
 
@@ -110,6 +110,12 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Batch error index | Y | — | — | — | — |
 | CLI ingestion errors | — | — | Y | — | — |
 | Deep nesting (no stack overflow) | Y | — | Y | Y | — |
+| Required enum property | Y | Y | Y | Y | Y |
+| Optional enum property | Y | Y | Y | Y | Y |
+| Enum with variant collision (e.g. "a" and "A") | Y | — | Y | Y | — |
+| Enum dedupe (same enum in two properties) | Y | — | Y | Y | — |
+| Enum with duplicate values in schema | Y | Y | Y | Y | — |
+| Non-string enum → String fallback | Y | — | — | — | — |
 | Reverse codegen (every struct ToJsonSchema + attributes) | Y | Y | Y | Y | Y |
 | Round-trip (generate → Type::json_schema() → TryFrom → parse → equals) | — | Y | — | Y | Y |
 
@@ -263,9 +269,20 @@ TODO.
 
 ### enum
 
-TODO. (Planned: JSON Schema `enum` = array of allowed values. Only string enums supported; non-string values fall back to `String`. Variant naming: PascalCase; invalid identifiers get `E` prefix. Collision handling: when multiple JSON values map to same Rust variant name, append `_0`, `_1`, `_2` to **all** colliding variants. Determinism: sort enum values alphabetically. Deduplication: duplicate JSON values → one variant. In tests, use `r#"..."#` when expected output contains `]"`.)
+JSON Schema `enum` is an array of allowed values. The instance validates if it is equal to one of the elements. We support it in codegen (as a property type), the validator, and reverse codegen.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+
+- **Codegen:** Only string enums are supported. When a property schema has `enum` with at least one value and all values are strings, we emit a Rust enum type (name from property key or title, same as struct naming). Non-string values or mixed types cause fallback to `String`. Variant naming: each value is mapped to PascalCase via `to_pascal_case`; if the result is not a valid Rust type identifier (e.g. starts with digit, keyword `Self`), we prefix with `E`. When multiple JSON values map to the same variant name (e.g. `"a"` and `"A"` both → `A`), we append `_0`, `_1`, `_2` to **all** variants in that collision set. Values are sorted alphabetically for determinism. Duplicate JSON values in the schema produce a single Rust variant. Enum types are deduplicated across properties and schemas: the same set of string values yields one Rust enum (canonical name from first occurrence). Enums are emitted before structs so struct fields can reference them. Root schema must still be `type: "object"` with `properties`; enum is supported only as a property type.
+- **Validator:** If `enum_values` is present and non-empty, the instance must be equal to one of the values (using JSON value equality). When both `type` and `enum` are present, we validate type first then enum membership. Error: `NotInEnum` with instance path.
+- **Reverse codegen:** `JsonSchema` serializes `enum_values` when present. The `ToJsonSchema` derive supports Rust unit enums: variant name (or `#[serde(rename)]`) becomes the allowed values; we emit `type_: Some("string")` and `enum_values: Some(vec![...])`.
+- In tests, use `r#"..."#` when expected output contains `]"`.
+
+**Spec version quirks:**
+
+- **draft-00, 01, 02:** `enum` is an array; instance must be one of the values. Meta-schema: type "array", optional. No minItems or uniqueness requirement in meta-schema.
+- **draft-03, 04:** Validation text says the array MUST have at least one element and elements MUST be unique. draft-04 meta-schema: `minItems: 1`.
+- **draft-06, 07, 2019-09, 2020-12:** Validation text says the array SHOULD have at least one element and elements SHOULD be unique. Meta-schema: `items: true` (any JSON value). We accept empty enum arrays (no validation constraint from enum) and allow duplicates in the schema (we dedupe in codegen).
 
 ---
 

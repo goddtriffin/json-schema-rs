@@ -37,6 +37,15 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
     stack.push((schema, instance, JsonPointer::root()));
 
     while let Some((schema, instance, instance_path)) = stack.pop() {
+        if let Some(ref allowed) = schema.enum_values
+            && !allowed.is_empty()
+            && !allowed.iter().any(|a| a == instance)
+        {
+            errors.push(ValidationError::NotInEnum {
+                instance_path: instance_path.clone(),
+            });
+            continue;
+        }
         let expected_type: Option<&str> = schema.type_.as_deref();
         match expected_type {
             Some("object") => {
@@ -143,6 +152,7 @@ mod tests {
             properties,
             required: Some(required.into_iter().map(String::from).collect()),
             title: None,
+            enum_values: None,
         }
     }
 
@@ -201,6 +211,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!("not an object");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -217,6 +228,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -231,6 +243,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!("");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -245,6 +258,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -261,6 +275,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -277,6 +292,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -293,6 +309,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -309,10 +326,87 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_valid_instance_in_allowed() {
+        let schema: JsonSchema = JsonSchema {
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("open".to_string()),
+                serde_json::Value::String("closed".to_string()),
+            ]),
+        };
+        let instance = json!("open");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_invalid_instance_not_in_allowed() {
+        let schema: JsonSchema = JsonSchema {
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("open".to_string()),
+                serde_json::Value::String("closed".to_string()),
+            ]),
+        };
+        let instance = json!("pending");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::NotInEnum {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_with_type_string_valid() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("a".to_string()),
+                serde_json::Value::String("b".to_string()),
+            ]),
+        };
+        let instance = json!("a");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_with_type_string_invalid_not_in_enum() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("a".to_string()),
+                serde_json::Value::String("b".to_string()),
+            ]),
+        };
+        let instance = json!("c");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::NotInEnum {
             instance_path: JsonPointer::root(),
         }]);
         assert_eq!(expected, actual);
@@ -325,6 +419,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -339,6 +434,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -353,6 +449,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(-1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -367,6 +464,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -383,6 +481,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!("42");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -399,6 +498,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -415,6 +515,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -431,6 +532,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -447,6 +549,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -525,6 +628,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -539,6 +643,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -553,6 +658,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!("3.14");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -569,6 +675,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -585,6 +692,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -601,6 +709,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!([1.0]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -617,6 +726,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -695,6 +805,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -711,6 +822,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -727,6 +839,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -753,6 +866,7 @@ mod tests {
             },
             required: Some(vec!["name".to_string()]),
             title: None,
+            enum_values: None,
         };
         let instance = json!({"name": "Alice"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -781,6 +895,7 @@ mod tests {
                     },
                     required: Some(vec!["city".to_string()]),
                     title: None,
+                    enum_values: None,
                 },
             );
             m
@@ -887,6 +1002,7 @@ mod tests {
                     },
                     required: Some(vec!["y".to_string()]),
                     title: None,
+                    enum_values: None,
                 },
             );
             m
@@ -924,6 +1040,7 @@ mod tests {
             },
             required: Some(vec!["value".to_string()]),
             title: None,
+            enum_values: None,
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
@@ -931,6 +1048,7 @@ mod tests {
                 properties: BTreeMap::new(),
                 required: Some(vec!["child".to_string()]),
                 title: None,
+                enum_values: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

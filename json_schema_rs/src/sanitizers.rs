@@ -99,6 +99,70 @@ pub fn to_pascal_case(name: &str) -> String {
     }
 }
 
+/// Maps a single enum value string to a valid Rust enum variant name (`PascalCase`).
+/// Invalid identifiers (leading digit, keyword `Self`, or non-alphanumeric/underscore) get an `E` prefix.
+///
+/// # Panics
+///
+/// Never: `pascal` is only used after a non-empty check.
+#[must_use]
+pub fn enum_variant_name_from_value(s: &str) -> String {
+    let pascal = to_pascal_case(s);
+    if pascal.is_empty() {
+        return "EUnnamed".to_string();
+    }
+    // Original starts with digit: to_pascal_case produces N-prefixed form; use E + rest so all invalid use E.
+    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        let suffix: &str = pascal.strip_prefix('N').unwrap_or(&pascal);
+        return format!("E{suffix}");
+    }
+    let first = pascal.chars().next().unwrap();
+    if first.is_ascii_digit() {
+        return format!("E{pascal}");
+    }
+    if pascal == RUST_KEYWORD_TYPE_SELF {
+        return "ESelf".to_string();
+    }
+    if pascal
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || c == '_'))
+    {
+        return format!("E{pascal}");
+    }
+    pascal
+}
+
+/// Given a deduplicated, sorted list of enum value strings, returns a list of (value, `variant_name`) with collision resolution.
+/// When multiple values map to the same variant name (e.g. "a" and "A" both → "A"), appends _0, _1, _2 to all in that collision set.
+///
+/// # Panics
+///
+/// Never: `by_base` and `group` are built from the same `bases` so lookups always succeed.
+#[must_use]
+pub fn enum_variant_names_with_collision_resolution(values: &[String]) -> Vec<(String, String)> {
+    let bases: Vec<(String, String)> = values
+        .iter()
+        .map(|v| (v.clone(), enum_variant_name_from_value(v)))
+        .collect();
+    let mut by_base: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (value, base) in &bases {
+        by_base.entry(base.clone()).or_default().push(value.clone());
+    }
+    bases
+        .into_iter()
+        .map(|(value, base)| {
+            let group = by_base.get(&base).expect("group");
+            if group.len() == 1 {
+                (value, base)
+            } else {
+                let idx = group.iter().position(|v| v == &value).expect("index");
+                (value, format!("{base}_{idx}"))
+            }
+        })
+        .collect()
+}
+
 /// Ensure a struct (or enum) name is a valid Rust type identifier (`PascalCase`; prefix if starts with digit).
 /// Rust keyword `Self` (the only `PascalCase` keyword) is escaped as `Self_`. Non-ASCII is replaced in [`to_pascal_case`].
 #[must_use]
@@ -311,6 +375,57 @@ mod tests {
     fn to_pascal_case_non_ascii_replaced() {
         let expected = "Caf";
         let actual = to_pascal_case("café");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_name_from_value_simple() {
+        let expected = "Open";
+        let actual = enum_variant_name_from_value("open");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_name_from_value_leading_digit_gets_e_prefix() {
+        let expected = "E123";
+        let actual = enum_variant_name_from_value("123");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_name_from_value_self_gets_e_prefix() {
+        let expected = "ESelf";
+        let actual = enum_variant_name_from_value("self");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_names_with_collision_resolution_single() {
+        let values: Vec<String> = vec!["open".to_string()];
+        let expected: Vec<(String, String)> = vec![("open".to_string(), "Open".to_string())];
+        let actual = enum_variant_names_with_collision_resolution(&values);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_names_with_collision_resolution_collision() {
+        let values: Vec<String> = vec!["a".to_string(), "A".to_string()];
+        let expected: Vec<(String, String)> = vec![
+            ("a".to_string(), "A_0".to_string()),
+            ("A".to_string(), "A_1".to_string()),
+        ];
+        let actual = enum_variant_names_with_collision_resolution(&values);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_names_with_collision_resolution_no_collision() {
+        let values: Vec<String> = vec!["open".to_string(), "closed".to_string()];
+        let expected: Vec<(String, String)> = vec![
+            ("open".to_string(), "Open".to_string()),
+            ("closed".to_string(), "Closed".to_string()),
+        ];
+        let actual = enum_variant_names_with_collision_resolution(&values);
         assert_eq!(expected, actual);
     }
 

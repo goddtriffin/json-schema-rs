@@ -5,7 +5,7 @@ use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::{
     Attribute, DeriveInput, Error, Field, Fields, Ident, LitStr, Meta, Result as SynResult, Token,
-    Type,
+    Type, Variant,
 };
 
 /// Extracts `title = "..."` from `#[to_json_schema(...)]` container attribute.
@@ -78,6 +78,32 @@ fn is_option_type(ty: &Type) -> bool {
         .is_some_and(|seg| seg.ident == "Option")
 }
 
+/// Returns the JSON string value for an enum unit variant: serde rename or variant name.
+fn variant_external_name(variant: &Variant) -> SynResult<String> {
+    for attr in &variant.attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if nv.path.is_ident("rename") {
+                let syn::Expr::Lit(expr_lit) = nv.value else {
+                    continue;
+                };
+                let syn::Lit::Str(s) = expr_lit.lit else {
+                    continue;
+                };
+                return Ok(s.value());
+            }
+        }
+    }
+    Ok(variant.ident.to_string())
+}
+
 /// Inner type of `Option<T>` if this is Option, otherwise the type itself.
 fn optional_inner_type(ty: &Type) -> &Type {
     let Type::Path(type_path) = ty else {
@@ -100,24 +126,29 @@ fn optional_inner_type(ty: &Type) -> &Type {
 }
 
 pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
+    let name: Ident = input.ident;
+
+    if let syn::Data::Enum(data_enum) = &input.data {
+        return expand_enum_to_json_schema(&name, &input.attrs, data_enum);
+    }
+
     let fields = match &input.data {
         syn::Data::Struct(s) => match &s.fields {
             Fields::Named(named) => &named.named,
             Fields::Unnamed(_) | Fields::Unit => {
                 return Err(Error::new_spanned(
-                    &input,
+                    name,
                     "ToJsonSchema derive only supports structs with named fields",
                 ));
             }
         },
         syn::Data::Enum(_) | syn::Data::Union(_) => {
             return Err(Error::new_spanned(
-                &input,
-                "ToJsonSchema derive only supports structs",
+                name,
+                "ToJsonSchema derive only supports structs and unit enums",
             ));
         }
     };
-    let name: Ident = input.ident;
 
     let title: Option<String> = container_title(&input.attrs)?;
     let title_expr = title
@@ -172,6 +203,55 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     properties,
                     required: #required_expr,
                     title: #title_expr,
+                    enum_values: None,
+                }
+            }
+        }
+    })
+}
+
+/// Expand `ToJsonSchema` for a unit enum: emit schema with type "string" and `enum_values`.
+fn expand_enum_to_json_schema(
+    name: &Ident,
+    attrs: &[Attribute],
+    data_enum: &syn::DataEnum,
+) -> SynResult<TokenStream2> {
+    let title: Option<String> = container_title(attrs)?;
+    let title_expr = title
+        .as_ref()
+        .map(|t| {
+            let lit = LitStr::new(t, proc_macro2::Span::call_site());
+            quote! { Some(#lit.to_string()) }
+        })
+        .unwrap_or(quote! { None });
+
+    let mut enum_value_lits: Vec<LitStr> = Vec::new();
+    for variant in &data_enum.variants {
+        match &variant.fields {
+            Fields::Unit => {}
+            Fields::Unnamed(_) | Fields::Named(_) => {
+                return Err(Error::new_spanned(
+                    variant,
+                    "ToJsonSchema derive for enum only supports unit variants",
+                ));
+            }
+        }
+        let external: String = variant_external_name(variant)?;
+        enum_value_lits.push(LitStr::new(&external, variant.ident.span()));
+    }
+
+    Ok(quote! {
+        impl ::json_schema_rs::ToJsonSchema for #name {
+            fn json_schema() -> ::json_schema_rs::JsonSchema {
+                let enum_values = vec![
+                    #(::serde_json::Value::String(#enum_value_lits.to_string())),*
+                ];
+                ::json_schema_rs::JsonSchema {
+                    type_: Some("string".to_string()),
+                    properties: ::std::collections::BTreeMap::new(),
+                    required: None,
+                    title: #title_expr,
+                    enum_values: Some(enum_values),
                 }
             }
         }

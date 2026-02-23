@@ -10,6 +10,12 @@ fn skip_required(v: &Option<Vec<String>>) -> bool {
     v.as_ref().is_none_or(Vec::is_empty)
 }
 
+/// Returns true when `enum_values` should be omitted from serialized output (None or empty).
+#[expect(clippy::ref_option)]
+fn skip_enum_values(v: &Option<Vec<serde_json::Value>>) -> bool {
+    v.as_ref().is_none_or(Vec::is_empty)
+}
+
 /// Schema helper with `deny_unknown_fields`: same shape as our schema model but with `#[serde(deny_unknown_fields)]`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +32,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) required: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) title: Option<String>,
+    #[serde(default, rename = "enum")]
+    pub(crate) enum_values: Option<Vec<serde_json::Value>>,
 }
 
 /// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
@@ -41,11 +49,12 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         properties,
         required: h.required,
         title: h.title,
+        enum_values: h.enum_values,
     }
 }
 
 /// Schema model used for code generation.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct JsonSchema {
     /// Schema type; `object`, `string`, `integer`, and `number` drive codegen; others are ignored.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -62,6 +71,10 @@ pub struct JsonSchema {
     /// Used for struct naming when present (`PascalCase`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+
+    /// Allowed values for the instance (JSON Schema `enum`). When present and non-empty, instance must equal one of these. Codegen uses only string-only enums.
+    #[serde(rename = "enum", skip_serializing_if = "skip_enum_values")]
+    pub enum_values: Option<Vec<serde_json::Value>>,
 }
 
 impl JsonSchema {
@@ -95,6 +108,14 @@ impl JsonSchema {
         self.required
             .as_ref()
             .is_some_and(|r| r.iter().any(|s| s == name))
+    }
+
+    /// Returns true if this schema has a string-only enum (non-empty, all elements are strings). Used for codegen to emit a Rust enum.
+    #[must_use]
+    pub(crate) fn is_string_enum(&self) -> bool {
+        self.enum_values
+            .as_ref()
+            .is_some_and(|v| !v.is_empty() && v.iter().all(serde_json::Value::is_string))
     }
 }
 
@@ -143,6 +164,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: Some("Root".to_string()),
+            enum_values: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"object","title":"Root"}"#;
@@ -156,6 +178,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"string\"}";
@@ -236,6 +259,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
@@ -275,9 +299,52 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"number\"}";
         assert_eq!(expected, actual.as_slice());
+    }
+
+    #[test]
+    fn is_string_enum() {
+        let no_enum: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: None,
+        };
+        assert!(!no_enum.is_string_enum());
+        let empty_enum: JsonSchema = JsonSchema {
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: Some(vec![]),
+        };
+        assert!(!empty_enum.is_string_enum());
+        let string_enum: JsonSchema = JsonSchema {
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("a".to_string()),
+                serde_json::Value::String("b".to_string()),
+            ]),
+        };
+        assert!(string_enum.is_string_enum());
+        let mixed_enum: JsonSchema = JsonSchema {
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("a".to_string()),
+                serde_json::Value::Number(42_i64.into()),
+            ]),
+        };
+        assert!(!mixed_enum.is_string_enum());
     }
 }

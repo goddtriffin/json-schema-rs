@@ -75,6 +75,126 @@ pub struct Root {
 }
 
 #[test]
+fn cli_generate_rust_enum_property() {
+    let schema_json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(actual.contains("pub enum Status"));
+    assert!(actual.contains("pub struct Root"));
+    assert!(actual.contains("pub status: Status"));
+    assert!(actual.contains("Open"));
+    assert!(actual.contains("Closed"));
+}
+
+#[test]
+fn cli_generate_rust_enum_collision() {
+    let schema_json = r#"{"type":"object","properties":{"t":{"enum":["a","A"]}},"required":["t"]}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(actual.contains("pub enum T"));
+    assert!(actual.contains("A_0"));
+    assert!(actual.contains("A_1"));
+    assert!(actual.contains("pub t: T"));
+}
+
+#[test]
+fn cli_generate_rust_enum_dedupe() {
+    let schema_json = r#"{"type":"object","properties":{"a":{"enum":["x","y"]},"b":{"enum":["x","y"]}},"required":["a"]}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(actual.contains("pub enum A"));
+    assert!(actual.contains("pub a: A"));
+    assert!(actual.contains("pub b: Option<A>"));
+}
+
+#[test]
+fn cli_generate_rust_enum_duplicate_values() {
+    let schema_json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(actual.contains("pub enum T"));
+    assert!(actual.contains("A_0"));
+    assert!(actual.contains("A_1"));
+    assert!(actual.contains("pub t: T"));
+}
+
+#[test]
 fn cli_generate_rust_integer_property() {
     let schema_json =
         r#"{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}"#;
@@ -842,6 +962,79 @@ pub struct Root {
 }
 
 ";
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn integration_parse_and_generate_enum_required() {
+    let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
+    let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Status {
+    #[serde(rename = "closed")]
+    Closed,
+    #[serde(rename = "open")]
+    Open,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub status: Status,
+}
+
+"#;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn integration_parse_and_generate_enum_optional() {
+    let json = r#"{"type":"object","properties":{"level":{"enum":["low","medium","high"]}}}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
+    assert!(actual.contains("pub enum Level"));
+    assert!(actual.contains("pub level: Option<Level>"));
+    assert!(actual.contains("Low"));
+    assert!(actual.contains("Medium"));
+    assert!(actual.contains("High"));
+}
+
+#[test]
+fn integration_parse_and_generate_enum_duplicate_values() {
+    let json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
+    let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum T {
+    #[serde(rename = "A")]
+    A_0,
+    #[serde(rename = "a")]
+    A_1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub t: T,
+}
+
+"#;
     assert_eq!(expected, actual);
 }
 
@@ -1677,6 +1870,197 @@ fn generated_rust_nested_object_builds_and_deserializes() {
 }
 
 #[test]
+fn generated_rust_enum_builds_and_deserializes() {
+    let schema_json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let generated = output.per_schema[0].clone();
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let src = temp_dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src");
+
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
+    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
+    let main_rs = r##"fn main() {
+    let root: compile_test::Root = serde_json::from_str(r#"{"status":"open"}"#).unwrap();
+    assert_eq!(root.status, compile_test::Status::Open);
+    let root2: compile_test::Root = serde_json::from_str(r#"{"status":"closed"}"#).unwrap();
+    assert_eq!(root2.status, compile_test::Status::Closed);
+}
+"##;
+    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+
+    let build = Command::new("cargo")
+        .args(["build"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "cargo build failed: stderr={}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new("cargo")
+        .args(["run", "--bin", "run"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "cargo run failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn generated_rust_enum_collision_builds_and_deserializes() {
+    let schema_json = r#"{"type":"object","properties":{"t":{"enum":["a","A"]}},"required":["t"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let generated = output.per_schema[0].clone();
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let src = temp_dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src");
+
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
+    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
+    let main_rs = r##"fn main() {
+    let root: compile_test::Root = serde_json::from_str(r#"{"t":"a"}"#).unwrap();
+    assert_eq!(root.t, compile_test::T::A_1);
+    let root2: compile_test::Root = serde_json::from_str(r#"{"t":"A"}"#).unwrap();
+    assert_eq!(root2.t, compile_test::T::A_0);
+}
+"##;
+    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+
+    let build = Command::new("cargo")
+        .args(["build"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "cargo build failed: stderr={}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new("cargo")
+        .args(["run", "--bin", "run"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "cargo run failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn generated_rust_enum_dedupe_builds_and_deserializes() {
+    let schema_json = r#"{"type":"object","properties":{"a":{"enum":["x","y"]},"b":{"enum":["x","y"]}},"required":["a"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let generated = output.per_schema[0].clone();
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let src = temp_dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src");
+
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
+    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
+    let main_rs = r##"fn main() {
+    let root: compile_test::Root = serde_json::from_str(r#"{"a":"x","b":"y"}"#).unwrap();
+    assert_eq!(root.a, compile_test::A::X);
+    assert_eq!(root.b, Some(compile_test::A::Y));
+}
+"##;
+    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+
+    let build = Command::new("cargo")
+        .args(["build"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "cargo build failed: stderr={}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new("cargo")
+        .args(["run", "--bin", "run"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "cargo run failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn generated_rust_enum_duplicate_values_builds_and_deserializes() {
+    let schema_json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let generated = output.per_schema[0].clone();
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let src = temp_dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src");
+
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
+    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
+    let main_rs = r##"fn main() {
+    let root: compile_test::Root = serde_json::from_str(r#"{"t":"A"}"#).unwrap();
+    assert_eq!(root.t, compile_test::T::A_0);
+    let root2: compile_test::Root = serde_json::from_str(r#"{"t":"a"}"#).unwrap();
+    assert_eq!(root2.t, compile_test::T::A_1);
+}
+"##;
+    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+
+    let build = Command::new("cargo")
+        .args(["build"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "cargo build failed: stderr={}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new("cargo")
+        .args(["run", "--bin", "run"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "cargo run failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn generated_rust_hyphenated_property_builds_and_deserializes() {
     let schema_json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
@@ -1904,12 +2288,14 @@ fn generated_rust_deep_nesting_builds_and_deserializes() {
                     properties: std::collections::BTreeMap::new(),
                     required: None,
                     title: None,
+                    enum_values: None,
                 },
             );
             m
         },
         required: None,
         title: Some("Leaf".to_string()),
+        enum_values: None,
     };
     for i in (0..DEPTH).rev() {
         let mut wrap: JsonSchema = JsonSchema {
@@ -1917,6 +2303,7 @@ fn generated_rust_deep_nesting_builds_and_deserializes() {
             properties: std::collections::BTreeMap::new(),
             required: None,
             title: Some(format!("Level{i}")),
+            enum_values: None,
         };
         wrap.properties.insert("child".to_string(), inner);
         inner = wrap;

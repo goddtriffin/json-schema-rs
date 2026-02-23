@@ -19,6 +19,13 @@ struct Address {
     street: String,
 }
 
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+enum Status {
+    Open,
+    Closed,
+}
+
 #[test]
 fn derive_root_json_schema() {
     let expected: JsonSchema = JsonSchema {
@@ -31,6 +38,7 @@ fn derive_root_json_schema() {
         },
         required: Some(vec!["id".to_string()]),
         title: Some("Root".to_string()),
+        enum_values: None,
     };
     let actual: JsonSchema = Root::json_schema();
     assert_eq!(expected, actual);
@@ -48,9 +56,20 @@ fn derive_address_json_schema() {
         },
         required: Some(vec!["city".to_string(), "street".to_string()]),
         title: None,
+        enum_values: None,
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_unit_enum_json_schema() {
+    let actual: JsonSchema = Status::json_schema();
+    assert_eq!(actual.type_.as_deref(), Some("string"));
+    let actual_enum = actual.enum_values.as_ref().expect("enum_values");
+    assert_eq!(actual_enum.len(), 2);
+    assert!(actual_enum.contains(&serde_json::Value::String("Open".to_string())));
+    assert!(actual_enum.contains(&serde_json::Value::String("Closed".to_string())));
 }
 
 #[test]

@@ -33,6 +33,11 @@ pub enum ValidationError {
         /// The required property name that was missing.
         property: String,
     },
+    /// Schema had `enum` but the instance value was not one of the allowed values.
+    NotInEnum {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+    },
 }
 
 impl std::error::Error for ValidationError {}
@@ -45,7 +50,8 @@ impl ValidationError {
             | ValidationError::ExpectedString { instance_path }
             | ValidationError::ExpectedInteger { instance_path }
             | ValidationError::ExpectedNumber { instance_path }
-            | ValidationError::MissingRequired { instance_path, .. } => instance_path,
+            | ValidationError::MissingRequired { instance_path, .. }
+            | ValidationError::NotInEnum { instance_path } => instance_path,
         }
     }
 }
@@ -68,6 +74,9 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::MissingRequired { property, .. } => {
                 write!(f, "{location}: missing required property \"{property}\"")
+            }
+            ValidationError::NotInEnum { .. } => {
+                write!(f, "{location}: value not in enum")
             }
         }
     }

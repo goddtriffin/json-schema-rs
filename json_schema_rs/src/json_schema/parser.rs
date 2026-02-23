@@ -65,6 +65,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             required: Option<Vec<String>>,
             #[serde(default)]
             title: Option<String>,
+            #[serde(default, rename = "enum")]
+            enum_values: Option<Vec<serde_json::Value>>,
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
@@ -72,6 +74,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             properties: h.properties.unwrap_or_default(),
             required: h.required,
             title: h.title,
+            enum_values: h.enum_values,
         })
     }
 }
@@ -145,13 +148,17 @@ mod tests {
                     "a".to_string(),
                     JsonSchema {
                         type_: Some("string".to_string()),
-                        ..Default::default()
+                        properties: std::collections::BTreeMap::new(),
+                        required: None,
+                        title: None,
+                        enum_values: None,
                     },
                 );
                 m
             },
             required: None,
             title: None,
+            enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -168,20 +175,27 @@ mod tests {
                     "x".to_string(),
                     JsonSchema {
                         type_: Some("string".to_string()),
-                        ..Default::default()
+                        properties: std::collections::BTreeMap::new(),
+                        required: None,
+                        title: None,
+                        enum_values: None,
                     },
                 );
                 m.insert(
                     "y".to_string(),
                     JsonSchema {
                         type_: Some("string".to_string()),
-                        ..Default::default()
+                        properties: std::collections::BTreeMap::new(),
+                        required: None,
+                        title: None,
+                        enum_values: None,
                     },
                 );
                 m
             },
             required: Some(vec!["x".to_string()]),
             title: None,
+            enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -196,6 +210,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -209,6 +224,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -255,6 +271,30 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"title":"Root"}"#;
+        let result: Result<_, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn deserialize_schema_with_enum() {
+        let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let status_schema: &JsonSchema = parsed.properties.get("status").expect("status property");
+        let expected_enum: Vec<serde_json::Value> = vec![
+            serde_json::Value::String("open".to_string()),
+            serde_json::Value::String("closed".to_string()),
+        ];
+        let actual: Option<&Vec<serde_json::Value>> = status_schema.enum_values.as_ref();
+        assert_eq!(Some(&expected_enum), actual);
+    }
+
+    #[test]
+    fn parse_strict_accepts_enum_key() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"object","properties":{"x":{"enum":["a","b"]}}}"#;
         let result: Result<_, _> = parse_schema(json, &settings);
         assert!(result.is_ok());
     }

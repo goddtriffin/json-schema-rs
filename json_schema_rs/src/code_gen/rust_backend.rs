@@ -6,7 +6,9 @@ use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
 use crate::json_schema::JsonSchema;
-use crate::sanitizers::{sanitize_field_name, sanitize_struct_name};
+use crate::sanitizers::{
+    enum_variant_names_with_collision_resolution, sanitize_field_name, sanitize_struct_name,
+};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
@@ -48,6 +50,30 @@ impl CodeGenBackend for RustBackend {
 struct StructToEmit {
     name: String,
     schema: JsonSchema,
+}
+
+/// One enum to emit: name and sorted, deduplicated string values (for variant naming and serde).
+struct EnumToEmit {
+    name: String,
+    values: Vec<String>,
+}
+
+/// Returns sorted, deduplicated string values if the schema is a string enum; otherwise None.
+fn string_enum_values(schema: &JsonSchema) -> Option<Vec<String>> {
+    if !schema.is_string_enum() {
+        return None;
+    }
+    let v: Vec<String> = schema
+        .enum_values
+        .as_ref()
+        .expect("string enum")
+        .iter()
+        .filter_map(|x| x.as_str().map(String::from))
+        .collect();
+    let set: BTreeSet<String> = v.into_iter().collect();
+    let mut out: Vec<String> = set.iter().cloned().collect();
+    out.sort();
+    Some(out)
 }
 
 /// Key for deduplication: canonical representation of an object schema for a given mode.
@@ -175,6 +201,28 @@ fn struct_name_from(
         })
 }
 
+/// Collect all string enums from a schema (and nested properties). Dedupe by value list; first occurrence wins the name.
+fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToEmit> {
+    let mut key_to_name: BTreeMap<Vec<String>, String> = BTreeMap::new();
+    let mut stack: Vec<&JsonSchema> = vec![schema];
+    while let Some(node) = stack.pop() {
+        for (key, prop_schema) in &node.properties {
+            if let Some(values) = string_enum_values(prop_schema) {
+                key_to_name.entry(values.clone()).or_insert_with(|| {
+                    struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings)
+                });
+            }
+            if prop_schema.is_object_with_properties() {
+                stack.push(prop_schema);
+            }
+        }
+    }
+    key_to_name
+        .into_iter()
+        .map(|(values, name)| EnumToEmit { name, values })
+        .collect()
+}
+
 /// Collect all object schemas that need a struct in topological order (children before parents).
 /// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
 fn collect_structs(
@@ -280,6 +328,23 @@ fn generate_rust_with_dedupe(
     settings: &CodeGenSettings,
 ) -> CodeGenResult<GenerateRustOutput> {
     let mode: DedupeMode = settings.dedupe_mode;
+
+    let mut enum_values_to_name: BTreeMap<Vec<String>, String> = BTreeMap::new();
+    for schema in schemas {
+        for e in collect_enums(schema, settings) {
+            enum_values_to_name
+                .entry(e.values.clone())
+                .or_insert(e.name);
+        }
+    }
+    let all_enums: Vec<EnumToEmit> = enum_values_to_name
+        .iter()
+        .map(|(values, name)| EnumToEmit {
+            name: name.clone(),
+            values: values.clone(),
+        })
+        .collect();
+
     let collected: Vec<(usize, String, JsonSchema)> =
         collect_structs_all_schemas(schemas, settings);
 
@@ -361,6 +426,11 @@ fn generate_rust_with_dedupe(
         writeln!(out)?;
         writeln!(out, "use serde::{{Deserialize, Serialize}};")?;
         writeln!(out)?;
+        for e in &all_enums {
+            let pairs: Vec<(String, String)> =
+                enum_variant_names_with_collision_resolution(&e.values);
+            emit_enum_from_pairs(&mut out, &e.name, &pairs)?;
+        }
         for (name, schema) in &shared_structs {
             emit_struct_derive_and_attrs(&mut out, name, schema)?;
             emit_struct_fields_with_resolver(
@@ -369,6 +439,7 @@ fn generate_rust_with_dedupe(
                 settings,
                 Some(&key_to_canonical_name),
                 mode,
+                Some(&enum_values_to_name),
             )?;
             writeln!(out, "}}")?;
             writeln!(out)?;
@@ -418,6 +489,11 @@ fn generate_rust_with_dedupe(
                             used_shared.insert(cn.clone());
                         }
                     }
+                    if let Some(values) = string_enum_values(prop_schema)
+                        && let Some(enum_name) = enum_values_to_name.get(&values)
+                    {
+                        used_shared.insert(enum_name.clone());
+                    }
                 }
             }
             let root_for_schema = collected
@@ -454,6 +530,7 @@ fn generate_rust_with_dedupe(
                     settings,
                     Some(&key_to_canonical_name),
                     mode,
+                    Some(&enum_values_to_name),
                 )
                 .ok();
                 writeln!(buf, "}}").ok();
@@ -506,6 +583,29 @@ fn visit_topo(
     out.push(name.to_string());
 }
 
+/// Emit a single Rust enum (unit variants). Pairs are (`json_value`, `variant_name`); serde rename when they differ.
+fn emit_enum_from_pairs(
+    out: &mut impl Write,
+    name: &str,
+    pairs: &[(String, String)],
+) -> CodeGenResult<()> {
+    writeln!(
+        out,
+        "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
+    )?;
+    writeln!(out, "pub enum {name} {{")?;
+    for (value, variant_name) in pairs {
+        if value != variant_name {
+            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+            writeln!(out, "    #[serde(rename = \"{escaped}\")]")?;
+        }
+        writeln!(out, "    {variant_name},")?;
+    }
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+    Ok(())
+}
+
 /// Emit struct fields; when resolver is Some (dedupe mode), use canonical type names for nested objects.
 fn emit_struct_fields_with_resolver(
     schema: &JsonSchema,
@@ -513,12 +613,33 @@ fn emit_struct_fields_with_resolver(
     settings: &CodeGenSettings,
     key_to_name: Option<&BTreeMap<DedupeKey, String>>,
     mode: DedupeMode,
+    enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
 ) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
-        if prop_schema.is_string() {
+        if let Some(values) = string_enum_values(prop_schema) {
+            let enum_name: &String = enum_values_to_name
+                .and_then(|m| m.get(&values))
+                .expect("enum name for string enum");
+            let ty = if schema.is_required(key) {
+                enum_name.clone()
+            } else {
+                format!("Option<{enum_name}>")
+            };
+            if needs_rename {
+                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            writeln!(out, "    pub {field_name}: {ty},")?;
+        } else if prop_schema.is_string()
+            || (prop_schema
+                .enum_values
+                .as_ref()
+                .is_some_and(|v| !v.is_empty())
+                && !prop_schema.is_string_enum())
+        {
+            // String type, or non-string/mixed enum fallback per design.
             let ty = if schema.is_required(key) {
                 "String".to_string()
             } else {
@@ -576,12 +697,33 @@ fn emit_struct_fields(
     schema: &JsonSchema,
     out: &mut impl Write,
     settings: &CodeGenSettings,
+    enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
 ) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
-        if prop_schema.is_string() {
+        if let Some(values) = string_enum_values(prop_schema) {
+            let enum_name: &String = enum_values_to_name
+                .and_then(|m| m.get(&values))
+                .expect("enum name for string enum");
+            let ty = if schema.is_required(key) {
+                enum_name.clone()
+            } else {
+                format!("Option<{enum_name}>")
+            };
+            if needs_rename {
+                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            writeln!(out, "    pub {field_name}: {ty},")?;
+        } else if prop_schema.is_string()
+            || (prop_schema
+                .enum_values
+                .as_ref()
+                .is_some_and(|v| !v.is_empty())
+                && !prop_schema.is_string_enum())
+        {
+            // String type, or non-string/mixed enum fallback per design.
             let ty = if schema.is_required(key) {
                 "String".to_string()
             } else {
@@ -638,6 +780,12 @@ fn emit_rust(
         return Err(CodeGenError::RootNotObject);
     }
 
+    let enums: Vec<EnumToEmit> = collect_enums(schema, settings);
+    let enum_values_to_name: BTreeMap<Vec<String>, String> = enums
+        .iter()
+        .map(|e| (e.values.clone(), e.name.clone()))
+        .collect();
+
     let mut structs: Vec<StructToEmit> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     collect_structs(schema, None, &mut structs, &mut seen, settings);
@@ -650,9 +798,14 @@ fn emit_rust(
     writeln!(out, "use serde::{{Deserialize, Serialize}};")?;
     writeln!(out)?;
 
+    for e in &enums {
+        let pairs: Vec<(String, String)> = enum_variant_names_with_collision_resolution(&e.values);
+        emit_enum_from_pairs(out, &e.name, &pairs)?;
+    }
+
     for st in &structs {
         emit_struct_derive_and_attrs(out, &st.name, &st.schema)?;
-        emit_struct_fields(&st.schema, out, settings)?;
+        emit_struct_fields(&st.schema, out, settings, Some(&enum_values_to_name))?;
         writeln!(out, "}}")?;
         writeln!(out)?;
     }
@@ -748,6 +901,170 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: String,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn required_enum_property_emits_enum_and_struct() {
+        let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Status {
+    #[serde(rename = "closed")]
+    Closed,
+    #[serde(rename = "open")]
+    Open,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub status: Status,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn optional_enum_property_emits_enum_and_struct() {
+        let json = r#"{"type":"object","properties":{"level":{"enum":["low","medium","high"]}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Level {
+    #[serde(rename = "high")]
+    High,
+    #[serde(rename = "low")]
+    Low,
+    #[serde(rename = "medium")]
+    Medium,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub level: Option<Level>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_dedupe_two_properties_same_enum_emits_one_enum() {
+        let json = r#"{"type":"object","properties":{"a":{"enum":["x","y"]},"b":{"enum":["x","y"]}},"required":["a"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum A {
+    #[serde(rename = "x")]
+    X,
+    #[serde(rename = "y")]
+    Y,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub a: A,
+    pub b: Option<A>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_collision_emits_suffixed_variants() {
+        let json = r#"{"type":"object","properties":{"t":{"enum":["a","A"]}},"required":["t"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum T {
+    #[serde(rename = "A")]
+    A_0,
+    #[serde(rename = "a")]
+    A_1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub t: T,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_duplicate_values_in_schema_emits_single_variant_per_value() {
+        let json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum T {
+    #[serde(rename = "A")]
+    A_0,
+    #[serde(rename = "a")]
+    A_1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub t: T,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_string_enum_fallback_emits_string() {
+        let json =
+            r#"{"type":"object","properties":{"tag":{"enum":["foo",1,true]}},"required":["tag"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub tag: String,
 }
 
 ";
@@ -983,6 +1300,7 @@ pub struct Root {
             },
             required: None,
             title: Some("Leaf".to_string()),
+            enum_values: None,
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
@@ -990,6 +1308,7 @@ pub struct Root {
                 properties: std::collections::BTreeMap::new(),
                 required: None,
                 title: Some(format!("Level{i}")),
+                enum_values: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;
