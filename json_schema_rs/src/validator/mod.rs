@@ -12,7 +12,7 @@ use serde_json::Value;
 /// Validates a JSON instance against a schema. Collects **all** validation errors
 /// and returns them in a single result (no fail-fast).
 ///
-/// Validates using the `type` (object, string, integer), `required`, and `properties`
+/// Validates using the `type` (object, string, integer, number), `required`, and `properties`
 /// keywords. Does not resolve `$ref` or `$defs`; additional properties are allowed.
 ///
 /// # Errors
@@ -79,6 +79,14 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                 let valid = instance.as_number().is_some_and(|n| n.as_i64().is_some());
                 if !valid {
                     errors.push(ValidationError::ExpectedInteger {
+                        instance_path: instance_path.clone(),
+                    });
+                }
+            }
+            Some("number") => {
+                let valid = instance.as_number().is_some();
+                if !valid {
+                    errors.push(ValidationError::ExpectedNumber {
                         instance_path: instance_path.clone(),
                     });
                 }
@@ -506,6 +514,176 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
             instance_path: JsonPointer::root().push("count"),
             property: "count".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_number_valid_float() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(2.5);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_number_valid_integer() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(42);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_number_invalid_string() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!("3.14");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_number_invalid_null() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(null);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_number_invalid_object() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!({});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_number_invalid_array() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!([1.0]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_number_invalid_bool() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let instance = json!(true);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn nested_property_type_number_valid() {
+        let schema = schema_object_with_required(vec!["value"], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "value".to_string(),
+                JsonSchema {
+                    type_: Some("number".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        let instance = json!({"value": 2.5});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn nested_property_type_number_invalid_string() {
+        let schema = schema_object_with_required(vec!["value"], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "value".to_string(),
+                JsonSchema {
+                    type_: Some("number".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        let instance = json!({"value": "3.14"});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
+            instance_path: JsonPointer::root().push("value"),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn nested_required_number_missing() {
+        let schema = schema_object_with_required(vec!["value"], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "value".to_string(),
+                JsonSchema {
+                    type_: Some("number".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        let instance = json!({});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
+            instance_path: JsonPointer::root().push("value"),
+            property: "value".to_string(),
         }]);
         assert_eq!(expected, actual);
     }

@@ -94,6 +94,27 @@ impl ToJsonSchema for u64 {
     }
 }
 
+fn number_schema() -> JsonSchema {
+    JsonSchema {
+        type_: Some("number".to_string()),
+        properties: BTreeMap::new(),
+        required: None,
+        title: None,
+    }
+}
+
+impl ToJsonSchema for f32 {
+    fn json_schema() -> JsonSchema {
+        number_schema()
+    }
+}
+
+impl ToJsonSchema for f64 {
+    fn json_schema() -> JsonSchema {
+        number_schema()
+    }
+}
+
 impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
     fn json_schema() -> JsonSchema {
         T::json_schema()
@@ -216,6 +237,32 @@ mod tests {
     fn u16_json_schema() {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = u16::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn f64_json_schema() {
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: std::collections::BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let actual: JsonSchema = f64::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn option_f64_json_schema() {
+        let expected: JsonSchema = f64::json_schema();
+        let actual: JsonSchema = Option::<f64>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn f32_json_schema() {
+        let expected_type: Option<&str> = Some("number");
+        let actual: JsonSchema = f32::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
     }
 

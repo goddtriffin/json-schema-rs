@@ -22,6 +22,7 @@ JSON Schema:
     "last_name": { "type": "string" },
     "birthday": { "type": "string" },
     "age": { "type": "integer" },
+    "score": { "type": "number" },
     "address": {
       "type": "object",
       "properties": {
@@ -55,6 +56,7 @@ pub struct Root {
     pub address: Option<Address>,
     pub age: Option<i64>,
     pub birthday: Option<String>,
+    pub score: Option<f64>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
 }

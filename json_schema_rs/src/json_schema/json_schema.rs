@@ -47,7 +47,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
 /// Schema model used for code generation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct JsonSchema {
-    /// Schema type; `object`, `string`, and `integer` drive codegen; others are ignored.
+    /// Schema type; `object`, `string`, `integer`, and `number` drive codegen; others are ignored.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
 
@@ -81,6 +81,12 @@ impl JsonSchema {
     #[must_use]
     pub(crate) fn is_integer(&self) -> bool {
         self.type_.as_deref() == Some("integer")
+    }
+
+    /// Returns true if this schema is type "number".
+    #[must_use]
+    pub(crate) fn is_number(&self) -> bool {
+        self.type_.as_deref() == Some("number")
     }
 
     /// Returns true if the given property name is required at this object level.
@@ -233,6 +239,45 @@ mod tests {
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
+        assert_eq!(expected, actual.as_slice());
+    }
+
+    #[test]
+    fn is_number() {
+        let mut s = JsonSchema::default();
+        let actual = [
+            s.is_number(),
+            {
+                s.type_ = Some("string".to_string());
+                s.is_number()
+            },
+            {
+                s.type_ = Some("integer".to_string());
+                s.is_number()
+            },
+            {
+                s.type_ = Some("object".to_string());
+                s.is_number()
+            },
+            {
+                s.type_ = Some("number".to_string());
+                s.is_number()
+            },
+        ];
+        let expected = [false, false, false, false, true];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn try_from_schema_number_to_vec_u8() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let actual: Vec<u8> = schema.try_into().expect("serialize");
+        let expected: &[u8] = b"{\"type\":\"number\"}";
         assert_eq!(expected, actual.as_slice());
     }
 }
