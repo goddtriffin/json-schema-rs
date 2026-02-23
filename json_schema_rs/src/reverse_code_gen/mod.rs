@@ -37,6 +37,63 @@ impl ToJsonSchema for bool {
     }
 }
 
+fn integer_schema() -> JsonSchema {
+    JsonSchema {
+        type_: Some("integer".to_string()),
+        properties: BTreeMap::new(),
+        required: None,
+        title: None,
+    }
+}
+
+impl ToJsonSchema for i8 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
+impl ToJsonSchema for u8 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
+impl ToJsonSchema for i16 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
+impl ToJsonSchema for u16 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
+impl ToJsonSchema for i32 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
+impl ToJsonSchema for u32 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
+impl ToJsonSchema for i64 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
+impl ToJsonSchema for u64 {
+    fn json_schema() -> JsonSchema {
+        integer_schema()
+    }
+}
+
 impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
     fn json_schema() -> JsonSchema {
         T::json_schema()
@@ -92,6 +149,74 @@ mod tests {
         let expected: JsonSchema = String::json_schema();
         let actual: JsonSchema = Option::<String>::json_schema();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn i64_json_schema() {
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("integer".to_string()),
+            properties: std::collections::BTreeMap::new(),
+            required: None,
+            title: None,
+        };
+        let actual: JsonSchema = i64::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn option_i64_json_schema() {
+        let expected: JsonSchema = i64::json_schema();
+        let actual: JsonSchema = Option::<i64>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn i32_json_schema() {
+        let expected_type: Option<&str> = Some("integer");
+        let actual: JsonSchema = i32::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn u32_json_schema() {
+        let expected_type: Option<&str> = Some("integer");
+        let actual: JsonSchema = u32::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn u64_json_schema() {
+        let expected_type: Option<&str> = Some("integer");
+        let actual: JsonSchema = u64::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn i8_json_schema() {
+        let expected_type: Option<&str> = Some("integer");
+        let actual: JsonSchema = i8::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn u8_json_schema() {
+        let expected_type: Option<&str> = Some("integer");
+        let actual: JsonSchema = u8::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn i16_json_schema() {
+        let expected_type: Option<&str> = Some("integer");
+        let actual: JsonSchema = i16::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn u16_json_schema() {
+        let expected_type: Option<&str> = Some("integer");
+        let actual: JsonSchema = u16::json_schema();
+        assert_eq!(expected_type, actual.type_.as_deref());
     }
 
     #[test]

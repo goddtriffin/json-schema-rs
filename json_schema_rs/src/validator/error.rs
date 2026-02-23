@@ -16,6 +16,11 @@ pub enum ValidationError {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
     },
+    /// Schema had `type: "integer"` but the instance was not an integer (e.g. float, string, or non-number).
+    ExpectedInteger {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+    },
     /// A property listed in `required` was absent.
     MissingRequired {
         /// JSON Pointer to the object (parent of the missing property).
@@ -33,6 +38,7 @@ impl ValidationError {
         match self {
             ValidationError::ExpectedObject { instance_path }
             | ValidationError::ExpectedString { instance_path }
+            | ValidationError::ExpectedInteger { instance_path }
             | ValidationError::MissingRequired { instance_path, .. } => instance_path,
         }
     }
@@ -47,6 +53,9 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::ExpectedString { .. } => {
                 write!(f, "{location}: expected string")
+            }
+            ValidationError::ExpectedInteger { .. } => {
+                write!(f, "{location}: expected integer")
             }
             ValidationError::MissingRequired { property, .. } => {
                 write!(f, "{location}: missing required property \"{property}\"")

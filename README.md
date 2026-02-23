@@ -21,6 +21,7 @@ JSON Schema:
     "first_name": { "type": "string" },
     "last_name": { "type": "string" },
     "birthday": { "type": "string" },
+    "age": { "type": "integer" },
     "address": {
       "type": "object",
       "properties": {
@@ -52,6 +53,7 @@ pub struct Address {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub address: Option<Address>,
+    pub age: Option<i64>,
     pub birthday: Option<String>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
