@@ -1,6 +1,18 @@
 use crate::json_pointer::JsonPointer;
 use std::fmt;
 
+/// Wraps f64 so that `ValidationError` can derive Eq (f64 is not Eq; comparison is by bits).
+#[derive(Debug, Clone, Copy)]
+pub struct OrderedF64(pub f64);
+
+impl PartialEq for OrderedF64 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for OrderedF64 {}
+
 pub type ValidationResult = Result<(), Vec<ValidationError>>;
 
 /// A single validation failure: kind and instance location.
@@ -43,6 +55,20 @@ pub enum ValidationError {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
     },
+    /// Instance was below the schema's `minimum` (inclusive lower bound).
+    BelowMinimum {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's minimum value.
+        minimum: OrderedF64,
+    },
+    /// Instance was above the schema's `maximum` (inclusive upper bound).
+    AboveMaximum {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's maximum value.
+        maximum: OrderedF64,
+    },
 }
 
 impl std::error::Error for ValidationError {}
@@ -57,7 +83,9 @@ impl ValidationError {
             | ValidationError::ExpectedNumber { instance_path }
             | ValidationError::ExpectedArray { instance_path }
             | ValidationError::MissingRequired { instance_path, .. }
-            | ValidationError::NotInEnum { instance_path } => instance_path,
+            | ValidationError::NotInEnum { instance_path }
+            | ValidationError::BelowMinimum { instance_path, .. }
+            | ValidationError::AboveMaximum { instance_path, .. } => instance_path,
         }
     }
 }
@@ -86,6 +114,12 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::NotInEnum { .. } => {
                 write!(f, "{location}: value not in enum")
+            }
+            ValidationError::BelowMinimum { minimum, .. } => {
+                write!(f, "{location}: value below minimum {}", minimum.0)
+            }
+            ValidationError::AboveMaximum { maximum, .. } => {
+                write!(f, "{location}: value above maximum {}", maximum.0)
             }
         }
     }

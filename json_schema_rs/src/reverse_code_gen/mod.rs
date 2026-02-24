@@ -25,6 +25,8 @@ impl ToJsonSchema for String {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         }
     }
 }
@@ -39,11 +41,13 @@ impl ToJsonSchema for bool {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         }
     }
 }
 
-fn integer_schema() -> JsonSchema {
+fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
         type_: Some("integer".to_string()),
         properties: BTreeMap::new(),
@@ -52,58 +56,61 @@ fn integer_schema() -> JsonSchema {
         description: None,
         enum_values: None,
         items: None,
+        minimum: Some(min),
+        maximum: Some(max),
     }
 }
 
 impl ToJsonSchema for i8 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        integer_schema_with_bounds(f64::from(i8::MIN), f64::from(i8::MAX))
     }
 }
 
 impl ToJsonSchema for u8 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        integer_schema_with_bounds(f64::from(u8::MIN), f64::from(u8::MAX))
     }
 }
 
 impl ToJsonSchema for i16 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        integer_schema_with_bounds(f64::from(i16::MIN), f64::from(i16::MAX))
     }
 }
 
 impl ToJsonSchema for u16 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        integer_schema_with_bounds(f64::from(u16::MIN), f64::from(u16::MAX))
     }
 }
 
 impl ToJsonSchema for i32 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        integer_schema_with_bounds(f64::from(i32::MIN), f64::from(i32::MAX))
     }
 }
 
 impl ToJsonSchema for u32 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        integer_schema_with_bounds(f64::from(u32::MIN), f64::from(u32::MAX))
     }
 }
 
 impl ToJsonSchema for i64 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        #[expect(clippy::cast_precision_loss)]
+        integer_schema_with_bounds(i64::MIN as f64, 9_223_372_036_854_775_807.0_f64)
     }
 }
 
 impl ToJsonSchema for u64 {
     fn json_schema() -> JsonSchema {
-        integer_schema()
+        integer_schema_with_bounds(0.0_f64, 18_446_744_073_709_551_615.0_f64)
     }
 }
 
-fn number_schema() -> JsonSchema {
+fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
         type_: Some("number".to_string()),
         properties: BTreeMap::new(),
@@ -112,18 +119,20 @@ fn number_schema() -> JsonSchema {
         description: None,
         enum_values: None,
         items: None,
+        minimum: Some(min),
+        maximum: Some(max),
     }
 }
 
 impl ToJsonSchema for f32 {
     fn json_schema() -> JsonSchema {
-        number_schema()
+        number_schema_with_bounds(f64::from(f32::MIN), f64::from(f32::MAX))
     }
 }
 
 impl ToJsonSchema for f64 {
     fn json_schema() -> JsonSchema {
-        number_schema()
+        number_schema_with_bounds(f64::MIN, f64::MAX)
     }
 }
 
@@ -143,6 +152,8 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
             description: None,
             enum_values: None,
             items: Some(Box::new(T::json_schema())),
+            minimum: None,
+            maximum: None,
         }
     }
 }
@@ -161,6 +172,8 @@ impl ToJsonSchema for HandWrittenExample {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         }
     }
 }
@@ -180,6 +193,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = String::json_schema();
         assert_eq!(expected, actual);
@@ -195,6 +210,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = bool::json_schema();
         assert_eq!(expected, actual);
@@ -217,6 +234,9 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            #[expect(clippy::cast_precision_loss)]
+            minimum: Some(i64::MIN as f64),
+            maximum: Some(9_223_372_036_854_775_807.0_f64),
         };
         let actual: JsonSchema = i64::json_schema();
         assert_eq!(expected, actual);
@@ -234,6 +254,8 @@ mod tests {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = i32::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(f64::from(i32::MIN)), actual.minimum);
+        assert_eq!(Some(f64::from(i32::MAX)), actual.maximum);
     }
 
     #[test]
@@ -241,6 +263,8 @@ mod tests {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = u32::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(f64::from(u32::MIN)), actual.minimum);
+        assert_eq!(Some(f64::from(u32::MAX)), actual.maximum);
     }
 
     #[test]
@@ -248,6 +272,8 @@ mod tests {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = u64::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(0.0_f64), actual.minimum);
+        assert_eq!(Some(18_446_744_073_709_551_615.0_f64), actual.maximum);
     }
 
     #[test]
@@ -255,6 +281,8 @@ mod tests {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = i8::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(f64::from(i8::MIN)), actual.minimum);
+        assert_eq!(Some(f64::from(i8::MAX)), actual.maximum);
     }
 
     #[test]
@@ -262,6 +290,8 @@ mod tests {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = u8::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(0.0_f64), actual.minimum);
+        assert_eq!(Some(255.0_f64), actual.maximum);
     }
 
     #[test]
@@ -269,6 +299,8 @@ mod tests {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = i16::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(f64::from(i16::MIN)), actual.minimum);
+        assert_eq!(Some(f64::from(i16::MAX)), actual.maximum);
     }
 
     #[test]
@@ -276,6 +308,8 @@ mod tests {
         let expected_type: Option<&str> = Some("integer");
         let actual: JsonSchema = u16::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(f64::from(u16::MIN)), actual.minimum);
+        assert_eq!(Some(f64::from(u16::MAX)), actual.maximum);
     }
 
     #[test]
@@ -288,6 +322,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: Some(f64::MIN),
+            maximum: Some(f64::MAX),
         };
         let actual: JsonSchema = f64::json_schema();
         assert_eq!(expected, actual);
@@ -305,6 +341,8 @@ mod tests {
         let expected_type: Option<&str> = Some("number");
         let actual: JsonSchema = f32::json_schema();
         assert_eq!(expected_type, actual.type_.as_deref());
+        assert_eq!(Some(f64::from(f32::MIN)), actual.minimum);
+        assert_eq!(Some(f64::from(f32::MAX)), actual.maximum);
     }
 
     #[test]
@@ -317,6 +355,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = super::HandWrittenExample::json_schema();
         assert_eq!(expected, actual);
@@ -332,6 +372,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(String::json_schema())),
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = Vec::<String>::json_schema();
         assert_eq!(expected, actual);
@@ -347,6 +389,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(i64::json_schema())),
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = Vec::<i64>::json_schema();
         assert_eq!(expected, actual);

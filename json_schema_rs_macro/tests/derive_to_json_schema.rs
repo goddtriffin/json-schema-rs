@@ -41,6 +41,8 @@ fn derive_root_json_schema() {
         description: None,
         enum_values: None,
         items: None,
+        minimum: None,
+        maximum: None,
     };
     let actual: JsonSchema = Root::json_schema();
     assert_eq!(expected, actual);
@@ -61,6 +63,8 @@ fn derive_address_json_schema() {
         description: None,
         enum_values: None,
         items: None,
+        minimum: None,
+        maximum: None,
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
@@ -135,6 +139,146 @@ fn derive_round_trip_with_description() {
     let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
     let parsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
     assert_eq!(schema, parsed);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithIntegerMinMax {
+    #[to_json_schema(minimum = 0, maximum = 255)]
+    byte: i64,
+}
+
+#[test]
+fn derive_field_minimum_maximum_integer() {
+    let mut byte_schema: JsonSchema = i64::json_schema();
+    byte_schema.minimum = Some(0.0);
+    byte_schema.maximum = Some(255.0);
+    let expected: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert("byte".to_string(), byte_schema);
+            m
+        },
+        required: Some(vec!["byte".to_string()]),
+        title: None,
+        description: None,
+        enum_values: None,
+        items: None,
+        minimum: None,
+        maximum: None,
+    };
+    let actual: JsonSchema = WithIntegerMinMax::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithFloatMinMax {
+    #[to_json_schema(minimum = 0.0, maximum = 100.0)]
+    score: f64,
+}
+
+#[test]
+fn derive_field_minimum_maximum_float() {
+    let mut score_schema: JsonSchema = f64::json_schema();
+    score_schema.minimum = Some(0.0);
+    score_schema.maximum = Some(100.0);
+    let expected: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert("score".to_string(), score_schema);
+            m
+        },
+        required: Some(vec!["score".to_string()]),
+        title: None,
+        description: None,
+        enum_values: None,
+        items: None,
+        minimum: None,
+        maximum: None,
+    };
+    let actual: JsonSchema = WithFloatMinMax::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_minimum_maximum_round_trip() {
+    let schema: JsonSchema = WithIntegerMinMax::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let parsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, parsed);
+}
+
+#[test]
+fn derive_minimum_maximum_float_round_trip() {
+    let schema: JsonSchema = WithFloatMinMax::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let parsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, parsed);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithOnlyMinimum {
+    #[to_json_schema(minimum = 10)]
+    value: i64,
+}
+
+#[test]
+fn derive_field_only_minimum() {
+    let mut value_schema: JsonSchema = i64::json_schema();
+    value_schema.minimum = Some(10.0);
+    let expected: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert("value".to_string(), value_schema);
+            m
+        },
+        required: Some(vec!["value".to_string()]),
+        title: None,
+        description: None,
+        enum_values: None,
+        items: None,
+        minimum: None,
+        maximum: None,
+    };
+    let actual: JsonSchema = WithOnlyMinimum::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithOnlyMaximum {
+    #[to_json_schema(maximum = 90)]
+    value: i64,
+}
+
+#[test]
+fn derive_field_only_maximum() {
+    let mut value_schema: JsonSchema = i64::json_schema();
+    value_schema.maximum = Some(90.0);
+    let expected: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert("value".to_string(), value_schema);
+            m
+        },
+        required: Some(vec!["value".to_string()]),
+        title: None,
+        description: None,
+        enum_values: None,
+        items: None,
+        minimum: None,
+        maximum: None,
+    };
+    let actual: JsonSchema = WithOnlyMaximum::json_schema();
+    assert_eq!(expected, actual);
 }
 
 #[derive(ToJsonSchema)]

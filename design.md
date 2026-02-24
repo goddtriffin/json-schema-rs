@@ -73,7 +73,7 @@ Codegen is built around a **swappable backend** trait in **`code_gen/mod.rs`**: 
 
 **Trait and serialization:** The **ToJsonSchema** trait (in **`reverse_code_gen`**) has `fn json_schema() -> JsonSchema`. **JsonSchema** implements **Serialize** and **TryFrom<&JsonSchema> for String** / **TryFrom<&JsonSchema> for Vec<u8>** (and consuming forms); use `String::try_from(&schema)` or `.try_into()` to get JSON. Error type is **JsonSchemaParseError** (wraps `serde_json::Error`). Round-trip: parse schema → generate Rust → compile crate with json-schema-rs + macro → for each generated type call `TypeName::json_schema()` → TryFrom to String/Vec<u8> → parse back → assert equals original (or derived) schema.
 
-**Container/field attributes:** Container: **`#[to_json_schema(title = "...")]`** (when the schema had a title). Field attributes (e.g. `#[json_schema(...)]`) are parsed for future use; only supported schema keywords (type, properties, required, title) are emitted today. Constraint attributes (minLength, pattern, etc.) are reserved until the schema model and validator support them. Attribute names follow a Serde-style pattern (container vs field). **No literal recursion** in `reverse_code_gen`: schema construction and serialization use iteration + stack where depth can be large (see design principle above).
+**Container/field attributes:** Container: **`#[to_json_schema(title = "...")]`** (when the schema had a title). Field-level **`#[to_json_schema(minimum = N, maximum = N)]`** is supported for emitting JSON Schema bounds on a property; N can be integer or float literals (stored as f64). When present, the attribute value overrides the type-derived minimum/maximum (e.g. an `i64` field with `#[to_json_schema(minimum = 0, maximum = 255)]` emits a schema with those bounds). Other field attributes (e.g. `#[json_schema(...)]`) are parsed for future use; only supported schema keywords (type, properties, required, title, minimum, maximum) are emitted today. Constraint attributes (minLength, pattern, etc.) are reserved until the schema model and validator support them. Attribute names follow a Serde-style pattern (container vs field). **No literal recursion** in `reverse_code_gen`: schema construction and serialization use iteration + stack where depth can be large (see design principle above).
 
 ### Codegen tests: scenario × frontend
 
@@ -104,6 +104,8 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Single optional integer | Y | Y | Y | Y | Y |
 | Single required number (float) | Y | Y | Y | Y | Y |
 | Single optional number (float) | Y | Y | Y | Y | Y |
+| Integer with min+max (narrow type, e.g. u8) | Y | Y | Y | Y | Y |
+| Number with min+max (f32 when in range) | Y | Y | Y | Y | Y |
 | Dedupe (two identical schemas) | Y | — | Y | Y | — |
 | Model name source (property-key) | Y | — | Y | Y | — |
 | Root not object / empty object error | Y | Y | — | — | — |
@@ -448,7 +450,7 @@ TODO.
 
 When a schema has `"type": "integer"` (or `"type": ["integer", ...]` with integer first), the instance must be a JSON number with no fractional part (a mathematical integer). This meaning is **identical across all JSON Schema drafts** (draft-00 through 2020-12).
 
-**Our implementation:** We parse both a single type string `"integer"` and an array whose first element is `"integer"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("integer")`, we require the instance to be a JSON number that is an integer (e.g. `instance.as_number().is_some_and(|n| n.as_i64().is_some())`); non-integers (float, string, null, etc.) produce `ValidationError::ExpectedInteger`. We do not apply any numeric constraints (minimum, maximum, etc.). Codegen: properties with `type: "integer"` emit Rust `i64` or `Option<i64>`. Reverse codegen: Rust types `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64` all emit `"type": "integer"` via `ToJsonSchema`. See schema model `is_integer()` in `json_schema_rs/src/json_schema/json_schema.rs`, validator in `json_schema_rs/src/validator/mod.rs`, Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`, and reverse codegen in `json_schema_rs/src/reverse_code_gen/mod.rs`.
+**Our implementation:** We parse both a single type string `"integer"` and an array whose first element is `"integer"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("integer")`, we require the instance to be a JSON number that is an integer (e.g. `instance.as_number().is_some_and(|n| n.as_i64().is_some())`); non-integers (float, string, null, etc.) produce `ValidationError::ExpectedInteger`. When the instance is numeric, we apply `minimum` and `maximum` if present (see **minimum** / **maximum**). Codegen: properties with `type: "integer"` emit a Rust integer type chosen from `minimum` and `maximum` when both present and valid, else `i64` or `Option<i64>` (see **minimum** / **maximum**). Reverse codegen: Rust types `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64` all emit `"type": "integer"` with `minimum` and `maximum` set to the type's range. See schema model `is_integer()` in `json_schema_rs/src/json_schema/json_schema.rs`, validator in `json_schema_rs/src/validator/mod.rs`, Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`, and reverse codegen in `json_schema_rs/src/reverse_code_gen/mod.rs`.
 
 **Spec version quirks:** None for the **meaning** of type `"integer"` across drafts. The only draft differences are in the **form** of the `type` keyword (string vs array), documented under **4. Type and value constraints → type**.
 
@@ -456,21 +458,25 @@ When a schema has `"type": "integer"` (or `"type": ["integer", ...]` with intege
 
 When a schema has `"type": "number"` (or `"type": ["number", ...]` with number first), the instance must be a JSON number (integer or floating-point). This meaning is **identical across all JSON Schema drafts** (draft-00 through 2020-12).
 
-**Our implementation:** We parse both a single type string `"number"` and an array whose first element is `"number"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("number")`, we require the instance to be a JSON number (`instance.as_number().is_some()`); non-numbers (string, null, object, array, boolean) produce `ValidationError::ExpectedNumber`. We do not apply any numeric constraints (minimum, maximum, etc.). Codegen: properties with `type: "number"` emit Rust `f64` or `Option<f64>`. Reverse codegen: Rust types `f32` and `f64` emit `"type": "number"` via `ToJsonSchema`. See schema model `is_number()` in `json_schema_rs/src/json_schema/json_schema.rs`, validator in `json_schema_rs/src/validator/mod.rs`, Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`, and reverse codegen in `json_schema_rs/src/reverse_code_gen/mod.rs`.
+**Our implementation:** We parse both a single type string `"number"` and an array whose first element is `"number"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("number")`, we require the instance to be a JSON number (`instance.as_number().is_some()`); non-numbers (string, null, object, array, boolean) produce `ValidationError::ExpectedNumber`. When the instance is numeric, we apply `minimum` and `maximum` if present (see **minimum** / **maximum**). Codegen: properties with `type: "number"` emit Rust `f32` or `f64` (or Option) chosen from `minimum` and `maximum` when both present and valid, else `f64` (see **minimum** / **maximum**). Reverse codegen: Rust types `f32` and `f64` emit `"type": "number"` with `minimum` and `maximum` set to the type's range. See schema model `is_number()` in `json_schema_rs/src/json_schema/json_schema.rs`, validator in `json_schema_rs/src/validator/mod.rs`, Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`, and reverse codegen in `json_schema_rs/src/reverse_code_gen/mod.rs`.
 
 **Spec version quirks:** None for the **meaning** of type `"number"` across drafts. The only draft differences are in the **form** of the `type` keyword (string vs array), documented under **4. Type and value constraints → type**.
 
 ### minimum
 
-TODO. (Planned: we use `minimum` and `maximum` when both present and valid to choose the smallest integer or float type. Fallback: no/min/max or invalid → `i64` for integer, `f64` for number. No validation; type selection only.)
+The value of `minimum` MUST be a number, representing an inclusive lower limit for a numeric instance. If the instance is a number, it validates only if the instance is greater than or exactly equal to `minimum`. This meaning is consistent across draft-04 through 2020-12 (draft-00/01 had optional `minimumCanEqual`, default true, i.e. inclusive).
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We store `minimum` as `Option<f64>` in the schema model (see `json_schema_rs/src/json_schema/json_schema.rs`). Validation: when the schema has `type: "integer"` or `type: "number"` and the instance is numeric, we require instance ≥ `minimum` when `minimum` is present; otherwise we push `ValidationError::BelowMinimum`. Codegen: we use `minimum` together with `maximum` when both are present and valid to choose the smallest Rust integer or float type that fits the range; if either is absent or invalid (e.g. min > max, or for integer non-integer or out of i64 range), we fall back to `i64` for integer and `f64` for number. Reverse codegen: we emit `minimum` (and `maximum`) from the Rust type's range (e.g. i8 → -128..=127, u8 → 0..=255, f32 → f32::MIN..=f32::MAX). The derive macro allows overriding the type-derived bound via field attribute **`#[to_json_schema(minimum = N)]`** (N an integer or float literal).
+
+**Spec version quirks:** None for inclusive `minimum` in draft-04 through 2020-12. Draft-00 and draft-01 used `minimumCanEqual` (boolean, default true) to allow equality; we implement only the inclusive semantics.
 
 ### maximum
 
-TODO. (Planned: see minimum; used together for range-based type selection.)
+The value of `maximum` MUST be a number, representing an inclusive upper limit for a numeric instance. If the instance is a number, it validates only if the instance is less than or exactly equal to `maximum`. This meaning is consistent across draft-04 through 2020-12 (draft-00/01 had optional `maximumCanEqual`, default true, i.e. inclusive).
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We store `maximum` as `Option<f64>` in the schema model. Validation: when the schema has `type: "integer"` or `type: "number"` and the instance is numeric, we require instance ≤ `maximum` when `maximum` is present; otherwise we push `ValidationError::AboveMaximum`. Codegen: used together with `minimum` for range-based type selection (see **minimum**). Reverse codegen: we emit `maximum` from the Rust type's range. The derive macro allows overriding the type-derived bound via field attribute **`#[to_json_schema(maximum = N)]`** (N an integer or float literal).
+
+**Spec version quirks:** None for inclusive `maximum` in draft-04 through 2020-12. Draft-00/01 used `maximumCanEqual` (boolean, default true); we implement only the inclusive semantics.
 
 ### exclusiveMinimum
 

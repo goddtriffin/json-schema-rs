@@ -38,6 +38,10 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) enum_values: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     pub(crate) items: Option<Box<DenyUnknownFieldsJsonSchema>>,
+    #[serde(default)]
+    pub(crate) minimum: Option<f64>,
+    #[serde(default)]
+    pub(crate) maximum: Option<f64>,
 }
 
 /// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
@@ -59,6 +63,8 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         description: h.description,
         enum_values: h.enum_values,
         items,
+        minimum: h.minimum,
+        maximum: h.maximum,
     }
 }
 
@@ -92,6 +98,14 @@ pub struct JsonSchema {
     /// Schema for all array elements (when type is "array"). Single-schema form only; tuple-typing (array of schemas) not supported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Box<JsonSchema>>,
+
+    /// Inclusive lower bound for numeric instances (integer or number). Used for validation and for codegen type selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<f64>,
+
+    /// Inclusive upper bound for numeric instances (integer or number). Used for validation and for codegen type selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<f64>,
 }
 
 impl JsonSchema {
@@ -196,6 +210,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"object","title":"Root"}"#;
@@ -212,6 +228,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"string\"}";
@@ -295,6 +313,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
@@ -337,6 +357,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"number\"}";
@@ -353,6 +375,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         assert!(!no_enum.is_string_enum());
         let empty_enum: JsonSchema = JsonSchema {
@@ -363,6 +387,8 @@ mod tests {
             description: None,
             enum_values: Some(vec![]),
             items: None,
+            minimum: None,
+            maximum: None,
         };
         assert!(!empty_enum.is_string_enum());
         let string_enum: JsonSchema = JsonSchema {
@@ -376,6 +402,8 @@ mod tests {
                 serde_json::Value::String("b".to_string()),
             ]),
             items: None,
+            minimum: None,
+            maximum: None,
         };
         assert!(string_enum.is_string_enum());
         let mixed_enum: JsonSchema = JsonSchema {
@@ -389,6 +417,8 @@ mod tests {
                 serde_json::Value::Number(42_i64.into()),
             ]),
             items: None,
+            minimum: None,
+            maximum: None,
         };
         assert!(!mixed_enum.is_string_enum());
     }
@@ -429,6 +459,8 @@ mod tests {
                     description: None,
                     enum_values: None,
                     items: None,
+                    minimum: None,
+                    maximum: None,
                 }));
                 s.is_array_with_items()
             },
@@ -447,6 +479,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -456,6 +490,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(item_schema)),
+            minimum: None,
+            maximum: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"array","items":{"type":"string"}}"#;

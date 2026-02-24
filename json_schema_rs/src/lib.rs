@@ -20,4 +20,4 @@ pub use json_schema::{
     JsonSchemaSettingsBuilder, SpecVersion, parse_schema, parse_schema_from_slice,
 };
 pub use reverse_code_gen::ToJsonSchema;
-pub use validator::{ValidationError, ValidationResult, validate};
+pub use validator::{OrderedF64, ValidationError, ValidationResult, validate};

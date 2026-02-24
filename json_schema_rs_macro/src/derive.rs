@@ -4,8 +4,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::{
-    Attribute, DeriveInput, Error, Field, Fields, Ident, LitStr, Meta, Result as SynResult, Token,
-    Type, Variant,
+    Attribute, DeriveInput, Error, Expr, Field, Fields, Ident, Lit, LitStr, Meta,
+    Result as SynResult, Token, Type, Variant,
 };
 
 /// Parser for doc attribute value: `= "string"` or just `"string"`.
@@ -103,6 +103,62 @@ fn field_description(field: &Field) -> SynResult<Option<String>> {
     }
 }
 
+/// Extracts a numeric value (integer or float literal) from `#[to_json_schema(key = N)]` on a field.
+fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<f64>> {
+    for attr in &field.attrs {
+        if !attr.path().is_ident("to_json_schema") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if !nv.path.is_ident(key) {
+                continue;
+            }
+            let value: f64 = match &nv.value {
+                Expr::Lit(expr_lit) => match &expr_lit.lit {
+                    Lit::Int(lit_int) => {
+                        let n: i64 = lit_int.base10_parse()?;
+                        #[expect(clippy::cast_precision_loss)]
+                        let f: f64 = n as f64;
+                        f
+                    }
+                    Lit::Float(lit_float) => lit_float.base10_parse()?,
+                    _ => {
+                        return Err(Error::new_spanned(
+                            &nv.value,
+                            format!(
+                                "to_json_schema({key} = ...) requires an integer or float literal"
+                            ),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(Error::new_spanned(
+                        &nv.value,
+                        format!("to_json_schema({key} = ...) requires an integer or float literal"),
+                    ));
+                }
+            };
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+/// Extracts `minimum = N` from a field's `#[to_json_schema(...)]` attribute.
+fn field_minimum(field: &Field) -> SynResult<Option<f64>> {
+    field_numeric_attr(field, "minimum")
+}
+
+/// Extracts `maximum = N` from a field's `#[to_json_schema(...)]` attribute.
+fn field_maximum(field: &Field) -> SynResult<Option<f64>> {
+    field_numeric_attr(field, "maximum")
+}
+
 /// Returns the JSON property key for a field: serde rename or field name.
 fn field_property_key(field: &Field) -> SynResult<String> {
     for attr in &field.attrs {
@@ -193,6 +249,7 @@ fn optional_inner_type(ty: &Type) -> &Type {
     t
 }
 
+#[expect(clippy::too_many_lines)]
 pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     let name: Ident = input.ident;
 
@@ -260,11 +317,30 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 quote! { Some(#lit.to_string()) }
             })
             .unwrap_or(quote! { None });
+        let field_min: Option<f64> = field_minimum(field)?;
+        let field_max: Option<f64> = field_maximum(field)?;
+        let min_expr: TokenStream2 = if let Some(m) = field_min {
+            let lit = proc_macro2::Literal::f64_unsuffixed(m);
+            quote! { Some(#lit) }
+        } else {
+            quote! { None }
+        };
+        let max_expr: TokenStream2 = if let Some(m) = field_max {
+            let lit = proc_macro2::Literal::f64_unsuffixed(m);
+            quote! { Some(#lit) }
+        } else {
+            quote! { None }
+        };
         property_inserts.push(quote! {
-            properties.insert(#key_lit.to_string(), ::json_schema_rs::JsonSchema {
-                description: #field_desc_expr,
-                ..<#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema()
-            });
+            {
+                let base = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
+                properties.insert(#key_lit.to_string(), ::json_schema_rs::JsonSchema {
+                    description: #field_desc_expr,
+                    minimum: #min_expr.or(base.minimum),
+                    maximum: #max_expr.or(base.maximum),
+                    ..base
+                });
+            }
         });
     }
 
@@ -294,6 +370,8 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     description: #description_expr,
                     enum_values: None,
                     items: None,
+                    minimum: None,
+                    maximum: None,
                 }
             }
         }
@@ -353,6 +431,8 @@ fn expand_enum_to_json_schema(
                     description: #description_expr,
                     enum_values: Some(enum_values),
                     items: None,
+                    minimum: None,
+                    maximum: None,
                 }
             }
         }

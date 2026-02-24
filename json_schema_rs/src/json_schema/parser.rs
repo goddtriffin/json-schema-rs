@@ -71,6 +71,10 @@ impl<'de> Deserialize<'de> for JsonSchema {
             enum_values: Option<Vec<serde_json::Value>>,
             #[serde(default)]
             items: Option<Box<JsonSchema>>,
+            #[serde(default)]
+            minimum: Option<f64>,
+            #[serde(default)]
+            maximum: Option<f64>,
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
@@ -81,6 +85,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             description: h.description,
             enum_values: h.enum_values,
             items: h.items,
+            minimum: h.minimum,
+            maximum: h.maximum,
         })
     }
 }
@@ -160,6 +166,8 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        minimum: None,
+                        maximum: None,
                     },
                 );
                 m
@@ -169,6 +177,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -191,6 +201,8 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        minimum: None,
+                        maximum: None,
                     },
                 );
                 m.insert(
@@ -203,6 +215,8 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        minimum: None,
+                        maximum: None,
                     },
                 );
                 m
@@ -212,6 +226,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -229,6 +245,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -245,6 +263,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -335,6 +355,72 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
+        let result: Result<_, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn deserialize_integer_with_minimum_and_maximum() {
+        let json = r#"{"type":"integer","minimum":0,"maximum":255}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let actual: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected_minimum: Option<f64> = Some(0.0);
+        let expected_maximum: Option<f64> = Some(255.0);
+        assert_eq!(expected_minimum, actual.minimum);
+        assert_eq!(expected_maximum, actual.maximum);
+        assert_eq!(actual.type_.as_deref(), Some("integer"));
+    }
+
+    #[test]
+    fn deserialize_integer_with_minimum_only() {
+        let json = r#"{"type":"integer","minimum":-100}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let actual: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<f64> = Some(-100.0);
+        assert_eq!(expected, actual.minimum);
+        assert_eq!(None, actual.maximum);
+    }
+
+    #[test]
+    fn deserialize_number_with_minimum_and_maximum_float() {
+        let json = r#"{"type":"number","minimum":0.5,"maximum":100.5}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let actual: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected_minimum: Option<f64> = Some(0.5);
+        let expected_maximum: Option<f64> = Some(100.5);
+        assert_eq!(expected_minimum, actual.minimum);
+        assert_eq!(expected_maximum, actual.maximum);
+        assert_eq!(actual.type_.as_deref(), Some("number"));
+    }
+
+    #[test]
+    fn deserialize_integer_with_maximum_only() {
+        let json = r#"{"type":"integer","maximum":100}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let actual: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(None, actual.minimum);
+        let expected_maximum: Option<f64> = Some(100.0);
+        assert_eq!(expected_maximum, actual.maximum);
+        assert_eq!(actual.type_.as_deref(), Some("integer"));
+    }
+
+    #[test]
+    fn deserialize_number_with_maximum_only() {
+        let json = r#"{"type":"number","maximum":99.5}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let actual: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(None, actual.minimum);
+        let expected_maximum: Option<f64> = Some(99.5);
+        assert_eq!(expected_maximum, actual.maximum);
+        assert_eq!(actual.type_.as_deref(), Some("number"));
+    }
+
+    #[test]
+    fn parse_strict_accepts_minimum_and_maximum() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"integer","minimum":0,"maximum":255}"#;
         let result: Result<_, _> = parse_schema(json, &settings);
         assert!(result.is_ok());
     }

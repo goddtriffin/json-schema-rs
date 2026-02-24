@@ -240,6 +240,75 @@ fn struct_name_from(
         })
 }
 
+const I64_MAX_AS_F64: f64 = 9_223_372_036_854_775_807.0_f64; // i64::MAX, exactly representable
+
+/// Returns the Rust type string for an integer or number schema using `minimum` and `maximum` when both present and valid; otherwise fallback to `i64` or `f64`.
+fn rust_numeric_type_for_schema(schema: &JsonSchema) -> String {
+    if schema.is_integer() {
+        let min: Option<f64> = schema.minimum;
+        let max: Option<f64> = schema.maximum;
+        #[expect(clippy::cast_precision_loss)]
+        let i64_min_f64: f64 = i64::MIN as f64;
+        let (min_i64, max_i64): (Option<i64>, Option<i64>) = match (min, max) {
+            (Some(mi), Some(ma)) if mi <= ma => {
+                let valid_min: bool =
+                    mi.fract() == 0.0 && (i64_min_f64..=I64_MAX_AS_F64).contains(&mi);
+                let valid_max: bool =
+                    ma.fract() == 0.0 && (i64_min_f64..=I64_MAX_AS_F64).contains(&ma);
+                if valid_min && valid_max {
+                    #[expect(clippy::cast_possible_truncation)]
+                    let min_i: i64 = mi as i64;
+                    #[expect(clippy::cast_possible_truncation)]
+                    let max_i: i64 = ma as i64;
+                    (Some(min_i), Some(max_i))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        };
+        if let (Some(lo), Some(hi)) = (min_i64, max_i64) {
+            if lo >= 0 {
+                if hi <= i64::from(u8::MAX) {
+                    return "u8".to_string();
+                }
+                if hi <= i64::from(u16::MAX) {
+                    return "u16".to_string();
+                }
+                if hi <= i64::from(u32::MAX) {
+                    return "u32".to_string();
+                }
+                return "u64".to_string();
+            }
+            if lo >= i64::from(i8::MIN) && hi <= i64::from(i8::MAX) {
+                return "i8".to_string();
+            }
+            if lo >= i64::from(i16::MIN) && hi <= i64::from(i16::MAX) {
+                return "i16".to_string();
+            }
+            if lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX) {
+                return "i32".to_string();
+            }
+        }
+        return "i64".to_string();
+    }
+    if schema.is_number() {
+        let min: Option<f64> = schema.minimum;
+        let max: Option<f64> = schema.maximum;
+        if let (Some(mi), Some(ma)) = (min, max)
+            && mi <= ma
+            && mi >= f64::from(f32::MIN)
+            && ma <= f64::from(f32::MAX)
+            && mi.is_finite()
+            && ma.is_finite()
+        {
+            return "f32".to_string();
+        }
+        return "f64".to_string();
+    }
+    unreachable!("rust_numeric_type_for_schema only called for integer or number schema");
+}
+
 /// Returns the Rust type string for a schema (used for array item type and nested types). Unsupported types yield `serde_json::Value`.
 fn rust_type_for_item_schema(
     schema: &JsonSchema,
@@ -261,10 +330,10 @@ fn rust_type_for_item_schema(
         return "String".to_string();
     }
     if schema.is_integer() {
-        return "i64".to_string();
+        return rust_numeric_type_for_schema(schema);
     }
     if schema.is_number() {
-        return "f64".to_string();
+        return rust_numeric_type_for_schema(schema);
     }
     if schema.is_object_with_properties() {
         let name: String = if let Some(m) = key_to_name {
@@ -777,7 +846,6 @@ fn emit_enum_from_pairs(
 }
 
 /// Emit struct fields; when resolver is Some (dedupe mode), use canonical type names for nested objects.
-#[expect(clippy::too_many_lines)]
 fn emit_struct_fields_with_resolver(
     schema: &JsonSchema,
     out: &mut impl Write,
@@ -825,21 +893,12 @@ fn emit_struct_fields_with_resolver(
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
             }
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_integer() {
+        } else if prop_schema.is_integer() || prop_schema.is_number() {
+            let inner: String = rust_numeric_type_for_schema(prop_schema);
             let ty = if schema.is_required(key) {
-                "i64".to_string()
+                inner
             } else {
-                "Option<i64>".to_string()
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_number() {
-            let ty = if schema.is_required(key) {
-                "f64".to_string()
-            } else {
-                "Option<f64>".to_string()
+                format!("Option<{inner}>")
             };
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
@@ -935,21 +994,12 @@ fn emit_struct_fields(
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
             }
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_integer() {
+        } else if prop_schema.is_integer() || prop_schema.is_number() {
+            let inner: String = rust_numeric_type_for_schema(prop_schema);
             let ty = if schema.is_required(key) {
-                "i64".to_string()
+                inner
             } else {
-                "Option<i64>".to_string()
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_number() {
-            let ty = if schema.is_required(key) {
-                "f64".to_string()
-            } else {
-                "Option<f64>".to_string()
+                format!("Option<{inner}>")
             };
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
@@ -1379,6 +1429,107 @@ pub struct Root {
     }
 
     #[test]
+    fn integer_with_minimum_maximum_u8_range_emits_u8() {
+        let json = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub byte: u8,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_only_minimum_emits_i64_fallback() {
+        let json = r#"{"type":"object","properties":{"count":{"type":"integer","minimum":0}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub count: Option<i64>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_only_maximum_emits_i64_fallback() {
+        let json = r#"{"type":"object","properties":{"count":{"type":"integer","maximum":100}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub count: Option<i64>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn number_without_min_max_emits_f64_fallback() {
+        let json =
+            r#"{"type":"object","properties":{"value":{"type":"number"}},"required":["value"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub value: f64,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn number_with_minimum_maximum_f32_range_emits_f32() {
+        let json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub value: f32,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn array_required_string_property() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
@@ -1634,6 +1785,8 @@ pub struct Root {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
@@ -1644,6 +1797,8 @@ pub struct Root {
                 description: None,
                 enum_values: None,
                 items: None,
+                minimum: None,
+                maximum: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

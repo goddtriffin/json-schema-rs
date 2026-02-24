@@ -3,7 +3,7 @@
 //! Collects every validation error (no fail-fast) and returns them in a single result.
 
 mod error;
-pub use error::{ValidationError, ValidationResult};
+pub use error::{OrderedF64, ValidationError, ValidationResult};
 
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::JsonSchema;
@@ -91,6 +91,25 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                     errors.push(ValidationError::ExpectedInteger {
                         instance_path: instance_path.clone(),
                     });
+                } else if let Some(instance_f64) =
+                    instance.as_number().and_then(serde_json::Number::as_f64)
+                {
+                    if let Some(min) = schema.minimum
+                        && instance_f64 < min
+                    {
+                        errors.push(ValidationError::BelowMinimum {
+                            instance_path: instance_path.clone(),
+                            minimum: crate::validator::error::OrderedF64(min),
+                        });
+                    }
+                    if let Some(max) = schema.maximum
+                        && instance_f64 > max
+                    {
+                        errors.push(ValidationError::AboveMaximum {
+                            instance_path: instance_path.clone(),
+                            maximum: crate::validator::error::OrderedF64(max),
+                        });
+                    }
                 }
             }
             Some("number") => {
@@ -99,6 +118,25 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                     errors.push(ValidationError::ExpectedNumber {
                         instance_path: instance_path.clone(),
                     });
+                } else if let Some(instance_f64) =
+                    instance.as_number().and_then(serde_json::Number::as_f64)
+                {
+                    if let Some(min) = schema.minimum
+                        && instance_f64 < min
+                    {
+                        errors.push(ValidationError::BelowMinimum {
+                            instance_path: instance_path.clone(),
+                            minimum: crate::validator::error::OrderedF64(min),
+                        });
+                    }
+                    if let Some(max) = schema.maximum
+                        && instance_f64 > max
+                    {
+                        errors.push(ValidationError::AboveMaximum {
+                            instance_path: instance_path.clone(),
+                            maximum: crate::validator::error::OrderedF64(max),
+                        });
+                    }
                 }
             }
             Some("array") => {
@@ -156,7 +194,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{ValidationError, ValidationResult, validate};
+    use super::{OrderedF64, ValidationError, ValidationResult, validate};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
     use serde_json::json;
@@ -174,6 +212,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         }
     }
 
@@ -235,6 +275,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("not an object");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -260,6 +302,8 @@ mod tests {
                         description: Some("User name".to_string()),
                         enum_values: None,
                         items: None,
+                        minimum: None,
+                        maximum: None,
                     },
                 );
                 m
@@ -269,6 +313,8 @@ mod tests {
             description: Some("Root type".to_string()),
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let valid_instance = json!({"name": "Alice"});
         let actual_valid: ValidationResult = validate(&schema, &valid_instance);
@@ -288,6 +334,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -305,6 +353,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -322,6 +372,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -341,6 +393,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -360,6 +414,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -379,6 +435,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -398,6 +456,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -420,6 +480,8 @@ mod tests {
                 serde_json::Value::String("closed".to_string()),
             ]),
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("open");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -440,6 +502,8 @@ mod tests {
                 serde_json::Value::String("closed".to_string()),
             ]),
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("pending");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -462,6 +526,8 @@ mod tests {
                 serde_json::Value::String("b".to_string()),
             ]),
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("a");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -482,6 +548,8 @@ mod tests {
                 serde_json::Value::String("b".to_string()),
             ]),
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("c");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -501,6 +569,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -518,6 +588,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -535,6 +607,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(-1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -552,6 +626,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -571,6 +647,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("42");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -590,6 +668,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -609,6 +689,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -628,6 +710,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -647,6 +731,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -728,6 +814,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -745,6 +833,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -762,6 +852,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("3.14");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -781,6 +873,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -800,6 +894,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -819,6 +915,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!([1.0]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -838,12 +936,218 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root(),
         }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_minimum_maximum_valid_in_range() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("integer".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: Some(0.0),
+            maximum: Some(255.0),
+        };
+        let instance = json!(100);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_below_minimum() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("integer".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: Some(10.0),
+            maximum: Some(100.0),
+        };
+        let instance = json!(5);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
+            instance_path: JsonPointer::root(),
+            minimum: OrderedF64(10.0),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_above_maximum() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("integer".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: Some(0.0),
+            maximum: Some(10.0),
+        };
+        let instance = json!(20);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
+            instance_path: JsonPointer::root(),
+            maximum: OrderedF64(10.0),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_no_minimum_maximum_no_extra_errors() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("integer".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!(42);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn number_with_minimum_maximum_valid_in_range() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: Some(0.5),
+            maximum: Some(99.5),
+        };
+        let instance = json!(50.0);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn number_below_minimum() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: Some(1.0),
+            maximum: Some(10.0),
+        };
+        let instance = json!(0.5);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
+            instance_path: JsonPointer::root(),
+            minimum: OrderedF64(1.0),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn number_above_maximum() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("number".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: Some(0.0),
+            maximum: Some(1.0),
+        };
+        let instance = json!(2.5);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
+            instance_path: JsonPointer::root(),
+            maximum: OrderedF64(1.0),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_and_number_min_max_violations_collected_from_multiple_properties() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "low".to_string(),
+                    JsonSchema {
+                        type_: Some("integer".to_string()),
+                        properties: BTreeMap::new(),
+                        required: None,
+                        title: None,
+                        description: None,
+                        enum_values: None,
+                        items: None,
+                        minimum: Some(10.0),
+                        maximum: Some(100.0),
+                    },
+                );
+                m.insert(
+                    "high".to_string(),
+                    JsonSchema {
+                        type_: Some("integer".to_string()),
+                        properties: BTreeMap::new(),
+                        required: None,
+                        title: None,
+                        description: None,
+                        enum_values: None,
+                        items: None,
+                        minimum: Some(10.0),
+                        maximum: Some(100.0),
+                    },
+                );
+                m
+            },
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!({"low": 5, "high": 200});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::AboveMaximum {
+                instance_path: JsonPointer::root().push("high"),
+                maximum: OrderedF64(100.0),
+            },
+            ValidationError::BelowMinimum {
+                instance_path: JsonPointer::root().push("low"),
+                minimum: OrderedF64(10.0),
+            },
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -857,6 +1161,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -874,6 +1180,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -891,6 +1199,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -910,6 +1220,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -919,6 +1231,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(item_schema)),
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(["a", "b", "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -936,6 +1250,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -945,6 +1261,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(item_schema)),
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(["a", 42, "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1026,6 +1344,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1045,6 +1365,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1064,6 +1386,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1093,6 +1417,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         let instance = json!({"name": "Alice"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1124,6 +1450,8 @@ mod tests {
                     description: None,
                     enum_values: None,
                     items: None,
+                    minimum: None,
+                    maximum: None,
                 },
             );
             m
@@ -1233,6 +1561,8 @@ mod tests {
                     description: None,
                     enum_values: None,
                     items: None,
+                    minimum: None,
+                    maximum: None,
                 },
             );
             m
@@ -1273,6 +1603,8 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            minimum: None,
+            maximum: None,
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
@@ -1283,6 +1615,8 @@ mod tests {
                 description: None,
                 enum_values: None,
                 items: None,
+                minimum: None,
+                maximum: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;
