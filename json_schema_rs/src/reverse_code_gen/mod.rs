@@ -24,6 +24,7 @@ impl ToJsonSchema for String {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         }
     }
 }
@@ -37,6 +38,7 @@ impl ToJsonSchema for bool {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         }
     }
 }
@@ -49,6 +51,7 @@ fn integer_schema() -> JsonSchema {
         title: None,
         description: None,
         enum_values: None,
+        items: None,
     }
 }
 
@@ -108,6 +111,7 @@ fn number_schema() -> JsonSchema {
         title: None,
         description: None,
         enum_values: None,
+        items: None,
     }
 }
 
@@ -129,6 +133,20 @@ impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
     }
 }
 
+impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
+    fn json_schema() -> JsonSchema {
+        JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(T::json_schema())),
+        }
+    }
+}
+
 /// Minimal hand-written struct implementing [`ToJsonSchema`] (used to validate trait shape).
 #[derive(Debug, Clone)]
 pub struct HandWrittenExample;
@@ -142,6 +160,7 @@ impl ToJsonSchema for HandWrittenExample {
             title: Some("HandWrittenExample".to_string()),
             description: None,
             enum_values: None,
+            items: None,
         }
     }
 }
@@ -160,6 +179,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = String::json_schema();
         assert_eq!(expected, actual);
@@ -174,6 +194,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = bool::json_schema();
         assert_eq!(expected, actual);
@@ -195,6 +216,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = i64::json_schema();
         assert_eq!(expected, actual);
@@ -265,6 +287,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = f64::json_schema();
         assert_eq!(expected, actual);
@@ -293,8 +316,46 @@ mod tests {
             title: Some("HandWrittenExample".to_string()),
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = super::HandWrittenExample::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn vec_string_json_schema() {
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: std::collections::BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(String::json_schema())),
+        };
+        let actual: JsonSchema = Vec::<String>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn vec_i64_json_schema() {
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: std::collections::BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(i64::json_schema())),
+        };
+        let actual: JsonSchema = Vec::<i64>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn option_vec_string_json_schema() {
+        let expected: JsonSchema = Vec::<String>::json_schema();
+        let actual: JsonSchema = Option::<Vec<String>>::json_schema();
         assert_eq!(expected, actual);
     }
 }

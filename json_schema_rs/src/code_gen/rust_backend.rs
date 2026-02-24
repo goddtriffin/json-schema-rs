@@ -105,6 +105,7 @@ struct DedupeKey {
     required: Option<Vec<String>>,
     title: Option<String>,
     description: Option<String>,
+    items: Option<Box<DedupeKey>>,
 }
 
 impl PartialEq for DedupeKey {
@@ -114,6 +115,7 @@ impl PartialEq for DedupeKey {
             && self.required == other.required
             && self.title == other.title
             && self.description == other.description
+            && self.items == other.items
     }
 }
 
@@ -145,6 +147,7 @@ impl Ord for DedupeKey {
                 .then_with(|| compare_option_vec(self.required.as_ref(), other.required.as_ref()))
                 .then_with(|| self.title.cmp(&other.title))
                 .then_with(|| self.description.cmp(&other.description))
+                .then_with(|| self.items.cmp(&other.items))
         })
     }
 }
@@ -191,6 +194,11 @@ impl DedupeKey {
             .iter()
             .map(|(k, v)| (k.clone(), DedupeKey::from_schema(v, mode)))
             .collect();
+        let items: Option<Box<DedupeKey>> = schema
+            .items
+            .as_ref()
+            .filter(|_| schema.type_.as_deref() == Some("array"))
+            .map(|s| Box::new(DedupeKey::from_schema(s, mode)));
         DedupeKey {
             type_: schema.type_.clone(),
             properties,
@@ -200,6 +208,7 @@ impl DedupeKey {
                 DedupeMode::Full => schema.description.clone(),
                 DedupeMode::Functional | DedupeMode::Disabled => None,
             },
+            items,
         }
     }
 }
@@ -231,6 +240,58 @@ fn struct_name_from(
         })
 }
 
+/// Returns the Rust type string for a schema (used for array item type and nested types). Unsupported types yield `serde_json::Value`.
+fn rust_type_for_item_schema(
+    schema: &JsonSchema,
+    from_key: Option<&str>,
+    enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
+    key_to_name: Option<&BTreeMap<DedupeKey, String>>,
+    settings: &CodeGenSettings,
+    mode: DedupeMode,
+) -> String {
+    if let Some(values) = string_enum_values(schema)
+        && let Some(m) = enum_values_to_name
+        && let Some(name) = m.get(&values)
+    {
+        return name.clone();
+    }
+    if schema.is_string()
+        || (schema.enum_values.as_ref().is_some_and(|v| !v.is_empty()) && !schema.is_string_enum())
+    {
+        return "String".to_string();
+    }
+    if schema.is_integer() {
+        return "i64".to_string();
+    }
+    if schema.is_number() {
+        return "f64".to_string();
+    }
+    if schema.is_object_with_properties() {
+        let name: String = if let Some(m) = key_to_name {
+            let key = DedupeKey::from_schema(schema, mode);
+            m.get(&key).cloned().unwrap_or_else(|| {
+                struct_name_from(schema.title.as_deref(), from_key, false, settings)
+            })
+        } else {
+            struct_name_from(schema.title.as_deref(), from_key, false, settings)
+        };
+        return name;
+    }
+    if schema.is_array_with_items() {
+        let item_schema: &JsonSchema = schema.items.as_ref().expect("array with items").as_ref();
+        let inner: String = rust_type_for_item_schema(
+            item_schema,
+            from_key,
+            enum_values_to_name,
+            key_to_name,
+            settings,
+            mode,
+        );
+        return format!("Vec<{inner}>");
+    }
+    "serde_json::Value".to_string()
+}
+
 /// Collect all string enums from a schema (and nested properties). Dedupe by value list; first occurrence wins the name and description.
 fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToEmit> {
     let mut key_to_name_desc: BTreeMap<Vec<String>, (String, Option<String>)> = BTreeMap::new();
@@ -251,6 +312,25 @@ fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToE
             }
             if prop_schema.is_object_with_properties() {
                 stack.push(prop_schema);
+            }
+            if prop_schema.is_array_with_items()
+                && let Some(ref items) = prop_schema.items
+            {
+                if let Some(values) = string_enum_values(items) {
+                    key_to_name_desc.entry(values.clone()).or_insert_with(|| {
+                        let name: String =
+                            struct_name_from(items.title.as_deref(), Some(key), false, settings);
+                        let description: Option<String> = items
+                            .description
+                            .as_ref()
+                            .filter(|s| !s.trim().is_empty())
+                            .cloned();
+                        (name, description)
+                    });
+                }
+                if items.is_object_with_properties() {
+                    stack.push(items);
+                }
             }
         }
     }
@@ -295,6 +375,11 @@ fn collect_structs(
             stack.push((schema_node, from_key_opt, index + 1, is_root));
             if child.is_object_with_properties() {
                 stack.push((child, Some(key.clone()), 0, false));
+            } else if child.is_array_with_items()
+                && let Some(ref items) = child.items
+                && items.is_object_with_properties()
+            {
+                stack.push((items.as_ref().clone(), Some(key.clone()), 0, false));
             }
         } else {
             post_order.push((schema_node, from_key_opt, is_root));
@@ -342,7 +427,12 @@ fn collect_structs_all_schemas(
                 let child: JsonSchema = schema_node.properties.get(&key).unwrap().clone();
                 stack.push((schema_node, from_key_opt, index + 1, is_root));
                 if child.is_object_with_properties() {
-                    stack.push((child, Some(key), 0, false));
+                    stack.push((child, Some(key.clone()), 0, false));
+                } else if child.is_array_with_items()
+                    && let Some(ref items) = child.items
+                    && items.is_object_with_properties()
+                {
+                    stack.push((items.as_ref().clone(), Some(key.clone()), 0, false));
                 }
             } else {
                 post_order.push((schema_node, from_key_opt, is_root));
@@ -452,6 +542,17 @@ fn generate_rust_with_dedupe(
                         set.insert(cn.clone());
                     }
                 }
+                if prop_schema.is_array_with_items()
+                    && let Some(ref items) = prop_schema.items
+                    && items.is_object_with_properties()
+                {
+                    let item_key = DedupeKey::from_schema(items, mode);
+                    if let Some(cn) = key_to_canonical_name.get(&item_key)
+                        && shared_names.contains(cn)
+                    {
+                        set.insert(cn.clone());
+                    }
+                }
             }
             deps.insert(name.clone(), set);
         }
@@ -514,6 +615,17 @@ fn generate_rust_with_dedupe(
                             set.insert(cn.clone());
                         }
                     }
+                    if prop_schema.is_array_with_items()
+                        && let Some(ref items) = prop_schema.items
+                        && items.is_object_with_properties()
+                    {
+                        let item_key = DedupeKey::from_schema(items, mode);
+                        if let Some(cn) = key_to_canonical_name.get(&item_key)
+                            && (local_names.contains(cn) || shared_names.contains(cn))
+                        {
+                            set.insert(cn.clone());
+                        }
+                    }
                 }
                 deps.insert(name.clone(), set);
             }
@@ -526,6 +638,17 @@ fn generate_rust_with_dedupe(
                     if prop_schema.is_object_with_properties() {
                         let prop_key = DedupeKey::from_schema(prop_schema, mode);
                         if let Some(cn) = key_to_canonical_name.get(&prop_key)
+                            && shared_names.contains(cn)
+                        {
+                            used_shared.insert(cn.clone());
+                        }
+                    }
+                    if prop_schema.is_array_with_items()
+                        && let Some(ref items) = prop_schema.items
+                        && items.is_object_with_properties()
+                    {
+                        let item_key = DedupeKey::from_schema(items, mode);
+                        if let Some(cn) = key_to_canonical_name.get(&item_key)
                             && shared_names.contains(cn)
                         {
                             used_shared.insert(cn.clone());
@@ -654,6 +777,7 @@ fn emit_enum_from_pairs(
 }
 
 /// Emit struct fields; when resolver is Some (dedupe mode), use canonical type names for nested objects.
+#[expect(clippy::too_many_lines)]
 fn emit_struct_fields_with_resolver(
     schema: &JsonSchema,
     out: &mut impl Write,
@@ -662,6 +786,8 @@ fn emit_struct_fields_with_resolver(
     mode: DedupeMode,
     enum_values_to_name: Option<&EnumValuesToNameMap>,
 ) -> CodeGenResult<()> {
+    let enum_names_simple: Option<BTreeMap<Vec<String>, String>> =
+        enum_values_to_name.map(|m| m.iter().map(|(k, (n, _))| (k.clone(), n.clone())).collect());
     for (key, prop_schema) in &schema.properties {
         for line in doc_lines(prop_schema.description.as_deref()) {
             writeln!(out, "    /// {line}")?;
@@ -714,6 +840,29 @@ fn emit_struct_fields_with_resolver(
                 "f64".to_string()
             } else {
                 "Option<f64>".to_string()
+            };
+            if needs_rename {
+                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            writeln!(out, "    pub {field_name}: {ty},")?;
+        } else if prop_schema.is_array_with_items() {
+            let item_schema: &JsonSchema = prop_schema
+                .items
+                .as_ref()
+                .expect("array with items")
+                .as_ref();
+            let inner: String = rust_type_for_item_schema(
+                item_schema,
+                Some(key),
+                enum_names_simple.as_ref(),
+                key_to_name,
+                settings,
+                mode,
+            );
+            let ty = if schema.is_required(key) {
+                format!("Vec<{inner}>")
+            } else {
+                format!("Option<Vec<{inner}>>")
             };
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
@@ -801,6 +950,29 @@ fn emit_struct_fields(
                 "f64".to_string()
             } else {
                 "Option<f64>".to_string()
+            };
+            if needs_rename {
+                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            writeln!(out, "    pub {field_name}: {ty},")?;
+        } else if prop_schema.is_array_with_items() {
+            let item_schema: &JsonSchema = prop_schema
+                .items
+                .as_ref()
+                .expect("array with items")
+                .as_ref();
+            let inner: String = rust_type_for_item_schema(
+                item_schema,
+                Some(key),
+                enum_values_to_name,
+                None,
+                settings,
+                DedupeMode::Full,
+            );
+            let ty = if schema.is_required(key) {
+                format!("Vec<{inner}>")
+            } else {
+                format!("Option<Vec<{inner}>>")
             };
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
@@ -1207,6 +1379,112 @@ pub struct Root {
     }
 
     #[test]
+    fn array_required_string_property() {
+        let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub tags: Vec<String>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn array_optional_string_property() {
+        let json =
+            r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub tags: Option<Vec<String>>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn array_of_integers_property() {
+        let json = r#"{"type":"object","properties":{"counts":{"type":"array","items":{"type":"integer"}}},"required":["counts"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub counts: Vec<i64>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn array_of_objects_property() {
+        let json = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}}}},"required":["items"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Items {
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub items: Vec<Items>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn array_of_arrays_property() {
+        let json = r#"{"type":"object","properties":{"matrix":{"type":"array","items":{"type":"array","items":{"type":"string"}}}},"required":["matrix"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub matrix: Vec<Vec<String>>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn mixed_string_integer_float_properties() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"},"value":{"type":"number"}},"required":["id"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
@@ -1355,6 +1633,7 @@ pub struct Root {
             title: Some("Leaf".to_string()),
             description: None,
             enum_values: None,
+            items: None,
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
@@ -1364,6 +1643,7 @@ pub struct Root {
                 title: Some(format!("Level{i}")),
                 description: None,
                 enum_values: None,
+                items: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

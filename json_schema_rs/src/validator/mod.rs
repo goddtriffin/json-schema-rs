@@ -31,6 +31,7 @@ use serde_json::Value;
 /// let result = validate(&schema, &instance);
 /// assert!(result.is_ok());
 /// ```
+#[expect(clippy::too_many_lines)]
 pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
     let mut errors: Vec<ValidationError> = Vec::new();
     let mut stack: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
@@ -100,6 +101,24 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                     });
                 }
             }
+            Some("array") => {
+                let Some(arr) = instance.as_array() else {
+                    errors.push(ValidationError::ExpectedArray {
+                        instance_path: instance_path.clone(),
+                    });
+                    continue;
+                };
+                if let Some(ref item_schema) = schema.items {
+                    let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
+                    for (i, elem) in arr.iter().enumerate() {
+                        let path = instance_path.push(&i.to_string());
+                        pending.push((item_schema, elem, path));
+                    }
+                    for item in pending.into_iter().rev() {
+                        stack.push(item);
+                    }
+                }
+            }
             None | Some(_) => {
                 // Type absent or not enforced: validate required/properties when instance is object
                 if let Some(obj) = instance.as_object() {
@@ -154,6 +173,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         }
     }
 
@@ -214,6 +234,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!("not an object");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -238,6 +259,7 @@ mod tests {
                         title: None,
                         description: Some("User name".to_string()),
                         enum_values: None,
+                        items: None,
                     },
                 );
                 m
@@ -246,6 +268,7 @@ mod tests {
             title: None,
             description: Some("Root type".to_string()),
             enum_values: None,
+            items: None,
         };
         let valid_instance = json!({"name": "Alice"});
         let actual_valid: ValidationResult = validate(&schema, &valid_instance);
@@ -264,6 +287,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -280,6 +304,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!("");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -296,6 +321,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -314,6 +340,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -332,6 +359,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -350,6 +378,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -368,6 +397,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -389,6 +419,7 @@ mod tests {
                 serde_json::Value::String("open".to_string()),
                 serde_json::Value::String("closed".to_string()),
             ]),
+            items: None,
         };
         let instance = json!("open");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -408,6 +439,7 @@ mod tests {
                 serde_json::Value::String("open".to_string()),
                 serde_json::Value::String("closed".to_string()),
             ]),
+            items: None,
         };
         let instance = json!("pending");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -429,6 +461,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            items: None,
         };
         let instance = json!("a");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -448,6 +481,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            items: None,
         };
         let instance = json!("c");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -466,6 +500,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -482,6 +517,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -498,6 +534,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(-1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -514,6 +551,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -532,6 +570,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!("42");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -550,6 +589,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -568,6 +608,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -586,6 +627,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -604,6 +646,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -684,6 +727,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -700,6 +744,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -716,6 +761,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!("3.14");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -734,6 +780,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -752,6 +799,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -770,6 +818,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!([1.0]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -788,11 +837,119 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_array_valid_empty() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+        };
+        let instance = json!([]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_array_valid_non_empty() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+        };
+        let instance = json!([1, 2, 3]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_array_invalid_not_array() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+        };
+        let instance = json!("not an array");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedArray {
+            instance_path: JsonPointer::root(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_array_with_items_valid() {
+        let item_schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+        };
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(item_schema)),
+        };
+        let instance = json!(["a", "b", "c"]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_array_with_items_invalid_element() {
+        let item_schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+        };
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(item_schema)),
+        };
+        let instance = json!(["a", 42, "c"]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root().push("1"),
         }]);
         assert_eq!(expected, actual);
     }
@@ -868,6 +1025,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -886,6 +1044,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -904,6 +1063,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -932,6 +1092,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let instance = json!({"name": "Alice"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -962,6 +1123,7 @@ mod tests {
                     title: None,
                     description: None,
                     enum_values: None,
+                    items: None,
                 },
             );
             m
@@ -1070,6 +1232,7 @@ mod tests {
                     title: None,
                     description: None,
                     enum_values: None,
+                    items: None,
                 },
             );
             m
@@ -1109,6 +1272,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
@@ -1118,6 +1282,7 @@ mod tests {
                 title: None,
                 description: None,
                 enum_values: None,
+                items: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

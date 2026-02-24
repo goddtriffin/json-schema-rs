@@ -5,7 +5,7 @@ This document is the **design and architecture knowledge bank** for the json-sch
 - **One section per feature/keyword** (or sub-sections for related keywords). Research uses **only** the local specs under `specs/` (draft-00 through 2020-12)—download them with `make vendor_specs`; they are gitignored and not in the repo. No reliance on the web.
 - Related features are grouped (e.g. string constraints under Strings, number constraints under Numbers). Each section can have **Spec version quirks** sub-sections for differences between drafts; we implement per the latest supported spec and may expose version-based config where behavior differs.
 
-Implemented keywords: type (object, string, integer, number), properties, required, title, enum. Other keywords are documented in the sections below. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
+Implemented keywords: type (object, string, integer, number, array), properties, required, title, enum, items. Other keywords are documented in the sections below. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
 
 ---
 
@@ -119,6 +119,10 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Reverse codegen (every struct ToJsonSchema + attributes) | Y | Y | Y | Y | Y |
 | Round-trip (generate → Type::json_schema() → TryFrom → parse → equals) | — | Y | — | Y | Y |
 | description (struct, field, enum doc) | Y | Y | Y | Y | Y |
+| Required array property (e.g. Vec\<String\>) | Y | Y | Y | Y | Y |
+| Optional array property | Y | Y | Y | Y | Y |
+| Array of objects (nested struct) | Y | Y | Y | Y | Y |
+| Array of arrays (e.g. Vec\<Vec\<String\>\>) | Y | — | Y | Y | Y |
 
 ### Rust codegen: name sanitization
 
@@ -352,11 +356,23 @@ TODO.
 
 ## 6. Arrays
 
+### type: "array"
+
+When a schema has `"type": "array"`, the instance must be a JSON array. This meaning is **identical across all JSON Schema drafts** (draft-00 through 2020-12). We use it in codegen (as a property type: array with `items` yields `Vec<T>` or `Option<Vec<T>>`), in the validator (when `type_ == Some("array")`, we require `instance.is_array()` and optionally validate each element against `items`), and in reverse codegen (`Vec<T>` emits `type: "array"` and `items: T::json_schema()`). Array is supported only as a **property type**; root schema must still be `type: "object"` with `properties`.
+
+**Spec version quirks:** None for the meaning of type `"array"`. The only draft differences are in the **form** of the `type` keyword (string vs array), documented under **4. Type and value constraints → type**.
+
 ### items
 
-TODO.
+The `items` keyword defines the schema that all array elements must validate against when it is a **single schema** (object). We support only the single-schema form; we do not support `items` as an array of schemas (tuple typing) or draft 2020-12 `prefixItems` in this implementation.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We parse and store `items` as `Option<Box<JsonSchema>>`. When present with `type: "array"`, codegen emits `Vec<T>` (or `Option<Vec<T>>`) where `T` is the Rust type for the item schema (string → `String`, integer → `i64`, number → `f64`, object with properties → struct name, string enum → enum name, array with items → `Vec<Inner>`). Unsupported item types (e.g. `null`, `boolean` only) emit `Vec<serde_json::Value>`. The validator, when `type_ == "array"` and `items` is present, validates each array element against the item schema (iterative stack, no recursion). Reverse codegen: `Vec<T>::json_schema()` returns `type: "array"` and `items: Some(Box::new(T::json_schema()))`. Array constraints (minItems, maxItems, uniqueItems, prefixItems, contains, etc.) are not implemented; see the TODO subsections below.
+
+**Spec version quirks:**
+
+- **Draft-00, 01, 02:** `items` is not in the core spec in the same form; later drafts standardize it.
+- **Draft-03, 04:** `items` may be a schema (object) or an array of schemas. When it is an object, all elements must validate against that schema. We support only the single-schema form.
+- **Draft 2019-09, 2020-12:** `prefixItems` is an array of schemas for tuple typing; `items` applies to indices beyond the prefixItems length (or all indices if prefixItems is absent). We support only `items` as a single schema; we ignore `prefixItems`. For compatibility, a schema with only `items` (single schema) validates all array elements against that schema, matching draft-04 behavior.
 
 ### prefixItems
 

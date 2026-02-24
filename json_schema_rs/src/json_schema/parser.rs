@@ -69,6 +69,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             description: Option<String>,
             #[serde(default, rename = "enum")]
             enum_values: Option<Vec<serde_json::Value>>,
+            #[serde(default)]
+            items: Option<Box<JsonSchema>>,
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
@@ -78,6 +80,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             title: h.title,
             description: h.description,
             enum_values: h.enum_values,
+            items: h.items,
         })
     }
 }
@@ -156,6 +159,7 @@ mod tests {
                         title: None,
                         description: None,
                         enum_values: None,
+                        items: None,
                     },
                 );
                 m
@@ -164,6 +168,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -185,6 +190,7 @@ mod tests {
                         title: None,
                         description: None,
                         enum_values: None,
+                        items: None,
                     },
                 );
                 m.insert(
@@ -196,6 +202,7 @@ mod tests {
                         title: None,
                         description: None,
                         enum_values: None,
+                        items: None,
                     },
                 );
                 m
@@ -204,6 +211,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -220,6 +228,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -235,9 +244,20 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deserialize_array_with_items() {
+        let json = r#"{"type":"array","items":{"type":"string"}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let actual: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(actual.type_.as_deref(), Some("array"));
+        let items: &JsonSchema = actual.items.as_ref().expect("items present").as_ref();
+        assert_eq!(items.type_.as_deref(), Some("string"));
     }
 
     #[test]
@@ -305,6 +325,16 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"x":{"enum":["a","b"]}}}"#;
+        let result: Result<_, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_strict_accepts_items_key() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"array","items":{"type":"string"}}"#;
         let result: Result<_, _> = parse_schema(json, &settings);
         assert!(result.is_ok());
     }

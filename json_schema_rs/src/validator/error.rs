@@ -26,6 +26,11 @@ pub enum ValidationError {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
     },
+    /// Schema had `type: "array"` but the instance was not an array.
+    ExpectedArray {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+    },
     /// A property listed in `required` was absent.
     MissingRequired {
         /// JSON Pointer to the object (parent of the missing property).
@@ -50,6 +55,7 @@ impl ValidationError {
             | ValidationError::ExpectedString { instance_path }
             | ValidationError::ExpectedInteger { instance_path }
             | ValidationError::ExpectedNumber { instance_path }
+            | ValidationError::ExpectedArray { instance_path }
             | ValidationError::MissingRequired { instance_path, .. }
             | ValidationError::NotInEnum { instance_path } => instance_path,
         }
@@ -71,6 +77,9 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::ExpectedNumber { .. } => {
                 write!(f, "{location}: expected number")
+            }
+            ValidationError::ExpectedArray { .. } => {
+                write!(f, "{location}: expected array")
             }
             ValidationError::MissingRequired { property, .. } => {
                 write!(f, "{location}: missing required property \"{property}\"")

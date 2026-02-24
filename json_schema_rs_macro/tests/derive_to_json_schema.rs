@@ -40,6 +40,7 @@ fn derive_root_json_schema() {
         title: Some("Root".to_string()),
         description: None,
         enum_values: None,
+        items: None,
     };
     let actual: JsonSchema = Root::json_schema();
     assert_eq!(expected, actual);
@@ -59,6 +60,7 @@ fn derive_address_json_schema() {
         title: None,
         description: None,
         enum_values: None,
+        items: None,
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
@@ -133,4 +135,25 @@ fn derive_round_trip_with_description() {
     let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
     let parsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
     assert_eq!(schema, parsed);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithVecField {
+    tags: Vec<String>,
+    counts: Option<Vec<i64>>,
+}
+
+#[test]
+fn derive_struct_with_vec_field_emits_array_schema() {
+    let schema: JsonSchema = WithVecField::json_schema();
+    let tags_schema: &JsonSchema = schema.properties.get("tags").expect("tags property");
+    assert_eq!(tags_schema.type_.as_deref(), Some("array"));
+    let items: &JsonSchema = tags_schema.items.as_ref().expect("items").as_ref();
+    assert_eq!(items.type_.as_deref(), Some("string"));
+
+    let counts_schema: &JsonSchema = schema.properties.get("counts").expect("counts property");
+    assert_eq!(counts_schema.type_.as_deref(), Some("array"));
+    let count_items: &JsonSchema = counts_schema.items.as_ref().expect("items").as_ref();
+    assert_eq!(count_items.type_.as_deref(), Some("integer"));
 }

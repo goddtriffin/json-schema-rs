@@ -36,6 +36,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) description: Option<String>,
     #[serde(default, rename = "enum")]
     pub(crate) enum_values: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub(crate) items: Option<Box<DenyUnknownFieldsJsonSchema>>,
 }
 
 /// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
@@ -46,6 +48,9 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         .into_iter()
         .map(|(k, v)| (k, deny_unknown_fields_helper_to_schema(v)))
         .collect();
+    let items: Option<Box<JsonSchema>> = h
+        .items
+        .map(|b| Box::new(deny_unknown_fields_helper_to_schema(*b)));
     JsonSchema {
         type_: h.type_,
         properties,
@@ -53,6 +58,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         title: h.title,
         description: h.description,
         enum_values: h.enum_values,
+        items,
     }
 }
 
@@ -82,6 +88,10 @@ pub struct JsonSchema {
     /// Allowed values for the instance (JSON Schema `enum`). When present and non-empty, instance must equal one of these. Codegen uses only string-only enums.
     #[serde(rename = "enum", skip_serializing_if = "skip_enum_values")]
     pub enum_values: Option<Vec<serde_json::Value>>,
+
+    /// Schema for all array elements (when type is "array"). Single-schema form only; tuple-typing (array of schemas) not supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<JsonSchema>>,
 }
 
 impl JsonSchema {
@@ -107,6 +117,18 @@ impl JsonSchema {
     #[must_use]
     pub(crate) fn is_number(&self) -> bool {
         self.type_.as_deref() == Some("number")
+    }
+
+    /// Returns true if this schema is type "array".
+    #[must_use]
+    pub(crate) fn is_array(&self) -> bool {
+        self.type_.as_deref() == Some("array")
+    }
+
+    /// Returns true if this schema is type "array" and has an items schema (single-schema form).
+    #[must_use]
+    pub(crate) fn is_array_with_items(&self) -> bool {
+        self.is_array() && self.items.is_some()
     }
 
     /// Returns true if the given property name is required at this object level.
@@ -173,6 +195,7 @@ mod tests {
             title: Some("Root".to_string()),
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"object","title":"Root"}"#;
@@ -188,6 +211,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"string\"}";
@@ -270,6 +294,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
@@ -311,6 +336,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"number\"}";
@@ -326,6 +352,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: None,
+            items: None,
         };
         assert!(!no_enum.is_string_enum());
         let empty_enum: JsonSchema = JsonSchema {
@@ -335,6 +362,7 @@ mod tests {
             title: None,
             description: None,
             enum_values: Some(vec![]),
+            items: None,
         };
         assert!(!empty_enum.is_string_enum());
         let string_enum: JsonSchema = JsonSchema {
@@ -347,6 +375,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            items: None,
         };
         assert!(string_enum.is_string_enum());
         let mixed_enum: JsonSchema = JsonSchema {
@@ -359,7 +388,87 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::Number(42_i64.into()),
             ]),
+            items: None,
         };
         assert!(!mixed_enum.is_string_enum());
+    }
+
+    #[test]
+    fn is_array() {
+        let mut s = JsonSchema::default();
+        let actual = [
+            s.is_array(),
+            {
+                s.type_ = Some("string".to_string());
+                s.is_array()
+            },
+            {
+                s.type_ = Some("array".to_string());
+                s.is_array()
+            },
+        ];
+        let expected = [false, false, true];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn is_array_with_items() {
+        let mut s = JsonSchema::default();
+        let actual = [
+            s.is_array_with_items(),
+            {
+                s.type_ = Some("array".to_string());
+                s.is_array_with_items()
+            },
+            {
+                s.items = Some(Box::new(JsonSchema {
+                    type_: Some("string".to_string()),
+                    properties: BTreeMap::new(),
+                    required: None,
+                    title: None,
+                    description: None,
+                    enum_values: None,
+                    items: None,
+                }));
+                s.is_array_with_items()
+            },
+        ];
+        let expected = [false, false, true];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn try_from_schema_array_with_items_to_string() {
+        let item_schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+        };
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(item_schema)),
+        };
+        let actual: String = schema.try_into().expect("serialize");
+        let expected = r#"{"type":"array","items":{"type":"string"}}"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn round_trip_parse_serialize_parse_compare_with_items() {
+        let json = r#"{"type":"array","items":{"type":"string"}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse again");
+        assert_eq!(parsed, reparsed);
     }
 }
