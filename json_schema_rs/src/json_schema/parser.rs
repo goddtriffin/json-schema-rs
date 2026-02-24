@@ -65,6 +65,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             required: Option<Vec<String>>,
             #[serde(default)]
             title: Option<String>,
+            #[serde(default)]
+            description: Option<String>,
             #[serde(default, rename = "enum")]
             enum_values: Option<Vec<serde_json::Value>>,
         }
@@ -74,6 +76,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             properties: h.properties.unwrap_or_default(),
             required: h.required,
             title: h.title,
+            description: h.description,
             enum_values: h.enum_values,
         })
     }
@@ -151,6 +154,7 @@ mod tests {
                         properties: std::collections::BTreeMap::new(),
                         required: None,
                         title: None,
+                        description: None,
                         enum_values: None,
                     },
                 );
@@ -158,6 +162,7 @@ mod tests {
             },
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
@@ -178,6 +183,7 @@ mod tests {
                         properties: std::collections::BTreeMap::new(),
                         required: None,
                         title: None,
+                        description: None,
                         enum_values: None,
                     },
                 );
@@ -188,6 +194,7 @@ mod tests {
                         properties: std::collections::BTreeMap::new(),
                         required: None,
                         title: None,
+                        description: None,
                         enum_values: None,
                     },
                 );
@@ -195,6 +202,7 @@ mod tests {
             },
             required: Some(vec!["x".to_string()]),
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
@@ -210,6 +218,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
@@ -224,6 +233,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");

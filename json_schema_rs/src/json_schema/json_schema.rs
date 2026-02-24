@@ -32,6 +32,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) required: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) title: Option<String>,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
     #[serde(default, rename = "enum")]
     pub(crate) enum_values: Option<Vec<serde_json::Value>>,
 }
@@ -49,6 +51,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         properties,
         required: h.required,
         title: h.title,
+        description: h.description,
         enum_values: h.enum_values,
     }
 }
@@ -71,6 +74,10 @@ pub struct JsonSchema {
     /// Used for struct naming when present (`PascalCase`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+
+    /// Human-readable description. Codegen emits it as Rust doc comments (struct, enum, or field).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 
     /// Allowed values for the instance (JSON Schema `enum`). When present and non-empty, instance must equal one of these. Codegen uses only string-only enums.
     #[serde(rename = "enum", skip_serializing_if = "skip_enum_values")]
@@ -164,6 +171,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: Some("Root".to_string()),
+            description: None,
             enum_values: None,
         };
         let actual: String = schema.try_into().expect("serialize");
@@ -178,6 +186,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
@@ -259,6 +268,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
@@ -299,6 +309,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
@@ -313,6 +324,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         assert!(!no_enum.is_string_enum());
@@ -321,6 +333,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: Some(vec![]),
         };
         assert!(!empty_enum.is_string_enum());
@@ -329,6 +342,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -340,6 +354,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::Number(42_i64.into()),

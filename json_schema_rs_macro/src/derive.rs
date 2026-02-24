@@ -8,6 +8,15 @@ use syn::{
     Type, Variant,
 };
 
+/// Parser for doc attribute value: `= "string"` or just `"string"`.
+fn parse_doc_value(input: syn::parse::ParseStream) -> SynResult<String> {
+    if input.peek(Token![=]) {
+        input.parse::<Token![=]>()?;
+    }
+    let lit: LitStr = input.parse()?;
+    Ok(lit.value())
+}
+
 /// Extracts `title = "..."` from `#[to_json_schema(...)]` container attribute.
 fn container_title(attrs: &[Attribute]) -> SynResult<Option<String>> {
     for attr in attrs {
@@ -33,6 +42,65 @@ fn container_title(attrs: &[Attribute]) -> SynResult<Option<String>> {
         }
     }
     Ok(None)
+}
+
+/// Extracts `description = "..."` from `#[to_json_schema(...)]` container attribute, or from `///` doc comments (joined with newline). Attribute takes precedence.
+fn container_description(attrs: &[Attribute]) -> SynResult<Option<String>> {
+    let mut from_attr: Option<String> = None;
+    let mut doc_lines: Vec<String> = Vec::new();
+    for attr in attrs {
+        if attr.path().is_ident("to_json_schema") {
+            let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+            let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+            for meta in metas {
+                let Meta::NameValue(nv) = meta else {
+                    continue;
+                };
+                if !nv.path.is_ident("description") {
+                    continue;
+                }
+                let syn::Expr::Lit(expr_lit) = nv.value else {
+                    continue;
+                };
+                let syn::Lit::Str(s) = expr_lit.lit else {
+                    continue;
+                };
+                from_attr = Some(s.value());
+                break;
+            }
+        } else if attr.path().is_ident("doc")
+            && let Ok(s) = attr.parse_args_with(parse_doc_value)
+        {
+            doc_lines.push(s.trim().to_string());
+        }
+    }
+    if let Some(s) = from_attr {
+        return Ok(Some(s));
+    }
+    if doc_lines.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(doc_lines.join("\n")))
+    }
+}
+
+/// Extracts description from a field's `///` doc comments (joined with newline).
+#[expect(clippy::unnecessary_wraps)]
+fn field_description(field: &Field) -> SynResult<Option<String>> {
+    let mut doc_lines: Vec<String> = Vec::new();
+    for attr in &field.attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+        if let Ok(s) = attr.parse_args_with(parse_doc_value) {
+            doc_lines.push(s.trim().to_string());
+        }
+    }
+    if doc_lines.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(doc_lines.join("\n")))
+    }
 }
 
 /// Returns the JSON property key for a field: serde rename or field name.
@@ -159,6 +227,15 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         })
         .unwrap_or(quote! { None });
 
+    let description: Option<String> = container_description(&input.attrs)?;
+    let description_expr = description
+        .as_ref()
+        .map(|d| {
+            let lit = LitStr::new(d, proc_macro2::Span::call_site());
+            quote! { Some(#lit.to_string()) }
+        })
+        .unwrap_or(quote! { None });
+
     let mut property_inserts: Vec<TokenStream2> = Vec::new();
     let mut required_keys: Vec<String> = Vec::new();
 
@@ -175,8 +252,19 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         if !is_opt {
             required_keys.push(key);
         }
+        let field_desc: Option<String> = field_description(field)?;
+        let field_desc_expr = field_desc
+            .as_ref()
+            .map(|d| {
+                let lit = LitStr::new(d, span);
+                quote! { Some(#lit.to_string()) }
+            })
+            .unwrap_or(quote! { None });
         property_inserts.push(quote! {
-            properties.insert(#key_lit.to_string(), <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema());
+            properties.insert(#key_lit.to_string(), ::json_schema_rs::JsonSchema {
+                description: #field_desc_expr,
+                ..<#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema()
+            });
         });
     }
 
@@ -203,6 +291,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     properties,
                     required: #required_expr,
                     title: #title_expr,
+                    description: #description_expr,
                     enum_values: None,
                 }
             }
@@ -221,6 +310,15 @@ fn expand_enum_to_json_schema(
         .as_ref()
         .map(|t| {
             let lit = LitStr::new(t, proc_macro2::Span::call_site());
+            quote! { Some(#lit.to_string()) }
+        })
+        .unwrap_or(quote! { None });
+
+    let description: Option<String> = container_description(attrs)?;
+    let description_expr = description
+        .as_ref()
+        .map(|d| {
+            let lit = LitStr::new(d, proc_macro2::Span::call_site());
             quote! { Some(#lit.to_string()) }
         })
         .unwrap_or(quote! { None });
@@ -251,6 +349,7 @@ fn expand_enum_to_json_schema(
                     properties: ::std::collections::BTreeMap::new(),
                     required: None,
                     title: #title_expr,
+                    description: #description_expr,
                     enum_values: Some(enum_values),
                 }
             }

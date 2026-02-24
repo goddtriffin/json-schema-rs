@@ -52,10 +52,30 @@ struct StructToEmit {
     schema: JsonSchema,
 }
 
-/// One enum to emit: name and sorted, deduplicated string values (for variant naming and serde).
+/// Map from enum value list to (name, description) for dedupe path. Used to resolve enum type names and carry description from first occurrence.
+type EnumValuesToNameMap = BTreeMap<Vec<String>, (String, Option<String>)>;
+
+/// One enum to emit: name, sorted deduplicated string values, and optional description (from first property schema that contributed this enum).
 struct EnumToEmit {
     name: String,
     values: Vec<String>,
+    description: Option<String>,
+}
+
+/// Returns doc comment lines for emission: empty if description is None or whitespace-only; else one line per non-empty trimmed line (no blank lines).
+fn doc_lines(s: Option<&str>) -> Vec<String> {
+    let Some(trimmed) = s.map(str::trim) else {
+        return Vec::new();
+    };
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    trimmed
+        .split('\n')
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 /// Returns sorted, deduplicated string values if the schema is a string enum; otherwise None.
@@ -84,6 +104,7 @@ struct DedupeKey {
     properties: BTreeMap<String, DedupeKey>,
     required: Option<Vec<String>>,
     title: Option<String>,
+    description: Option<String>,
 }
 
 impl PartialEq for DedupeKey {
@@ -92,6 +113,7 @@ impl PartialEq for DedupeKey {
             && self.properties == other.properties
             && self.required == other.required
             && self.title == other.title
+            && self.description == other.description
     }
 }
 
@@ -122,6 +144,7 @@ impl Ord for DedupeKey {
                 })
                 .then_with(|| compare_option_vec(self.required.as_ref(), other.required.as_ref()))
                 .then_with(|| self.title.cmp(&other.title))
+                .then_with(|| self.description.cmp(&other.description))
         })
     }
 }
@@ -137,11 +160,15 @@ fn compare_option_vec(a: Option<&Vec<String>>, b: Option<&Vec<String>>) -> Order
 
 /// Emits `#[derive(..., ToJsonSchema)]` and optional `#[to_json_schema(title = "...")]` for a struct.
 /// Uses `json_schema_rs_macro::ToJsonSchema` so generated code compiles when the macro crate is a dependency.
+/// Emits struct doc comment from schema.description when non-empty.
 fn emit_struct_derive_and_attrs(
     out: &mut impl Write,
     name: &str,
     schema: &JsonSchema,
 ) -> CodeGenResult<()> {
+    for line in doc_lines(schema.description.as_deref()) {
+        writeln!(out, "/// {line}")?;
+    }
     writeln!(
         out,
         "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
@@ -158,7 +185,6 @@ fn emit_struct_derive_and_attrs(
 }
 
 impl DedupeKey {
-    #[expect(clippy::only_used_in_recursion)]
     fn from_schema(schema: &JsonSchema, mode: DedupeMode) -> Self {
         let properties: BTreeMap<String, DedupeKey> = schema
             .properties
@@ -170,6 +196,10 @@ impl DedupeKey {
             properties,
             required: schema.required.clone(),
             title: schema.title.clone(),
+            description: match mode {
+                DedupeMode::Full => schema.description.clone(),
+                DedupeMode::Functional | DedupeMode::Disabled => None,
+            },
         }
     }
 }
@@ -201,15 +231,22 @@ fn struct_name_from(
         })
 }
 
-/// Collect all string enums from a schema (and nested properties). Dedupe by value list; first occurrence wins the name.
+/// Collect all string enums from a schema (and nested properties). Dedupe by value list; first occurrence wins the name and description.
 fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToEmit> {
-    let mut key_to_name: BTreeMap<Vec<String>, String> = BTreeMap::new();
+    let mut key_to_name_desc: BTreeMap<Vec<String>, (String, Option<String>)> = BTreeMap::new();
     let mut stack: Vec<&JsonSchema> = vec![schema];
     while let Some(node) = stack.pop() {
         for (key, prop_schema) in &node.properties {
             if let Some(values) = string_enum_values(prop_schema) {
-                key_to_name.entry(values.clone()).or_insert_with(|| {
-                    struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings)
+                key_to_name_desc.entry(values.clone()).or_insert_with(|| {
+                    let name: String =
+                        struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings);
+                    let description: Option<String> = prop_schema
+                        .description
+                        .as_ref()
+                        .filter(|s| !s.trim().is_empty())
+                        .cloned();
+                    (name, description)
                 });
             }
             if prop_schema.is_object_with_properties() {
@@ -217,9 +254,13 @@ fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToE
             }
         }
     }
-    key_to_name
+    key_to_name_desc
         .into_iter()
-        .map(|(values, name)| EnumToEmit { name, values })
+        .map(|(values, (name, description))| EnumToEmit {
+            name,
+            values,
+            description,
+        })
         .collect()
 }
 
@@ -329,19 +370,20 @@ fn generate_rust_with_dedupe(
 ) -> CodeGenResult<GenerateRustOutput> {
     let mode: DedupeMode = settings.dedupe_mode;
 
-    let mut enum_values_to_name: BTreeMap<Vec<String>, String> = BTreeMap::new();
+    let mut enum_values_to_name: EnumValuesToNameMap = BTreeMap::new();
     for schema in schemas {
         for e in collect_enums(schema, settings) {
             enum_values_to_name
                 .entry(e.values.clone())
-                .or_insert(e.name);
+                .or_insert_with(|| (e.name.clone(), e.description.clone()));
         }
     }
     let all_enums: Vec<EnumToEmit> = enum_values_to_name
         .iter()
-        .map(|(values, name)| EnumToEmit {
+        .map(|(values, (name, description))| EnumToEmit {
             name: name.clone(),
             values: values.clone(),
+            description: description.clone(),
         })
         .collect();
 
@@ -429,7 +471,7 @@ fn generate_rust_with_dedupe(
         for e in &all_enums {
             let pairs: Vec<(String, String)> =
                 enum_variant_names_with_collision_resolution(&e.values);
-            emit_enum_from_pairs(&mut out, &e.name, &pairs)?;
+            emit_enum_from_pairs(&mut out, &e.name, &pairs, e.description.as_deref())?;
         }
         for (name, schema) in &shared_structs {
             emit_struct_derive_and_attrs(&mut out, name, schema)?;
@@ -490,7 +532,7 @@ fn generate_rust_with_dedupe(
                         }
                     }
                     if let Some(values) = string_enum_values(prop_schema)
-                        && let Some(enum_name) = enum_values_to_name.get(&values)
+                        && let Some((enum_name, _)) = enum_values_to_name.get(&values)
                     {
                         used_shared.insert(enum_name.clone());
                     }
@@ -584,11 +626,16 @@ fn visit_topo(
 }
 
 /// Emit a single Rust enum (unit variants). Pairs are (`json_value`, `variant_name`); serde rename when they differ.
+/// Emits enum doc comment from description when present.
 fn emit_enum_from_pairs(
     out: &mut impl Write,
     name: &str,
     pairs: &[(String, String)],
+    description: Option<&str>,
 ) -> CodeGenResult<()> {
+    for line in doc_lines(description) {
+        writeln!(out, "/// {line}")?;
+    }
     writeln!(
         out,
         "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
@@ -613,15 +660,18 @@ fn emit_struct_fields_with_resolver(
     settings: &CodeGenSettings,
     key_to_name: Option<&BTreeMap<DedupeKey, String>>,
     mode: DedupeMode,
-    enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
+    enum_values_to_name: Option<&EnumValuesToNameMap>,
 ) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
+        for line in doc_lines(prop_schema.description.as_deref()) {
+            writeln!(out, "    /// {line}")?;
+        }
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
         if let Some(values) = string_enum_values(prop_schema) {
             let enum_name: &String = enum_values_to_name
-                .and_then(|m| m.get(&values))
+                .and_then(|m| m.get(&values).map(|(n, _)| n))
                 .expect("enum name for string enum");
             let ty = if schema.is_required(key) {
                 enum_name.clone()
@@ -700,6 +750,9 @@ fn emit_struct_fields(
     enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
 ) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
+        for line in doc_lines(prop_schema.description.as_deref()) {
+            writeln!(out, "    /// {line}")?;
+        }
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
@@ -800,7 +853,7 @@ fn emit_rust(
 
     for e in &enums {
         let pairs: Vec<(String, String)> = enum_variant_names_with_collision_resolution(&e.values);
-        emit_enum_from_pairs(out, &e.name, &pairs)?;
+        emit_enum_from_pairs(out, &e.name, &pairs, e.description.as_deref())?;
     }
 
     for st in &structs {
@@ -1300,6 +1353,7 @@ pub struct Root {
             },
             required: None,
             title: Some("Leaf".to_string()),
+            description: None,
             enum_values: None,
         };
         for i in (0..DEPTH).rev() {
@@ -1308,6 +1362,7 @@ pub struct Root {
                 properties: std::collections::BTreeMap::new(),
                 required: None,
                 title: Some(format!("Level{i}")),
+                description: None,
                 enum_values: None,
             };
             wrap.properties.insert("child".to_string(), inner);
@@ -1517,6 +1572,188 @@ pub struct Root {
             shared_count + per_count >= 1,
             "at least one struct (Root in per_schema, nested in shared when deduped)"
         );
+    }
+
+    #[test]
+    fn description_root_struct_single_line() {
+        let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"A root type"}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+/// A root type
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub id: Option<String>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn description_root_struct_multi_line() {
+        let json = r#"{"type":"object","properties":{"x":{"type":"string"}},"description":"Line one\nLine two"}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+/// Line one
+/// Line two
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub x: Option<String>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn description_empty_or_whitespace_emits_no_doc() {
+        let json_empty =
+            r#"{"type":"object","properties":{"a":{"type":"string"}},"description":""}"#;
+        let schema_empty: JsonSchema = serde_json::from_str(json_empty).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema_empty], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub a: Option<String>,
+}
+
+";
+        assert_eq!(expected, actual);
+
+        let json_ws =
+            r#"{"type":"object","properties":{"a":{"type":"string"}},"description":"   \n  "}"#;
+        let schema_ws: JsonSchema = serde_json::from_str(json_ws).unwrap();
+        let output_ws: super::GenerateRustOutput = generate_rust(&[schema_ws], &settings).unwrap();
+        let actual_ws = String::from_utf8(output_ws.per_schema[0].clone()).unwrap();
+        assert_eq!(expected, actual_ws);
+    }
+
+    #[test]
+    fn description_nested_object_struct_doc() {
+        let json = r#"{"type":"object","properties":{"nested":{"type":"object","description":"Inner type","properties":{"v":{"type":"string"}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+/// Inner type
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Nested {
+    pub v: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    /// Inner type
+    pub nested: Option<Nested>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn description_property_field_doc() {
+        let json = r#"{"type":"object","properties":{"name":{"type":"string","description":"User full name"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    /// User full name
+    pub name: Option<String>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn description_enum_property_emits_enum_doc() {
+        let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"],"description":"Issue status"}},"required":["status"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+/// Issue status
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Status {
+    #[serde(rename = "closed")]
+    Closed,
+    #[serde(rename = "open")]
+    Open,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    /// Issue status
+    pub status: Status,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dedupe_functional_same_shape_different_description_one_struct() {
+        let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"First"}"#;
+        let j2 =
+            r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"Second"}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Functional)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected_shared_some = true;
+        let actual_shared_some = output.shared.is_some();
+        assert_eq!(expected_shared_some, actual_shared_some);
+    }
+
+    #[test]
+    fn dedupe_full_same_shape_different_description_two_structs() {
+        let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"First"}"#;
+        let j2 =
+            r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"Second"}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Full)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected_shared_some = false;
+        let actual_shared_some = output.shared.is_some();
+        assert_eq!(expected_shared_some, actual_shared_some);
+        assert_eq!(2, output.per_schema.len());
     }
 
     #[test]

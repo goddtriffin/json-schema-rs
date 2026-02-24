@@ -118,6 +118,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Non-string enum → String fallback | Y | — | — | — | — |
 | Reverse codegen (every struct ToJsonSchema + attributes) | Y | Y | Y | Y | Y |
 | Round-trip (generate → Type::json_schema() → TryFrom → parse → equals) | — | Y | — | Y | Y |
+| description (struct, field, enum doc) | Y | Y | Y | Y | Y |
 
 ### Rust codegen: name sanitization
 
@@ -493,7 +494,7 @@ We use `title` for struct naming (PascalCase) when **model name source** is defa
 
 ### description
 
-TODO. (Planned: empty or whitespace-only `description` treated as absent; no blank doc lines. Multi-line: one doc line per line of text. Placement: object schema `description` → struct doc; enum schema → enum doc; property schema → field doc.)
+**Our implementation:** We treat empty or whitespace-only `description` as absent (no doc lines emitted). Multi-line description: one `///` doc line per non-empty trimmed line; no blank doc lines. **Placement:** object schema `description` → struct doc; enum schema (string enum) `description` → enum doc; property schema `description` → field doc. **Dedupe:** Functional mode excludes `description` from the dedupe key (same shape with different description yields one struct); Full mode includes it (different descriptions yield separate structs). **Reverse codegen:** Container `#[to_json_schema(description = "...")]` sets schema `description`; the macro also attempts to read `///` doc comments on struct/enum for description. Per-field description is merged into each property's schema (from attribute or doc when supported).
 
 **Spec version quirks:** (placeholder or blank)
 

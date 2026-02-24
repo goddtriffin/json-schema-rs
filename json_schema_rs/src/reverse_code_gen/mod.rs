@@ -22,6 +22,7 @@ impl ToJsonSchema for String {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         }
     }
@@ -34,6 +35,7 @@ impl ToJsonSchema for bool {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         }
     }
@@ -45,6 +47,7 @@ fn integer_schema() -> JsonSchema {
         properties: BTreeMap::new(),
         required: None,
         title: None,
+        description: None,
         enum_values: None,
     }
 }
@@ -103,6 +106,7 @@ fn number_schema() -> JsonSchema {
         properties: BTreeMap::new(),
         required: None,
         title: None,
+        description: None,
         enum_values: None,
     }
 }
@@ -136,6 +140,7 @@ impl ToJsonSchema for HandWrittenExample {
             properties: BTreeMap::new(),
             required: None,
             title: Some("HandWrittenExample".to_string()),
+            description: None,
             enum_values: None,
         }
     }
@@ -153,6 +158,7 @@ mod tests {
             properties: std::collections::BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = String::json_schema();
@@ -166,6 +172,7 @@ mod tests {
             properties: std::collections::BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = bool::json_schema();
@@ -186,6 +193,7 @@ mod tests {
             properties: std::collections::BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = i64::json_schema();
@@ -255,6 +263,7 @@ mod tests {
             properties: std::collections::BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = f64::json_schema();
@@ -282,6 +291,7 @@ mod tests {
             properties: std::collections::BTreeMap::new(),
             required: None,
             title: Some("HandWrittenExample".to_string()),
+            description: None,
             enum_values: None,
         };
         let actual: JsonSchema = super::HandWrittenExample::json_schema();

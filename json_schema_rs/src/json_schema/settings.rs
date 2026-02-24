@@ -9,7 +9,7 @@
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonSchemaSettings {
     /// When `true`, schema ingestion fails if any schema object contains keys
-    /// other than the known keywords we model (`type`, `properties`, `required`, `title`).
+    /// other than the known keywords we model (`type`, `properties`, `required`, `title`, `description`).
     pub disallow_unknown_fields: bool,
 }
 

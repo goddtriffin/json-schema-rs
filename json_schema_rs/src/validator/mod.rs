@@ -152,6 +152,7 @@ mod tests {
             properties,
             required: Some(required.into_iter().map(String::from).collect()),
             title: None,
+            description: None,
             enum_values: None,
         }
     }
@@ -211,6 +212,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!("not an object");
@@ -222,12 +224,45 @@ mod tests {
     }
 
     #[test]
+    fn schema_with_description_validates_as_before() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "name".to_string(),
+                    JsonSchema {
+                        type_: Some("string".to_string()),
+                        properties: BTreeMap::new(),
+                        required: None,
+                        title: None,
+                        description: Some("User name".to_string()),
+                        enum_values: None,
+                    },
+                );
+                m
+            },
+            required: None,
+            title: None,
+            description: Some("Root type".to_string()),
+            enum_values: None,
+        };
+        let valid_instance = json!({"name": "Alice"});
+        let actual_valid: ValidationResult = validate(&schema, &valid_instance);
+        assert_eq!(Ok(()), actual_valid);
+        let invalid_instance = json!({"name": 42});
+        let actual_invalid: ValidationResult = validate(&schema, &invalid_instance);
+        assert!(actual_invalid.is_err());
+    }
+
+    #[test]
     fn root_type_string_valid_nonempty() {
         let schema: JsonSchema = JsonSchema {
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!("ok");
@@ -243,6 +278,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!("");
@@ -258,6 +294,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!({"x": 1});
@@ -275,6 +312,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(42);
@@ -292,6 +330,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(null);
@@ -309,6 +348,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(true);
@@ -326,6 +366,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!([1, 2]);
@@ -343,6 +384,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: Some(vec![
                 serde_json::Value::String("open".to_string()),
                 serde_json::Value::String("closed".to_string()),
@@ -361,6 +403,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: Some(vec![
                 serde_json::Value::String("open".to_string()),
                 serde_json::Value::String("closed".to_string()),
@@ -381,6 +424,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -399,6 +443,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -419,6 +464,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(42);
@@ -434,6 +480,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(0);
@@ -449,6 +496,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(-1);
@@ -464,6 +512,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(2.5);
@@ -481,6 +530,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!("42");
@@ -498,6 +548,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(null);
@@ -515,6 +566,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!({"x": 1});
@@ -532,6 +584,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!([1, 2]);
@@ -549,6 +602,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(true);
@@ -628,6 +682,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(2.5);
@@ -643,6 +698,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(42);
@@ -658,6 +714,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!("3.14");
@@ -675,6 +732,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(null);
@@ -692,6 +750,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!({});
@@ -709,6 +768,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!([1.0]);
@@ -726,6 +786,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(true);
@@ -805,6 +866,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(42);
@@ -822,6 +884,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!(null);
@@ -839,6 +902,7 @@ mod tests {
             properties: BTreeMap::new(),
             required: None,
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!([1, 2]);
@@ -866,6 +930,7 @@ mod tests {
             },
             required: Some(vec!["name".to_string()]),
             title: None,
+            description: None,
             enum_values: None,
         };
         let instance = json!({"name": "Alice"});
@@ -895,6 +960,7 @@ mod tests {
                     },
                     required: Some(vec!["city".to_string()]),
                     title: None,
+                    description: None,
                     enum_values: None,
                 },
             );
@@ -1002,6 +1068,7 @@ mod tests {
                     },
                     required: Some(vec!["y".to_string()]),
                     title: None,
+                    description: None,
                     enum_values: None,
                 },
             );
@@ -1040,6 +1107,7 @@ mod tests {
             },
             required: Some(vec!["value".to_string()]),
             title: None,
+            description: None,
             enum_values: None,
         };
         for _ in 0..DEPTH {
@@ -1048,6 +1116,7 @@ mod tests {
                 properties: BTreeMap::new(),
                 required: Some(vec!["child".to_string()]),
                 title: None,
+                description: None,
                 enum_values: None,
             };
             wrap.properties.insert("child".to_string(), inner);
