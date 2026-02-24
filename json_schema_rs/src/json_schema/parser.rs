@@ -71,6 +71,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             enum_values: Option<Vec<serde_json::Value>>,
             #[serde(default)]
             items: Option<Box<JsonSchema>>,
+            #[serde(default, rename = "uniqueItems")]
+            unique_items: Option<bool>,
             #[serde(default)]
             minimum: Option<f64>,
             #[serde(default)]
@@ -85,6 +87,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             description: h.description,
             enum_values: h.enum_values,
             items: h.items,
+            unique_items: h.unique_items,
             minimum: h.minimum,
             maximum: h.maximum,
         })
@@ -166,6 +169,7 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        unique_items: None,
                         minimum: None,
                         maximum: None,
                     },
@@ -177,6 +181,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -201,6 +206,7 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        unique_items: None,
                         minimum: None,
                         maximum: None,
                     },
@@ -215,6 +221,7 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        unique_items: None,
                         minimum: None,
                         maximum: None,
                     },
@@ -226,6 +233,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -245,6 +253,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -263,6 +272,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -355,6 +365,16 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
+        let result: Result<_, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_strict_accepts_unique_items_key() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":true}"#;
         let result: Result<_, _> = parse_schema(json, &settings);
         assert!(result.is_ok());
     }

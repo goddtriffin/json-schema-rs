@@ -123,6 +123,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | description (struct, field, enum doc) | Y | Y | Y | Y | Y |
 | Required array property (e.g. Vec\<String\>) | Y | Y | Y | Y | Y |
 | Optional array property | Y | Y | Y | Y | Y |
+| Array with uniqueItems true (e.g. HashSet\<String\>) | Y | Y | Y | Y | Y |
 | Array of objects (nested struct) | Y | Y | Y | Y | Y |
 | Array of arrays (e.g. Vec\<Vec\<String\>\>) | Y | — | Y | Y | Y |
 
@@ -396,9 +397,11 @@ TODO.
 
 ### uniqueItems
 
-TODO.
+When `uniqueItems` is `true`, all array elements must be unique (JSON structural equality). Default/absent = false. Meaning is the same across draft-02 through 2020-12.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We parse and store `unique_items` as `Option<bool>`. **Validator:** When `type: "array"` and `unique_items == Some(true)`, we check that no two elements are equal (using `serde_json::Value` equality); if a duplicate is found we push `ValidationError::DuplicateArrayItems` and continue. **Codegen:** When `unique_items == Some(true)` and the item type is hashable (string, integer, number, or string enum), we emit `HashSet<T>` or `Option<HashSet<T>>`; otherwise we emit `Vec<T>` and the validator enforces uniqueness. **Reverse codegen:** `Vec<T>::json_schema()` does not set `unique_items` (omit = false). `HashSet<T>::json_schema()` returns `type: "array"`, `items: T::json_schema()`, and `unique_items: Some(true)`.
+
+**Spec version quirks:** None; the keyword is boolean with the same meaning (all elements unique when true) across draft-02 through 2020-12.
 
 ### unevaluatedItems
 

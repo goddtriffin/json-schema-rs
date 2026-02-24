@@ -2,7 +2,7 @@
 
 use json_schema_rs::{JsonSchema, JsonSchemaSettings, ToJsonSchema, parse_schema};
 use json_schema_rs_macro::ToJsonSchema;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(ToJsonSchema)]
 #[to_json_schema(title = "Root")]
@@ -41,6 +41,7 @@ fn derive_root_json_schema() {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: None,
         maximum: None,
     };
@@ -63,6 +64,7 @@ fn derive_address_json_schema() {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: None,
         maximum: None,
     };
@@ -165,6 +167,7 @@ fn derive_field_minimum_maximum_integer() {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: None,
         maximum: None,
     };
@@ -196,6 +199,7 @@ fn derive_field_minimum_maximum_float() {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: None,
         maximum: None,
     };
@@ -244,6 +248,7 @@ fn derive_field_only_minimum() {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: None,
         maximum: None,
     };
@@ -274,6 +279,7 @@ fn derive_field_only_maximum() {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: None,
         maximum: None,
     };
@@ -300,4 +306,20 @@ fn derive_struct_with_vec_field_emits_array_schema() {
     assert_eq!(counts_schema.type_.as_deref(), Some("array"));
     let count_items: &JsonSchema = counts_schema.items.as_ref().expect("items").as_ref();
     assert_eq!(count_items.type_.as_deref(), Some("integer"));
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithHashSetField {
+    tags: HashSet<String>,
+}
+
+#[test]
+fn derive_struct_with_hash_set_field_emits_unique_items_true() {
+    let schema: JsonSchema = WithHashSetField::json_schema();
+    let tags_schema: &JsonSchema = schema.properties.get("tags").expect("tags property");
+    assert_eq!(tags_schema.type_.as_deref(), Some("array"));
+    assert_eq!(tags_schema.unique_items, Some(true));
+    let items: &JsonSchema = tags_schema.items.as_ref().expect("items").as_ref();
+    assert_eq!(items.type_.as_deref(), Some("string"));
 }

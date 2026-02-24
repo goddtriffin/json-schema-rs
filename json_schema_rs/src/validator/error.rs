@@ -43,6 +43,11 @@ pub enum ValidationError {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
     },
+    /// Schema had `uniqueItems: true` but the array contained duplicate elements.
+    DuplicateArrayItems {
+        /// JSON Pointer to the array instance that failed.
+        instance_path: JsonPointer,
+    },
     /// A property listed in `required` was absent.
     MissingRequired {
         /// JSON Pointer to the object (parent of the missing property).
@@ -82,6 +87,7 @@ impl ValidationError {
             | ValidationError::ExpectedInteger { instance_path }
             | ValidationError::ExpectedNumber { instance_path }
             | ValidationError::ExpectedArray { instance_path }
+            | ValidationError::DuplicateArrayItems { instance_path }
             | ValidationError::MissingRequired { instance_path, .. }
             | ValidationError::NotInEnum { instance_path }
             | ValidationError::BelowMinimum { instance_path, .. }
@@ -108,6 +114,9 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::ExpectedArray { .. } => {
                 write!(f, "{location}: expected array")
+            }
+            ValidationError::DuplicateArrayItems { .. } => {
+                write!(f, "{location}: array has duplicate items")
             }
             ValidationError::MissingRequired { property, .. } => {
                 write!(f, "{location}: missing required property \"{property}\"")

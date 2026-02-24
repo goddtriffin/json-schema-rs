@@ -484,6 +484,40 @@ fn cli_generate_rust_array_optional() {
 }
 
 #[test]
+fn cli_generate_rust_array_unique_items_true() {
+    let schema_json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(
+        actual.contains("pub tags: HashSet<String>"),
+        "expected HashSet<String>: {actual}"
+    );
+    assert!(
+        actual.contains("use std::collections::HashSet"),
+        "expected HashSet use: {actual}"
+    );
+}
+
+#[test]
 fn cli_generate_unsupported_language_exit_nonzero_and_stderr() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let schema_path = temp_dir.path().join("x.json");
@@ -1428,6 +1462,24 @@ pub struct Root {
 }
 
 #[test]
+fn integration_parse_and_generate_array_unique_items_true() {
+    let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
+    assert!(
+        actual.contains("pub tags: HashSet<String>"),
+        "expected HashSet<String> for uniqueItems true: {actual}"
+    );
+    assert!(
+        actual.contains("use std::collections::HashSet"),
+        "expected HashSet use: {actual}"
+    );
+}
+
+#[test]
 fn integration_parse_and_generate_array_optional() {
     let json =
         r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}"#;
@@ -1615,6 +1667,54 @@ fn generated_rust_array_required_builds_and_deserializes() {
     let main_rs = r##"fn main() {
     let root: compile_test::Root = serde_json::from_str(r#"{"tags":["a","b","c"]}"#).unwrap();
     assert_eq!(root.tags, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+}
+"##;
+    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+
+    let build = Command::new("cargo")
+        .args(["build"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "cargo build failed: stderr={}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new("cargo")
+        .args(["run", "--bin", "run"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "cargo run failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn generated_rust_unique_items_builds_and_deserializes() {
+    let schema_json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let generated = output.per_schema[0].clone();
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let src = temp_dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src");
+
+    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
+    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
+    let main_rs = r##"fn main() {
+    use std::collections::HashSet;
+    let root: compile_test::Root = serde_json::from_str(r#"{"tags":["a","b","c"]}"#).unwrap();
+    let expected: HashSet<String> = ["a","b","c"].into_iter().map(String::from).collect();
+    assert_eq!(root.tags, expected);
 }
 "##;
     fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
@@ -2944,6 +3044,7 @@ fn generated_rust_deep_nesting_builds_and_deserializes() {
                     description: None,
                     enum_values: None,
                     items: None,
+                    unique_items: None,
                     minimum: None,
                     maximum: None,
                 },
@@ -2955,6 +3056,7 @@ fn generated_rust_deep_nesting_builds_and_deserializes() {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: None,
         maximum: None,
     };
@@ -2967,6 +3069,7 @@ fn generated_rust_deep_nesting_builds_and_deserializes() {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };

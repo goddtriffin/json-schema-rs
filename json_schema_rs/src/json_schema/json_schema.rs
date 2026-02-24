@@ -38,6 +38,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) enum_values: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     pub(crate) items: Option<Box<DenyUnknownFieldsJsonSchema>>,
+    #[serde(default, rename = "uniqueItems")]
+    pub(crate) unique_items: Option<bool>,
     #[serde(default)]
     pub(crate) minimum: Option<f64>,
     #[serde(default)]
@@ -63,6 +65,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         description: h.description,
         enum_values: h.enum_values,
         items,
+        unique_items: h.unique_items,
         minimum: h.minimum,
         maximum: h.maximum,
     }
@@ -98,6 +101,10 @@ pub struct JsonSchema {
     /// Schema for all array elements (when type is "array"). Single-schema form only; tuple-typing (array of schemas) not supported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Box<JsonSchema>>,
+
+    /// When true, all array elements must be unique (JSON equality). Array-only; used by validator and codegen (`HashSet` when applicable).
+    #[serde(rename = "uniqueItems", skip_serializing_if = "Option::is_none")]
+    pub unique_items: Option<bool>,
 
     /// Inclusive lower bound for numeric instances (integer or number). Used for validation and for codegen type selection.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -210,6 +217,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -228,6 +236,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -313,6 +322,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -357,6 +367,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -375,6 +386,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -387,6 +399,7 @@ mod tests {
             description: None,
             enum_values: Some(vec![]),
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -402,6 +415,7 @@ mod tests {
                 serde_json::Value::String("b".to_string()),
             ]),
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -417,6 +431,7 @@ mod tests {
                 serde_json::Value::Number(42_i64.into()),
             ]),
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -459,6 +474,7 @@ mod tests {
                     description: None,
                     enum_values: None,
                     items: None,
+                    unique_items: None,
                     minimum: None,
                     maximum: None,
                 }));
@@ -479,6 +495,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -490,6 +507,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(item_schema)),
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -501,6 +519,46 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_parse_compare_with_items() {
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse again");
+        assert_eq!(parsed, reparsed);
+    }
+
+    #[test]
+    fn parse_unique_items_true() {
+        let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":true}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<bool> = Some(true);
+        let actual: Option<bool> = parsed.unique_items;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_unique_items_false() {
+        let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":false}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<bool> = Some(false);
+        let actual: Option<bool> = parsed.unique_items;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_unique_items_absent() {
+        let json = r#"{"type":"array","items":{"type":"string"}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<bool> = None;
+        let actual: Option<bool> = parsed.unique_items;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn round_trip_parse_serialize_parse_compare_with_unique_items() {
+        let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":true}"#;
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
         let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
         let serialized: String = (&parsed).try_into().expect("serialize");

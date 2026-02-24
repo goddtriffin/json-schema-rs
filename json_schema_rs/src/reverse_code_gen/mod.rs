@@ -25,6 +25,7 @@ impl ToJsonSchema for String {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         }
@@ -41,6 +42,7 @@ impl ToJsonSchema for bool {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         }
@@ -56,6 +58,7 @@ fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: Some(min),
         maximum: Some(max),
     }
@@ -119,6 +122,7 @@ fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         description: None,
         enum_values: None,
         items: None,
+        unique_items: None,
         minimum: Some(min),
         maximum: Some(max),
     }
@@ -152,6 +156,25 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
             description: None,
             enum_values: None,
             items: Some(Box::new(T::json_schema())),
+            unique_items: None,
+            minimum: None,
+            maximum: None,
+        }
+    }
+}
+
+#[expect(clippy::implicit_hasher)]
+impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::HashSet<T> {
+    fn json_schema() -> JsonSchema {
+        JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(T::json_schema())),
+            unique_items: Some(true),
             minimum: None,
             maximum: None,
         }
@@ -172,6 +195,7 @@ impl ToJsonSchema for HandWrittenExample {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         }
@@ -193,6 +217,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -210,6 +235,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -234,6 +260,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             #[expect(clippy::cast_precision_loss)]
             minimum: Some(i64::MIN as f64),
             maximum: Some(9_223_372_036_854_775_807.0_f64),
@@ -322,6 +349,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: Some(f64::MIN),
             maximum: Some(f64::MAX),
         };
@@ -355,6 +383,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -372,6 +401,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(String::json_schema())),
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -389,6 +419,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(i64::json_schema())),
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -401,5 +432,23 @@ mod tests {
         let expected: JsonSchema = Vec::<String>::json_schema();
         let actual: JsonSchema = Option::<Vec<String>>::json_schema();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn hash_set_string_json_schema_has_unique_items_true() {
+        use std::collections::HashSet;
+        let actual: JsonSchema = HashSet::<String>::json_schema();
+        let expected_unique: Option<bool> = Some(true);
+        assert_eq!(expected_unique, actual.unique_items);
+        assert_eq!(actual.type_.as_deref(), Some("array"));
+        let items: &JsonSchema = actual.items.as_ref().expect("items").as_ref();
+        assert_eq!(items.type_.as_deref(), Some("string"));
+    }
+
+    #[test]
+    fn vec_string_json_schema_has_unique_items_none() {
+        let actual: JsonSchema = Vec::<String>::json_schema();
+        let expected_unique: Option<bool> = None;
+        assert_eq!(expected_unique, actual.unique_items);
     }
 }

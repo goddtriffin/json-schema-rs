@@ -146,6 +146,25 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                     });
                     continue;
                 };
+                if schema.unique_items == Some(true) {
+                    let mut has_duplicate = false;
+                    for i in 0..arr.len() {
+                        for j in (i + 1)..arr.len() {
+                            if arr[i] == arr[j] {
+                                has_duplicate = true;
+                                break;
+                            }
+                        }
+                        if has_duplicate {
+                            break;
+                        }
+                    }
+                    if has_duplicate {
+                        errors.push(ValidationError::DuplicateArrayItems {
+                            instance_path: instance_path.clone(),
+                        });
+                    }
+                }
                 if let Some(ref item_schema) = schema.items {
                     let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
                     for (i, elem) in arr.iter().enumerate() {
@@ -212,6 +231,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         }
@@ -275,6 +295,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -302,6 +323,7 @@ mod tests {
                         description: Some("User name".to_string()),
                         enum_values: None,
                         items: None,
+                        unique_items: None,
                         minimum: None,
                         maximum: None,
                     },
@@ -313,6 +335,7 @@ mod tests {
             description: Some("Root type".to_string()),
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -334,6 +357,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -353,6 +377,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -372,6 +397,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -393,6 +419,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -414,6 +441,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -435,6 +463,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -456,6 +485,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -480,6 +510,7 @@ mod tests {
                 serde_json::Value::String("closed".to_string()),
             ]),
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -502,6 +533,7 @@ mod tests {
                 serde_json::Value::String("closed".to_string()),
             ]),
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -526,6 +558,7 @@ mod tests {
                 serde_json::Value::String("b".to_string()),
             ]),
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -548,6 +581,7 @@ mod tests {
                 serde_json::Value::String("b".to_string()),
             ]),
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -569,6 +603,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -588,6 +623,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -607,6 +643,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -626,6 +663,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -647,6 +685,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -668,6 +707,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -689,6 +729,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -710,6 +751,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -731,6 +773,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -814,6 +857,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -833,6 +877,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -852,6 +897,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -873,6 +919,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -894,6 +941,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -915,6 +963,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -936,6 +985,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -957,6 +1007,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: Some(0.0),
             maximum: Some(255.0),
         };
@@ -976,6 +1027,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: Some(10.0),
             maximum: Some(100.0),
         };
@@ -998,6 +1050,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: Some(0.0),
             maximum: Some(10.0),
         };
@@ -1020,6 +1073,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1039,6 +1093,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: Some(0.5),
             maximum: Some(99.5),
         };
@@ -1058,6 +1113,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: Some(1.0),
             maximum: Some(10.0),
         };
@@ -1080,6 +1136,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: Some(0.0),
             maximum: Some(1.0),
         };
@@ -1108,6 +1165,7 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        unique_items: None,
                         minimum: Some(10.0),
                         maximum: Some(100.0),
                     },
@@ -1122,6 +1180,7 @@ mod tests {
                         description: None,
                         enum_values: None,
                         items: None,
+                        unique_items: None,
                         minimum: Some(10.0),
                         maximum: Some(100.0),
                     },
@@ -1133,6 +1192,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1161,6 +1221,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1180,6 +1241,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1199,6 +1261,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1220,6 +1283,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1231,6 +1295,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(item_schema)),
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1250,6 +1315,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1261,6 +1327,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: Some(Box::new(item_schema)),
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1269,6 +1336,160 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root().push("1"),
         }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_true_no_duplicates_valid() {
+        let item_schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(item_schema)),
+            unique_items: Some(true),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!(["a", "b", "c"]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_true_duplicates_invalid() {
+        let item_schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(item_schema)),
+            unique_items: Some(true),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!(["a", "b", "a"]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected_has_duplicate_error: bool = actual.as_ref().err().is_some_and(|e| {
+            e.iter()
+                .any(|err| matches!(err, ValidationError::DuplicateArrayItems { .. }))
+        });
+        assert!(
+            expected_has_duplicate_error,
+            "expected DuplicateArrayItems: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn unique_items_false_duplicates_valid() {
+        let item_schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(item_schema)),
+            unique_items: Some(false),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!(["a", "a"]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_absent_duplicates_valid() {
+        let item_schema: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: Some(Box::new(item_schema)),
+            unique_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!(["a", "a"]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_true_empty_array_valid() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: Some(true),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
 
@@ -1344,6 +1565,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1365,6 +1587,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1386,6 +1609,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1417,6 +1641,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1450,6 +1675,7 @@ mod tests {
                     description: None,
                     enum_values: None,
                     items: None,
+                    unique_items: None,
                     minimum: None,
                     maximum: None,
                 },
@@ -1561,6 +1787,7 @@ mod tests {
                     description: None,
                     enum_values: None,
                     items: None,
+                    unique_items: None,
                     minimum: None,
                     maximum: None,
                 },
@@ -1603,6 +1830,7 @@ mod tests {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1615,6 +1843,7 @@ mod tests {
                 description: None,
                 enum_values: None,
                 items: None,
+                unique_items: None,
                 minimum: None,
                 maximum: None,
             };

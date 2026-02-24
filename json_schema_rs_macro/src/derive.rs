@@ -370,6 +370,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     description: #description_expr,
                     enum_values: None,
                     items: None,
+                    unique_items: None,
                     minimum: None,
                     maximum: None,
                 }
@@ -431,6 +432,7 @@ fn expand_enum_to_json_schema(
                     description: #description_expr,
                     enum_values: Some(enum_values),
                     items: None,
+                    unique_items: None,
                     minimum: None,
                     maximum: None,
                 }

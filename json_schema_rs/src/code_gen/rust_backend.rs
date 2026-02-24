@@ -32,7 +32,7 @@ impl CodeGenBackend for RustBackend {
                         index,
                         source: Box::new(e),
                     })?;
-                    per_schema.push(out.into_inner());
+                    per_schema.push(maybe_prepend_hash_set_use(out.into_inner()));
                 }
                 Ok(GenerateRustOutput {
                     shared: None,
@@ -106,6 +106,7 @@ struct DedupeKey {
     title: Option<String>,
     description: Option<String>,
     items: Option<Box<DedupeKey>>,
+    unique_items: Option<bool>,
 }
 
 impl PartialEq for DedupeKey {
@@ -116,6 +117,7 @@ impl PartialEq for DedupeKey {
             && self.title == other.title
             && self.description == other.description
             && self.items == other.items
+            && self.unique_items == other.unique_items
     }
 }
 
@@ -148,6 +150,7 @@ impl Ord for DedupeKey {
                 .then_with(|| self.title.cmp(&other.title))
                 .then_with(|| self.description.cmp(&other.description))
                 .then_with(|| self.items.cmp(&other.items))
+                .then_with(|| self.unique_items.cmp(&other.unique_items))
         })
     }
 }
@@ -159,6 +162,23 @@ fn compare_option_vec(a: Option<&Vec<String>>, b: Option<&Vec<String>>) -> Order
         (Some(_), None) => Ordering::Greater,
         (Some(aa), Some(bb)) => aa.cmp(bb),
     }
+}
+
+/// If the buffer contains "`HashSet`", insert `use std::collections::HashSet;` after the serde use line.
+fn maybe_prepend_hash_set_use(mut buf: Vec<u8>) -> Vec<u8> {
+    if !buf.windows(7).any(|w| w == b"HashSet") {
+        return buf;
+    }
+    let needle = b"use serde::{Deserialize, Serialize};\n";
+    let pos = buf
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|i| i + needle.len());
+    if let Some(insert_at) = pos {
+        let hash_set_use = b"use std::collections::HashSet;\n";
+        buf.splice(insert_at..insert_at, hash_set_use.iter().copied());
+    }
+    buf
 }
 
 /// Emits `#[derive(..., ToJsonSchema)]` and optional `#[to_json_schema(title = "...")]` for a struct.
@@ -199,6 +219,11 @@ impl DedupeKey {
             .as_ref()
             .filter(|_| schema.type_.as_deref() == Some("array"))
             .map(|s| Box::new(DedupeKey::from_schema(s, mode)));
+        let unique_items: Option<bool> = if schema.type_.as_deref() == Some("array") {
+            schema.unique_items
+        } else {
+            None
+        };
         DedupeKey {
             type_: schema.type_.clone(),
             properties,
@@ -209,6 +234,7 @@ impl DedupeKey {
                 DedupeMode::Functional | DedupeMode::Disabled => None,
             },
             items,
+            unique_items,
         }
     }
 }
@@ -309,6 +335,12 @@ fn rust_numeric_type_for_schema(schema: &JsonSchema) -> String {
     unreachable!("rust_numeric_type_for_schema only called for integer or number schema");
 }
 
+/// Returns true when the schema represents a type that is Hash + Eq (string, integer, number, or enum).
+/// Used to decide whether to emit `HashSet<T>` for array with uniqueItems: true.
+fn item_schema_is_hashable(schema: &JsonSchema) -> bool {
+    !schema.is_object_with_properties() && !schema.is_array_with_items()
+}
+
 /// Returns the Rust type string for a schema (used for array item type and nested types). Unsupported types yield `serde_json::Value`.
 fn rust_type_for_item_schema(
     schema: &JsonSchema,
@@ -356,7 +388,13 @@ fn rust_type_for_item_schema(
             settings,
             mode,
         );
-        return format!("Vec<{inner}>");
+        let use_hash_set: bool =
+            schema.unique_items == Some(true) && item_schema_is_hashable(item_schema);
+        return if use_hash_set {
+            format!("HashSet<{inner}>")
+        } else {
+            format!("Vec<{inner}>")
+        };
     }
     "serde_json::Value".to_string()
 }
@@ -583,7 +621,7 @@ fn generate_rust_with_dedupe(
                 index,
                 source: Box::new(e),
             })?;
-            per_schema.push(out.into_inner());
+            per_schema.push(maybe_prepend_hash_set_use(out.into_inner()));
         }
         return Ok(GenerateRustOutput {
             shared: None,
@@ -656,7 +694,7 @@ fn generate_rust_with_dedupe(
             writeln!(out, "}}")?;
             writeln!(out)?;
         }
-        out.into_inner()
+        maybe_prepend_hash_set_use(out.into_inner())
     };
 
     let per_schema: Vec<Vec<u8>> = (0..schemas.len())
@@ -770,7 +808,7 @@ fn generate_rust_with_dedupe(
                 writeln!(buf, "}}").ok();
                 writeln!(buf).ok();
             }
-            buf.into_inner()
+            maybe_prepend_hash_set_use(buf.into_inner())
         })
         .collect();
 
@@ -918,10 +956,13 @@ fn emit_struct_fields_with_resolver(
                 settings,
                 mode,
             );
+            let use_hash_set: bool =
+                prop_schema.unique_items == Some(true) && item_schema_is_hashable(item_schema);
+            let container: &str = if use_hash_set { "HashSet" } else { "Vec" };
             let ty = if schema.is_required(key) {
-                format!("Vec<{inner}>")
+                format!("{container}<{inner}>")
             } else {
-                format!("Option<Vec<{inner}>>")
+                format!("Option<{container}<{inner}>>")
             };
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
@@ -1019,10 +1060,13 @@ fn emit_struct_fields(
                 settings,
                 DedupeMode::Full,
             );
+            let use_hash_set: bool =
+                prop_schema.unique_items == Some(true) && item_schema_is_hashable(item_schema);
+            let container: &str = if use_hash_set { "HashSet" } else { "Vec" };
             let ty = if schema.is_required(key) {
-                format!("Vec<{inner}>")
+                format!("{container}<{inner}>")
             } else {
-                format!("Option<Vec<{inner}>>")
+                format!("Option<{container}<{inner}>>")
             };
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
@@ -1550,6 +1594,60 @@ pub struct Root {
     }
 
     #[test]
+    fn array_with_unique_items_true_emits_hash_set_string() {
+        let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        assert!(
+            actual.contains("pub tags: HashSet<String>"),
+            "expected HashSet<String>: {actual}"
+        );
+        assert!(
+            actual.contains("use std::collections::HashSet"),
+            "expected HashSet use: {actual}"
+        );
+    }
+
+    #[test]
+    fn array_with_unique_items_false_emits_vec_string() {
+        let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":false}},"required":["tags"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub tags: Vec<String>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn array_with_unique_items_true_object_items_emits_vec() {
+        let json = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}},"uniqueItems":true}},"required":["items"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        assert!(
+            actual.contains("pub items: Vec<") && actual.contains(">,"),
+            "uniqueItems true with object items should emit Vec: {actual}"
+        );
+        assert!(
+            !actual.contains("HashSet"),
+            "should not use HashSet for object items: {actual}"
+        );
+    }
+
+    #[test]
     fn array_optional_string_property() {
         let json =
             r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}"#;
@@ -1785,6 +1883,7 @@ pub struct Root {
             description: None,
             enum_values: None,
             items: None,
+            unique_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1797,6 +1896,7 @@ pub struct Root {
                 description: None,
                 enum_values: None,
                 items: None,
+                unique_items: None,
                 minimum: None,
                 maximum: None,
             };
