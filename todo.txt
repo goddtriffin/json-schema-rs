@@ -28,3 +28,53 @@ For each of these TODO items, check what every other competitor library does, ch
   e.g. NotInEnum should say what the invalid enum value was and also what the full allowed set is
   e.g. TooFewItems should say what the invalid amount was and also what the specified minimum is
   e.g. AboveMaximum should say the invalid value and also what the specified maximum is
+
+
+/contribution-guide Please create plan:
+- please implement string "minLength"/"maxLength"
+- implement across all tools the codebase offers (code gen, validator, reverse code gen, CLI, macros, etc)
+- implement tests that match all of our guidelines (exhaustive, lockstep, etc)
+- make sure to include implementation of Rust macro annotations for setting min/max length on Rust model string fields, which should help reverse code gen apply these constraints within the generated JSON Schema (and make sure our JSON Schema to Rust code gen also generates these trait macro annotations on our generated Rust models)
+
+
+/contribution-guide Please create plan:
+- please implement UUIDs
+- make this driven by a crate feature, which is disabled by default. If users of this library want to enable integration with the UUID crate and have auto serializing and deserializing into UUIDs instead of strings, they'll have to manually enable the UUID json-schema-rs feature. This way this dependency isn't pulled in unless they really want it.
+- implement across all tools the codebase offers (code gen, validator, reverse code gen, CLI, macros, etc)
+- implement tests that match all of our guidelines (exhaustive, lockstep, etc)
+
+
+
+/contribution-guide Create plan to optimize the runtime speed of these unit tests which are taking too long to execute:
+```
+test generated_rust_array_optional_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_array_required_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_dedupe_two_identical_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_deep_nesting_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_description_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_enum_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_enum_collision_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_enum_dedupe_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_enum_duplicate_values_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_hyphenated_paths_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_hyphenated_property_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_integer_with_min_max_u8_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_model_name_source_property_key_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_multi_schema_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_nested_modules_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_nested_object_builds_and_deserializes has been running for over 60 seconds
+```
+
+And:
+```
+test generated_rust_number_with_min_max_f32_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_optional_float_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_optional_integer_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_optional_string_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_required_float_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_required_integer_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_single_schema_builds_and_deserializes has been running for over 60 seconds
+test generated_rust_unique_items_builds_and_deserializes has been running for over 60 seconds
+test round_trip_generated_rust_integer_with_min_max_preserves_bounds has been running for over 60 seconds
+test round_trip_generated_rust_json_schema_matches_original has been running for over 60 seconds
+```
