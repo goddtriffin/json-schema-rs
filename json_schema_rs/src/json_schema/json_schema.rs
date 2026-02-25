@@ -40,6 +40,10 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) items: Option<Box<DenyUnknownFieldsJsonSchema>>,
     #[serde(default, rename = "uniqueItems")]
     pub(crate) unique_items: Option<bool>,
+    #[serde(default, rename = "minItems")]
+    pub(crate) min_items: Option<u64>,
+    #[serde(default, rename = "maxItems")]
+    pub(crate) max_items: Option<u64>,
     #[serde(default)]
     pub(crate) minimum: Option<f64>,
     #[serde(default)]
@@ -66,6 +70,8 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         enum_values: h.enum_values,
         items,
         unique_items: h.unique_items,
+        min_items: h.min_items,
+        max_items: h.max_items,
         minimum: h.minimum,
         maximum: h.maximum,
     }
@@ -105,6 +111,14 @@ pub struct JsonSchema {
     /// When true, all array elements must be unique (JSON equality). Array-only; used by validator and codegen (`HashSet` when applicable).
     #[serde(rename = "uniqueItems", skip_serializing_if = "Option::is_none")]
     pub unique_items: Option<bool>,
+
+    /// Minimum number of array elements. Array-only; used by validator and codegen (emitted as field attribute).
+    #[serde(rename = "minItems", skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<u64>,
+
+    /// Maximum number of array elements. Array-only; used by validator and codegen (emitted as field attribute).
+    #[serde(rename = "maxItems", skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<u64>,
 
     /// Inclusive lower bound for numeric instances (integer or number). Used for validation and for codegen type selection.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -218,6 +232,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -237,6 +253,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -323,6 +341,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -368,6 +388,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -387,6 +409,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -400,6 +424,8 @@ mod tests {
             enum_values: Some(vec![]),
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -416,6 +442,8 @@ mod tests {
             ]),
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -432,6 +460,8 @@ mod tests {
             ]),
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -475,6 +505,8 @@ mod tests {
                     enum_values: None,
                     items: None,
                     unique_items: None,
+                    min_items: None,
+                    max_items: None,
                     minimum: None,
                     maximum: None,
                 }));
@@ -496,6 +528,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -508,6 +542,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };

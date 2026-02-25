@@ -26,6 +26,8 @@ impl ToJsonSchema for String {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         }
@@ -43,6 +45,8 @@ impl ToJsonSchema for bool {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         }
@@ -59,6 +63,8 @@ fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: Some(min),
         maximum: Some(max),
     }
@@ -123,6 +129,8 @@ fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: Some(min),
         maximum: Some(max),
     }
@@ -157,6 +165,8 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
             enum_values: None,
             items: Some(Box::new(T::json_schema())),
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         }
@@ -175,6 +185,8 @@ impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::
             enum_values: None,
             items: Some(Box::new(T::json_schema())),
             unique_items: Some(true),
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         }
@@ -196,6 +208,8 @@ impl ToJsonSchema for HandWrittenExample {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         }
@@ -218,6 +232,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -236,6 +252,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -261,6 +279,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             #[expect(clippy::cast_precision_loss)]
             minimum: Some(i64::MIN as f64),
             maximum: Some(9_223_372_036_854_775_807.0_f64),
@@ -350,6 +370,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: Some(f64::MIN),
             maximum: Some(f64::MAX),
         };
@@ -384,6 +406,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -402,6 +426,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(String::json_schema())),
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -420,6 +446,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(i64::json_schema())),
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };

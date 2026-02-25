@@ -48,6 +48,20 @@ pub enum ValidationError {
         /// JSON Pointer to the array instance that failed.
         instance_path: JsonPointer,
     },
+    /// Schema had `minItems` but the array had fewer elements.
+    TooFewItems {
+        /// JSON Pointer to the array instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's minItems value.
+        min_items: u64,
+    },
+    /// Schema had `maxItems` but the array had more elements.
+    TooManyItems {
+        /// JSON Pointer to the array instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's maxItems value.
+        max_items: u64,
+    },
     /// A property listed in `required` was absent.
     MissingRequired {
         /// JSON Pointer to the object (parent of the missing property).
@@ -88,6 +102,8 @@ impl ValidationError {
             | ValidationError::ExpectedNumber { instance_path }
             | ValidationError::ExpectedArray { instance_path }
             | ValidationError::DuplicateArrayItems { instance_path }
+            | ValidationError::TooFewItems { instance_path, .. }
+            | ValidationError::TooManyItems { instance_path, .. }
             | ValidationError::MissingRequired { instance_path, .. }
             | ValidationError::NotInEnum { instance_path }
             | ValidationError::BelowMinimum { instance_path, .. }
@@ -117,6 +133,12 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::DuplicateArrayItems { .. } => {
                 write!(f, "{location}: array has duplicate items")
+            }
+            ValidationError::TooFewItems { min_items, .. } => {
+                write!(f, "{location}: array has fewer than {min_items} items")
+            }
+            ValidationError::TooManyItems { max_items, .. } => {
+                write!(f, "{location}: array has more than {max_items} items")
             }
             ValidationError::MissingRequired { property, .. } => {
                 write!(f, "{location}: missing required property \"{property}\"")

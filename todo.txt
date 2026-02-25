@@ -6,6 +6,25 @@ For each of these TODO items, check what every other competitor library does, ch
   competitor libraries, and then compare them all against each other to clearly mark a winner
   for each given category.
 - support UUIDs
-- support integer fields being generated as the smallest possible Rust integer type that fits the range
-  using minimum/maximum bounds: i8, u8, i16, u16, etc. Do the same thing for number fields being
-  generated as f32/f64 if minimum/maximum are set accordingly, otherwise fallback to f64.
+- add code gen and reverse code gen setting for: "flatten single entry combinator".
+  This is a boolean flag, which is disabled by default. If enabled, whenever an allOf/anyOf/oneOf
+  is encountered, if it only has a single entry within it, then we "flatten" it - aka we
+  delete the combinator allOf/anyOf/oneOf "array" and replace it by up-leveling the
+  inner entry object as a standalone schema in its place. This should work for code gen
+  (when converting JSON Schema to Rust models), as well as reverse coden gen (when
+  converting Rust models to JSON Schema). To make this setting available to developers for
+  reverse code gen, we should have a Rust macro annotation for configuring this setting.
+- refactor test_json_schema_suite to use the DenyUnknownFieldsJsonSchema instead of the
+  normal JsonSchema. This will give us a higher quality result output because it'll deny
+  JSON Schema features/fields we have not yet implemented.
+- we need access to massive JSON Schema definitions and validate that our library supports them
+  with amazing high speed performance and space efficiency.
+- we should create automated testing which takes the test_json_schema_suite, and runs several of the
+  best competitor libraries against them, and verify that we return the same results (and
+  generally the same quality/usefulness validation error messages)
+- should all generated Rust models implement the Hash derive macro trait?
+  This would enable all code gen models to play well with uniqueItems by default.
+- upgrade all validation error messages to provide more context
+  e.g. NotInEnum should say what the invalid enum value was and also what the full allowed set is
+  e.g. TooFewItems should say what the invalid amount was and also what the specified minimum is
+  e.g. AboveMaximum should say the invalid value and also what the specified maximum is

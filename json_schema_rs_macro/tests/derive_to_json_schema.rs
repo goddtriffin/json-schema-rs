@@ -42,6 +42,8 @@ fn derive_root_json_schema() {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: None,
         maximum: None,
     };
@@ -65,6 +67,8 @@ fn derive_address_json_schema() {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: None,
         maximum: None,
     };
@@ -168,6 +172,8 @@ fn derive_field_minimum_maximum_integer() {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: None,
         maximum: None,
     };
@@ -200,6 +206,8 @@ fn derive_field_minimum_maximum_float() {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: None,
         maximum: None,
     };
@@ -249,6 +257,8 @@ fn derive_field_only_minimum() {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: None,
         maximum: None,
     };
@@ -280,6 +290,8 @@ fn derive_field_only_maximum() {
         enum_values: None,
         items: None,
         unique_items: None,
+        min_items: None,
+        max_items: None,
         minimum: None,
         maximum: None,
     };
@@ -322,4 +334,60 @@ fn derive_struct_with_hash_set_field_emits_unique_items_true() {
     assert_eq!(tags_schema.unique_items, Some(true));
     let items: &JsonSchema = tags_schema.items.as_ref().expect("items").as_ref();
     assert_eq!(items.type_.as_deref(), Some("string"));
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithVecFieldMinMax {
+    #[to_json_schema(min_items = 1, max_items = 10)]
+    tags: Vec<String>,
+}
+
+#[test]
+fn derive_struct_with_vec_field_min_items_max_items_emits_bounds() {
+    let schema: JsonSchema = WithVecFieldMinMax::json_schema();
+    let tags_schema: &JsonSchema = schema.properties.get("tags").expect("tags property");
+    let expected_min: Option<u64> = Some(1);
+    let expected_max: Option<u64> = Some(10);
+    let actual_min: Option<u64> = tags_schema.min_items;
+    let actual_max: Option<u64> = tags_schema.max_items;
+    assert_eq!(expected_min, actual_min);
+    assert_eq!(expected_max, actual_max);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithHashSetFieldMinMax {
+    #[to_json_schema(min_items = 2, max_items = 5)]
+    ids: HashSet<String>,
+}
+
+#[test]
+fn derive_struct_with_hash_set_field_min_items_max_items_emits_bounds() {
+    let schema: JsonSchema = WithHashSetFieldMinMax::json_schema();
+    let ids_schema: &JsonSchema = schema.properties.get("ids").expect("ids property");
+    let expected_min: Option<u64> = Some(2);
+    let expected_max: Option<u64> = Some(5);
+    let actual_min: Option<u64> = ids_schema.min_items;
+    let actual_max: Option<u64> = ids_schema.max_items;
+    assert_eq!(expected_min, actual_min);
+    assert_eq!(expected_max, actual_max);
+}
+
+#[test]
+fn vec_string_json_schema_has_min_items_max_items_none() {
+    let actual: JsonSchema = Vec::<String>::json_schema();
+    let expected_min: Option<u64> = None;
+    let expected_max: Option<u64> = None;
+    assert_eq!(expected_min, actual.min_items);
+    assert_eq!(expected_max, actual.max_items);
+}
+
+#[test]
+fn hash_set_string_json_schema_has_min_items_max_items_none() {
+    let actual: JsonSchema = HashSet::<String>::json_schema();
+    let expected_min: Option<u64> = None;
+    let expected_max: Option<u64> = None;
+    assert_eq!(expected_min, actual.min_items);
+    assert_eq!(expected_max, actual.max_items);
 }

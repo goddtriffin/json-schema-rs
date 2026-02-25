@@ -146,6 +146,22 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                     });
                     continue;
                 };
+                if let Some(min_items) = schema.min_items
+                    && arr.len() < min_items.try_into().unwrap_or(usize::MAX)
+                {
+                    errors.push(ValidationError::TooFewItems {
+                        instance_path: instance_path.clone(),
+                        min_items,
+                    });
+                }
+                if let Some(max_items) = schema.max_items
+                    && arr.len() > max_items.try_into().unwrap_or(0)
+                {
+                    errors.push(ValidationError::TooManyItems {
+                        instance_path: instance_path.clone(),
+                        max_items,
+                    });
+                }
                 if schema.unique_items == Some(true) {
                     let mut has_duplicate = false;
                     for i in 0..arr.len() {
@@ -232,6 +248,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         }
@@ -296,6 +314,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -324,6 +344,8 @@ mod tests {
                         enum_values: None,
                         items: None,
                         unique_items: None,
+                        min_items: None,
+                        max_items: None,
                         minimum: None,
                         maximum: None,
                     },
@@ -336,6 +358,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -358,6 +382,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -378,6 +404,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -398,6 +426,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -420,6 +450,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -442,6 +474,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -464,6 +498,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -486,6 +522,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -511,6 +549,8 @@ mod tests {
             ]),
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -534,6 +574,8 @@ mod tests {
             ]),
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -559,6 +601,8 @@ mod tests {
             ]),
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -582,6 +626,8 @@ mod tests {
             ]),
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -604,6 +650,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -624,6 +672,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -644,6 +694,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -664,6 +716,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -686,6 +740,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -708,6 +764,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -730,6 +788,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -752,6 +812,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -774,6 +836,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -858,6 +922,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -878,6 +944,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -898,6 +966,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -920,6 +990,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -942,6 +1014,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -964,6 +1038,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -986,6 +1062,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1008,6 +1086,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: Some(0.0),
             maximum: Some(255.0),
         };
@@ -1028,6 +1108,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: Some(10.0),
             maximum: Some(100.0),
         };
@@ -1051,6 +1133,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: Some(0.0),
             maximum: Some(10.0),
         };
@@ -1074,6 +1158,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1094,6 +1180,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: Some(0.5),
             maximum: Some(99.5),
         };
@@ -1114,6 +1202,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: Some(1.0),
             maximum: Some(10.0),
         };
@@ -1137,6 +1227,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: Some(0.0),
             maximum: Some(1.0),
         };
@@ -1166,6 +1258,8 @@ mod tests {
                         enum_values: None,
                         items: None,
                         unique_items: None,
+                        min_items: None,
+                        max_items: None,
                         minimum: Some(10.0),
                         maximum: Some(100.0),
                     },
@@ -1181,6 +1275,8 @@ mod tests {
                         enum_values: None,
                         items: None,
                         unique_items: None,
+                        min_items: None,
+                        max_items: None,
                         minimum: Some(10.0),
                         maximum: Some(100.0),
                     },
@@ -1193,6 +1289,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1222,6 +1320,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1242,6 +1342,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1262,6 +1364,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1284,6 +1388,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1296,6 +1402,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1316,6 +1424,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1328,6 +1438,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1350,6 +1462,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1362,6 +1476,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: Some(true),
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1382,6 +1498,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1394,6 +1512,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: Some(true),
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1420,6 +1540,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1432,6 +1554,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: Some(false),
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1452,6 +1576,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1464,6 +1590,8 @@ mod tests {
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1484,12 +1612,270 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: Some(true),
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_only_pass() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: Some(2),
+            max_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2, 3]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_only_fail() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: Some(3),
+            max_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
+            instance_path: JsonPointer::root(),
+            min_items: 3,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_only_edge_len_equals_min() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: Some(2),
+            max_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn max_items_only_pass() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: Some(5),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn max_items_only_fail() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: Some(2),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2, 3]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::TooManyItems {
+            instance_path: JsonPointer::root(),
+            max_items: 2,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn max_items_only_edge_len_equals_max() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: Some(2),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_max_items_both_pass() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: Some(2),
+            max_items: Some(5),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2, 3]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_max_items_fail_too_few() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: Some(2),
+            max_items: Some(5),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
+            instance_path: JsonPointer::root(),
+            min_items: 2,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_max_items_fail_too_many() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: Some(2),
+            max_items: Some(5),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2, 3, 4, 5, 6]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::TooManyItems {
+            instance_path: JsonPointer::root(),
+            max_items: 5,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_max_items_absent_unchanged() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!([1, 2, 3]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_max_items_not_array_expected_array_only() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: Some(2),
+            max_items: Some(5),
+            minimum: None,
+            maximum: None,
+        };
+        let instance = json!("not an array");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedArray {
+            instance_path: JsonPointer::root(),
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1566,6 +1952,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1588,6 +1976,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1610,6 +2000,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1642,6 +2034,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1676,6 +2070,8 @@ mod tests {
                     enum_values: None,
                     items: None,
                     unique_items: None,
+                    min_items: None,
+                    max_items: None,
                     minimum: None,
                     maximum: None,
                 },
@@ -1788,6 +2184,8 @@ mod tests {
                     enum_values: None,
                     items: None,
                     unique_items: None,
+                    min_items: None,
+                    max_items: None,
                     minimum: None,
                     maximum: None,
                 },
@@ -1831,6 +2229,8 @@ mod tests {
             enum_values: None,
             items: None,
             unique_items: None,
+            min_items: None,
+            max_items: None,
             minimum: None,
             maximum: None,
         };
@@ -1844,6 +2244,8 @@ mod tests {
                 enum_values: None,
                 items: None,
                 unique_items: None,
+                min_items: None,
+                max_items: None,
                 minimum: None,
                 maximum: None,
             };

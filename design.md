@@ -73,7 +73,7 @@ Codegen is built around a **swappable backend** trait in **`code_gen/mod.rs`**: 
 
 **Trait and serialization:** The **ToJsonSchema** trait (in **`reverse_code_gen`**) has `fn json_schema() -> JsonSchema`. **JsonSchema** implements **Serialize** and **TryFrom<&JsonSchema> for String** / **TryFrom<&JsonSchema> for Vec<u8>** (and consuming forms); use `String::try_from(&schema)` or `.try_into()` to get JSON. Error type is **JsonSchemaParseError** (wraps `serde_json::Error`). Round-trip: parse schema → generate Rust → compile crate with json-schema-rs + macro → for each generated type call `TypeName::json_schema()` → TryFrom to String/Vec<u8> → parse back → assert equals original (or derived) schema.
 
-**Container/field attributes:** Container: **`#[to_json_schema(title = "...")]`** (when the schema had a title). Field-level **`#[to_json_schema(minimum = N, maximum = N)]`** is supported for emitting JSON Schema bounds on a property; N can be integer or float literals (stored as f64). When present, the attribute value overrides the type-derived minimum/maximum (e.g. an `i64` field with `#[to_json_schema(minimum = 0, maximum = 255)]` emits a schema with those bounds). Other field attributes (e.g. `#[json_schema(...)]`) are parsed for future use; only supported schema keywords (type, properties, required, title, minimum, maximum) are emitted today. Constraint attributes (minLength, pattern, etc.) are reserved until the schema model and validator support them. Attribute names follow a Serde-style pattern (container vs field). **No literal recursion** in `reverse_code_gen`: schema construction and serialization use iteration + stack where depth can be large (see design principle above).
+**Container/field attributes:** Container: **`#[to_json_schema(title = "...")]`** (when the schema had a title). Field-level **`#[to_json_schema(minimum = N, maximum = N)]`** is supported for emitting JSON Schema bounds on a property; N can be integer or float literals (stored as f64). When present, the attribute value overrides the type-derived minimum/maximum (e.g. an `i64` field with `#[to_json_schema(minimum = 0, maximum = 255)]` emits a schema with those bounds). Field-level **`#[to_json_schema(min_items = N, max_items = M)]`** is supported for array/set properties (Vec, HashSet, Option<Vec>, Option<HashSet>); when present, the attribute overlays the type-derived schema so the emitted JSON Schema includes minItems/maxItems. Other field attributes (e.g. `#[json_schema(...)]`) are parsed for future use; only supported schema keywords (type, properties, required, title, minimum, maximum, min_items, max_items) are emitted today. Constraint attributes (minLength, pattern, etc.) are reserved until the schema model and validator support them. Attribute names follow a Serde-style pattern (container vs field). **No literal recursion** in `reverse_code_gen`: schema construction and serialization use iteration + stack where depth can be large (see design principle above).
 
 ### Codegen tests: scenario × frontend
 
@@ -124,6 +124,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Required array property (e.g. Vec\<String\>) | Y | Y | Y | Y | Y |
 | Optional array property | Y | Y | Y | Y | Y |
 | Array with uniqueItems true (e.g. HashSet\<String\>) | Y | Y | Y | Y | Y |
+| Array with minItems/maxItems (schema + emitted attribute) | Y | Y | Y | Y | Y |
 | Array of objects (nested struct) | Y | Y | Y | Y | Y |
 | Array of arrays (e.g. Vec\<Vec\<String\>\>) | Y | — | Y | Y | Y |
 
@@ -369,7 +370,7 @@ When a schema has `"type": "array"`, the instance must be a JSON array. This mea
 
 The `items` keyword defines the schema that all array elements must validate against when it is a **single schema** (object). We support only the single-schema form; we do not support `items` as an array of schemas (tuple typing) or draft 2020-12 `prefixItems` in this implementation.
 
-**Our implementation:** We parse and store `items` as `Option<Box<JsonSchema>>`. When present with `type: "array"`, codegen emits `Vec<T>` (or `Option<Vec<T>>`) where `T` is the Rust type for the item schema (string → `String`, integer → `i64`, number → `f64`, object with properties → struct name, string enum → enum name, array with items → `Vec<Inner>`). Unsupported item types (e.g. `null`, `boolean` only) emit `Vec<serde_json::Value>`. The validator, when `type_ == "array"` and `items` is present, validates each array element against the item schema (iterative stack, no recursion). Reverse codegen: `Vec<T>::json_schema()` returns `type: "array"` and `items: Some(Box::new(T::json_schema()))`. Array constraints (minItems, maxItems, uniqueItems, prefixItems, contains, etc.) are not implemented; see the TODO subsections below.
+**Our implementation:** We parse and store `items` as `Option<Box<JsonSchema>>`. When present with `type: "array"`, codegen emits `Vec<T>` (or `Option<Vec<T>>`) where `T` is the Rust type for the item schema (string → `String`, integer → `i64`, number → `f64`, object with properties → struct name, string enum → enum name, array with items → `Vec<Inner>`). Unsupported item types (e.g. `null`, `boolean` only) emit `Vec<serde_json::Value>`. The validator, when `type_ == "array"` and `items` is present, validates each array element against the item schema (iterative stack, no recursion). Reverse codegen: `Vec<T>::json_schema()` returns `type: "array"` and `items: Some(Box::new(T::json_schema()))`. We support minItems, maxItems, and uniqueItems (see their subsections). prefixItems, contains, unevaluatedItems, etc. are not implemented; see the TODO subsections below.
 
 **Spec version quirks:**
 
@@ -391,9 +392,11 @@ TODO.
 
 ### minItems / maxItems
 
-TODO.
+`minItems` and `maxItems` constrain array length: valid if `size >= minItems` and `size <= maxItems`. Apply only when the instance is an array (after type check). Same meaning across draft-04 through 2020-12.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We parse and store `min_items` and `max_items` as `Option<u64>`. **Validator:** When `type_ == "array"` and the instance is an array, we check length against `min_items` (if present) and `max_items` (if present); we push `ValidationError::TooFewItems` or `TooManyItems` and continue (no fail-fast). Length bounds apply to all arrays regardless of `uniqueItems` (i.e. both Vec and HashSet in codegen). **Codegen:** Emitted Rust type remains `Vec<T>` or `HashSet<T>` (and optional variants) per existing rules; when the schema has `min_items` or `max_items`, we emit `#[to_json_schema(min_items = N, max_items = M)]` on the generated field (only the keys that are present) so generated models round-trip and reverse codegen reproduces the schema. **DedupeKey** includes `min_items` and `max_items` so array/set schemas with different bounds are not deduplicated. **Reverse codegen:** `Vec<T>::json_schema()` and `HashSet<T>::json_schema()` set `min_items: None`, `max_items: None`; the derive supports `#[to_json_schema(min_items = N, max_items = M)]` on array and set fields (Vec, HashSet, Option<Vec>, Option<HashSet>) and overlays them on the property schema.
+
+**Spec version quirks:** Draft-04 meta uses positiveInteger for `maxItems` and positiveIntegerDefault0 for `minItems`; 2019-09 and 2020-12 use nonNegativeInteger / nonNegativeIntegerDefault0. Validation semantics are identical; we use `u64` and accept 0 for both where the spec allows.
 
 ### uniqueItems
 
