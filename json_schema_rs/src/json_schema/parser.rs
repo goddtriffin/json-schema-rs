@@ -93,6 +93,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             max_length: Option<u64>,
             #[serde(default)]
             format: Option<String>,
+            #[serde(default, rename = "allOf")]
+            all_of: Option<Vec<JsonSchema>>,
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
@@ -114,6 +116,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             min_length: h.min_length,
             max_length: h.max_length,
             format: h.format,
+            all_of: h.all_of,
         })
     }
 }
@@ -207,6 +210,7 @@ mod tests {
                         min_length: None,
                         max_length: None,
                         format: None,
+                        all_of: None,
                     },
                 );
                 m
@@ -225,8 +229,88 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_all_of_present() {
+        let json = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}}}]}"#;
+        let settings = JsonSchemaSettings::builder().build();
+        let parsed = parse_schema(json, &settings).expect("parse");
+        let mut props_a = BTreeMap::new();
+        props_a.insert(
+            "a".to_string(),
+            JsonSchema {
+                type_: Some("string".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut props_b = BTreeMap::new();
+        props_b.insert(
+            "b".to_string(),
+            JsonSchema {
+                type_: Some("integer".to_string()),
+                ..Default::default()
+            },
+        );
+        let expected: Option<Vec<JsonSchema>> = Some(vec![
+            JsonSchema {
+                type_: Some("object".to_string()),
+                properties: props_a,
+                ..Default::default()
+            },
+            JsonSchema {
+                type_: Some("object".to_string()),
+                properties: props_b,
+                ..Default::default()
+            },
+        ]);
+        let actual = parsed.all_of.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_all_of_absent() {
+        let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
+        let settings = JsonSchemaSettings::builder().build();
+        let parsed = parse_schema(json, &settings).expect("parse");
+        let expected: Option<Vec<JsonSchema>> = None;
+        let actual = parsed.all_of.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_all_of_empty_array() {
+        let json = r#"{"allOf":[]}"#;
+        let settings = JsonSchemaSettings::builder().build();
+        let parsed = parse_schema(json, &settings).expect("parse");
+        let expected: Option<Vec<JsonSchema>> = Some(vec![]);
+        let actual = parsed.all_of.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_all_of_single_subschema() {
+        let json = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string"}}}]}"#;
+        let settings = JsonSchemaSettings::builder().build();
+        let parsed = parse_schema(json, &settings).expect("parse");
+        let mut props = BTreeMap::new();
+        props.insert(
+            "x".to_string(),
+            JsonSchema {
+                type_: Some("string".to_string()),
+                ..Default::default()
+            },
+        );
+        let expected: Option<Vec<JsonSchema>> = Some(vec![JsonSchema {
+            type_: Some("object".to_string()),
+            properties: props,
+            ..Default::default()
+        }]);
+        let actual = parsed.all_of.clone();
         assert_eq!(expected, actual);
     }
 
@@ -260,6 +344,7 @@ mod tests {
                         min_length: None,
                         max_length: None,
                         format: None,
+                        all_of: None,
                     },
                 );
                 m.insert(
@@ -283,6 +368,7 @@ mod tests {
                         min_length: None,
                         max_length: None,
                         format: None,
+                        all_of: None,
                     },
                 );
                 m
@@ -301,6 +387,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -329,6 +416,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -356,6 +444,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);

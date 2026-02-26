@@ -17,6 +17,24 @@ pub enum CodeGenError {
         index: usize,
         source: Box<CodeGenError>,
     },
+    /// allOf is present but empty (no subschemas to merge).
+    AllOfMergeEmpty,
+    /// At least one subschema in allOf is not object-like (no type "object" and no non-empty properties).
+    AllOfMergeNonObjectSubschema { index: usize },
+    /// Same property appears in multiple subschemas with incompatible types (e.g. string vs integer).
+    AllOfMergeConflictingPropertyType {
+        property_key: String,
+        subschema_indices: Vec<usize>,
+    },
+    /// Same property has conflicting minimum/maximum (or minLength/maxLength, minItems/maxItems) across subschemas that cannot be merged.
+    AllOfMergeConflictingNumericBounds {
+        property_key: String,
+        keyword: String,
+    },
+    /// Same property has enum in more than one subschema with incompatible value sets.
+    AllOfMergeConflictingEnum { property_key: String },
+    /// Subschema uses unsupported features for merge (e.g. $ref, non-object type).
+    AllOfMergeUnsupportedSubschema { index: usize, reason: String },
 }
 
 impl fmt::Display for CodeGenError {
@@ -30,6 +48,37 @@ impl fmt::Display for CodeGenError {
             CodeGenError::Batch { index, source } => {
                 write!(f, "schema at index {index}: {source}")
             }
+            CodeGenError::AllOfMergeEmpty => {
+                write!(f, "allOf is present but empty (no subschemas to merge)")
+            }
+            CodeGenError::AllOfMergeNonObjectSubschema { index } => write!(
+                f,
+                "allOf subschema at index {index} is not object-like (need type \"object\" or non-empty properties)"
+            ),
+            CodeGenError::AllOfMergeConflictingPropertyType {
+                property_key,
+                subschema_indices,
+            } => write!(
+                f,
+                "allOf merge: property \"{property_key}\" has conflicting types in subschemas at indices {subschema_indices:?}"
+            ),
+            CodeGenError::AllOfMergeConflictingNumericBounds {
+                property_key,
+                keyword,
+            } => write!(
+                f,
+                "allOf merge: property \"{property_key}\" has conflicting {keyword} across subschemas"
+            ),
+            CodeGenError::AllOfMergeConflictingEnum { property_key } => write!(
+                f,
+                "allOf merge: property \"{property_key}\" has conflicting enum values across subschemas"
+            ),
+            CodeGenError::AllOfMergeUnsupportedSubschema { index, reason } => {
+                write!(
+                    f,
+                    "allOf subschema at index {index} is unsupported for merge: {reason}"
+                )
+            }
         }
     }
 }
@@ -38,7 +87,13 @@ impl std::error::Error for CodeGenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CodeGenError::Io(e) => Some(e),
-            CodeGenError::RootNotObject => None,
+            CodeGenError::RootNotObject
+            | CodeGenError::AllOfMergeEmpty
+            | CodeGenError::AllOfMergeNonObjectSubschema { .. }
+            | CodeGenError::AllOfMergeConflictingPropertyType { .. }
+            | CodeGenError::AllOfMergeConflictingNumericBounds { .. }
+            | CodeGenError::AllOfMergeConflictingEnum { .. }
+            | CodeGenError::AllOfMergeUnsupportedSubschema { .. } => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
         }
     }

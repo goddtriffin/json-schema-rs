@@ -36,6 +36,7 @@ impl ToJsonSchema for String {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         }
     }
 }
@@ -61,6 +62,7 @@ impl ToJsonSchema for bool {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         }
     }
 }
@@ -85,6 +87,7 @@ fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         min_length: None,
         max_length: None,
         format: None,
+        all_of: None,
     }
 }
 
@@ -157,6 +160,7 @@ fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         min_length: None,
         max_length: None,
         format: None,
+        all_of: None,
     }
 }
 
@@ -199,6 +203,7 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         }
     }
 }
@@ -225,6 +230,7 @@ impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         }
     }
 }
@@ -254,6 +260,7 @@ impl ToJsonSchema for HandWrittenExample {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         }
     }
 }
@@ -280,6 +287,7 @@ impl ToJsonSchema for uuid::Uuid {
             min_length: None,
             max_length: None,
             format: Some("uuid".to_string()),
+            all_of: None,
         }
     }
 }
@@ -310,6 +318,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = String::json_schema();
         assert_eq!(expected, actual);
@@ -336,6 +345,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = bool::json_schema();
         assert_eq!(expected, actual);
@@ -370,6 +380,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = i64::json_schema();
         assert_eq!(expected, actual);
@@ -466,6 +477,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = f64::json_schema();
         assert_eq!(expected, actual);
@@ -508,6 +520,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = super::HandWrittenExample::json_schema();
         assert_eq!(expected, actual);
@@ -534,6 +547,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = Vec::<String>::json_schema();
         assert_eq!(expected, actual);
@@ -560,6 +574,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: JsonSchema = Vec::<i64>::json_schema();
         assert_eq!(expected, actual);

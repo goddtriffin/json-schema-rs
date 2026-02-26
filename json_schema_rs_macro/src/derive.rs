@@ -547,6 +547,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     min_length: None,
                     max_length: None,
                     format: None,
+                    all_of: None,
                 }
             }
         }
@@ -635,6 +636,7 @@ fn expand_enum_to_json_schema(
                     min_length: None,
                     max_length: None,
                     format: None,
+                    all_of: None,
                 }
             }
         }

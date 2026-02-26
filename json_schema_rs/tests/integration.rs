@@ -1796,7 +1796,7 @@ edition = "2024"
 path = "src/lib.rs"
 
 [[bin]]
-name = "run"
+name = "{}"
 path = "src/main.rs"
 
 [dependencies]
@@ -1805,6 +1805,7 @@ serde_json = "1"
 json-schema-rs = {{ path = "{}" }}
 json-schema-rs-macro = {{ path = "{}" }}
 "#,
+        package_name,
         package_name,
         json_schema_rs_path.display(),
         macro_path.display()
@@ -1864,11 +1865,11 @@ fn assert_cargo_build_workspace(workspace_root: &Path) {
     );
 }
 
-/// Runs `cargo run -p <package> --bin run` with `CARGO_TARGET_DIR` set. Cwd must be workspace root.
+/// Runs `cargo run -p <package> --bin <package>` with `CARGO_TARGET_DIR` set. Cwd must be workspace root.
 fn assert_cargo_run_package(workspace_root: &Path, package: &str, scenario_name: &str) {
     let target_dir: PathBuf = integration_codegen_target_dir();
     let run = Command::new("cargo")
-        .args(["run", "-p", package, "--bin", "run"])
+        .args(["run", "-p", package, "--bin", package])
         .current_dir(workspace_root)
         .env("CARGO_TARGET_DIR", &target_dir)
         .output()
@@ -2110,6 +2111,7 @@ fn write_workspace_scenario_member(
                                 min_length: None,
                                 max_length: None,
                                 format: None,
+                                all_of: None,
                             },
                         );
                         m
@@ -2128,6 +2130,7 @@ fn write_workspace_scenario_member(
                     min_length: None,
                     max_length: None,
                     format: None,
+                    all_of: None,
                 };
                 for i in (0..DEPTH).rev() {
                     let mut wrap: JsonSchema = JsonSchema {
@@ -2149,6 +2152,7 @@ fn write_workspace_scenario_member(
                         min_length: None,
                         max_length: None,
                         format: None,
+                        all_of: None,
                     };
                     wrap.properties.insert("child".to_string(), inner);
                     inner = wrap;
@@ -2156,6 +2160,17 @@ fn write_workspace_scenario_member(
                 let output = generate_rust(&[inner], default_code_gen).expect("generate");
                 let main_rs = r##"fn main() {
     let _: compile_test::Level0 = serde_json::from_str(r#"{"child":{"child":{"child":{}}}}"#).unwrap();
+}
+"##;
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
+            "allof_merged" => {
+                let schema_json = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}},"required":["b"]}]}"#;
+                let schema: JsonSchema =
+                    parse_schema(schema_json, schema_settings).expect("parse allOf schema");
+                let output = generate_rust(&[schema], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
+    let _: compile_test::Root = serde_json::from_str(r#"{"a":"x","b":1}"#).unwrap();
 }
 "##;
                 (output.per_schema[0].clone(), vec![], main_rs)
@@ -2428,6 +2443,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "dedupe_two_identical",
         "model_name_source_property_key",
         "deep_nesting",
+        "allof_merged",
     ];
 
     for name in &scenario_list {

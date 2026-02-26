@@ -435,6 +435,188 @@ fn item_schema_is_hashable(schema: &JsonSchema) -> bool {
     !schema.is_object_with_properties() && !schema.is_array_with_items()
 }
 
+/// True if schema is object-like for allOf merge: type "object" or non-empty properties.
+fn is_object_like_for_merge(schema: &JsonSchema) -> bool {
+    schema.type_.as_deref() == Some("object") || !schema.properties.is_empty()
+}
+
+/// Merge an array of object-like schemas (allOf) into a single schema. Errors on empty array,
+/// non-object-like subschema, or conflicting property types/bounds/enums.
+pub(crate) fn merge_all_of(schemas: &[JsonSchema]) -> CodeGenResult<JsonSchema> {
+    if schemas.is_empty() {
+        return Err(CodeGenError::AllOfMergeEmpty);
+    }
+    for (index, s) in schemas.iter().enumerate() {
+        if !is_object_like_for_merge(s) {
+            return Err(CodeGenError::AllOfMergeNonObjectSubschema { index });
+        }
+    }
+    let mut merged = JsonSchema::default();
+    for s in schemas {
+        merge_object_schema_into(&mut merged, s, "")?;
+    }
+    merged.type_ = Some("object".to_string());
+    Ok(merged)
+}
+
+/// Merge one object schema into `target`. Used for allOf merge. `parent_key` is for error messages.
+fn merge_object_schema_into(
+    target: &mut JsonSchema,
+    other: &JsonSchema,
+    parent_key: &str,
+) -> CodeGenResult<()> {
+    for (k, other_prop) in &other.properties {
+        let key_for_errors = if parent_key.is_empty() {
+            k.clone()
+        } else {
+            format!("{parent_key}.{k}")
+        };
+        if let Some(target_prop) = target.properties.get_mut(k) {
+            let merged_prop = merge_property_schemas(target_prop, other_prop, &key_for_errors)?;
+            *target_prop = merged_prop;
+        } else {
+            target.properties.insert(k.clone(), other_prop.clone());
+        }
+    }
+    // Required: union, dedupe, first-occurrence order
+    let mut required: Vec<String> = target.required.clone().unwrap_or_default();
+    for r in other.required.as_deref().unwrap_or(&[]) {
+        if !required.contains(r) {
+            required.push(r.clone());
+        }
+    }
+    target.required = if required.is_empty() {
+        None
+    } else {
+        Some(required)
+    };
+    if target.title.as_deref().map_or("", str::trim).is_empty() {
+        target.title.clone_from(&other.title);
+    }
+    if target
+        .description
+        .as_deref()
+        .map_or("", str::trim)
+        .is_empty()
+    {
+        target.description.clone_from(&other.description);
+    }
+    if target.comment.is_none() {
+        target.comment.clone_from(&other.comment);
+    }
+    Ok(())
+}
+
+/// Merge two property subschemas (same key in different allOf branches). Returns merged schema or error on conflict.
+fn merge_property_schemas(
+    a: &JsonSchema,
+    b: &JsonSchema,
+    property_key: &str,
+) -> CodeGenResult<JsonSchema> {
+    if a.is_object_with_properties() && b.is_object_with_properties() {
+        let mut merged = a.clone();
+        merge_object_schema_into(&mut merged, b, property_key)?;
+        return Ok(merged);
+    }
+    if a.is_array_with_items() && b.is_array_with_items() {
+        let a_items = a.items.as_ref().expect("array with items").as_ref();
+        let b_items = b.items.as_ref().expect("array with items").as_ref();
+        let merged_items = merge_property_schemas(a_items, b_items, &format!("{property_key}[]"))?;
+        let mut out = a.clone();
+        out.items = Some(Box::new(merged_items));
+        return Ok(out);
+    }
+    let type_a = a.type_.as_deref();
+    let type_b = b.type_.as_deref();
+    if type_a != type_b {
+        return Err(CodeGenError::AllOfMergeConflictingPropertyType {
+            property_key: property_key.to_string(),
+            subschema_indices: vec![], // we don't have indices in this context; message still clear
+        });
+    }
+    if a.is_string() && b.is_string() {
+        let mut out = a.clone();
+        if out.min_length.is_none() {
+            out.min_length = b.min_length;
+        }
+        if out.max_length.is_none() {
+            out.max_length = b.max_length;
+        }
+        if out.format.is_none() {
+            out.format.clone_from(&b.format);
+        }
+        if let (Some(ea), Some(eb)) = (&a.enum_values, &b.enum_values) {
+            if ea != eb {
+                return Err(CodeGenError::AllOfMergeConflictingEnum {
+                    property_key: property_key.to_string(),
+                });
+            }
+        } else if b.enum_values.is_some() {
+            out.enum_values.clone_from(&b.enum_values);
+        }
+        return Ok(out);
+    }
+    if a.is_integer() && b.is_integer() || a.is_number() && b.is_number() {
+        let mut out = a.clone();
+        merge_numeric_bounds(&mut out, b, property_key, "minimum", "maximum")?;
+        return Ok(out);
+    }
+    if a.is_string_enum() && b.is_string_enum() {
+        if a.enum_values != b.enum_values {
+            return Err(CodeGenError::AllOfMergeConflictingEnum {
+                property_key: property_key.to_string(),
+            });
+        }
+        return Ok(a.clone());
+    }
+    if type_a.is_some() || type_b.is_some() {
+        return Err(CodeGenError::AllOfMergeConflictingPropertyType {
+            property_key: property_key.to_string(),
+            subschema_indices: vec![],
+        });
+    }
+    Ok(a.clone())
+}
+
+fn merge_numeric_bounds(
+    target: &mut JsonSchema,
+    other: &JsonSchema,
+    property_key: &str,
+    min_kw: &str,
+    max_kw: &str,
+) -> CodeGenResult<()> {
+    let (t_min, t_max) = (target.minimum, target.maximum);
+    let (o_min, o_max) = (other.minimum, other.maximum);
+    let new_min = match (t_min, o_min) {
+        (Some(t), Some(o)) => Some(t.max(o)),
+        (a, None) | (None, a) => a,
+    };
+    let new_max = match (t_max, o_max) {
+        (Some(t), Some(o)) => Some(t.min(o)),
+        (a, None) | (None, a) => a,
+    };
+    if let (Some(mi), Some(ma)) = (new_min, new_max)
+        && mi > ma
+    {
+        return Err(CodeGenError::AllOfMergeConflictingNumericBounds {
+            property_key: property_key.to_string(),
+            keyword: format!("{min_kw}/{max_kw}"),
+        });
+    }
+    target.minimum = new_min;
+    target.maximum = new_max;
+    Ok(())
+}
+
+/// Resolve allOf for codegen: if schema has non-empty `all_of`, merge and return; otherwise return clone.
+pub(crate) fn resolve_all_of_for_codegen(schema: &JsonSchema) -> CodeGenResult<JsonSchema> {
+    match &schema.all_of {
+        Some(all) if !all.is_empty() => merge_all_of(all),
+        Some(_) => Err(CodeGenError::AllOfMergeEmpty),
+        None => Ok(schema.clone()),
+    }
+}
+
 /// Returns the Rust type string for a schema (used for array item type and nested types). Unsupported types yield `serde_json::Value`.
 fn rust_type_for_item_schema(
     schema: &JsonSchema,
@@ -553,15 +735,16 @@ fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToE
 
 /// Collect all object schemas that need a struct in topological order (children before parents).
 /// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
+/// Resolves allOf for each node before use (merge on-the-fly).
 fn collect_structs(
     schema: &JsonSchema,
     from_key: Option<&str>,
     out: &mut Vec<StructToEmit>,
     seen: &mut BTreeSet<String>,
     settings: &CodeGenSettings,
-) {
+) -> CodeGenResult<()> {
     if !schema.is_object_with_properties() {
-        return;
+        return Ok(());
     }
 
     // Phase 1: iterative post-order DFS to collect (schema, from_key) so children come before parents.
@@ -579,14 +762,17 @@ fn collect_structs(
         if index < keys.len() {
             let key: String = keys.get(index).unwrap().clone();
             let child: JsonSchema = schema_node.properties.get(&key).unwrap().clone();
+            let child_resolved = resolve_all_of_for_codegen(&child)?;
             stack.push((schema_node, from_key_opt, index + 1, is_root));
-            if child.is_object_with_properties() {
-                stack.push((child, Some(key.clone()), 0, false));
-            } else if child.is_array_with_items()
-                && let Some(ref items) = child.items
-                && items.is_object_with_properties()
+            if child_resolved.is_object_with_properties() {
+                stack.push((child_resolved, Some(key.clone()), 0, false));
+            } else if child_resolved.is_array_with_items()
+                && let Some(ref items) = child_resolved.items
             {
-                stack.push((items.as_ref().clone(), Some(key.clone()), 0, false));
+                let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                if items_resolved.is_object_with_properties() {
+                    stack.push((items_resolved, Some(key.clone()), 0, false));
+                }
             }
         } else {
             post_order.push((schema_node, from_key_opt, is_root));
@@ -612,6 +798,7 @@ fn collect_structs(
             schema: schema_node,
         });
     }
+    Ok(())
 }
 
 /// Collect (`schema_idx`, `candidate_name`, schema) for every struct from all schemas in post-order (children before parents) per schema. No name dedupe.
@@ -667,8 +854,19 @@ fn generate_rust_with_dedupe(
 ) -> CodeGenResult<GenerateRustOutput> {
     let mode: DedupeMode = settings.dedupe_mode;
 
+    let resolved_schemas: Vec<JsonSchema> = schemas
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            resolve_all_of_for_codegen(s).map_err(|e| CodeGenError::Batch {
+                index: i,
+                source: Box::new(e),
+            })
+        })
+        .collect::<CodeGenResult<Vec<_>>>()?;
+
     let mut enum_values_to_name: EnumValuesToNameMap = BTreeMap::new();
-    for schema in schemas {
+    for schema in &resolved_schemas {
         for e in collect_enums(schema, settings) {
             enum_values_to_name
                 .entry(e.values.clone())
@@ -685,7 +883,7 @@ fn generate_rust_with_dedupe(
         .collect();
 
     let collected: Vec<(usize, String, JsonSchema)> =
-        collect_structs_all_schemas(schemas, settings);
+        collect_structs_all_schemas(&resolved_schemas, settings);
 
     // Build BTreeMap: DedupeKey -> (canonical_name, schema, occurrences)
     let mut map: BTreeMap<DedupeKey, (String, JsonSchema, Vec<(usize, String)>)> = BTreeMap::new();
@@ -714,8 +912,8 @@ fn generate_rust_with_dedupe(
         .collect();
 
     if shared_names.is_empty() {
-        let mut per_schema: Vec<Vec<u8>> = Vec::with_capacity(schemas.len());
-        for (index, schema) in schemas.iter().enumerate() {
+        let mut per_schema: Vec<Vec<u8>> = Vec::with_capacity(resolved_schemas.len());
+        for (index, schema) in resolved_schemas.iter().enumerate() {
             let mut out = Cursor::new(Vec::new());
             emit_rust(schema, &mut out, settings).map_err(|e| CodeGenError::Batch {
                 index,
@@ -1278,11 +1476,12 @@ fn emit_rust(
     out: &mut impl Write,
     settings: &CodeGenSettings,
 ) -> CodeGenResult<()> {
-    if !schema.is_object_with_properties() {
+    let root = resolve_all_of_for_codegen(schema)?;
+    if !root.is_object_with_properties() {
         return Err(CodeGenError::RootNotObject);
     }
 
-    let enums: Vec<EnumToEmit> = collect_enums(schema, settings);
+    let enums: Vec<EnumToEmit> = collect_enums(&root, settings);
     let enum_values_to_name: BTreeMap<Vec<String>, String> = enums
         .iter()
         .map(|e| (e.values.clone(), e.name.clone()))
@@ -1290,7 +1489,7 @@ fn emit_rust(
 
     let mut structs: Vec<StructToEmit> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    collect_structs(schema, None, &mut structs, &mut seen, settings);
+    collect_structs(&root, None, &mut structs, &mut seen, settings)?;
 
     writeln!(
         out,
@@ -1336,7 +1535,7 @@ pub fn generate_rust(
 #[cfg(test)]
 mod tests {
     use super::CodeGenError;
-    use super::{CodeGenBackend, RustBackend, generate_rust};
+    use super::{CodeGenBackend, RustBackend, generate_rust, merge_all_of};
     use crate::code_gen::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
     use crate::json_schema::JsonSchema;
 
@@ -1448,6 +1647,152 @@ pub struct Root {
 
 "#;
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn all_of_merged_object_golden() {
+        let json = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}},"required":["b"]}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub a: Option<String>,
+    pub b: i64,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn merge_all_of_success_two_object_subschemas() {
+        let s1: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
+                .unwrap();
+        let s2: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"b":{"type":"integer"}},"required":["b"]}"#,
+        )
+        .unwrap();
+        let actual = merge_all_of(&[s1, s2]).unwrap();
+        let expected: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["b"]}"#,
+        )
+        .unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn merge_all_of_empty_errors() {
+        let actual = merge_all_of(&[]);
+        assert!(matches!(actual, Err(CodeGenError::AllOfMergeEmpty)));
+    }
+
+    #[test]
+    fn merge_all_of_single_schema() {
+        let s: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"x":{"type":"string"}}}"#)
+                .unwrap();
+        let expected = s.clone();
+        let actual = merge_all_of(std::slice::from_ref(&s)).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn merge_all_of_conflicting_property_type_errors() {
+        let s1: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"k":{"type":"string"}}}"#)
+                .unwrap();
+        let s2: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"k":{"type":"integer"}}}"#)
+                .unwrap();
+        let actual = merge_all_of(&[s1, s2]);
+        assert!(matches!(
+            actual,
+            Err(CodeGenError::AllOfMergeConflictingPropertyType {
+                property_key: ref k,
+                ..
+            }) if k == "k"
+        ));
+    }
+
+    #[test]
+    fn merge_all_of_non_object_subschema_errors() {
+        let s1: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
+                .unwrap();
+        let s2: JsonSchema = serde_json::from_str(r#"{"type":"string"}"#).unwrap();
+        let actual = merge_all_of(&[s1, s2]);
+        assert!(matches!(
+            actual,
+            Err(CodeGenError::AllOfMergeNonObjectSubschema { index: 1 })
+        ));
+    }
+
+    #[test]
+    fn merge_all_of_conflicting_enum_errors() {
+        let s1: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"s":{"enum":["a","b"]}}}"#)
+                .unwrap();
+        let s2: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"s":{"enum":["x","y"]}}}"#)
+                .unwrap();
+        let actual = merge_all_of(&[s1, s2]);
+        assert!(matches!(
+            actual,
+            Err(CodeGenError::AllOfMergeConflictingEnum { property_key: ref k }) if k == "s"
+        ));
+    }
+
+    #[test]
+    fn merge_all_of_conflicting_numeric_bounds_errors() {
+        let s1: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":10}}}"#,
+        )
+        .unwrap();
+        let s2: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":20,"maximum":30}}}"#,
+        )
+        .unwrap();
+        let actual = merge_all_of(&[s1, s2]);
+        assert!(matches!(
+            actual,
+            Err(CodeGenError::AllOfMergeConflictingNumericBounds {
+                property_key: ref k,
+                keyword: ref w
+            }) if k == "n" && w == "minimum/maximum"
+        ));
+    }
+
+    #[test]
+    fn batch_error_when_allof_merge_fails_in_second_schema() {
+        let s0: JsonSchema =
+            serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
+                .unwrap();
+        let s1_bad: JsonSchema = serde_json::from_str(
+            r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string"}}},{"type":"object","properties":{"x":{"type":"integer"}}}]}"#,
+        )
+        .unwrap();
+        let settings = default_settings();
+        let actual = generate_rust(&[s0.clone(), s1_bad], &settings).unwrap_err();
+        assert!(matches!(actual, CodeGenError::Batch { index: 1, .. }));
+    }
+
+    #[test]
+    fn root_all_of_merges_to_empty_object_errors_with_root_not_object() {
+        let schema: JsonSchema =
+            serde_json::from_str(r#"{"allOf":[{"type":"object"},{"type":"object"}]}"#).unwrap();
+        let settings = default_settings();
+        let actual = generate_rust(&[schema], &settings).unwrap_err();
+        assert!(
+            matches!(actual, CodeGenError::Batch { index: 0, source: ref s } if matches!(**s, CodeGenError::RootNotObject)),
+            "expected Batch {{ index: 0, source: RootNotObject }}, got {actual:?}"
+        );
     }
 
     #[test]
@@ -2129,6 +2474,7 @@ pub struct Root {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
@@ -2150,6 +2496,7 @@ pub struct Root {
                 min_length: None,
                 max_length: None,
                 format: None,
+                all_of: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

@@ -130,6 +130,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Array with uniqueItems true (e.g. HashSet\<String\>) | Y | Y | Y | Y | Y |
 | Array with minItems/maxItems (schema + emitted attribute) | Y | Y | Y | Y | Y |
 | String with minLength/maxLength (schema + emitted attribute) | Y | Y | Y | Y | Y |
+| allOf (merged object) | Y | — | — | Y | — |
 | Array of objects (nested struct) | Y | Y | Y | Y | Y |
 | Array of arrays (e.g. Vec\<Vec\<String\>\>) | Y | — | Y | Y | Y |
 
@@ -231,9 +232,20 @@ TODO.
 
 ### allOf
 
-TODO.
+The JSON Schema `allOf` keyword is an array of schemas; an instance validates if it validates against **every** element. (Draft-03 and later; draft-00/01/02 do not define allOf in the core meta-schema we vendor.)
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+
+- **Ingestion:** We store `allOf` as-is. The in-memory `JsonSchema` has `all_of: Option<Vec<JsonSchema>>`. No merging at parse time.
+- **Validator:** When `all_of` is present and non-empty, we validate the instance against **each** subschema (push each `(subschema, instance, path)` onto the validation stack); we collect all errors (no fail-fast). No merge.
+- **Codegen:** When a schema node has `all_of`, we **merge on-the-fly** (in codegen only) into a single effective schema for that node, then run existing struct collection and emission on that merged result. We emit a **single** Rust model per node. Merge rules: properties union (same key: recursive merge for nested object/array items; first non-None for leaf/constraint); required union (dedupe, stable order); type_ `Some("object")` when all subschemas are object-like; title/description first non-empty; other keywords first non-None. If merge fails (e.g. conflicting property types, non-object subschema), we return a specific [`CodeGenError`](json_schema_rs/src/code_gen/error.rs) variant (see Codegen errors for merge failures below).
+- **Reverse codegen:** **Not supported.** We do not emit `allOf` from Rust types (no macro annotation). Round-trip is intentionally lossy unless a future design adds support (e.g. attributes or a different representation).
+
+**Round-trip and reverse codegen:** Schema round-trip (parse → serialize) and reverse codegen do **not** preserve `allOf`; the design is intentionally lossy. We do not add round-trip tests that assert allOf is preserved.
+
+**Codegen errors for merge failures:** When on-the-fly merging fails, we return distinct `CodeGenError` variants: `AllOfMergeEmpty`, `AllOfMergeNonObjectSubschema`, `AllOfMergeConflictingPropertyType`, `AllOfMergeConflictingNumericBounds`, `AllOfMergeConflictingEnum`, `AllOfMergeUnsupportedSubschema`. We do not silently fall back. Which conflicts are fatal vs resolved (e.g. first-wins for title/description) is documented in the merge implementation and in this section.
+
+**Spec version quirks:** allOf appears in draft-03 and later; behavior is consistent across drafts we support (array of schemas; instance must validate against every element). Draft-00, 01, 02 do not define allOf in the core meta-schema.
 
 ### anyOf
 

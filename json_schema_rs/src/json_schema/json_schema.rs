@@ -16,6 +16,12 @@ fn skip_enum_values(v: &Option<Vec<serde_json::Value>>) -> bool {
     v.as_ref().is_none_or(Vec::is_empty)
 }
 
+/// Returns true when `all_of` should be omitted from serialized output (None or empty).
+#[expect(clippy::ref_option)]
+fn skip_all_of(v: &Option<Vec<JsonSchema>>) -> bool {
+    v.as_ref().is_none_or(Vec::is_empty)
+}
+
 /// Schema helper with `deny_unknown_fields`: same shape as our schema model but with `#[serde(deny_unknown_fields)]`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,6 +66,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) max_length: Option<u64>,
     #[serde(default)]
     pub(crate) format: Option<String>,
+    #[serde(default, rename = "allOf")]
+    pub(crate) all_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
 }
 
 /// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
@@ -73,6 +81,11 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
     let items: Option<Box<JsonSchema>> = h
         .items
         .map(|b| Box::new(deny_unknown_fields_helper_to_schema(*b)));
+    let all_of: Option<Vec<JsonSchema>> = h.all_of.map(|v| {
+        v.into_iter()
+            .map(deny_unknown_fields_helper_to_schema)
+            .collect()
+    });
     JsonSchema {
         schema: h.schema,
         id: h.id,
@@ -92,6 +105,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         min_length: h.min_length,
         max_length: h.max_length,
         format: h.format,
+        all_of,
     }
 }
 
@@ -170,6 +184,10 @@ pub struct JsonSchema {
     /// `"uuid"` drives type selection in codegen and format validation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+
+    /// allOf: instance must validate against every subschema. Stored as-is at ingestion; validator validates each; codegen merges on-the-fly. Not preserved on round-trip or reverse codegen.
+    #[serde(rename = "allOf", skip_serializing_if = "skip_all_of")]
+    pub all_of: Option<Vec<JsonSchema>>,
 }
 
 impl JsonSchema {
@@ -285,6 +303,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"object","title":"Root"}"#;
@@ -312,6 +331,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: String = (&schema).try_into().expect("serialize");
         let expected_contains = r#""$comment":"Created by John Doe""#;
@@ -342,6 +362,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"string\"}";
@@ -436,6 +457,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
@@ -489,6 +511,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"number\"}";
@@ -516,6 +539,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         assert!(!no_enum.is_string_enum());
         let empty_enum: JsonSchema = JsonSchema {
@@ -537,6 +561,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         assert!(!empty_enum.is_string_enum());
         let string_enum: JsonSchema = JsonSchema {
@@ -561,6 +586,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         assert!(string_enum.is_string_enum());
         let mixed_enum: JsonSchema = JsonSchema {
@@ -585,6 +611,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         assert!(!mixed_enum.is_string_enum());
     }
@@ -636,6 +663,7 @@ mod tests {
                     min_length: None,
                     max_length: None,
                     format: None,
+                    all_of: None,
                 }));
                 s.is_array_with_items()
             },
@@ -665,6 +693,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -685,6 +714,7 @@ mod tests {
             min_length: None,
             max_length: None,
             format: None,
+            all_of: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"array","items":{"type":"string"}}"#;
