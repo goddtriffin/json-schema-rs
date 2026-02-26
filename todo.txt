@@ -5,7 +5,6 @@ For each of these TODO items, check what every other competitor library does, ch
   It should spit out individual results for the relevant metrics of our library, the same for
   competitor libraries, and then compare them all against each other to clearly mark a winner
   for each given category.
-- support UUIDs
 - add code gen and reverse code gen setting for: "flatten single entry combinator".
   This is a boolean flag, which is disabled by default. If enabled, whenever an allOf/anyOf/oneOf
   is encountered, if it only has a single entry within it, then we "flatten" it - aka we
@@ -24,10 +23,6 @@ For each of these TODO items, check what every other competitor library does, ch
   generally the same quality/usefulness validation error messages)
 - should all generated Rust models implement the Hash derive macro trait?
   This would enable all code gen models to play well with uniqueItems by default.
-- upgrade all validation error messages to provide more context
-  e.g. NotInEnum should say what the invalid enum value was and also what the full allowed set is
-  e.g. TooFewItems should say what the invalid amount was and also what the specified minimum is
-  e.g. AboveMaximum should say the invalid value and also what the specified maximum is
 
 
 /contribution-guide Please create plan:

@@ -9,6 +9,23 @@ use crate::json_pointer::JsonPointer;
 use crate::json_schema::JsonSchema;
 use serde_json::Value;
 
+/// Returns the JSON type name of the value for use in "got" error messages.
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Serializes a JSON value to a string for error display. Never truncates.
+fn value_to_display_string(v: &Value) -> String {
+    serde_json::to_string(v).unwrap_or_else(|_| "?".to_string())
+}
+
 /// Validates a JSON instance against a schema. Collects **all** validation errors
 /// and returns them in a single result (no fail-fast).
 ///
@@ -42,8 +59,12 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
             && !allowed.is_empty()
             && !allowed.iter().any(|a| a == instance)
         {
+            let invalid_value: String = value_to_display_string(instance);
+            let allowed_strs: Vec<String> = allowed.iter().map(value_to_display_string).collect();
             errors.push(ValidationError::NotInEnum {
                 instance_path: instance_path.clone(),
+                invalid_value,
+                allowed: allowed_strs,
             });
             continue;
         }
@@ -53,6 +74,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                 let Some(obj) = instance.as_object() else {
                     errors.push(ValidationError::ExpectedObject {
                         instance_path: instance_path.clone(),
+                        got: json_type_name(instance).to_string(),
                     });
                     continue;
                 };
@@ -82,6 +104,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                 if !instance.is_string() {
                     errors.push(ValidationError::ExpectedString {
                         instance_path: instance_path.clone(),
+                        got: json_type_name(instance).to_string(),
                     });
                 }
                 // minLength / maxLength: count Unicode code points (chars), not bytes.
@@ -93,6 +116,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                         errors.push(ValidationError::TooShort {
                             instance_path: instance_path.clone(),
                             min_length,
+                            actual_length: char_count,
                         });
                     }
                     if let Some(max_length) = schema.max_length
@@ -101,6 +125,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                         errors.push(ValidationError::TooLong {
                             instance_path: instance_path.clone(),
                             max_length,
+                            actual_length: char_count,
                         });
                     }
                 }
@@ -110,6 +135,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                 if !valid {
                     errors.push(ValidationError::ExpectedInteger {
                         instance_path: instance_path.clone(),
+                        got: json_type_name(instance).to_string(),
                     });
                 } else if let Some(instance_f64) =
                     instance.as_number().and_then(serde_json::Number::as_f64)
@@ -120,6 +146,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                         errors.push(ValidationError::BelowMinimum {
                             instance_path: instance_path.clone(),
                             minimum: crate::validator::error::OrderedF64(min),
+                            actual: crate::validator::error::OrderedF64(instance_f64),
                         });
                     }
                     if let Some(max) = schema.maximum
@@ -128,6 +155,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                         errors.push(ValidationError::AboveMaximum {
                             instance_path: instance_path.clone(),
                             maximum: crate::validator::error::OrderedF64(max),
+                            actual: crate::validator::error::OrderedF64(instance_f64),
                         });
                     }
                 }
@@ -137,6 +165,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                 if !valid {
                     errors.push(ValidationError::ExpectedNumber {
                         instance_path: instance_path.clone(),
+                        got: json_type_name(instance).to_string(),
                     });
                 } else if let Some(instance_f64) =
                     instance.as_number().and_then(serde_json::Number::as_f64)
@@ -147,6 +176,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                         errors.push(ValidationError::BelowMinimum {
                             instance_path: instance_path.clone(),
                             minimum: crate::validator::error::OrderedF64(min),
+                            actual: crate::validator::error::OrderedF64(instance_f64),
                         });
                     }
                     if let Some(max) = schema.maximum
@@ -155,6 +185,7 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                         errors.push(ValidationError::AboveMaximum {
                             instance_path: instance_path.clone(),
                             maximum: crate::validator::error::OrderedF64(max),
+                            actual: crate::validator::error::OrderedF64(instance_f64),
                         });
                     }
                 }
@@ -163,15 +194,18 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                 let Some(arr) = instance.as_array() else {
                     errors.push(ValidationError::ExpectedArray {
                         instance_path: instance_path.clone(),
+                        got: json_type_name(instance).to_string(),
                     });
                     continue;
                 };
+                let actual_count: u64 = arr.len() as u64;
                 if let Some(min_items) = schema.min_items
                     && arr.len() < min_items.try_into().unwrap_or(usize::MAX)
                 {
                     errors.push(ValidationError::TooFewItems {
                         instance_path: instance_path.clone(),
                         min_items,
+                        actual_count,
                     });
                 }
                 if let Some(max_items) = schema.max_items
@@ -180,24 +214,26 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                     errors.push(ValidationError::TooManyItems {
                         instance_path: instance_path.clone(),
                         max_items,
+                        actual_count,
                     });
                 }
                 if schema.unique_items == Some(true) {
-                    let mut has_duplicate = false;
+                    let mut duplicate_value_opt: Option<String> = None;
                     for i in 0..arr.len() {
                         for j in (i + 1)..arr.len() {
                             if arr[i] == arr[j] {
-                                has_duplicate = true;
+                                duplicate_value_opt = Some(value_to_display_string(&arr[i]));
                                 break;
                             }
                         }
-                        if has_duplicate {
+                        if duplicate_value_opt.is_some() {
                             break;
                         }
                     }
-                    if has_duplicate {
+                    if let Some(duplicate_value) = duplicate_value_opt {
                         errors.push(ValidationError::DuplicateArrayItems {
                             instance_path: instance_path.clone(),
+                            duplicate_value,
                         });
                     }
                 }
@@ -347,6 +383,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
+            got: "string".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -469,6 +506,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root(),
+            got: "object".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -495,6 +533,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root(),
+            got: "number".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -521,6 +560,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root(),
+            got: "null".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -547,6 +587,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root(),
+            got: "boolean".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -573,6 +614,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root(),
+            got: "array".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -629,6 +671,8 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::NotInEnum {
             instance_path: JsonPointer::root(),
+            invalid_value: "\"pending\"".to_string(),
+            allowed: vec!["\"open\"".to_string(), "\"closed\"".to_string()],
         }]);
         assert_eq!(expected, actual);
     }
@@ -685,6 +729,8 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::NotInEnum {
             instance_path: JsonPointer::root(),
+            invalid_value: "\"c\"".to_string(),
+            allowed: vec!["\"a\"".to_string(), "\"b\"".to_string()],
         }]);
         assert_eq!(expected, actual);
     }
@@ -783,6 +829,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
             instance_path: JsonPointer::root(),
+            got: "number".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -809,6 +856,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
             instance_path: JsonPointer::root(),
+            got: "string".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -835,6 +883,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
             instance_path: JsonPointer::root(),
+            got: "null".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -861,6 +910,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
             instance_path: JsonPointer::root(),
+            got: "object".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -887,6 +937,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
             instance_path: JsonPointer::root(),
+            got: "array".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -913,6 +964,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
             instance_path: JsonPointer::root(),
+            got: "boolean".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -953,6 +1005,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
             instance_path: JsonPointer::root().push("count"),
+            got: "number".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1049,6 +1102,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root(),
+            got: "string".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1075,6 +1129,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root(),
+            got: "null".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1101,6 +1156,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root(),
+            got: "object".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1127,6 +1183,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root(),
+            got: "array".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1153,6 +1210,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root(),
+            got: "boolean".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1204,6 +1262,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
             instance_path: JsonPointer::root(),
             minimum: OrderedF64(10.0),
+            actual: OrderedF64(5.0),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1231,6 +1290,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
             instance_path: JsonPointer::root(),
             maximum: OrderedF64(10.0),
+            actual: OrderedF64(20.0),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1306,6 +1366,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
             instance_path: JsonPointer::root(),
             minimum: OrderedF64(1.0),
+            actual: OrderedF64(0.5),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1333,6 +1394,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
             instance_path: JsonPointer::root(),
             maximum: OrderedF64(1.0),
+            actual: OrderedF64(2.5),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1402,10 +1464,12 @@ mod tests {
             ValidationError::AboveMaximum {
                 instance_path: JsonPointer::root().push("high"),
                 maximum: OrderedF64(100.0),
+                actual: OrderedF64(200.0),
             },
             ValidationError::BelowMinimum {
                 instance_path: JsonPointer::root().push("low"),
                 minimum: OrderedF64(10.0),
+                actual: OrderedF64(5.0),
             },
         ]);
         assert_eq!(expected, actual);
@@ -1481,6 +1545,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedArray {
             instance_path: JsonPointer::root(),
+            got: "string".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1563,6 +1628,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root().push("1"),
+            got: "number".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -1804,6 +1870,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
             instance_path: JsonPointer::root(),
             min_items: 3,
+            actual_count: 2,
         }]);
         assert_eq!(expected, actual);
     }
@@ -1879,6 +1946,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooManyItems {
             instance_path: JsonPointer::root(),
             max_items: 2,
+            actual_count: 3,
         }]);
         assert_eq!(expected, actual);
     }
@@ -1954,6 +2022,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
             instance_path: JsonPointer::root(),
             min_items: 2,
+            actual_count: 1,
         }]);
         assert_eq!(expected, actual);
     }
@@ -1981,6 +2050,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooManyItems {
             instance_path: JsonPointer::root(),
             max_items: 5,
+            actual_count: 6,
         }]);
         assert_eq!(expected, actual);
     }
@@ -2031,6 +2101,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedArray {
             instance_path: JsonPointer::root(),
+            got: "string".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2071,6 +2142,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
             instance_path: JsonPointer::root().push("value"),
+            got: "string".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2119,6 +2191,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
+            got: "number".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2145,6 +2218,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
+            got: "null".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2171,6 +2245,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
             instance_path: JsonPointer::root(),
+            got: "array".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2459,6 +2534,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::try_from("/a~1b").unwrap(),
+            got: "number".to_string(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2486,6 +2562,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooShort {
             instance_path: JsonPointer::root(),
             min_length: 5,
+            actual_length: 2,
         }]);
         assert_eq!(expected, actual);
     }
@@ -2534,6 +2611,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooLong {
             instance_path: JsonPointer::root(),
             max_length: 3,
+            actual_length: 5,
         }]);
         assert_eq!(expected, actual);
     }
@@ -2582,6 +2660,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooLong {
             instance_path: JsonPointer::root(),
             max_length: 0,
+            actual_length: 1,
         }]);
         assert_eq!(expected, actual);
     }
@@ -2622,6 +2701,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooShort {
             instance_path: JsonPointer::root(),
             min_length: 5,
+            actual_length: 2,
         }]);
         assert_eq!(expected, actual);
     }
@@ -2639,6 +2719,7 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::TooLong {
             instance_path: JsonPointer::root(),
             max_length: 4,
+            actual_length: 11,
         }]);
         assert_eq!(expected, actual);
     }
