@@ -1723,553 +1723,6 @@ pub struct Root {
 }
 
 #[test]
-fn round_trip_generated_rust_json_schema_matches_original() {
-    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id"],"title":"Root"}"#;
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let original: JsonSchema = parse_schema(schema_json, &settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output =
-        generate_rust(std::slice::from_ref(&original), &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r#"
-fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
-    let schema = compile_test::Root::json_schema();
-    let json: String = (&schema).try_into().expect("serialize");
-    let settings = JsonSchemaSettings::builder().build();
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
-    assert_eq!(schema, reparsed, "round-trip Root::json_schema() must match");
-}
-"#;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_required_float_builds_and_deserializes() {
-    let schema_json =
-        r#"{"type":"object","properties":{"value":{"type":"number"}},"required":["value"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"value":3.14}"#).unwrap();
-    assert_eq!(root.value, 3.14);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_array_required_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"tags":["a","b","c"]}"#).unwrap();
-    assert_eq!(root.tags, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_unique_items_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    use std::collections::HashSet;
-    let root: compile_test::Root = serde_json::from_str(r#"{"tags":["a","b","c"]}"#).unwrap();
-    let expected: HashSet<String> = ["a","b","c"].into_iter().map(String::from).collect();
-    assert_eq!(root.tags, expected);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_array_optional_builds_and_deserializes() {
-    let schema_json =
-        r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"tags":["x","y"]}"#).unwrap();
-    assert_eq!(root.tags, Some(vec!["x".to_string(), "y".to_string()]));
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_min_items_max_items_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5}},"required":["tags"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"tags":["a","b","c"]}"#).unwrap();
-    assert_eq!(root.tags, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_optional_float_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"value":{"type":"number"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"value":2.5}"#).unwrap();
-    assert_eq!(root.value, Some(2.5));
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn round_trip_generated_rust_with_integer_json_schema_matches_original() {
-    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"}},"required":["id"],"title":"Root"}"#;
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let original: JsonSchema = parse_schema(schema_json, &settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output =
-        generate_rust(std::slice::from_ref(&original), &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r#"
-fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
-    let schema = compile_test::Root::json_schema();
-    let json: String = (&schema).try_into().expect("serialize");
-    let settings = JsonSchemaSettings::builder().build();
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
-    assert_eq!(schema, reparsed, "round-trip Root::json_schema() must match");
-}
-"#;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn round_trip_generated_rust_with_number_json_schema_matches_original() {
-    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"},"value":{"type":"number"}},"required":["id"],"title":"Root"}"#;
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let original: JsonSchema = parse_schema(schema_json, &settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output =
-        generate_rust(std::slice::from_ref(&original), &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r#"
-fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
-    let schema = compile_test::Root::json_schema();
-    let json: String = (&schema).try_into().expect("serialize");
-    let settings = JsonSchemaSettings::builder().build();
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
-    assert_eq!(schema, reparsed, "round-trip Root::json_schema() must match");
-}
-"#;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn round_trip_generated_rust_integer_with_min_max_preserves_bounds() {
-    let schema_json = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"],"title":"Root"}"#;
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let original: JsonSchema = parse_schema(schema_json, &settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output =
-        generate_rust(std::slice::from_ref(&original), &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r#"
-fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
-    let schema = compile_test::Root::json_schema();
-    let json: String = (&schema).try_into().expect("serialize");
-    let settings = JsonSchemaSettings::builder().build();
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
-    assert_eq!(schema, reparsed, "round-trip Root::json_schema() must match");
-}
-"#;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn round_trip_generated_rust_number_with_min_max_preserves_bounds() {
-    let schema_json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"],"title":"Root"}"#;
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let original: JsonSchema = parse_schema(schema_json, &settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output =
-        generate_rust(std::slice::from_ref(&original), &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    // f32::MIN/MAX do not round-trip exactly through JSON, so assert structure and approximate min/max instead of full equality.
-    let main_rs = r#"
-fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
-    let schema = compile_test::Root::json_schema();
-    let json: String = (&schema).try_into().expect("serialize");
-    let settings = JsonSchemaSettings::builder().build();
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
-    let value_schema = schema.properties.get("value").expect("value property");
-    let value_reparsed = reparsed.properties.get("value").expect("value property");
-    assert_eq!(value_schema.type_, value_reparsed.type_, "type must match");
-    let (min_s, max_s) = (value_schema.minimum.unwrap(), value_schema.maximum.unwrap());
-    let (min_r, max_r) = (value_reparsed.minimum.unwrap(), value_reparsed.maximum.unwrap());
-    let tol = 1e32_f64;
-    assert!((min_s - min_r).abs() < tol && (max_s - max_r).abs() < tol, "min/max must round-trip within tolerance");
-}
-"#;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
 fn integration_parse_and_generate_root_not_object_errors() {
     let json = r#"{"type":"string"}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
@@ -2279,8 +1732,26 @@ fn integration_parse_and_generate_root_not_object_errors() {
     assert!(actual.is_err(), "root not object should error");
 }
 
+/// Stable target directory for all "generated Rust build + deserialize" integration tests.
+/// Path deps (json-schema-rs, json-schema-rs-macro) are built once and reused across scenarios.
+fn integration_codegen_target_dir() -> PathBuf {
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR set by Cargo");
+    let target_dir: PathBuf = std::env::var("CARGO_TARGET_DIR").map_or_else(
+        |_| PathBuf::from(&manifest_dir).join("..").join("target"),
+        PathBuf::from,
+    );
+    target_dir.join("integration_codegen")
+}
+
 /// Cargo.toml content for a temp crate that compiles generated Rust (needs json-schema-rs and macro for `ToJsonSchema` derive).
+#[expect(dead_code)]
 fn temp_crate_cargo_toml_with_reverse_codegen() -> String {
+    temp_crate_cargo_toml_with_reverse_codegen_named("compile_test")
+}
+
+/// Cargo.toml content for a workspace member with the given package name.
+fn temp_crate_cargo_toml_with_reverse_codegen_named(package_name: &str) -> String {
     let manifest_dir =
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR set by Cargo");
     let workspace_root = std::path::Path::new(&manifest_dir)
@@ -2290,7 +1761,7 @@ fn temp_crate_cargo_toml_with_reverse_codegen() -> String {
     let macro_path = workspace_root.join("json_schema_rs_macro");
     format!(
         r#"[package]
-name = "compile_test"
+name = "{}"
 version = "0.0.1"
 edition = "2024"
 
@@ -2307,9 +1778,81 @@ serde_json = "1"
 json-schema-rs = {{ path = "{}" }}
 json-schema-rs-macro = {{ path = "{}" }}
 "#,
+        package_name,
         json_schema_rs_path.display(),
         macro_path.display()
     )
+}
+
+/// Runs `cargo build` with `CARGO_TARGET_DIR` set to the shared `integration_codegen` path.
+/// Asserts success; on failure panics with stderr.
+#[expect(dead_code)]
+fn assert_cargo_build(cwd: &Path, scenario_name: &str) {
+    let target_dir: PathBuf = integration_codegen_target_dir();
+    let build = Command::new("cargo")
+        .args(["build"])
+        .current_dir(cwd)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("run cargo build");
+    assert!(
+        build.status.success(),
+        "scenario '{}': cargo build failed: stderr={}",
+        scenario_name,
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+/// Runs `cargo run --bin run` with `CARGO_TARGET_DIR` set. For a single crate, cwd is crate root.
+#[expect(dead_code)]
+fn assert_cargo_run_bin_run(cwd: &Path, scenario_name: &str) {
+    let target_dir: PathBuf = integration_codegen_target_dir();
+    let run = Command::new("cargo")
+        .args(["run", "--bin", "run"])
+        .current_dir(cwd)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "scenario '{}': cargo run failed: stderr={}",
+        scenario_name,
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+/// Runs `cargo build --workspace` with `CARGO_TARGET_DIR` set. Cwd must be workspace root.
+fn assert_cargo_build_workspace(workspace_root: &Path) {
+    let target_dir: PathBuf = integration_codegen_target_dir();
+    let build = Command::new("cargo")
+        .args(["build", "--workspace"])
+        .current_dir(workspace_root)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("run cargo build --workspace");
+    assert!(
+        build.status.success(),
+        "cargo build --workspace failed: stderr={}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+/// Runs `cargo run -p <package> --bin run` with `CARGO_TARGET_DIR` set. Cwd must be workspace root.
+fn assert_cargo_run_package(workspace_root: &Path, package: &str, scenario_name: &str) {
+    let target_dir: PathBuf = integration_codegen_target_dir();
+    let run = Command::new("cargo")
+        .args(["run", "-p", package, "--bin", "run"])
+        .current_dir(workspace_root)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("run cargo run");
+    assert!(
+        run.status.success(),
+        "scenario '{}': cargo run -p {} failed: stderr={}",
+        scenario_name,
+        package,
+        String::from_utf8_lossy(&run.stderr)
+    );
 }
 
 /// Builds map: directory path (relative) -> set of module names. Root is `PathBuf::new()`; subdirs e.g. "nested".
@@ -2346,920 +1889,200 @@ fn mod_rs_content_by_dir(output_relatives: &[PathBuf]) -> BTreeMap<PathBuf, BTre
     by_dir
 }
 
-#[test]
-fn generated_rust_single_schema_builds_and_deserializes() {
-    let schema_json =
-        r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
+/// Writes one workspace member (Cargo.toml, src/) for the given scenario.
+/// Uses `package_name` in Cargo.toml and in main.rs (replacing `compile_test`).
+#[expect(clippy::too_many_lines)]
+fn write_workspace_scenario_member(
+    scenarios_dir: &Path,
+    scenario_name: &str,
+    package_name: &str,
+    schema_settings: &JsonSchemaSettings,
+    default_code_gen: &CodeGenSettings,
+) {
+    let member_path = scenarios_dir.join(scenario_name);
+    let src = member_path.join("src");
     fs::create_dir_all(&src).expect("create src");
 
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let _: compile_test::Root = serde_json::from_str(r#"{"id":"x"}"#).unwrap();
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+    fs::write(
+        member_path.join("Cargo.toml"),
+        temp_crate_cargo_toml_with_reverse_codegen_named(package_name),
+    )
+    .expect("write Cargo.toml");
 
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_description_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"}},"required":["id"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let _: compile_test::Root = serde_json::from_str(r#"{"id":"x"}"#).unwrap();
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_required_integer_builds_and_deserializes() {
-    let schema_json =
-        r#"{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"count":42}"#).unwrap();
-    assert_eq!(root.count, 42);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_optional_integer_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"count":{"type":"integer"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"count":100}"#).unwrap();
-    assert_eq!(root.count, Some(100));
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_integer_with_min_max_u8_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"byte":42}"#).unwrap();
-    assert_eq!(root.byte, 42u8);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_number_with_min_max_f32_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"value":50.5}"#).unwrap();
-    assert!((root.value - 50.5_f32).abs() < 0.001);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_nested_modules_builds_and_deserializes() {
-    let schema_root = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-    let schema_child = r#"{"type":"object","properties":{"y":{"type":"string"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed_root: JsonSchema = parse_schema(schema_root, &schema_settings).expect("parse root");
-    let parsed_child: JsonSchema =
-        parse_schema(schema_child, &schema_settings).expect("parse child");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[parsed_root, parsed_child], &code_gen_settings).expect("generate");
-
-    let output_relatives: Vec<PathBuf> =
-        vec![PathBuf::from("root.rs"), PathBuf::from("nested/child.rs")];
-    let by_dir = mod_rs_content_by_dir(&output_relatives);
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    let nested_src = src.join("nested");
-    fs::create_dir_all(&nested_src).expect("create src and nested");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-
-    let root_modules = by_dir.get(&PathBuf::new()).expect("root entry");
-    let lib_rs_content: String = root_modules
-        .iter()
-        .map(|m| format!("pub mod {m};"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    fs::write(src.join("lib.rs"), lib_rs_content).expect("write lib.rs");
-    fs::write(src.join("root.rs"), &output.per_schema[0]).expect("write root.rs");
-
-    let nested_modules = by_dir.get(&PathBuf::from("nested")).expect("nested entry");
-    let nested_mod_content: String = nested_modules
-        .iter()
-        .map(|m| format!("pub mod {m};"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    fs::write(nested_src.join("mod.rs"), nested_mod_content).expect("write nested/mod.rs");
-    fs::write(nested_src.join("child.rs"), &output.per_schema[1]).expect("write nested/child.rs");
-
-    let main_rs = r##"fn main() {
+    #[expect(clippy::type_complexity)]
+    let (lib_rs, extra_files, main_rs_template): (Vec<u8>, Vec<(PathBuf, Vec<u8>)>, &str) =
+        match scenario_name {
+            "nested_modules" => {
+                let schema_root = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
+                let schema_child = r#"{"type":"object","properties":{"y":{"type":"string"}}}"#;
+                let parsed_root: JsonSchema =
+                    parse_schema(schema_root, schema_settings).expect("parse root");
+                let parsed_child: JsonSchema =
+                    parse_schema(schema_child, schema_settings).expect("parse child");
+                let output = generate_rust(&[parsed_root, parsed_child], default_code_gen)
+                    .expect("generate");
+                let output_relatives: Vec<PathBuf> =
+                    vec![PathBuf::from("root.rs"), PathBuf::from("nested/child.rs")];
+                let by_dir = mod_rs_content_by_dir(&output_relatives);
+                let root_modules = by_dir.get(&PathBuf::new()).expect("root entry");
+                let lib_rs_content: String = root_modules
+                    .iter()
+                    .map(|m| format!("pub mod {m};"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n";
+                let nested_modules = by_dir.get(&PathBuf::from("nested")).expect("nested entry");
+                let nested_mod_content: String = nested_modules
+                    .iter()
+                    .map(|m| format!("pub mod {m};"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n";
+                let main_rs = r##"fn main() {
     let _: compile_test::root::Root = serde_json::from_str(r#"{"x":"ok"}"#).unwrap();
     let _: compile_test::nested::child::Root = serde_json::from_str(r#"{"y":"ok"}"#).unwrap();
 }
 "##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_multi_schema_builds_and_deserializes() {
-    let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
-    let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed_a: JsonSchema = parse_schema(schema_a, &schema_settings).expect("parse a");
-    let parsed_b: JsonSchema = parse_schema(schema_b, &schema_settings).expect("parse b");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[parsed_a, parsed_b], &code_gen_settings).expect("generate");
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), "pub mod a;\npub mod b;\n").expect("write lib.rs");
-    fs::write(src.join("a.rs"), &output.per_schema[0]).expect("write a.rs");
-    fs::write(src.join("b.rs"), &output.per_schema[1]).expect("write b.rs");
-    let main_rs = r##"fn main() {
+                let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                    (PathBuf::from("root.rs"), output.per_schema[0].clone()),
+                    (
+                        PathBuf::from("nested/mod.rs"),
+                        nested_mod_content.into_bytes(),
+                    ),
+                    (
+                        PathBuf::from("nested/child.rs"),
+                        output.per_schema[1].clone(),
+                    ),
+                ];
+                (lib_rs_content.into_bytes(), extra, main_rs)
+            }
+            "multi_schema" => {
+                let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
+                let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
+                let parsed_a: JsonSchema =
+                    parse_schema(schema_a, schema_settings).expect("parse a");
+                let parsed_b: JsonSchema =
+                    parse_schema(schema_b, schema_settings).expect("parse b");
+                let output =
+                    generate_rust(&[parsed_a, parsed_b], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
     let _: compile_test::a::Root = serde_json::from_str(r#"{"a":"x"}"#).unwrap();
     let _: compile_test::b::Root = serde_json::from_str(r#"{"b":"y"}"#).unwrap();
 }
 "##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_optional_string_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let v: compile_test::Root = serde_json::from_str(r#"{}"#).unwrap();
-    assert!(v.name.is_none());
-    let v2: compile_test::Root = serde_json::from_str(r#"{"name":"x"}"#).unwrap();
-    assert_eq!(v2.name.as_deref(), Some("x"));
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_nested_object_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let v: compile_test::Root = serde_json::from_str(r#"{"address":{"city":"NYC","street_address":"123 Main"}}"#).unwrap();
-    assert!(v.address.is_some());
-    let addr = v.address.as_ref().unwrap();
-    assert_eq!(addr.city.as_deref(), Some("NYC"));
-    assert_eq!(addr.street_address.as_deref(), Some("123 Main"));
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_enum_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"status":"open"}"#).unwrap();
-    assert_eq!(root.status, compile_test::Status::Open);
-    let root2: compile_test::Root = serde_json::from_str(r#"{"status":"closed"}"#).unwrap();
-    assert_eq!(root2.status, compile_test::Status::Closed);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_enum_collision_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"t":{"enum":["a","A"]}},"required":["t"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"t":"a"}"#).unwrap();
-    assert_eq!(root.t, compile_test::T::A_1);
-    let root2: compile_test::Root = serde_json::from_str(r#"{"t":"A"}"#).unwrap();
-    assert_eq!(root2.t, compile_test::T::A_0);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_enum_dedupe_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"a":{"enum":["x","y"]},"b":{"enum":["x","y"]}},"required":["a"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"a":"x","b":"y"}"#).unwrap();
-    assert_eq!(root.a, compile_test::A::X);
-    assert_eq!(root.b, Some(compile_test::A::Y));
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_enum_duplicate_values_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"t":"A"}"#).unwrap();
-    assert_eq!(root.t, compile_test::T::A_0);
-    let root2: compile_test::Root = serde_json::from_str(r#"{"t":"a"}"#).unwrap();
-    assert_eq!(root2.t, compile_test::T::A_1);
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_hyphenated_property_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let v: compile_test::Root = serde_json::from_str(r#"{"foo-bar":"baz"}"#).unwrap();
-    assert_eq!(v.foo_bar.as_deref(), Some("baz"));
-}
-"##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_hyphenated_paths_builds_and_deserializes() {
-    let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
-    let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed_a: JsonSchema = parse_schema(schema_a, &schema_settings).expect("parse a");
-    let parsed_b: JsonSchema = parse_schema(schema_b, &schema_settings).expect("parse b");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[parsed_a, parsed_b], &code_gen_settings).expect("generate");
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    let sub_dir_src = src.join("sub_dir");
-    fs::create_dir_all(&sub_dir_src).expect("create src and sub_dir");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), "pub mod schema_1;\npub mod sub_dir;\n").expect("write lib.rs");
-    fs::write(src.join("schema_1.rs"), &output.per_schema[0]).expect("write schema_1.rs");
-    fs::write(sub_dir_src.join("mod.rs"), "pub mod schema_2;\n").expect("write sub_dir/mod.rs");
-    fs::write(sub_dir_src.join("schema_2.rs"), &output.per_schema[1])
-        .expect("write sub_dir/schema_2.rs");
-    let main_rs = r##"fn main() {
+                let lib_rs: Vec<u8> = "pub mod a;\npub mod b;\n".into();
+                let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                    (PathBuf::from("a.rs"), output.per_schema[0].clone()),
+                    (PathBuf::from("b.rs"), output.per_schema[1].clone()),
+                ];
+                (lib_rs, extra, main_rs)
+            }
+            "hyphenated_paths" => {
+                let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
+                let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
+                let parsed_a: JsonSchema =
+                    parse_schema(schema_a, schema_settings).expect("parse a");
+                let parsed_b: JsonSchema =
+                    parse_schema(schema_b, schema_settings).expect("parse b");
+                let output =
+                    generate_rust(&[parsed_a, parsed_b], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
     let _: compile_test::schema_1::Root = serde_json::from_str(r#"{"a":"x"}"#).unwrap();
     let _: compile_test::sub_dir::schema_2::Root = serde_json::from_str(r#"{"b":"y"}"#).unwrap();
 }
 "##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_dedupe_two_identical_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed_a: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse a");
-    let parsed_b: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse b");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder()
-        .dedupe_mode(DedupeMode::Full)
-        .build();
-    let output = generate_rust(&[parsed_a, parsed_b], &code_gen_settings).expect("generate");
-    let shared_bytes: Vec<u8> = output
-        .shared
-        .clone()
-        .expect("dedupe with two identical schemas produces shared");
-    let per_a = output.per_schema[0].clone();
-    let per_b = output.per_schema[1].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(
-        src.join("lib.rs"),
-        "pub mod shared;\npub mod a;\npub mod b;\n",
-    )
-    .expect("write lib.rs");
-    fs::write(src.join("shared.rs"), &shared_bytes).expect("write shared.rs");
-    let a_rs_content: String = String::from_utf8(per_a)
-        .expect("utf8")
-        .replace("pub use crate::", "pub use crate::shared::");
-    let b_rs_content: String = String::from_utf8(per_b)
-        .expect("utf8")
-        .replace("pub use crate::", "pub use crate::shared::");
-    fs::write(src.join("a.rs"), a_rs_content.as_bytes()).expect("write a.rs");
-    fs::write(src.join("b.rs"), b_rs_content.as_bytes()).expect("write b.rs");
-    let main_rs = r##"fn main() {
+                let lib_rs: Vec<u8> = "pub mod schema_1;\npub mod sub_dir;\n".into();
+                let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                    (PathBuf::from("schema_1.rs"), output.per_schema[0].clone()),
+                    (
+                        PathBuf::from("sub_dir/mod.rs"),
+                        "pub mod schema_2;\n".into(),
+                    ),
+                    (
+                        PathBuf::from("sub_dir/schema_2.rs"),
+                        output.per_schema[1].clone(),
+                    ),
+                ];
+                (lib_rs, extra, main_rs)
+            }
+            "dedupe_two_identical" => {
+                let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
+                let parsed_a: JsonSchema =
+                    parse_schema(schema_json, schema_settings).expect("parse a");
+                let parsed_b: JsonSchema =
+                    parse_schema(schema_json, schema_settings).expect("parse b");
+                let code_gen: CodeGenSettings = CodeGenSettings::builder()
+                    .dedupe_mode(DedupeMode::Full)
+                    .build();
+                let output = generate_rust(&[parsed_a, parsed_b], &code_gen).expect("generate");
+                let shared_bytes: Vec<u8> = output
+                    .shared
+                    .clone()
+                    .expect("dedupe with two identical schemas produces shared");
+                let a_rs_content: String = String::from_utf8(output.per_schema[0].clone())
+                    .expect("utf8")
+                    .replace("pub use crate::", "pub use crate::shared::");
+                let b_rs_content: String = String::from_utf8(output.per_schema[1].clone())
+                    .expect("utf8")
+                    .replace("pub use crate::", "pub use crate::shared::");
+                let main_rs = r##"fn main() {
     let _: compile_test::a::Root = serde_json::from_str(r#"{"id":"x"}"#).unwrap();
     let _: compile_test::b::Root = serde_json::from_str(r#"{"id":"y"}"#).unwrap();
 }
 "##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_model_name_source_property_key_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"address":{"type":"object","title":"FooBar","properties":{"city":{"type":"string"}}}}}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder()
-        .model_name_source(ModelNameSource::PropertyKeyFirst)
-        .build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
+                let lib_rs: Vec<u8> = "pub mod shared;\npub mod a;\npub mod b;\n".into();
+                let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                    (PathBuf::from("shared.rs"), shared_bytes),
+                    (PathBuf::from("a.rs"), a_rs_content.into_bytes()),
+                    (PathBuf::from("b.rs"), b_rs_content.into_bytes()),
+                ];
+                (lib_rs, extra, main_rs)
+            }
+            "model_name_source_property_key" => {
+                let schema_json = r#"{"type":"object","properties":{"address":{"type":"object","title":"FooBar","properties":{"city":{"type":"string"}}}}}"#;
+                let schema: JsonSchema =
+                    parse_schema(schema_json, schema_settings).expect("parse schema");
+                let code_gen: CodeGenSettings = CodeGenSettings::builder()
+                    .model_name_source(ModelNameSource::PropertyKeyFirst)
+                    .build();
+                let output = generate_rust(&[schema], &code_gen).expect("generate");
+                let main_rs = r##"fn main() {
     let v: compile_test::Root = serde_json::from_str(r#"{"address":{"city":"NYC"}}"#).unwrap();
     assert!(v.address.is_some());
     assert_eq!(v.address.as_ref().unwrap().city.as_deref(), Some("NYC"));
 }
 "##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_deep_nesting_builds_and_deserializes() {
-    const DEPTH: usize = 15;
-    let mut inner: JsonSchema = JsonSchema {
-        type_: Some("object".to_string()),
-        properties: {
-            let mut m = std::collections::BTreeMap::new();
-            m.insert(
-                "value".to_string(),
-                JsonSchema {
-                    type_: Some("string".to_string()),
-                    properties: std::collections::BTreeMap::new(),
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
+            "deep_nesting" => {
+                const DEPTH: usize = 15;
+                let mut inner: JsonSchema = JsonSchema {
+                    type_: Some("object".to_string()),
+                    properties: {
+                        let mut m = std::collections::BTreeMap::new();
+                        m.insert(
+                            "value".to_string(),
+                            JsonSchema {
+                                type_: Some("string".to_string()),
+                                properties: std::collections::BTreeMap::new(),
+                                required: None,
+                                title: None,
+                                description: None,
+                                enum_values: None,
+                                items: None,
+                                unique_items: None,
+                                min_items: None,
+                                max_items: None,
+                                minimum: None,
+                                maximum: None,
+                                min_length: None,
+                                max_length: None,
+                            },
+                        );
+                        m
+                    },
                     required: None,
-                    title: None,
+                    title: Some("Leaf".to_string()),
                     description: None,
                     enum_values: None,
                     items: None,
@@ -3270,177 +2093,278 @@ fn generated_rust_deep_nesting_builds_and_deserializes() {
                     maximum: None,
                     min_length: None,
                     max_length: None,
-                },
-            );
-            m
-        },
-        required: None,
-        title: Some("Leaf".to_string()),
-        description: None,
-        enum_values: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-    };
-    for i in (0..DEPTH).rev() {
-        let mut wrap: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            required: None,
-            title: Some(format!("Level{i}")),
-            description: None,
-            enum_values: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-        };
-        wrap.properties.insert("child".to_string(), inner);
-        inner = wrap;
-    }
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[inner], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
+                };
+                for i in (0..DEPTH).rev() {
+                    let mut wrap: JsonSchema = JsonSchema {
+                        type_: Some("object".to_string()),
+                        properties: std::collections::BTreeMap::new(),
+                        required: None,
+                        title: Some(format!("Level{i}")),
+                        description: None,
+                        enum_values: None,
+                        items: None,
+                        unique_items: None,
+                        min_items: None,
+                        max_items: None,
+                        minimum: None,
+                        maximum: None,
+                        min_length: None,
+                        max_length: None,
+                    };
+                    wrap.properties.insert("child".to_string(), inner);
+                    inner = wrap;
+                }
+                let output = generate_rust(&[inner], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
     let _: compile_test::Level0 = serde_json::from_str(r#"{"child":{"child":{"child":{}}}}"#).unwrap();
 }
 "##;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-}
-
-#[test]
-fn generated_rust_string_min_length_max_length_builds_and_deserializes() {
-    let schema_json = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}},"required":["name"]}"#;
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &schema_settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
-
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
-
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r##"fn main() {
-    let root: compile_test::Root = serde_json::from_str(r#"{"name":"Alice"}"#).unwrap();
-    assert_eq!(root.name, "Alice".to_string());
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
+            "kitchen_sink" => {
+                // One schema exercising many features; main asserts each (same as the individual scenario tests).
+                let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"},"value_required":{"type":"number"},"value_optional":{"type":"number"},"count_required":{"type":"integer"},"count_optional":{"type":"integer"},"byte":{"type":"integer","minimum":0,"maximum":255},"value_f32":{"type":"number","minimum":0.0,"maximum":100.0},"tags_required":{"type":"array","items":{"type":"string"}},"tags_optional":{"type":"array","items":{"type":"string"}},"tags_unique":{"type":"array","items":{"type":"string"},"uniqueItems":true},"tags_min_max":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5},"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}},"name_bounded":{"type":"string","minLength":2,"maxLength":50},"foo-bar":{"type":"string"},"status":{"enum":["open","closed"]},"name_opt":{"type":"string"}},"required":["id","value_required","count_required","byte","value_f32","tags_required","tags_unique","tags_min_max","name_bounded","status"]}"#;
+                let schema: JsonSchema =
+                    parse_schema(schema_json, schema_settings).expect("parse schema");
+                let output = generate_rust(&[schema], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
+    use std::collections::HashSet;
+    // single_schema / description: required id
+    let root: compile_test::Root = serde_json::from_str(r#"{"id":"x","value_required":3.14,"count_required":42,"byte":42,"value_f32":3.14,"tags_required":["a","b","c"],"tags_unique":["a","b","c"],"tags_min_max":["a","b","c"],"name_bounded":"Alice","status":"open"}"#).unwrap();
+    assert_eq!(root.id, "x".to_string());
+    // required_float
+    assert_eq!(root.value_required, 3.14);
+    // required_integer
+    assert_eq!(root.count_required, 42);
+    // integer_with_min_max_u8
+    assert_eq!(root.byte, 42);
+    // number_with_min_max_f32
+    assert_eq!(root.value_f32, 3.14);
+    // array_required
+    assert_eq!(root.tags_required, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    // unique_items
+    let expected_set: HashSet<String> = ["a","b","c"].into_iter().map(String::from).collect();
+    assert_eq!(root.tags_unique, expected_set);
+    // min_items_max_items
+    assert_eq!(root.tags_min_max, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    // string_min_length_max_length
+    assert_eq!(root.name_bounded, "Alice".to_string());
+    // enum_basic
+    assert_eq!(root.status, compile_test::Status::Open);
+    // optional_float
+    let r2: compile_test::Root = serde_json::from_str(r#"{"id":"y","value_required":1.0,"value_optional":2.5,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["x","y"],"name_bounded":"ab","status":"closed"}"#).unwrap();
+    assert_eq!(r2.value_optional, Some(2.5));
+    // optional_integer
+    let r3: compile_test::Root = serde_json::from_str(r#"{"id":"z","value_required":0.0,"count_required":0,"count_optional":1,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"xy","status":"open"}"#).unwrap();
+    assert_eq!(r3.count_optional, Some(1));
+    // array_optional
+    let r4: compile_test::Root = serde_json::from_str(r#"{"id":"w","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_optional":["x","y"],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open"}"#).unwrap();
+    assert_eq!(r4.tags_optional, Some(vec!["x".to_string(), "y".to_string()]));
+    // optional_string
+    let r_opt: compile_test::Root = serde_json::from_str(r#"{"id":"o","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","name_opt":"optional"}"#).unwrap();
+    assert_eq!(r_opt.name_opt.as_deref(), Some("optional"));
+    // nested_object
+    let r5: compile_test::Root = serde_json::from_str(r#"{"id":"n","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","address":{"city":"NYC","street_address":"5th Ave"}}"#).unwrap();
+    assert!(r5.address.is_some());
+    assert_eq!(r5.address.as_ref().unwrap().city.as_deref(), Some("NYC"));
+    assert_eq!(r5.address.as_ref().unwrap().street_address.as_deref(), Some("5th Ave"));
+    // hyphenated_property
+    let r6: compile_test::Root = serde_json::from_str(r#"{"id":"h","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","foo-bar":"baz"}"#).unwrap();
+    assert_eq!(r6.foo_bar.as_deref(), Some("baz"));
 }
 "##;
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
+            "round_trip" => {
+                // All six round-trip checks in one binary (same assertions as the six round_trip_* scenarios).
+                let schema_basic = r#"{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id"],"title":"Root"}"#;
+                let schema_integer = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"}},"required":["id"],"title":"Root"}"#;
+                let schema_number = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"},"value":{"type":"number"}},"required":["id"],"title":"Root"}"#;
+                let schema_int_min_max = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"],"title":"Root"}"#;
+                let schema_number_min_max = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"],"title":"Root"}"#;
+                let schema_string_min_max = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}},"required":["name"]}"#;
+                let schemas: Vec<JsonSchema> = [
+                    schema_basic,
+                    schema_integer,
+                    schema_number,
+                    schema_int_min_max,
+                    schema_number_min_max,
+                    schema_string_min_max,
+                ]
+                .iter()
+                .map(|s| parse_schema(s, schema_settings).expect("parse"))
+                .collect();
+                let output = generate_rust(&schemas, default_code_gen).expect("generate");
+                let lib_rs: Vec<u8> = "pub mod basic;\npub mod integer;\npub mod number;\npub mod integer_min_max;\npub mod number_min_max;\npub mod string_min_max;\n".into();
+                let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                    (PathBuf::from("basic.rs"), output.per_schema[0].clone()),
+                    (PathBuf::from("integer.rs"), output.per_schema[1].clone()),
+                    (PathBuf::from("number.rs"), output.per_schema[2].clone()),
+                    (
+                        PathBuf::from("integer_min_max.rs"),
+                        output.per_schema[3].clone(),
+                    ),
+                    (
+                        PathBuf::from("number_min_max.rs"),
+                        output.per_schema[4].clone(),
+                    ),
+                    (
+                        PathBuf::from("string_min_max.rs"),
+                        output.per_schema[5].clone(),
+                    ),
+                ];
+                let main_rs = r#"
+fn main() {
+    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
+    let settings = JsonSchemaSettings::builder().build();
+    // round_trip_basic
+    let schema = compile_test::basic::Root::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, reparsed, "round-trip basic");
+    // round_trip_integer
+    let schema = compile_test::integer::Root::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, reparsed, "round-trip integer");
+    // round_trip_number
+    let schema = compile_test::number::Root::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, reparsed, "round-trip number");
+    // round_trip_integer_min_max
+    let schema = compile_test::integer_min_max::Root::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, reparsed, "round-trip integer min max");
+    // round_trip_number_min_max (tolerance for f32)
+    let schema = compile_test::number_min_max::Root::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    let value_schema = schema.properties.get("value").expect("value property");
+    let value_reparsed = reparsed.properties.get("value").expect("value property");
+    assert_eq!(value_schema.type_, value_reparsed.type_, "type must match");
+    let (min_s, max_s) = (value_schema.minimum.unwrap(), value_schema.maximum.unwrap());
+    let (min_r, max_r) = (value_reparsed.minimum.unwrap(), value_reparsed.maximum.unwrap());
+    let tol = 1e32_f64;
+    assert!((min_s - min_r).abs() < tol && (max_s - max_r).abs() < tol, "min/max must round-trip within tolerance");
+    // round_trip_string_min_length_max_length
+    let schema = compile_test::string_min_max::Root::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    assert_eq!(schema, reparsed, "round-trip string min max");
+}
+"#;
+                (lib_rs, extra, main_rs)
+            }
+            "enum_variants" => {
+                // Three enum scenarios (collision, dedupe, duplicate_values) in one member; basic enum is in kitchen_sink.
+                // Use DedupeMode::Disabled so each per_schema is self-contained (no shared buffer); otherwise enums are deduped and per_schema has "pub use crate::T" etc.
+                let code_gen: CodeGenSettings = CodeGenSettings::builder()
+                    .dedupe_mode(DedupeMode::Disabled)
+                    .build();
+                let schema_collision =
+                    r#"{"type":"object","properties":{"t":{"enum":["a","A"]}},"required":["t"]}"#;
+                let schema_dedupe = r#"{"type":"object","properties":{"a":{"enum":["x","y"]},"b":{"enum":["x","y"]}},"required":["a"]}"#;
+                let schema_duplicate = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
+                let schemas: Vec<JsonSchema> = [schema_collision, schema_dedupe, schema_duplicate]
+                    .iter()
+                    .map(|s| parse_schema(s, schema_settings).expect("parse"))
+                    .collect();
+                let output = generate_rust(&schemas, &code_gen).expect("generate");
+                let lib_rs: Vec<u8> =
+                    "pub mod collision;\npub mod dedupe;\npub mod duplicate_values;\n".into();
+                let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                    (PathBuf::from("collision.rs"), output.per_schema[0].clone()),
+                    (PathBuf::from("dedupe.rs"), output.per_schema[1].clone()),
+                    (
+                        PathBuf::from("duplicate_values.rs"),
+                        output.per_schema[2].clone(),
+                    ),
+                ];
+                let main_rs = r##"fn main() {
+    // enum_collision
+    let root: compile_test::collision::Root = serde_json::from_str(r#"{"t":"A"}"#).unwrap();
+    assert_eq!(root.t, compile_test::collision::T::A_0);
+    let root2: compile_test::collision::Root = serde_json::from_str(r#"{"t":"a"}"#).unwrap();
+    assert_eq!(root2.t, compile_test::collision::T::A_1);
+    // enum_dedupe
+    let root: compile_test::dedupe::Root = serde_json::from_str(r#"{"a":"x","b":"y"}"#).unwrap();
+    assert_eq!(root.a, compile_test::dedupe::A::X);
+    assert_eq!(root.b, Some(compile_test::dedupe::A::Y));
+    // enum_duplicate_values
+    let root: compile_test::duplicate_values::Root = serde_json::from_str(r#"{"t":"A"}"#).unwrap();
+    assert_eq!(root.t, compile_test::duplicate_values::T::A_0);
+    let root2: compile_test::duplicate_values::Root = serde_json::from_str(r#"{"t":"a"}"#).unwrap();
+    assert_eq!(root2.t, compile_test::duplicate_values::T::A_1);
+}
+"##;
+                (lib_rs, extra, main_rs)
+            }
+            _ => panic!("unknown scenario: {scenario_name}"),
+        };
+
+    fs::write(src.join("lib.rs"), &lib_rs).expect("write lib.rs");
+    for (rel, content) in extra_files {
+        let p = src.join(&rel);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(&p, content).expect("write file");
+    }
+    let main_rs: String = main_rs_template.replace("compile_test", package_name);
     fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
-
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
 }
 
 #[test]
-fn round_trip_generated_rust_string_min_length_max_length_json_schema_matches_original() {
-    let schema_json = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}},"required":["name"]}"#;
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let original: JsonSchema = parse_schema(schema_json, &settings).expect("parse schema");
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output =
-        generate_rust(std::slice::from_ref(&original), &code_gen_settings).expect("generate");
-    let generated = output.per_schema[0].clone();
+fn generated_rust_build_and_deserialize_all_scenarios() {
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let default_code_gen: CodeGenSettings = CodeGenSettings::builder().build();
 
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let src = temp_dir.path().join("src");
-    fs::create_dir_all(&src).expect("create src");
+    let workspace_root = tempfile::tempdir().expect("workspace root");
+    let scenarios_dir = workspace_root.path().join("scenarios");
+    fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let cargo_toml = temp_crate_cargo_toml_with_reverse_codegen();
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
-    fs::write(src.join("lib.rs"), &generated).expect("write lib.rs");
-    let main_rs = r#"
-fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
-    let schema = compile_test::Root::json_schema();
-    let json: String = (&schema).try_into().expect("serialize");
-    let settings = JsonSchemaSettings::builder().build();
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
-    assert_eq!(schema, reparsed, "round-trip Root::json_schema() must match");
-}
-"#;
-    fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+    let scenario_list: Vec<&str> = vec![
+        "kitchen_sink",
+        "round_trip",
+        "enum_variants",
+        "nested_modules",
+        "multi_schema",
+        "hyphenated_paths",
+        "dedupe_two_identical",
+        "model_name_source_property_key",
+        "deep_nesting",
+    ];
 
-    let build = Command::new("cargo")
-        .args(["build"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo build");
-    assert!(
-        build.status.success(),
-        "cargo build failed: stderr={}",
-        String::from_utf8_lossy(&build.stderr)
+    for name in &scenario_list {
+        let package_name: String = format!("compile_test_{name}");
+        write_workspace_scenario_member(
+            &scenarios_dir,
+            name,
+            &package_name,
+            &schema_settings,
+            &default_code_gen,
+        );
+    }
+
+    let members: String = scenario_list
+        .iter()
+        .map(|n| format!("\"scenarios/{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let workspace_toml = format!(
+        r"[workspace]
+members = [{members}]
+"
     );
+    fs::write(workspace_root.path().join("Cargo.toml"), workspace_toml)
+        .expect("write workspace Cargo.toml");
 
-    let run = Command::new("cargo")
-        .args(["run", "--bin", "run"])
-        .current_dir(temp_dir.path())
-        .output()
-        .expect("run cargo run");
-    assert!(
-        run.status.success(),
-        "cargo run failed: stderr={}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    assert_cargo_build_workspace(workspace_root.path());
+
+    for name in &scenario_list {
+        let package_name: String = format!("compile_test_{name}");
+        assert_cargo_run_package(workspace_root.path(), &package_name, name);
+    }
 }
