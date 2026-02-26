@@ -85,6 +85,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             min_length: Option<u64>,
             #[serde(default, rename = "maxLength")]
             max_length: Option<u64>,
+            #[serde(default)]
+            format: Option<String>,
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
@@ -102,6 +104,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             maximum: h.maximum,
             min_length: h.min_length,
             max_length: h.max_length,
+            format: h.format,
         })
     }
 }
@@ -188,6 +191,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        format: None,
                     },
                 );
                 m
@@ -204,6 +208,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -233,6 +238,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        format: None,
                     },
                 );
                 m.insert(
@@ -252,6 +258,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        format: None,
                     },
                 );
                 m
@@ -268,6 +275,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -292,6 +300,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -315,6 +324,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -502,6 +512,16 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"integer","minimum":0,"maximum":255}"#;
+        let result: Result<_, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_strict_accepts_format_key() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"string","format":"uuid"}"#;
         let result: Result<_, _> = parse_schema(json, &settings);
         assert!(result.is_ok());
     }

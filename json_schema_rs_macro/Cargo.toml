@@ -16,6 +16,9 @@ categories.workspace = true
 path = "src/lib.rs"
 proc-macro = true
 
+[features]
+uuid = ["dep:uuid", "json-schema-rs/uuid"]
+
 [lints]
 workspace = true
 
@@ -25,7 +28,9 @@ proc-macro2 = "1"
 quote = "1"
 serde_json.workspace = true
 syn = "2"
+uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true

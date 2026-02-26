@@ -24,9 +24,3 @@ For each of these TODO items, check what every other competitor library does, ch
 - should all generated Rust models implement the Hash derive macro trait?
   This would enable all code gen models to play well with uniqueItems by default.
 
-
-/contribution-guide Please create plan:
-- please implement UUIDs
-- make this driven by a crate feature, which is disabled by default. If users of this library want to enable integration with the UUID crate and have auto serializing and deserializing into UUIDs instead of strings, they'll have to manually enable the UUID json-schema-rs feature. This way this dependency isn't pulled in unless they really want it.
-- implement across all tools the codebase offers (code gen, validator, reverse code gen, CLI, macros, etc)
-- implement tests that match all of our guidelines (exhaustive, lockstep, etc)

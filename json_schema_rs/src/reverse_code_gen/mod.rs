@@ -32,6 +32,7 @@ impl ToJsonSchema for String {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         }
     }
 }
@@ -53,6 +54,7 @@ impl ToJsonSchema for bool {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         }
     }
 }
@@ -73,6 +75,7 @@ fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         maximum: Some(max),
         min_length: None,
         max_length: None,
+        format: None,
     }
 }
 
@@ -141,6 +144,7 @@ fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
         maximum: Some(max),
         min_length: None,
         max_length: None,
+        format: None,
     }
 }
 
@@ -179,6 +183,7 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         }
     }
 }
@@ -201,6 +206,7 @@ impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         }
     }
 }
@@ -226,6 +232,30 @@ impl ToJsonSchema for HandWrittenExample {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
+        }
+    }
+}
+
+#[cfg(feature = "uuid")]
+impl ToJsonSchema for uuid::Uuid {
+    fn json_schema() -> JsonSchema {
+        JsonSchema {
+            type_: Some("string".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: Some("uuid".to_string()),
         }
     }
 }
@@ -252,6 +282,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = String::json_schema();
         assert_eq!(expected, actual);
@@ -274,6 +305,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = bool::json_schema();
         assert_eq!(expected, actual);
@@ -304,6 +336,7 @@ mod tests {
             maximum: Some(9_223_372_036_854_775_807.0_f64),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = i64::json_schema();
         assert_eq!(expected, actual);
@@ -396,6 +429,7 @@ mod tests {
             maximum: Some(f64::MAX),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = f64::json_schema();
         assert_eq!(expected, actual);
@@ -434,6 +468,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = super::HandWrittenExample::json_schema();
         assert_eq!(expected, actual);
@@ -456,6 +491,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = Vec::<String>::json_schema();
         assert_eq!(expected, actual);
@@ -478,6 +514,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let actual: JsonSchema = Vec::<i64>::json_schema();
         assert_eq!(expected, actual);
@@ -506,5 +543,31 @@ mod tests {
         let actual: JsonSchema = Vec::<String>::json_schema();
         let expected_unique: Option<bool> = None;
         assert_eq!(expected_unique, actual.unique_items);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn uuid_json_schema() {
+        let actual: JsonSchema = uuid::Uuid::json_schema();
+        assert_eq!(actual.type_.as_deref(), Some("string"));
+        assert_eq!(actual.format.as_deref(), Some("uuid"));
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn option_uuid_json_schema() {
+        let actual: JsonSchema = Option::<uuid::Uuid>::json_schema();
+        assert_eq!(actual.type_.as_deref(), Some("string"));
+        assert_eq!(actual.format.as_deref(), Some("uuid"));
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn vec_uuid_json_schema() {
+        let actual: JsonSchema = Vec::<uuid::Uuid>::json_schema();
+        assert_eq!(actual.type_.as_deref(), Some("array"));
+        let items: &JsonSchema = actual.items.as_ref().expect("items").as_ref();
+        assert_eq!(items.type_.as_deref(), Some("string"));
+        assert_eq!(items.format.as_deref(), Some("uuid"));
     }
 }

@@ -556,6 +556,29 @@ TODO.
 
 ### format
 
-TODO.
+The `format` annotation is stored on `JsonSchema` as `Option<String>`. Currently only `"uuid"` is
+acted upon; other values are preserved through parse/serialize round-trips but have no effect on
+validation or codegen.
 
-**Spec version quirks:** (placeholder or blank)
+**UUID feature (`uuid` feature flag)**
+
+Enable with `json-schema-rs = { features = ["uuid"] }` (or `["dep:uuid"]` internally). Activating
+the feature:
+
+- **Validation:** string instances whose schema has `format: "uuid"` are validated with
+  `uuid::Uuid::parse_str`. An `InvalidUuidFormat` error is emitted for strings that do not conform
+  to the UUID format.
+- **Codegen:** string properties with `format: "uuid"` emit `uuid::Uuid` (required) or
+  `Option<uuid::Uuid>` (optional) instead of `String`/`Option<String>`. A `use uuid::Uuid;`
+  statement is automatically prepended. Array item schemas with `format: "uuid"` likewise produce
+  `Vec<Uuid>` etc.
+- **Reverse codegen:** `uuid::Uuid` implements `ToJsonSchema`, returning
+  `{"type":"string","format":"uuid"}`. `Option<Uuid>`, `Vec<Uuid>`, and `HashSet<Uuid>` are
+  supported through the existing generic impls.
+- **Macro:** the `json_schema_to_rust!` proc-macro and `#[derive(ToJsonSchema)]` both respect the
+  `uuid` feature in the macro crate; enable with
+  `json-schema-rs-macro = { features = ["uuid"] }`.
+
+**Spec version quirks:** JSON Schema draft-07 onwards lists `format` as a vocabulary keyword; its
+validation behaviour is opt-in (annotation only by default). This library treats `"uuid"` as a
+validation-enforcing keyword when the `uuid` feature is enabled.

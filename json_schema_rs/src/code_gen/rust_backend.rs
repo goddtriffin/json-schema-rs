@@ -32,7 +32,12 @@ impl CodeGenBackend for RustBackend {
                         index,
                         source: Box::new(e),
                     })?;
-                    per_schema.push(maybe_prepend_hash_set_use(out.into_inner()));
+                    per_schema.push({
+                        let result = maybe_prepend_hash_set_use(out.into_inner());
+                        #[cfg(feature = "uuid")]
+                        let result = maybe_prepend_uuid_use(result);
+                        result
+                    });
                 }
                 Ok(GenerateRustOutput {
                     shared: None,
@@ -111,6 +116,7 @@ struct DedupeKey {
     max_items: Option<u64>,
     min_length: Option<u64>,
     max_length: Option<u64>,
+    format: Option<String>,
 }
 
 impl PartialEq for DedupeKey {
@@ -126,6 +132,7 @@ impl PartialEq for DedupeKey {
             && self.max_items == other.max_items
             && self.min_length == other.min_length
             && self.max_length == other.max_length
+            && self.format == other.format
     }
 }
 
@@ -163,6 +170,7 @@ impl Ord for DedupeKey {
                 .then_with(|| self.max_items.cmp(&other.max_items))
                 .then_with(|| self.min_length.cmp(&other.min_length))
                 .then_with(|| self.max_length.cmp(&other.max_length))
+                .then_with(|| self.format.cmp(&other.format))
         })
     }
 }
@@ -189,6 +197,30 @@ fn maybe_prepend_hash_set_use(mut buf: Vec<u8>) -> Vec<u8> {
     if let Some(insert_at) = pos {
         let hash_set_use = b"use std::collections::HashSet;\n";
         buf.splice(insert_at..insert_at, hash_set_use.iter().copied());
+    }
+    buf
+}
+
+/// If the buffer contains "`Uuid`", insert `use uuid::Uuid;` after the HashSet use line (if present) or after the serde use line.
+#[cfg(feature = "uuid")]
+fn maybe_prepend_uuid_use(mut buf: Vec<u8>) -> Vec<u8> {
+    if !buf.windows(4).any(|w| w == b"Uuid") {
+        return buf;
+    }
+    let hash_set_needle = b"use std::collections::HashSet;\n";
+    let serde_needle = b"use serde::{Deserialize, Serialize};\n";
+    let insert_at = buf
+        .windows(hash_set_needle.len())
+        .position(|w| w == hash_set_needle)
+        .map(|i| i + hash_set_needle.len())
+        .or_else(|| {
+            buf.windows(serde_needle.len())
+                .position(|w| w == serde_needle)
+                .map(|i| i + serde_needle.len())
+        });
+    if let Some(pos) = insert_at {
+        let uuid_use = b"use uuid::Uuid;\n";
+        buf.splice(pos..pos, uuid_use.iter().copied());
     }
     buf
 }
@@ -256,6 +288,11 @@ impl DedupeKey {
         } else {
             None
         };
+        let format: Option<String> = if schema.type_.as_deref() == Some("string") {
+            schema.format.clone()
+        } else {
+            None
+        };
         DedupeKey {
             type_: schema.type_.clone(),
             properties,
@@ -271,6 +308,7 @@ impl DedupeKey {
             max_items,
             min_length,
             max_length,
+            format,
         }
     }
 }
@@ -395,6 +433,12 @@ fn rust_type_for_item_schema(
     if schema.is_string()
         || (schema.enum_values.as_ref().is_some_and(|v| !v.is_empty()) && !schema.is_string_enum())
     {
+        #[cfg(feature = "uuid")]
+        {
+            if schema.format.as_deref() == Some("uuid") {
+                return "Uuid".to_string();
+            }
+        }
         return "String".to_string();
     }
     if schema.is_integer() {
@@ -657,7 +701,12 @@ fn generate_rust_with_dedupe(
                 index,
                 source: Box::new(e),
             })?;
-            per_schema.push(maybe_prepend_hash_set_use(out.into_inner()));
+            per_schema.push({
+                let result = maybe_prepend_hash_set_use(out.into_inner());
+                #[cfg(feature = "uuid")]
+                let result = maybe_prepend_uuid_use(result);
+                result
+            });
         }
         return Ok(GenerateRustOutput {
             shared: None,
@@ -730,7 +779,12 @@ fn generate_rust_with_dedupe(
             writeln!(out, "}}")?;
             writeln!(out)?;
         }
-        maybe_prepend_hash_set_use(out.into_inner())
+        {
+            let result = maybe_prepend_hash_set_use(out.into_inner());
+            #[cfg(feature = "uuid")]
+            let result = maybe_prepend_uuid_use(result);
+            result
+        }
     };
 
     let per_schema: Vec<Vec<u8>> = (0..schemas.len())
@@ -844,7 +898,12 @@ fn generate_rust_with_dedupe(
                 writeln!(buf, "}}").ok();
                 writeln!(buf).ok();
             }
-            maybe_prepend_hash_set_use(buf.into_inner())
+            {
+                let result = maybe_prepend_hash_set_use(buf.into_inner());
+                #[cfg(feature = "uuid")]
+                let result = maybe_prepend_uuid_use(result);
+                result
+            }
         })
         .collect();
 
@@ -958,6 +1017,19 @@ fn emit_struct_fields_with_resolver(
                 .is_some_and(|v| !v.is_empty())
                 && !prop_schema.is_string_enum())
         {
+            #[cfg(feature = "uuid")]
+            if prop_schema.is_string() && prop_schema.format.as_deref() == Some("uuid") {
+                let ty = if schema.is_required(key) {
+                    "Uuid".to_string()
+                } else {
+                    "Option<Uuid>".to_string()
+                };
+                if needs_rename {
+                    writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+                }
+                writeln!(out, "    pub {field_name}: {ty},")?;
+                continue;
+            }
             // String type, or non-string/mixed enum fallback per design.
             let ty = if schema.is_required(key) {
                 "String".to_string()
@@ -1083,6 +1155,19 @@ fn emit_struct_fields(
                 .is_some_and(|v| !v.is_empty())
                 && !prop_schema.is_string_enum())
         {
+            #[cfg(feature = "uuid")]
+            if prop_schema.is_string() && prop_schema.format.as_deref() == Some("uuid") {
+                let ty = if schema.is_required(key) {
+                    "Uuid".to_string()
+                } else {
+                    "Option<Uuid>".to_string()
+                };
+                if needs_rename {
+                    writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+                }
+                writeln!(out, "    pub {field_name}: {ty},")?;
+                continue;
+            }
             // String type, or non-string/mixed enum fallback per design.
             let ty = if schema.is_required(key) {
                 "String".to_string()
@@ -2006,6 +2091,7 @@ pub struct Root {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
@@ -2023,6 +2109,7 @@ pub struct Root {
                 maximum: None,
                 min_length: None,
                 max_length: None,
+                format: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;
@@ -2439,6 +2526,72 @@ pub struct Root {
         let settings: CodeGenSettings = CodeGenSettings::builder().build();
         let expected = DedupeMode::Full;
         let actual = settings.dedupe_mode;
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn uuid_required_property() {
+        let json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub id: Uuid,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn uuid_optional_property() {
+        let json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub id: Option<Uuid>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn uuid_array_items() {
+        let json = r#"{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string","format":"uuid"}}},"required":["ids"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub ids: Vec<Uuid>,
+}
+
+";
         assert_eq!(expected, actual);
     }
 }

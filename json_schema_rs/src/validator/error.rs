@@ -130,6 +130,14 @@ pub enum ValidationError {
         /// Actual Unicode code point count (for user-facing context).
         actual_length: u64,
     },
+    /// The string instance does not parse as a valid UUID (only emitted when the `uuid` feature is enabled).
+    #[cfg(feature = "uuid")]
+    InvalidUuidFormat {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The invalid string value (for user-facing context).
+        value: String,
+    },
 }
 
 impl std::error::Error for ValidationError {}
@@ -152,11 +160,14 @@ impl ValidationError {
             | ValidationError::AboveMaximum { instance_path, .. }
             | ValidationError::TooShort { instance_path, .. }
             | ValidationError::TooLong { instance_path, .. } => instance_path,
+            #[cfg(feature = "uuid")]
+            ValidationError::InvalidUuidFormat { instance_path, .. } => instance_path,
         }
     }
 }
 
 impl fmt::Display for ValidationError {
+    #[expect(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let location = self.instance_path().display_root_or_path();
         match self {
@@ -254,6 +265,10 @@ impl fmt::Display for ValidationError {
                     f,
                     "{location}: string has {actual_length} code points, maxLength is {max_length}"
                 )
+            }
+            #[cfg(feature = "uuid")]
+            ValidationError::InvalidUuidFormat { value, .. } => {
+                write!(f, "{location}: string \"{value}\" is not a valid UUID")
             }
         }
     }

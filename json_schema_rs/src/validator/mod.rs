@@ -129,6 +129,17 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                         });
                     }
                 }
+                #[cfg(feature = "uuid")]
+                if schema.format.as_deref() == Some("uuid") {
+                    if let Some(s) = instance.as_str() {
+                        if uuid::Uuid::parse_str(s).is_err() {
+                            errors.push(ValidationError::InvalidUuidFormat {
+                                instance_path: instance_path.clone(),
+                                value: s.to_string(),
+                            });
+                        }
+                    }
+                }
             }
             Some("integer") => {
                 let valid = instance.as_number().is_some_and(|n| n.as_i64().is_some());
@@ -310,6 +321,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         }
     }
 
@@ -378,6 +390,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("not an object");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -411,6 +424,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        format: None,
                     },
                 );
                 m
@@ -427,6 +441,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let valid_instance = json!({"name": "Alice"});
         let actual_valid: ValidationResult = validate(&schema, &valid_instance);
@@ -453,6 +468,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -477,6 +493,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -501,6 +518,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -528,6 +546,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -555,6 +574,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -582,6 +602,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -609,6 +630,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -639,6 +661,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("open");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -666,6 +689,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("pending");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -697,6 +721,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("a");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -724,6 +749,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("c");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -752,6 +778,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -776,6 +803,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -800,6 +828,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(-1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -824,6 +853,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -851,6 +881,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("42");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -878,6 +909,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -905,6 +937,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -932,6 +965,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -959,6 +993,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1049,6 +1084,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1073,6 +1109,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1097,6 +1134,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("3.14");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1124,6 +1162,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1151,6 +1190,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1178,6 +1218,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1.0]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1205,6 +1246,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1232,6 +1274,7 @@ mod tests {
             maximum: Some(255.0),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(100);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1256,6 +1299,7 @@ mod tests {
             maximum: Some(100.0),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1284,6 +1328,7 @@ mod tests {
             maximum: Some(10.0),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(20);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1312,6 +1357,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1336,6 +1382,7 @@ mod tests {
             maximum: Some(99.5),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(50.0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1360,6 +1407,7 @@ mod tests {
             maximum: Some(10.0),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(0.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1388,6 +1436,7 @@ mod tests {
             maximum: Some(1.0),
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1422,6 +1471,7 @@ mod tests {
                         maximum: Some(100.0),
                         min_length: None,
                         max_length: None,
+                        format: None,
                     },
                 );
                 m.insert(
@@ -1441,6 +1491,7 @@ mod tests {
                         maximum: Some(100.0),
                         min_length: None,
                         max_length: None,
+                        format: None,
                     },
                 );
                 m
@@ -1457,6 +1508,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!({"low": 5, "high": 200});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1492,6 +1544,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1516,6 +1569,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1540,6 +1594,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1567,6 +1622,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -1583,6 +1639,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(["a", "b", "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1607,6 +1664,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -1623,6 +1681,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(["a", 42, "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1650,6 +1709,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -1666,6 +1726,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(["a", "b", "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1690,6 +1751,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -1706,6 +1768,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(["a", "b", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1736,6 +1799,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -1752,6 +1816,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(["a", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1776,6 +1841,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -1792,6 +1858,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(["a", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1816,6 +1883,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1840,6 +1908,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1864,6 +1933,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1892,6 +1962,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1916,6 +1987,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1940,6 +2012,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1968,6 +2041,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1992,6 +2066,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2016,6 +2091,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2044,6 +2120,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2, 3, 4, 5, 6]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2072,6 +2149,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2096,6 +2174,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2186,6 +2265,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2213,6 +2293,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2240,6 +2321,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2277,6 +2359,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         let instance = json!({"name": "Alice"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2315,6 +2398,7 @@ mod tests {
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    format: None,
                 },
             );
             m
@@ -2431,6 +2515,7 @@ mod tests {
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    format: None,
                 },
             );
             m
@@ -2478,6 +2563,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            format: None,
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
@@ -2495,6 +2581,7 @@ mod tests {
                 maximum: None,
                 min_length: None,
                 max_length: None,
+                format: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;
@@ -2735,5 +2822,30 @@ mod tests {
         };
         let instance = json!("日本語");
         assert_eq!(Ok(()), validate(&schema, &instance));
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_valid_uuid() {
+        let schema: JsonSchema =
+            serde_json::from_str(r#"{"type":"string","format":"uuid"}"#).unwrap();
+        let instance = json!("550e8400-e29b-41d4-a716-446655440000");
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_invalid_string() {
+        let schema: JsonSchema =
+            serde_json::from_str(r#"{"type":"string","format":"uuid"}"#).unwrap();
+        let instance = json!("not-a-uuid");
+        let expected: ValidationResult = Err(vec![ValidationError::InvalidUuidFormat {
+            instance_path: JsonPointer::root(),
+            value: "not-a-uuid".to_string(),
+        }]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
     }
 }

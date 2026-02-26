@@ -2077,6 +2077,7 @@ fn write_workspace_scenario_member(
                                 maximum: None,
                                 min_length: None,
                                 max_length: None,
+                                format: None,
                             },
                         );
                         m
@@ -2093,6 +2094,7 @@ fn write_workspace_scenario_member(
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    format: None,
                 };
                 for i in (0..DEPTH).rev() {
                     let mut wrap: JsonSchema = JsonSchema {
@@ -2110,6 +2112,7 @@ fn write_workspace_scenario_member(
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        format: None,
                     };
                     wrap.properties.insert("child".to_string(), inner);
                     inner = wrap;
@@ -2314,6 +2317,60 @@ fn main() {
     }
     let main_rs: String = main_rs_template.replace("compile_test", package_name);
     fs::write(src.join("main.rs"), main_rs).expect("write main.rs");
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn integration_parse_and_generate_uuid_property() {
+    let json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#;
+    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
+    let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
+    assert!(
+        actual.contains("pub id: Uuid,"),
+        "required uuid field should be Uuid: {actual}"
+    );
+    assert!(
+        actual.contains("use uuid::Uuid;"),
+        "uuid use statement should be present: {actual}"
+    );
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn cli_generate_rust_uuid_property() {
+    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(
+        actual.contains("pub id: Uuid,"),
+        "required uuid field should be Uuid: {actual}"
+    );
+    assert!(
+        actual.contains("use uuid::Uuid;"),
+        "uuid use statement should be present: {actual}"
+    );
 }
 
 #[test]

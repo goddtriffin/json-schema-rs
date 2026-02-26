@@ -48,6 +48,7 @@ fn derive_root_json_schema() {
         maximum: None,
         min_length: None,
         max_length: None,
+        format: None,
     };
     let actual: JsonSchema = Root::json_schema();
     assert_eq!(expected, actual);
@@ -75,6 +76,7 @@ fn derive_address_json_schema() {
         maximum: None,
         min_length: None,
         max_length: None,
+        format: None,
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
@@ -182,6 +184,7 @@ fn derive_field_minimum_maximum_integer() {
         maximum: None,
         min_length: None,
         max_length: None,
+        format: None,
     };
     let actual: JsonSchema = WithIntegerMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -218,6 +221,7 @@ fn derive_field_minimum_maximum_float() {
         maximum: None,
         min_length: None,
         max_length: None,
+        format: None,
     };
     let actual: JsonSchema = WithFloatMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -271,6 +275,7 @@ fn derive_field_only_minimum() {
         maximum: None,
         min_length: None,
         max_length: None,
+        format: None,
     };
     let actual: JsonSchema = WithOnlyMinimum::json_schema();
     assert_eq!(expected, actual);
@@ -306,6 +311,7 @@ fn derive_field_only_maximum() {
         maximum: None,
         min_length: None,
         max_length: None,
+        format: None,
     };
     let actual: JsonSchema = WithOnlyMaximum::json_schema();
     assert_eq!(expected, actual);
@@ -460,4 +466,36 @@ fn macro_derive_to_json_schema_string_no_length_constraints() {
     let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
     assert_eq!(None, name_schema.min_length);
     assert_eq!(None, name_schema.max_length);
+}
+
+#[cfg(feature = "uuid")]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithUuid {
+    id: uuid::Uuid,
+    secondary_id: Option<uuid::Uuid>,
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn derive_uuid_field_json_schema() {
+    let schema: JsonSchema = WithUuid::json_schema();
+    let id_schema: &JsonSchema = schema.properties.get("id").expect("id property");
+    assert_eq!(id_schema.type_.as_deref(), Some("string"));
+    assert_eq!(id_schema.format.as_deref(), Some("uuid"));
+    let secondary_schema: &JsonSchema = schema
+        .properties
+        .get("secondary_id")
+        .expect("secondary_id property");
+    assert_eq!(secondary_schema.type_.as_deref(), Some("string"));
+    assert_eq!(secondary_schema.format.as_deref(), Some("uuid"));
+    let required = schema.required.as_ref().expect("required");
+    assert!(
+        required.contains(&"id".to_string()),
+        "id should be required"
+    );
+    assert!(
+        !required.contains(&"secondary_id".to_string()),
+        "secondary_id should not be required"
+    );
 }
