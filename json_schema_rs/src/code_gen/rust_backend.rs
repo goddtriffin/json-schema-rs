@@ -102,7 +102,7 @@ fn string_enum_values(schema: &JsonSchema) -> Option<Vec<String>> {
 }
 
 /// Key for deduplication: canonical representation of an object schema for a given mode.
-/// Implements `Ord` + `Eq` for use in `BTreeMap`. Functional mode excludes description; Full includes it (when present in schema).
+/// Implements `Ord` + `Eq` for use in `BTreeMap`. Functional mode excludes description and comment; Full includes them (when present in schema).
 #[derive(Debug, Clone)]
 struct DedupeKey {
     type_: Option<String>,
@@ -110,6 +110,7 @@ struct DedupeKey {
     required: Option<Vec<String>>,
     title: Option<String>,
     description: Option<String>,
+    comment: Option<String>,
     items: Option<Box<DedupeKey>>,
     unique_items: Option<bool>,
     min_items: Option<u64>,
@@ -126,6 +127,7 @@ impl PartialEq for DedupeKey {
             && self.required == other.required
             && self.title == other.title
             && self.description == other.description
+            && self.comment == other.comment
             && self.items == other.items
             && self.unique_items == other.unique_items
             && self.min_items == other.min_items
@@ -164,6 +166,7 @@ impl Ord for DedupeKey {
                 .then_with(|| compare_option_vec(self.required.as_ref(), other.required.as_ref()))
                 .then_with(|| self.title.cmp(&other.title))
                 .then_with(|| self.description.cmp(&other.description))
+                .then_with(|| self.comment.cmp(&other.comment))
                 .then_with(|| self.items.cmp(&other.items))
                 .then_with(|| self.unique_items.cmp(&other.unique_items))
                 .then_with(|| self.min_items.cmp(&other.min_items))
@@ -300,6 +303,10 @@ impl DedupeKey {
             title: schema.title.clone(),
             description: match mode {
                 DedupeMode::Full => schema.description.clone(),
+                DedupeMode::Functional | DedupeMode::Disabled => None,
+            },
+            comment: match mode {
+                DedupeMode::Full => schema.comment.clone(),
                 DedupeMode::Functional | DedupeMode::Disabled => None,
             },
             items,
@@ -2082,6 +2089,7 @@ pub struct Root {
             required: None,
             title: Some("Leaf".to_string()),
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -2100,6 +2108,7 @@ pub struct Root {
                 required: None,
                 title: Some(format!("Level{i}")),
                 description: None,
+                comment: None,
                 enum_values: None,
                 items: None,
                 unique_items: None,
@@ -2490,6 +2499,37 @@ pub struct Root {
         let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"First"}"#;
         let j2 =
             r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"Second"}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Full)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected_shared_some = false;
+        let actual_shared_some = output.shared.is_some();
+        assert_eq!(expected_shared_some, actual_shared_some);
+        assert_eq!(2, output.per_schema.len());
+    }
+
+    #[test]
+    fn dedupe_functional_same_shape_different_comment_one_struct() {
+        let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"First"}"#;
+        let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"Second"}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Functional)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected_shared_some = true;
+        let actual_shared_some = output.shared.is_some();
+        assert_eq!(expected_shared_some, actual_shared_some);
+    }
+
+    #[test]
+    fn dedupe_full_same_shape_different_comment_two_structs() {
+        let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"First"}"#;
+        let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"Second"}"#;
         let s1: JsonSchema = serde_json::from_str(j1).unwrap();
         let s2: JsonSchema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()

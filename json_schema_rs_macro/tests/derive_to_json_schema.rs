@@ -39,6 +39,7 @@ fn derive_root_json_schema() {
         required: Some(vec!["id".to_string()]),
         title: Some("Root".to_string()),
         description: None,
+        comment: None,
         enum_values: None,
         items: None,
         unique_items: None,
@@ -67,6 +68,7 @@ fn derive_address_json_schema() {
         required: Some(vec!["city".to_string(), "street".to_string()]),
         title: None,
         description: None,
+        comment: None,
         enum_values: None,
         items: None,
         unique_items: None,
@@ -113,6 +115,25 @@ fn derive_attribute_description() {
     let actual: JsonSchema = AttrDescription::json_schema();
     let expected_desc: Option<String> = Some("From attribute".to_string());
     assert_eq!(expected_desc, actual.description);
+}
+
+#[derive(ToJsonSchema)]
+#[to_json_schema(comment = "Created by X")]
+#[expect(dead_code)]
+struct WithCommentAttr {
+    id: String,
+}
+
+#[test]
+fn derive_attribute_comment() {
+    let actual: JsonSchema = WithCommentAttr::json_schema();
+    let expected_comment: Option<String> = Some("Created by X".to_string());
+    assert_eq!(expected_comment, actual.comment);
+    let json: String = (&actual).try_into().expect("serialize");
+    assert!(
+        json.contains(r#""$comment":"Created by X""#),
+        "serialized schema should contain $comment; got: {json}"
+    );
 }
 
 #[derive(ToJsonSchema)]
@@ -175,6 +196,7 @@ fn derive_field_minimum_maximum_integer() {
         required: Some(vec!["byte".to_string()]),
         title: None,
         description: None,
+        comment: None,
         enum_values: None,
         items: None,
         unique_items: None,
@@ -212,6 +234,7 @@ fn derive_field_minimum_maximum_float() {
         required: Some(vec!["score".to_string()]),
         title: None,
         description: None,
+        comment: None,
         enum_values: None,
         items: None,
         unique_items: None,
@@ -266,6 +289,7 @@ fn derive_field_only_minimum() {
         required: Some(vec!["value".to_string()]),
         title: None,
         description: None,
+        comment: None,
         enum_values: None,
         items: None,
         unique_items: None,
@@ -302,6 +326,7 @@ fn derive_field_only_maximum() {
         required: Some(vec!["value".to_string()]),
         title: None,
         description: None,
+        comment: None,
         enum_values: None,
         items: None,
         unique_items: None,

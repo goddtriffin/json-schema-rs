@@ -34,6 +34,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) title: Option<String>,
     #[serde(default)]
     pub(crate) description: Option<String>,
+    #[serde(default, rename = "$comment")]
+    pub(crate) comment: Option<String>,
     #[serde(default, rename = "enum")]
     pub(crate) enum_values: Option<Vec<serde_json::Value>>,
     #[serde(default)]
@@ -73,6 +75,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         required: h.required,
         title: h.title,
         description: h.description,
+        comment: h.comment,
         enum_values: h.enum_values,
         items,
         unique_items: h.unique_items,
@@ -108,6 +111,10 @@ pub struct JsonSchema {
     /// Human-readable description. Codegen emits it as Rust doc comments (struct, enum, or field).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// Schema-only comment (draft-07+). Stored and round-tripped; not used for validation or user-facing docs.
+    #[serde(rename = "$comment", skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 
     /// Allowed values for the instance (JSON Schema `enum`). When present and non-empty, instance must equal one of these. Codegen uses only string-only enums.
     #[serde(rename = "enum", skip_serializing_if = "skip_enum_values")]
@@ -251,6 +258,7 @@ mod tests {
             required: None,
             title: Some("Root".to_string()),
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -268,6 +276,34 @@ mod tests {
     }
 
     #[test]
+    fn try_from_schema_with_comment_serializes_dollar_comment() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: Some("Created by John Doe".to_string()),
+            enum_values: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+        };
+        let actual: String = (&schema).try_into().expect("serialize");
+        let expected_contains = r#""$comment":"Created by John Doe""#;
+        assert!(
+            actual.contains(expected_contains),
+            "serialized schema should contain $comment; got: {actual}"
+        );
+    }
+
+    #[test]
     fn try_from_schema_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
             type_: Some("string".to_string()),
@@ -275,6 +311,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -366,6 +403,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -416,6 +454,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -440,6 +479,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -458,6 +498,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: Some(vec![]),
             items: None,
             unique_items: None,
@@ -476,6 +517,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -497,6 +539,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::Number(42_i64.into()),
@@ -548,6 +591,7 @@ mod tests {
                     required: None,
                     title: None,
                     description: None,
+                    comment: None,
                     enum_values: None,
                     items: None,
                     unique_items: None,
@@ -574,6 +618,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -591,6 +636,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,

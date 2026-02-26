@@ -123,6 +123,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Reverse codegen (every struct ToJsonSchema + attributes) | Y | Y | Y | Y | Y |
 | Round-trip (generate → Type::json_schema() → TryFrom → parse → equals) | — | Y | — | Y | Y |
 | description (struct, field, enum doc) | Y | Y | Y | Y | Y |
+| $comment (round-trip; reverse via comment attribute) | Y | Y | Y | Y | Y |
 | Required array property (e.g. Vec\<String\>) | Y | Y | Y | Y | Y |
 | Optional array property | Y | Y | Y | Y | Y |
 | Array with uniqueItems true (e.g. HashSet\<String\>) | Y | Y | Y | Y | Y |
@@ -201,9 +202,11 @@ TODO.
 
 ### $comment
 
-TODO.
+**Our implementation:** We parse, store, and serialize `$comment` (round-trip). The validator ignores it (no validation effect). Codegen does not emit it as user-facing doc (reserved for `description`); we do not emit `//` line comments in generated Rust. Dedupe: **Functional** mode excludes `comment` from the key (same shape with different `$comment` yields one struct); **Full** mode includes it (different comments yield separate structs). Reverse codegen: `#[to_json_schema(comment = "...")]` on a struct or enum sets the emitted schema’s `$comment`.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** `$comment` is defined in draft-07 and later (2019-09, 2020-12); draft-06 and earlier do not define it. We accept the key when present in older drafts (lenient) but only draft-07+ define the keyword.
+
+**Competitor approaches:** Rust: BelfordZ stores `comment` in the schema model; Stranger6667/typify do not. Other languages: many (json-everything, Corvus, networknt, santhosh-tekuri, pwall567, etc.) parse and store with no validation/codegen emission; jsonschema2pojo emits as Javadoc (spec says “should not be used to communicate to users”); Blaze emits only in Exhaustive mode. We align with parse+store+round-trip and no user-facing emission. See research reports under `research/reports/`.
 
 ---
 

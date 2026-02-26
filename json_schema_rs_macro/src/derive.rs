@@ -84,6 +84,33 @@ fn container_description(attrs: &[Attribute]) -> SynResult<Option<String>> {
     }
 }
 
+/// Extracts `comment = "..."` from `#[to_json_schema(...)]` container attribute.
+fn container_comment(attrs: &[Attribute]) -> SynResult<Option<String>> {
+    for attr in attrs {
+        if !attr.path().is_ident("to_json_schema") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if !nv.path.is_ident("comment") {
+                continue;
+            }
+            let syn::Expr::Lit(expr_lit) = nv.value else {
+                continue;
+            };
+            let syn::Lit::Str(s) = expr_lit.lit else {
+                continue;
+            };
+            return Ok(Some(s.value()));
+        }
+    }
+    Ok(None)
+}
+
 /// Extracts description from a field's `///` doc comments (joined with newline).
 #[expect(clippy::unnecessary_wraps)]
 fn field_description(field: &Field) -> SynResult<Option<String>> {
@@ -355,6 +382,15 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         })
         .unwrap_or(quote! { None });
 
+    let comment: Option<String> = container_comment(&input.attrs)?;
+    let comment_expr = comment
+        .as_ref()
+        .map(|c| {
+            let lit = LitStr::new(c, proc_macro2::Span::call_site());
+            quote! { Some(#lit.to_string()) }
+        })
+        .unwrap_or(quote! { None });
+
     let mut property_inserts: Vec<TokenStream2> = Vec::new();
     let mut required_keys: Vec<String> = Vec::new();
 
@@ -462,6 +498,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     required: #required_expr,
                     title: #title_expr,
                     description: #description_expr,
+                    comment: #comment_expr,
                     enum_values: None,
                     items: None,
                     unique_items: None,
@@ -502,6 +539,15 @@ fn expand_enum_to_json_schema(
         })
         .unwrap_or(quote! { None });
 
+    let comment: Option<String> = container_comment(attrs)?;
+    let comment_expr = comment
+        .as_ref()
+        .map(|c| {
+            let lit = LitStr::new(c, proc_macro2::Span::call_site());
+            quote! { Some(#lit.to_string()) }
+        })
+        .unwrap_or(quote! { None });
+
     let mut enum_value_lits: Vec<LitStr> = Vec::new();
     for variant in &data_enum.variants {
         match &variant.fields {
@@ -529,6 +575,7 @@ fn expand_enum_to_json_schema(
                     required: None,
                     title: #title_expr,
                     description: #description_expr,
+                    comment: #comment_expr,
                     enum_values: Some(enum_values),
                     items: None,
                     unique_items: None,

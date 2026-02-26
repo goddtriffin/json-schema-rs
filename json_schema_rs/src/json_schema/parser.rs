@@ -67,6 +67,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             title: Option<String>,
             #[serde(default)]
             description: Option<String>,
+            #[serde(default, rename = "$comment")]
+            comment: Option<String>,
             #[serde(default, rename = "enum")]
             enum_values: Option<Vec<serde_json::Value>>,
             #[serde(default)]
@@ -95,6 +97,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             required: h.required,
             title: h.title,
             description: h.description,
+            comment: h.comment,
             enum_values: h.enum_values,
             items: h.items,
             unique_items: h.unique_items,
@@ -182,6 +185,7 @@ mod tests {
                         required: None,
                         title: None,
                         description: None,
+                        comment: None,
                         enum_values: None,
                         items: None,
                         unique_items: None,
@@ -199,6 +203,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -229,6 +234,7 @@ mod tests {
                         required: None,
                         title: None,
                         description: None,
+                        comment: None,
                         enum_values: None,
                         items: None,
                         unique_items: None,
@@ -249,6 +255,7 @@ mod tests {
                         required: None,
                         title: None,
                         description: None,
+                        comment: None,
                         enum_values: None,
                         items: None,
                         unique_items: None,
@@ -266,6 +273,7 @@ mod tests {
             required: Some(vec!["x".to_string()]),
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -291,6 +299,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -315,6 +324,7 @@ mod tests {
             required: None,
             title: None,
             description: None,
+            comment: None,
             enum_values: None,
             items: None,
             unique_items: None,
@@ -383,6 +393,47 @@ mod tests {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"title":"Root"}"#;
         let result: Result<_, _> = parse_schema(json, &settings);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_dollar_comment_preserved() {
+        let json = r#"{"type":"object","properties":{},"$comment":"Created by John Doe"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<String> = Some("Created by John Doe".to_string());
+        assert_eq!(expected, parsed.comment);
+    }
+
+    #[test]
+    fn parse_without_comment_is_none() {
+        let json = r#"{"type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(None, parsed.comment);
+    }
+
+    #[test]
+    fn round_trip_preserves_dollar_comment() {
+        let json = r#"{"type":"object","properties":{"country":{"type":"string","$comment":"TODO: add enum"}},"$comment":"Root schema"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse again");
+        assert_eq!(parsed.comment, reparsed.comment);
+        let country_schema: &JsonSchema = reparsed.properties.get("country").expect("country");
+        assert_eq!(Some("TODO: add enum".to_string()), country_schema.comment);
+    }
+
+    #[test]
+    fn parse_strict_accepts_dollar_comment() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"object","properties":{"a":{"type":"string"}},"$comment":"Note"}"#;
+        let result: Result<JsonSchema, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+        let parsed = result.unwrap();
+        assert_eq!(Some("Note".to_string()), parsed.comment);
     }
 
     #[test]
