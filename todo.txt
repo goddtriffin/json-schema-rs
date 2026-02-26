@@ -31,13 +31,6 @@ For each of these TODO items, check what every other competitor library does, ch
 
 
 /contribution-guide Please create plan:
-- please implement string "minLength"/"maxLength"
-- implement across all tools the codebase offers (code gen, validator, reverse code gen, CLI, macros, etc)
-- implement tests that match all of our guidelines (exhaustive, lockstep, etc)
-- make sure to include implementation of Rust macro annotations for setting min/max length on Rust model string fields, which should help reverse code gen apply these constraints within the generated JSON Schema (and make sure our JSON Schema to Rust code gen also generates these trait macro annotations on our generated Rust models)
-
-
-/contribution-guide Please create plan:
 - please implement UUIDs
 - make this driven by a crate feature, which is disabled by default. If users of this library want to enable integration with the UUID crate and have auto serializing and deserializing into UUIDs instead of strings, they'll have to manually enable the UUID json-schema-rs feature. This way this dependency isn't pulled in unless they really want it.
 - implement across all tools the codebase offers (code gen, validator, reverse code gen, CLI, macros, etc)

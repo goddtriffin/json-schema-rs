@@ -88,6 +88,20 @@ pub enum ValidationError {
         /// The schema's maximum value.
         maximum: OrderedF64,
     },
+    /// Schema had `minLength` but the string had fewer Unicode code points.
+    TooShort {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's minLength value.
+        min_length: u64,
+    },
+    /// Schema had `maxLength` but the string had more Unicode code points.
+    TooLong {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's maxLength value.
+        max_length: u64,
+    },
 }
 
 impl std::error::Error for ValidationError {}
@@ -107,7 +121,9 @@ impl ValidationError {
             | ValidationError::MissingRequired { instance_path, .. }
             | ValidationError::NotInEnum { instance_path }
             | ValidationError::BelowMinimum { instance_path, .. }
-            | ValidationError::AboveMaximum { instance_path, .. } => instance_path,
+            | ValidationError::AboveMaximum { instance_path, .. }
+            | ValidationError::TooShort { instance_path, .. }
+            | ValidationError::TooLong { instance_path, .. } => instance_path,
         }
     }
 }
@@ -151,6 +167,12 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::AboveMaximum { maximum, .. } => {
                 write!(f, "{location}: value above maximum {}", maximum.0)
+            }
+            ValidationError::TooShort { min_length, .. } => {
+                write!(f, "{location}: string shorter than minLength {min_length}")
+            }
+            ValidationError::TooLong { max_length, .. } => {
+                write!(f, "{location}: string longer than maxLength {max_length}")
             }
         }
     }

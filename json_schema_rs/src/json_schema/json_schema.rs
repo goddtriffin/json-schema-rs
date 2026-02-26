@@ -48,6 +48,10 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) minimum: Option<f64>,
     #[serde(default)]
     pub(crate) maximum: Option<f64>,
+    #[serde(default, rename = "minLength")]
+    pub(crate) min_length: Option<u64>,
+    #[serde(default, rename = "maxLength")]
+    pub(crate) max_length: Option<u64>,
 }
 
 /// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
@@ -74,6 +78,8 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         max_items: h.max_items,
         minimum: h.minimum,
         maximum: h.maximum,
+        min_length: h.min_length,
+        max_length: h.max_length,
     }
 }
 
@@ -127,6 +133,14 @@ pub struct JsonSchema {
     /// Inclusive upper bound for numeric instances (integer or number). Used for validation and for codegen type selection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum: Option<f64>,
+
+    /// Minimum string length in Unicode code points. String-only; used by validator and codegen.
+    #[serde(rename = "minLength", skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<u64>,
+
+    /// Maximum string length in Unicode code points. String-only; used by validator and codegen.
+    #[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<u64>,
 }
 
 impl JsonSchema {
@@ -236,6 +250,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"object","title":"Root"}"#;
@@ -257,6 +273,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"string\"}";
@@ -345,6 +363,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
@@ -392,6 +412,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"number\"}";
@@ -413,6 +435,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         assert!(!no_enum.is_string_enum());
         let empty_enum: JsonSchema = JsonSchema {
@@ -428,6 +452,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         assert!(!empty_enum.is_string_enum());
         let string_enum: JsonSchema = JsonSchema {
@@ -446,6 +472,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         assert!(string_enum.is_string_enum());
         let mixed_enum: JsonSchema = JsonSchema {
@@ -464,6 +492,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         assert!(!mixed_enum.is_string_enum());
     }
@@ -509,6 +539,8 @@ mod tests {
                     max_items: None,
                     minimum: None,
                     maximum: None,
+                    min_length: None,
+                    max_length: None,
                 }));
                 s.is_array_with_items()
             },
@@ -532,6 +564,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let schema: JsonSchema = JsonSchema {
             type_: Some("array".to_string()),
@@ -546,6 +580,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"array","items":{"type":"string"}}"#;
@@ -595,6 +631,57 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_parse_compare_with_unique_items() {
         let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":true}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse again");
+        assert_eq!(parsed, reparsed);
+    }
+
+    #[test]
+    fn parse_min_length() {
+        let json = r#"{"type":"string","minLength":5}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(Some(5), parsed.min_length);
+    }
+
+    #[test]
+    fn parse_max_length() {
+        let json = r#"{"type":"string","maxLength":20}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(Some(20), parsed.max_length);
+    }
+
+    #[test]
+    fn parse_min_length_max_length_both() {
+        let json = r#"{"type":"string","minLength":2,"maxLength":50}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(Some(2), parsed.min_length);
+        assert_eq!(Some(50), parsed.max_length);
+    }
+
+    #[test]
+    fn parse_min_length_absent() {
+        let json = r#"{"type":"string"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(None, parsed.min_length);
+    }
+
+    #[test]
+    fn parse_max_length_absent() {
+        let json = r#"{"type":"string"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(None, parsed.max_length);
+    }
+
+    #[test]
+    fn round_trip_parse_serialize_parse_with_min_length_max_length() {
+        let json = r#"{"type":"string","minLength":2,"maxLength":50}"#;
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
         let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
         let serialized: String = (&parsed).try_into().expect("serialize");

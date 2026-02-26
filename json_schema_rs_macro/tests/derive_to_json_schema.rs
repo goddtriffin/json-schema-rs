@@ -46,6 +46,8 @@ fn derive_root_json_schema() {
         max_items: None,
         minimum: None,
         maximum: None,
+        min_length: None,
+        max_length: None,
     };
     let actual: JsonSchema = Root::json_schema();
     assert_eq!(expected, actual);
@@ -71,6 +73,8 @@ fn derive_address_json_schema() {
         max_items: None,
         minimum: None,
         maximum: None,
+        min_length: None,
+        max_length: None,
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
@@ -176,6 +180,8 @@ fn derive_field_minimum_maximum_integer() {
         max_items: None,
         minimum: None,
         maximum: None,
+        min_length: None,
+        max_length: None,
     };
     let actual: JsonSchema = WithIntegerMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -210,6 +216,8 @@ fn derive_field_minimum_maximum_float() {
         max_items: None,
         minimum: None,
         maximum: None,
+        min_length: None,
+        max_length: None,
     };
     let actual: JsonSchema = WithFloatMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -261,6 +269,8 @@ fn derive_field_only_minimum() {
         max_items: None,
         minimum: None,
         maximum: None,
+        min_length: None,
+        max_length: None,
     };
     let actual: JsonSchema = WithOnlyMinimum::json_schema();
     assert_eq!(expected, actual);
@@ -294,6 +304,8 @@ fn derive_field_only_maximum() {
         max_items: None,
         minimum: None,
         maximum: None,
+        min_length: None,
+        max_length: None,
     };
     let actual: JsonSchema = WithOnlyMaximum::json_schema();
     assert_eq!(expected, actual);
@@ -390,4 +402,62 @@ fn hash_set_string_json_schema_has_min_items_max_items_none() {
     let expected_max: Option<u64> = None;
     assert_eq!(expected_min, actual.min_items);
     assert_eq!(expected_max, actual.max_items);
+}
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithStringMinLength {
+    #[to_json_schema(min_length = 3)]
+    name: String,
+}
+
+#[test]
+fn macro_derive_to_json_schema_string_min_length() {
+    let schema: JsonSchema = WithStringMinLength::json_schema();
+    let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
+    assert_eq!(Some(3), name_schema.min_length);
+    assert_eq!(None, name_schema.max_length);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithStringMaxLength {
+    #[to_json_schema(max_length = 10)]
+    name: String,
+}
+
+#[test]
+fn macro_derive_to_json_schema_string_max_length() {
+    let schema: JsonSchema = WithStringMaxLength::json_schema();
+    let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
+    assert_eq!(None, name_schema.min_length);
+    assert_eq!(Some(10), name_schema.max_length);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithStringBothLengths {
+    #[to_json_schema(min_length = 2, max_length = 50)]
+    name: String,
+}
+
+#[test]
+fn macro_derive_to_json_schema_string_min_length_max_length() {
+    let schema: JsonSchema = WithStringBothLengths::json_schema();
+    let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
+    assert_eq!(Some(2), name_schema.min_length);
+    assert_eq!(Some(50), name_schema.max_length);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithStringNoLengthConstraints {
+    name: String,
+}
+
+#[test]
+fn macro_derive_to_json_schema_string_no_length_constraints() {
+    let schema: JsonSchema = WithStringNoLengthConstraints::json_schema();
+    let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
+    assert_eq!(None, name_schema.min_length);
+    assert_eq!(None, name_schema.max_length);
 }

@@ -109,6 +109,8 @@ struct DedupeKey {
     unique_items: Option<bool>,
     min_items: Option<u64>,
     max_items: Option<u64>,
+    min_length: Option<u64>,
+    max_length: Option<u64>,
 }
 
 impl PartialEq for DedupeKey {
@@ -122,6 +124,8 @@ impl PartialEq for DedupeKey {
             && self.unique_items == other.unique_items
             && self.min_items == other.min_items
             && self.max_items == other.max_items
+            && self.min_length == other.min_length
+            && self.max_length == other.max_length
     }
 }
 
@@ -157,6 +161,8 @@ impl Ord for DedupeKey {
                 .then_with(|| self.unique_items.cmp(&other.unique_items))
                 .then_with(|| self.min_items.cmp(&other.min_items))
                 .then_with(|| self.max_items.cmp(&other.max_items))
+                .then_with(|| self.min_length.cmp(&other.min_length))
+                .then_with(|| self.max_length.cmp(&other.max_length))
         })
     }
 }
@@ -240,6 +246,16 @@ impl DedupeKey {
         } else {
             None
         };
+        let min_length: Option<u64> = if schema.type_.as_deref() == Some("string") {
+            schema.min_length
+        } else {
+            None
+        };
+        let max_length: Option<u64> = if schema.type_.as_deref() == Some("string") {
+            schema.max_length
+        } else {
+            None
+        };
         DedupeKey {
             type_: schema.type_.clone(),
             properties,
@@ -253,6 +269,8 @@ impl DedupeKey {
             unique_items,
             min_items,
             max_items,
+            min_length,
+            max_length,
         }
     }
 }
@@ -949,6 +967,16 @@ fn emit_struct_fields_with_resolver(
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
             }
+            if prop_schema.min_length.is_some() || prop_schema.max_length.is_some() {
+                let mut attrs: Vec<String> = Vec::new();
+                if let Some(n) = prop_schema.min_length {
+                    attrs.push(format!("min_length = {n}"));
+                }
+                if let Some(n) = prop_schema.max_length {
+                    attrs.push(format!("max_length = {n}"));
+                }
+                writeln!(out, "    #[to_json_schema({})]", attrs.join(", "))?;
+            }
             writeln!(out, "    pub {field_name}: {ty},")?;
         } else if prop_schema.is_integer() || prop_schema.is_number() {
             let inner: String = rust_numeric_type_for_schema(prop_schema);
@@ -1021,6 +1049,7 @@ fn emit_struct_fields_with_resolver(
 }
 
 /// Emit a single struct's fields to `out`.
+#[expect(clippy::too_many_lines)]
 fn emit_struct_fields(
     schema: &JsonSchema,
     out: &mut impl Write,
@@ -1062,6 +1091,16 @@ fn emit_struct_fields(
             };
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            if prop_schema.min_length.is_some() || prop_schema.max_length.is_some() {
+                let mut attrs: Vec<String> = Vec::new();
+                if let Some(n) = prop_schema.min_length {
+                    attrs.push(format!("min_length = {n}"));
+                }
+                if let Some(n) = prop_schema.max_length {
+                    attrs.push(format!("max_length = {n}"));
+                }
+                writeln!(out, "    #[to_json_schema({})]", attrs.join(", "))?;
             }
             writeln!(out, "    pub {field_name}: {ty},")?;
         } else if prop_schema.is_integer() || prop_schema.is_number() {
@@ -1965,6 +2004,8 @@ pub struct Root {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
@@ -1980,6 +2021,8 @@ pub struct Root {
                 max_items: None,
                 minimum: None,
                 maximum: None,
+                min_length: None,
+                max_length: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

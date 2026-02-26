@@ -211,6 +211,16 @@ fn field_max_items(field: &Field) -> SynResult<Option<u64>> {
     field_u64_attr(field, "max_items")
 }
 
+/// Extracts `min_length = N` from a field's `#[to_json_schema(...)]` attribute.
+fn field_min_length(field: &Field) -> SynResult<Option<u64>> {
+    field_u64_attr(field, "min_length")
+}
+
+/// Extracts `max_length = N` from a field's `#[to_json_schema(...)]` attribute.
+fn field_max_length(field: &Field) -> SynResult<Option<u64>> {
+    field_u64_attr(field, "max_length")
+}
+
 /// Returns the JSON property key for a field: serde rename or field name.
 fn field_property_key(field: &Field) -> SynResult<String> {
     for attr in &field.attrs {
@@ -373,6 +383,8 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         let field_max: Option<f64> = field_maximum(field)?;
         let field_min_items: Option<u64> = field_min_items(field)?;
         let field_max_items: Option<u64> = field_max_items(field)?;
+        let field_min_length: Option<u64> = field_min_length(field)?;
+        let field_max_length: Option<u64> = field_max_length(field)?;
         let min_expr: TokenStream2 = if let Some(m) = field_min {
             let lit = proc_macro2::Literal::f64_unsuffixed(m);
             quote! { Some(#lit) }
@@ -397,6 +409,18 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         } else {
             quote! { None }
         };
+        let min_length_expr: TokenStream2 = if let Some(n) = field_min_length {
+            let lit = proc_macro2::Literal::u64_unsuffixed(n);
+            quote! { Some(#lit) }
+        } else {
+            quote! { None }
+        };
+        let max_length_expr: TokenStream2 = if let Some(n) = field_max_length {
+            let lit = proc_macro2::Literal::u64_unsuffixed(n);
+            quote! { Some(#lit) }
+        } else {
+            quote! { None }
+        };
         property_inserts.push(quote! {
             {
                 let base = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
@@ -406,6 +430,8 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     maximum: #max_expr.or(base.maximum),
                     min_items: #min_items_expr.or(base.min_items),
                     max_items: #max_items_expr.or(base.max_items),
+                    min_length: #min_length_expr.or(base.min_length),
+                    max_length: #max_length_expr.or(base.max_length),
                     ..base
                 });
             }
@@ -443,6 +469,8 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     max_items: None,
                     minimum: None,
                     maximum: None,
+                    min_length: None,
+                    max_length: None,
                 }
             }
         }
@@ -507,6 +535,8 @@ fn expand_enum_to_json_schema(
                     max_items: None,
                     minimum: None,
                     maximum: None,
+                    min_length: None,
+                    max_length: None,
                 }
             }
         }

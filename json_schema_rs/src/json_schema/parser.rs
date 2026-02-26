@@ -81,6 +81,10 @@ impl<'de> Deserialize<'de> for JsonSchema {
             minimum: Option<f64>,
             #[serde(default)]
             maximum: Option<f64>,
+            #[serde(default, rename = "minLength")]
+            min_length: Option<u64>,
+            #[serde(default, rename = "maxLength")]
+            max_length: Option<u64>,
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
@@ -96,6 +100,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             max_items: h.max_items,
             minimum: h.minimum,
             maximum: h.maximum,
+            min_length: h.min_length,
+            max_length: h.max_length,
         })
     }
 }
@@ -180,6 +186,8 @@ mod tests {
                         max_items: None,
                         minimum: None,
                         maximum: None,
+                        min_length: None,
+                        max_length: None,
                     },
                 );
                 m
@@ -194,6 +202,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -221,6 +231,8 @@ mod tests {
                         max_items: None,
                         minimum: None,
                         maximum: None,
+                        min_length: None,
+                        max_length: None,
                     },
                 );
                 m.insert(
@@ -238,6 +250,8 @@ mod tests {
                         max_items: None,
                         minimum: None,
                         maximum: None,
+                        min_length: None,
+                        max_length: None,
                     },
                 );
                 m
@@ -252,6 +266,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -274,6 +290,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -295,6 +313,8 @@ mod tests {
             max_items: None,
             minimum: None,
             maximum: None,
+            min_length: None,
+            max_length: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);

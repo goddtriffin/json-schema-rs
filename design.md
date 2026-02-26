@@ -73,7 +73,7 @@ Codegen is built around a **swappable backend** trait in **`code_gen/mod.rs`**: 
 
 **Trait and serialization:** The **ToJsonSchema** trait (in **`reverse_code_gen`**) has `fn json_schema() -> JsonSchema`. **JsonSchema** implements **Serialize** and **TryFrom<&JsonSchema> for String** / **TryFrom<&JsonSchema> for Vec<u8>** (and consuming forms); use `String::try_from(&schema)` or `.try_into()` to get JSON. Error type is **JsonSchemaParseError** (wraps `serde_json::Error`). Round-trip: parse schema → generate Rust → compile crate with json-schema-rs + macro → for each generated type call `TypeName::json_schema()` → TryFrom to String/Vec<u8> → parse back → assert equals original (or derived) schema.
 
-**Container/field attributes:** Container: **`#[to_json_schema(title = "...")]`** (when the schema had a title). Field-level **`#[to_json_schema(minimum = N, maximum = N)]`** is supported for emitting JSON Schema bounds on a property; N can be integer or float literals (stored as f64). When present, the attribute value overrides the type-derived minimum/maximum (e.g. an `i64` field with `#[to_json_schema(minimum = 0, maximum = 255)]` emits a schema with those bounds). Field-level **`#[to_json_schema(min_items = N, max_items = M)]`** is supported for array/set properties (Vec, HashSet, Option<Vec>, Option<HashSet>); when present, the attribute overlays the type-derived schema so the emitted JSON Schema includes minItems/maxItems. Other field attributes (e.g. `#[json_schema(...)]`) are parsed for future use; only supported schema keywords (type, properties, required, title, minimum, maximum, min_items, max_items) are emitted today. Constraint attributes (minLength, pattern, etc.) are reserved until the schema model and validator support them. Attribute names follow a Serde-style pattern (container vs field). **No literal recursion** in `reverse_code_gen`: schema construction and serialization use iteration + stack where depth can be large (see design principle above).
+**Container/field attributes:** Container: **`#[to_json_schema(title = "...")]`** (when the schema had a title). Field-level **`#[to_json_schema(minimum = N, maximum = N)]`** is supported for emitting JSON Schema bounds on a property; N can be integer or float literals (stored as f64). When present, the attribute value overrides the type-derived minimum/maximum (e.g. an `i64` field with `#[to_json_schema(minimum = 0, maximum = 255)]` emits a schema with those bounds). Field-level **`#[to_json_schema(min_items = N, max_items = M)]`** is supported for array/set properties (Vec, HashSet, Option<Vec>, Option<HashSet>); when present, the attribute overlays the type-derived schema so the emitted JSON Schema includes minItems/maxItems. Field-level **`#[to_json_schema(min_length = N, max_length = M)]`** is supported for string properties (String, Option<String>); when present, the attribute overlays the type-derived schema so the emitted JSON Schema includes minLength/maxLength. Other field attributes (e.g. `#[json_schema(...)]`) are parsed for future use; only supported schema keywords (type, properties, required, title, minimum, maximum, min_items, max_items, min_length, max_length) are emitted today. Constraint attributes (pattern, etc.) are reserved until the schema model and validator support them. Attribute names follow a Serde-style pattern (container vs field). **No literal recursion** in `reverse_code_gen`: schema construction and serialization use iteration + stack where depth can be large (see design principle above).
 
 ### Codegen tests: scenario × frontend
 
@@ -125,6 +125,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Optional array property | Y | Y | Y | Y | Y |
 | Array with uniqueItems true (e.g. HashSet\<String\>) | Y | Y | Y | Y | Y |
 | Array with minItems/maxItems (schema + emitted attribute) | Y | Y | Y | Y | Y |
+| String with minLength/maxLength (schema + emitted attribute) | Y | Y | Y | Y | Y |
 | Array of objects (nested struct) | Y | Y | Y | Y | Y |
 | Array of arrays (e.g. Vec\<Vec\<String\>\>) | Y | — | Y | Y | Y |
 
@@ -420,21 +421,22 @@ TODO.
 
 When a schema has `"type": "string"` (or `"type": ["string", ...]` with string first), the instance must be a JSON string. This meaning is **identical across all JSON Schema drafts** (draft-00 through 2020-12).
 
-**Our implementation:** We parse both a single type string `"string"` and an array whose first element is `"string"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("string")`, we require the instance to be a JSON string (`instance.is_string()`); non-strings produce `ValidationError::ExpectedString`. We do not apply any string constraints (minLength, maxLength, pattern, format). Codegen: properties with `type: "string"` emit Rust `String` or `Option<String>` (with `#[serde(rename = "...")]` when the field name differs from the JSON key). See schema model `is_string()` in `json_schema_rs/src/json_schema/json_schema.rs`, parser in `json_schema_rs/src/json_schema/parser.rs`, validator in `json_schema_rs/src/validator/mod.rs`, and Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`. Reverse codegen is not implemented; when it is, Rust `String` should emit `"type": "string"`.
+**Our implementation:** We parse both a single type string `"string"` and an array whose first element is `"string"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("string")`, we require the instance to be a JSON string (`instance.is_string()`); non-strings produce `ValidationError::ExpectedString`. String length constraints (`minLength`, `maxLength`) are applied when the instance is a string (see **minLength / maxLength** below). Codegen: properties with `type: "string"` emit Rust `String` or `Option<String>` (with `#[serde(rename = "...")]` when the field name differs from the JSON key; `#[to_json_schema(min_length = N, max_length = N)]` when constraints are present). See schema model `is_string()` in `json_schema_rs/src/json_schema/json_schema.rs`, parser in `json_schema_rs/src/json_schema/parser.rs`, validator in `json_schema_rs/src/validator/mod.rs`, and Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`. Reverse codegen: Rust `String` emits `"type": "string"` with no length bounds. Field-level `#[to_json_schema(min_length = N, max_length = N)]` attributes on String fields wire constraints through the derive macro.
 
 **Spec version quirks:** None for the **meaning** of type `"string"` (instance must be a string). The only draft differences are in the **form** of the `type` keyword (string vs array, and draft-03 array may contain schema objects), documented under **4. Type and value constraints → type**.
 
-#### minLength
+### minLength / maxLength
 
-TODO (string-only constraint).
+`minLength` and `maxLength` constrain the length of string instances. The length is counted as Unicode code points (`.chars().count()`), not UTF-8 bytes. Both keywords are string-only; they are ignored when the instance is not a string (the `ExpectedString` error covers that case). Both are inclusive: `minLength: 3` means the string must have at least 3 code points; `maxLength: 50` means at most 50.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+- **Schema model:** `JsonSchema.min_length: Option<u64>` and `JsonSchema.max_length: Option<u64>` (serialized as `"minLength"` / `"maxLength"`). Both `None` by default; omitted from serialized JSON when absent.
+- **Validator:** In the `Some("string")` arm, after the type check, if the instance is a string, `s.chars().count()` is compared against `min_length` and `max_length`. Violations emit `ValidationError::TooShort { min_length }` or `ValidationError::TooLong { max_length }`. These are only emitted when the instance IS a string; non-string instances get only `ExpectedString`.
+- **Codegen (JSON Schema → Rust):** When a string property schema has `min_length` and/or `max_length`, the backend emits `#[to_json_schema(min_length = N)]`, `#[to_json_schema(max_length = N)]`, or `#[to_json_schema(min_length = N, max_length = N)]` before the field declaration. This is consistent with the `min_items`/`max_items` pattern for array fields.
+- **Reverse codegen (Rust → JSON Schema):** `String::json_schema()` returns `"type": "string"` with no length constraints. Field-level `#[to_json_schema(min_length = N, max_length = N)]` on a `String` (or `Option<String>`) field feeds into `property_inserts` in the derive macro, producing a schema with the specified `minLength`/`maxLength`. The `.or(base.min_length)` / `.or(base.max_length)` merge means field attributes take precedence over base type defaults (which are `None`).
+- **Macro (`json_schema_to_rust!`):** The macro generates Rust source with the `#[to_json_schema(...)]` attributes on string fields; when the generated code is compiled, the `ToJsonSchema` derive re-derives the schema (round-trip verified in the test suite).
 
-#### maxLength
-
-TODO (string-only constraint).
-
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** Present from Draft 3 onward. In Draft 3 and 4, `minLength` defaults to 0 (no minimum) and `maxLength` has no default (unconstrained). The character-counting semantics (`chars`, i.e., Unicode code points / UCS-2 code units in earlier drafts) have been stable. In practice, counting `.chars()` (Rust Unicode scalar values) matches the spec's intent for all common text.
 
 #### pattern
 
