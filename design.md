@@ -124,6 +124,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Round-trip (generate → Type::json_schema() → TryFrom → parse → equals) | — | Y | — | Y | Y |
 | description (struct, field, enum doc) | Y | Y | Y | Y | Y |
 | $comment (round-trip; reverse via comment attribute) | Y | Y | Y | Y | Y |
+| $id (round-trip; id attribute emitted when present; reverse via id attribute) | Y | — | — | — | — |
 | Required array property (e.g. Vec\<String\>) | Y | Y | Y | Y | Y |
 | Optional array property | Y | Y | Y | Y | Y |
 | Array with uniqueItems true (e.g. HashSet\<String\>) | Y | Y | Y | Y | Y |
@@ -172,9 +173,9 @@ All functions that produce valid Rust identifiers (struct names, field names, mo
 
 ### $id
 
-TODO.
+**Our implementation:** We parse, store, and serialize `$id` (round-trip). It is stored as `id: Option<String>` on [`JsonSchema`] (serde `rename = "$id"`). We support **only `$id`**; we do **not** support draft-04 `id` (no parsing or emission of the un-prefixed keyword). The validator accepts and preserves it; it does not change validation outcome. Codegen does not use it for struct naming. **Dedupe:** **Full** dedupe mode includes `id` in the dedupe key (two otherwise-identical schemas with different `$id` produce two structs). **Functional** dedupe mode does **not** include `id` in the key (same shape with different `$id` yields one shared struct). Reverse codegen: `#[to_json_schema(id = "...")]` on a struct sets the emitted schema's `$id`. When we implement `$ref` resolution in a future change, `$id` will be used as the base URI; no `$ref` behavior in this implementation.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** In the JSON Schema specification, draft-04 and earlier use the keyword `id` (no dollar sign); draft 6 and later use `$id`. We support only `$id`; draft-04 `id` is not accepted or emitted. Documents written to draft-04 that need an identifier must use a tool or post-process to emit `id` if required.
 
 ### $anchor
 

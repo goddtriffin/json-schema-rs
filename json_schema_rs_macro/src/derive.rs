@@ -44,6 +44,33 @@ fn container_title(attrs: &[Attribute]) -> SynResult<Option<String>> {
     Ok(None)
 }
 
+/// Extracts `id = "..."` from `#[to_json_schema(...)]` container attribute.
+fn container_id(attrs: &[Attribute]) -> SynResult<Option<String>> {
+    for attr in attrs {
+        if !attr.path().is_ident("to_json_schema") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if !nv.path.is_ident("id") {
+                continue;
+            }
+            let syn::Expr::Lit(expr_lit) = nv.value else {
+                continue;
+            };
+            let syn::Lit::Str(s) = expr_lit.lit else {
+                continue;
+            };
+            return Ok(Some(s.value()));
+        }
+    }
+    Ok(None)
+}
+
 /// Extracts `description = "..."` from `#[to_json_schema(...)]` container attribute, or from `///` doc comments (joined with newline). Attribute takes precedence.
 fn container_description(attrs: &[Attribute]) -> SynResult<Option<String>> {
     let mut from_attr: Option<String> = None;
@@ -391,6 +418,15 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         })
         .unwrap_or(quote! { None });
 
+    let id: Option<String> = container_id(&input.attrs)?;
+    let id_expr = id
+        .as_ref()
+        .map(|i| {
+            let lit = LitStr::new(i, proc_macro2::Span::call_site());
+            quote! { Some(#lit.to_string()) }
+        })
+        .unwrap_or(quote! { None });
+
     let mut property_inserts: Vec<TokenStream2> = Vec::new();
     let mut required_keys: Vec<String> = Vec::new();
 
@@ -494,6 +530,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 #(#property_inserts)*
                 ::json_schema_rs::JsonSchema {
                     schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
+                    id: #id_expr,
                     type_: Some("object".to_string()),
                     properties,
                     required: #required_expr,
@@ -549,6 +586,15 @@ fn expand_enum_to_json_schema(
         })
         .unwrap_or(quote! { None });
 
+    let id: Option<String> = container_id(attrs)?;
+    let id_expr = id
+        .as_ref()
+        .map(|i| {
+            let lit = LitStr::new(i, proc_macro2::Span::call_site());
+            quote! { Some(#lit.to_string()) }
+        })
+        .unwrap_or(quote! { None });
+
     let mut enum_value_lits: Vec<LitStr> = Vec::new();
     for variant in &data_enum.variants {
         match &variant.fields {
@@ -572,6 +618,7 @@ fn expand_enum_to_json_schema(
                 ];
                 ::json_schema_rs::JsonSchema {
                     schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
+                    id: #id_expr,
                     type_: Some("string".to_string()),
                     properties: ::std::collections::BTreeMap::new(),
                     required: None,

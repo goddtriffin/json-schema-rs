@@ -22,6 +22,8 @@ fn skip_enum_values(v: &Option<Vec<serde_json::Value>>) -> bool {
 pub(crate) struct DenyUnknownFieldsJsonSchema {
     #[serde(default, rename = "$schema")]
     pub(crate) schema: Option<String>,
+    #[serde(default, rename = "$id")]
+    pub(crate) id: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::parser::deserialize_type_optional_deny_unknown_fields",
@@ -73,6 +75,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         .map(|b| Box::new(deny_unknown_fields_helper_to_schema(*b)));
     JsonSchema {
         schema: h.schema,
+        id: h.id,
         type_: h.type_,
         properties,
         required: h.required,
@@ -98,6 +101,10 @@ pub struct JsonSchema {
     /// Declares the JSON Schema dialect (meta-schema URI). When present, stored and round-tripped; used for draft inference when no explicit spec version is set.
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
+
+    /// Unique identifier for the schema (typically a URI). Stored and round-tripped. We support only `$id`; draft-04 `id` is not accepted or emitted. Reserved for future use as base URI when `$ref` resolution is implemented.
+    #[serde(rename = "$id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 
     /// Schema type; `object`, `string`, `integer`, and `number` drive codegen; others are ignored.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -261,6 +268,7 @@ mod tests {
     fn try_from_schema_to_string() {
         let schema: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -287,6 +295,7 @@ mod tests {
     fn try_from_schema_with_comment_serializes_dollar_comment() {
         let schema: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -316,6 +325,7 @@ mod tests {
     fn try_from_schema_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -409,6 +419,7 @@ mod tests {
     fn try_from_schema_integer_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -461,6 +472,7 @@ mod tests {
     fn try_from_schema_number_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -487,6 +499,7 @@ mod tests {
     fn is_string_enum() {
         let no_enum: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -507,6 +520,7 @@ mod tests {
         assert!(!no_enum.is_string_enum());
         let empty_enum: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: None,
             properties: BTreeMap::new(),
             required: None,
@@ -527,6 +541,7 @@ mod tests {
         assert!(!empty_enum.is_string_enum());
         let string_enum: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: None,
             properties: BTreeMap::new(),
             required: None,
@@ -550,6 +565,7 @@ mod tests {
         assert!(string_enum.is_string_enum());
         let mixed_enum: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: None,
             properties: BTreeMap::new(),
             required: None,
@@ -603,6 +619,7 @@ mod tests {
             {
                 s.items = Some(Box::new(JsonSchema {
                     schema: None,
+                    id: None,
                     type_: Some("string".to_string()),
                     properties: BTreeMap::new(),
                     required: None,
@@ -631,6 +648,7 @@ mod tests {
     fn try_from_schema_array_with_items_to_string() {
         let item_schema: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -650,6 +668,7 @@ mod tests {
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,

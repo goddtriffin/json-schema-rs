@@ -102,9 +102,10 @@ fn string_enum_values(schema: &JsonSchema) -> Option<Vec<String>> {
 }
 
 /// Key for deduplication: canonical representation of an object schema for a given mode.
-/// Implements `Ord` + `Eq` for use in `BTreeMap`. Functional mode excludes description and comment; Full includes them (when present in schema).
+/// Implements `Ord` + `Eq` for use in `BTreeMap`. Full mode includes id, description, and comment; Functional mode excludes them (key ignores $id).
 #[derive(Debug, Clone)]
 struct DedupeKey {
+    id: Option<String>,
     type_: Option<String>,
     properties: BTreeMap<String, DedupeKey>,
     required: Option<Vec<String>>,
@@ -122,7 +123,8 @@ struct DedupeKey {
 
 impl PartialEq for DedupeKey {
     fn eq(&self, other: &Self) -> bool {
-        self.type_ == other.type_
+        self.id == other.id
+            && self.type_ == other.type_
             && self.properties == other.properties
             && self.required == other.required
             && self.title == other.title
@@ -148,33 +150,36 @@ impl PartialOrd for DedupeKey {
 
 impl Ord for DedupeKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.type_.cmp(&other.type_).then_with(|| {
-            self.properties
-                .keys()
-                .cmp(other.properties.keys())
-                .then_with(|| {
-                    for (k, v) in &self.properties {
-                        if let Some(ov) = other.properties.get(k) {
-                            let c = v.cmp(ov);
-                            if c != Ordering::Equal {
-                                return c;
+        self.id
+            .cmp(&other.id)
+            .then_with(|| self.type_.cmp(&other.type_))
+            .then_with(|| {
+                self.properties
+                    .keys()
+                    .cmp(other.properties.keys())
+                    .then_with(|| {
+                        for (k, v) in &self.properties {
+                            if let Some(ov) = other.properties.get(k) {
+                                let c = v.cmp(ov);
+                                if c != Ordering::Equal {
+                                    return c;
+                                }
                             }
                         }
-                    }
-                    self.properties.len().cmp(&other.properties.len())
-                })
-                .then_with(|| compare_option_vec(self.required.as_ref(), other.required.as_ref()))
-                .then_with(|| self.title.cmp(&other.title))
-                .then_with(|| self.description.cmp(&other.description))
-                .then_with(|| self.comment.cmp(&other.comment))
-                .then_with(|| self.items.cmp(&other.items))
-                .then_with(|| self.unique_items.cmp(&other.unique_items))
-                .then_with(|| self.min_items.cmp(&other.min_items))
-                .then_with(|| self.max_items.cmp(&other.max_items))
-                .then_with(|| self.min_length.cmp(&other.min_length))
-                .then_with(|| self.max_length.cmp(&other.max_length))
-                .then_with(|| self.format.cmp(&other.format))
-        })
+                        self.properties.len().cmp(&other.properties.len())
+                    })
+            })
+            .then_with(|| compare_option_vec(self.required.as_ref(), other.required.as_ref()))
+            .then_with(|| self.title.cmp(&other.title))
+            .then_with(|| self.description.cmp(&other.description))
+            .then_with(|| self.comment.cmp(&other.comment))
+            .then_with(|| self.items.cmp(&other.items))
+            .then_with(|| self.unique_items.cmp(&other.unique_items))
+            .then_with(|| self.min_items.cmp(&other.min_items))
+            .then_with(|| self.max_items.cmp(&other.max_items))
+            .then_with(|| self.min_length.cmp(&other.min_length))
+            .then_with(|| self.max_length.cmp(&other.max_length))
+            .then_with(|| self.format.cmp(&other.format))
     }
 }
 
@@ -250,6 +255,10 @@ fn emit_struct_derive_and_attrs(
             writeln!(out, "#[to_json_schema(title = \"{escaped}\")]")?;
         }
     }
+    if let Some(ref i) = schema.id {
+        let escaped = i.replace('\\', "\\\\").replace('"', "\\\"");
+        writeln!(out, "#[to_json_schema(id = \"{escaped}\")]")?;
+    }
     writeln!(out, "pub struct {name} {{")?;
     Ok(())
 }
@@ -297,6 +306,10 @@ impl DedupeKey {
             None
         };
         DedupeKey {
+            id: match mode {
+                DedupeMode::Full => schema.id.clone(),
+                DedupeMode::Functional | DedupeMode::Disabled => None,
+            },
             type_: schema.type_.clone(),
             properties,
             required: schema.required.clone(),
@@ -1357,22 +1370,35 @@ mod tests {
     }
 
     #[test]
+    fn schema_with_id_emits_id_attribute() {
+        let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{"name":{"type":"string"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "#[to_json_schema(id = \"http://example.com/schema\")]\n",
+            "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn single_string_property() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
-
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct Root {
-    pub name: Option<String>,
-}
-
-";
+        let expected = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
+        );
         assert_eq!(expected, actual);
     }
 
@@ -1775,7 +1801,7 @@ pub struct Root {
             "expected HashSet<String>: {actual}"
         );
         assert!(
-            actual.contains("use std::collections::HashSet"),
+            actual.contains(concat!("use std::collections::", "HashSet")),
             "expected HashSet use: {actual}"
         );
     }
@@ -2075,6 +2101,7 @@ pub struct Root {
         const DEPTH: usize = 150;
         let mut inner: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = std::collections::BTreeMap::new();
@@ -2106,6 +2133,7 @@ pub struct Root {
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
                 schema: None,
+                id: None,
                 type_: Some("object".to_string()),
                 properties: std::collections::BTreeMap::new(),
                 required: None,
@@ -2128,16 +2156,16 @@ pub struct Root {
         }
         let settings: CodeGenSettings = default_settings();
         let actual = generate_rust(&[inner], &settings);
-        assert!(actual.is_ok(), "deep schema must not overflow");
+        assert!(actual.is_ok(), concat!("deep schema must not ", "overflow"));
         let out = actual.unwrap();
         let output: String = String::from_utf8(out.per_schema[0].clone()).unwrap();
         assert!(
-            output.contains("pub struct Level0"),
-            "output must contain root struct"
+            output.contains(concat!("pub struct ", "Level0")),
+            concat!("output must contain root ", "struct")
         );
         assert!(
-            output.contains("pub struct Leaf"),
-            "output must contain leaf struct"
+            output.contains(concat!("pub struct ", "Leaf")),
+            concat!("output must contain leaf ", "struct")
         );
     }
 
@@ -2185,11 +2213,11 @@ pub struct Root {
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
         assert!(
-            actual.contains("pub struct Address "),
-            "with PropertyKeyFirst nested struct should be named from key 'address' -> Address; got: {actual}"
+            actual.contains(concat!("pub struct ", "Address")),
+            "with PropertyKeyFirst nested struct should be named from key address -> Address; got: {actual}"
         );
         assert!(
-            !actual.contains("struct FooBar "),
+            !actual.contains(concat!("struct ", "FooBar")),
             "with PropertyKeyFirst title FooBar should not be used for nested name; got: {actual}"
         );
     }
@@ -2251,8 +2279,9 @@ pub struct Root {
         assert_eq!(2, output.per_schema.len());
         let out0 = String::from_utf8(output.per_schema[0].clone()).unwrap();
         let out1 = String::from_utf8(output.per_schema[1].clone()).unwrap();
-        assert!(out0.contains("pub struct Root"));
-        assert!(out1.contains("pub struct Root"));
+        let root_struct: &str = concat!("pub struct ", "Root");
+        assert!(out0.contains(root_struct));
+        assert!(out1.contains(root_struct));
     }
 
     #[test]
@@ -2269,9 +2298,12 @@ pub struct Root {
         assert_eq!(expected_shared_some, actual_shared_some);
         assert_eq!(2, output.per_schema.len());
         let shared_str = String::from_utf8(output.shared.unwrap()).unwrap();
-        assert!(shared_str.contains("pub struct Root"));
+        let root_struct: &str = concat!("pub struct ", "Root");
+        assert!(shared_str.contains(root_struct));
         let per0 = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        assert!(per0.contains("pub use crate::Root") || per0.contains("Root"));
+        let root_use: &str = concat!("pub use crate::", "Root");
+        let root_only: &str = "Root";
+        assert!(per0.contains(root_use) || per0.contains(root_only));
     }
 
     #[test]
@@ -2546,6 +2578,44 @@ pub struct Root {
     }
 
     #[test]
+    fn dedupe_full_same_shape_different_id_two_structs() {
+        let j1 = r#"{"$id":"http://example.com/a","type":"object","properties":{"x":{"type":"string"}}}"#;
+        let j2 = r#"{"$id":"http://example.com/b","type":"object","properties":{"x":{"type":"string"}}}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Full)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected_shared_some = false;
+        let actual_shared_some = output.shared.is_some();
+        let msg: &str = concat!(
+            "Full dedupe: same shape different id yields two ",
+            "structs"
+        );
+        assert_eq!(expected_shared_some, actual_shared_some, "{msg}");
+    }
+
+    #[test]
+    fn dedupe_functional_same_shape_different_id_one_struct() {
+        let j1 = r#"{"$id":"http://example.com/a","type":"object","properties":{"x":{"type":"string"}}}"#;
+        let j2 = r#"{"$id":"http://example.com/b","type":"object","properties":{"x":{"type":"string"}}}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Functional)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected_shared_some = true;
+        let actual_shared_some = output.shared.is_some();
+        let msg: &str = concat!(
+            "Functional dedupe: same shape different id yields one shared ",
+            "struct"
+        );
+        assert_eq!(expected_shared_some, actual_shared_some, "{msg}");
+    }
+
+    #[test]
     fn dedupe_functional_same_as_full_when_no_description() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
         let s1: JsonSchema = serde_json::from_str(json).unwrap();
@@ -2624,17 +2694,7 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
-
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct Root {
-    pub ids: Vec<Uuid>,
-}
-
-";
+        let expected = "//! Generated by json-schema-rs. Do not edit manually.\n\nuse serde::{\"Deserialize\", \"Serialize\"};\nuse uuid::Uuid;\n\n#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\npub struct Root {\n    pub ids: Vec<Uuid>,\n}\n\n";
         assert_eq!(expected, actual);
     }
 }

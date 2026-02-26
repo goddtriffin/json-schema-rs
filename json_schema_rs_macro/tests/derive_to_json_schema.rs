@@ -20,6 +20,13 @@ struct Address {
 }
 
 #[derive(ToJsonSchema)]
+#[to_json_schema(id = "http://example.com/with-id")]
+#[expect(dead_code)]
+struct WithId {
+    value: String,
+}
+
+#[derive(ToJsonSchema)]
 #[expect(dead_code)]
 enum Status {
     Open,
@@ -30,6 +37,7 @@ enum Status {
 fn derive_root_json_schema() {
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -60,6 +68,7 @@ fn derive_root_json_schema() {
 fn derive_address_json_schema() {
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -84,6 +93,15 @@ fn derive_address_json_schema() {
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_id_attribute_emits_id_in_schema() {
+    let actual: JsonSchema = WithId::json_schema();
+    let expected_id: Option<String> = Some("http://example.com/with-id".to_string());
+    assert_eq!(expected_id, actual.id);
+    let json: String = (&actual).try_into().expect("serialize");
+    assert!(json.contains("\"$id\":\"http://example.com/with-id\""));
 }
 
 #[test]
@@ -190,6 +208,7 @@ fn derive_field_minimum_maximum_integer() {
     byte_schema.maximum = Some(255.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -229,6 +248,7 @@ fn derive_field_minimum_maximum_float() {
     score_schema.maximum = Some(100.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -285,6 +305,7 @@ fn derive_field_only_minimum() {
     value_schema.minimum = Some(10.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -323,6 +344,7 @@ fn derive_field_only_maximum() {
     value_schema.maximum = Some(90.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();

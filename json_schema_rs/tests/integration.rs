@@ -2085,6 +2085,7 @@ fn write_workspace_scenario_member(
                 const DEPTH: usize = 15;
                 let mut inner: JsonSchema = JsonSchema {
                     schema: None,
+                    id: None,
                     type_: Some("object".to_string()),
                     properties: {
                         let mut m = std::collections::BTreeMap::new();
@@ -2092,6 +2093,7 @@ fn write_workspace_scenario_member(
                             "value".to_string(),
                             JsonSchema {
                                 schema: None,
+                                id: None,
                                 type_: Some("string".to_string()),
                                 properties: std::collections::BTreeMap::new(),
                                 required: None,
@@ -2130,6 +2132,7 @@ fn write_workspace_scenario_member(
                 for i in (0..DEPTH).rev() {
                     let mut wrap: JsonSchema = JsonSchema {
                         schema: None,
+                        id: None,
                         type_: Some("object".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,

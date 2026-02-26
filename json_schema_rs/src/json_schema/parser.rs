@@ -58,6 +58,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
         struct JsonSchemaHelper {
             #[serde(default, rename = "$schema")]
             schema: Option<String>,
+            #[serde(default, rename = "$id")]
+            id: Option<String>,
             #[serde(default, deserialize_with = "deserialize_type_optional")]
             #[serde(rename = "type")]
             type_: Option<String>,
@@ -95,6 +97,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
             schema: h.schema,
+            id: h.id,
             type_: h.type_,
             properties: h.properties.unwrap_or_default(),
             required: h.required,
@@ -179,6 +182,7 @@ mod tests {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
         let expected: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
@@ -186,6 +190,7 @@ mod tests {
                     "a".to_string(),
                     JsonSchema {
                         schema: None,
+                        id: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,
@@ -230,6 +235,7 @@ mod tests {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
         let expected: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
@@ -237,6 +243,7 @@ mod tests {
                     "x".to_string(),
                     JsonSchema {
                         schema: None,
+                        id: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,
@@ -259,6 +266,7 @@ mod tests {
                     "y".to_string(),
                     JsonSchema {
                         schema: None,
+                        id: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,
@@ -304,6 +312,7 @@ mod tests {
             r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
         let expected: JsonSchema = JsonSchema {
             schema: Some("https://example.com".to_string()),
+            id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -330,6 +339,7 @@ mod tests {
         let json = r#"{"type":["string", "null"],"properties":{}}"#;
         let expected: JsonSchema = JsonSchema {
             schema: None,
+            id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -422,6 +432,46 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
         let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
         assert_eq!(None, parsed.schema);
+    }
+
+    #[test]
+    fn parse_without_id_is_none() {
+        let json = r#"{"type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<String> = None;
+        assert_eq!(expected, parsed.id);
+    }
+
+    #[test]
+    fn parse_with_id_preserves_id() {
+        let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<String> = Some("http://example.com/schema".to_string());
+        assert_eq!(expected, parsed.id);
+    }
+
+    #[test]
+    fn round_trip_preserves_id() {
+        let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse");
+        assert_eq!(parsed.id, reparsed.id);
+    }
+
+    #[test]
+    fn parse_strict_accepts_id_keyword() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{}}"#;
+        let result: Result<JsonSchema, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+        let parsed = result.unwrap();
+        assert_eq!(Some("http://example.com/schema".to_string()), parsed.id);
     }
 
     #[test]
