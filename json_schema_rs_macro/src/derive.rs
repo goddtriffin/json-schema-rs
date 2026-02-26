@@ -493,6 +493,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 let mut properties = ::std::collections::BTreeMap::new();
                 #(#property_inserts)*
                 ::json_schema_rs::JsonSchema {
+                    schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
                     type_: Some("object".to_string()),
                     properties,
                     required: #required_expr,
@@ -570,6 +571,7 @@ fn expand_enum_to_json_schema(
                     #(::serde_json::Value::String(#enum_value_lits.to_string())),*
                 ];
                 ::json_schema_rs::JsonSchema {
+                    schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
                     type_: Some("string".to_string()),
                     properties: ::std::collections::BTreeMap::new(),
                     required: None,

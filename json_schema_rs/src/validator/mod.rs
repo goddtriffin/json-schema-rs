@@ -307,6 +307,7 @@ mod tests {
         properties: BTreeMap<String, JsonSchema>,
     ) -> JsonSchema {
         JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties,
             required: Some(required.into_iter().map(String::from).collect()),
@@ -333,6 +334,7 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -340,6 +342,7 @@ mod tests {
             m.insert(
                 "b".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -359,6 +362,7 @@ mod tests {
             m.insert(
                 "name".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -377,6 +381,7 @@ mod tests {
     #[test]
     fn wrong_type_string_instead_of_object() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -406,12 +411,14 @@ mod tests {
     #[test]
     fn schema_with_description_validates_as_before() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "name".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("string".to_string()),
                         properties: BTreeMap::new(),
                         required: None,
@@ -458,6 +465,7 @@ mod tests {
     #[test]
     fn schema_with_comment_validates_same_as_without() {
         let schema_without: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -476,6 +484,7 @@ mod tests {
             format: None,
         };
         let schema_with_comment: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -506,6 +515,7 @@ mod tests {
     #[test]
     fn root_type_string_valid_nonempty() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -532,6 +542,7 @@ mod tests {
     #[test]
     fn root_type_string_valid_empty() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -558,6 +569,7 @@ mod tests {
     #[test]
     fn wrong_type_object_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -587,6 +599,7 @@ mod tests {
     #[test]
     fn wrong_type_number_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -616,6 +629,7 @@ mod tests {
     #[test]
     fn wrong_type_null_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -645,6 +659,7 @@ mod tests {
     #[test]
     fn wrong_type_boolean_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -674,6 +689,7 @@ mod tests {
     #[test]
     fn wrong_type_array_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -703,6 +719,7 @@ mod tests {
     #[test]
     fn enum_valid_instance_in_allowed() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: None,
             properties: BTreeMap::new(),
             required: None,
@@ -732,6 +749,7 @@ mod tests {
     #[test]
     fn enum_invalid_instance_not_in_allowed() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: None,
             properties: BTreeMap::new(),
             required: None,
@@ -765,6 +783,7 @@ mod tests {
     #[test]
     fn enum_with_type_string_valid() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -794,6 +813,7 @@ mod tests {
     #[test]
     fn enum_with_type_string_invalid_not_in_enum() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -827,6 +847,7 @@ mod tests {
     #[test]
     fn root_type_integer_valid_42() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -853,6 +874,7 @@ mod tests {
     #[test]
     fn root_type_integer_valid_0() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -879,6 +901,7 @@ mod tests {
     #[test]
     fn root_type_integer_valid_negative() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -905,6 +928,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_float() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -934,6 +958,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_string() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -963,6 +988,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_null() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -992,6 +1018,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_object() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1021,6 +1048,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_array() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1050,6 +1078,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_bool() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1142,6 +1171,7 @@ mod tests {
     #[test]
     fn root_type_number_valid_float() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1168,6 +1198,7 @@ mod tests {
     #[test]
     fn root_type_number_valid_integer() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1194,6 +1225,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_string() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1223,6 +1255,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_null() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1252,6 +1285,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_object() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1281,6 +1315,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_array() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1310,6 +1345,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_bool() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1339,6 +1375,7 @@ mod tests {
     #[test]
     fn integer_with_minimum_maximum_valid_in_range() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1365,6 +1402,7 @@ mod tests {
     #[test]
     fn integer_below_minimum() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1395,6 +1433,7 @@ mod tests {
     #[test]
     fn integer_above_maximum() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1425,6 +1464,7 @@ mod tests {
     #[test]
     fn integer_no_minimum_maximum_no_extra_errors() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1451,6 +1491,7 @@ mod tests {
     #[test]
     fn number_with_minimum_maximum_valid_in_range() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1477,6 +1518,7 @@ mod tests {
     #[test]
     fn number_below_minimum() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1507,6 +1549,7 @@ mod tests {
     #[test]
     fn number_above_maximum() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1537,12 +1580,14 @@ mod tests {
     #[test]
     fn integer_and_number_min_max_violations_collected_from_multiple_properties() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "low".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("integer".to_string()),
                         properties: BTreeMap::new(),
                         required: None,
@@ -1564,6 +1609,7 @@ mod tests {
                 m.insert(
                     "high".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("integer".to_string()),
                         properties: BTreeMap::new(),
                         required: None,
@@ -1619,6 +1665,7 @@ mod tests {
     #[test]
     fn root_type_array_valid_empty() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1645,6 +1692,7 @@ mod tests {
     #[test]
     fn root_type_array_valid_non_empty() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1671,6 +1719,7 @@ mod tests {
     #[test]
     fn root_type_array_invalid_not_array() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1700,6 +1749,7 @@ mod tests {
     #[test]
     fn root_type_array_with_items_valid() {
         let item_schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1718,6 +1768,7 @@ mod tests {
             format: None,
         };
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1744,6 +1795,7 @@ mod tests {
     #[test]
     fn root_type_array_with_items_invalid_element() {
         let item_schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1762,6 +1814,7 @@ mod tests {
             format: None,
         };
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1791,6 +1844,7 @@ mod tests {
     #[test]
     fn unique_items_true_no_duplicates_valid() {
         let item_schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1809,6 +1863,7 @@ mod tests {
             format: None,
         };
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1835,6 +1890,7 @@ mod tests {
     #[test]
     fn unique_items_true_duplicates_invalid() {
         let item_schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1853,6 +1909,7 @@ mod tests {
             format: None,
         };
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1885,6 +1942,7 @@ mod tests {
     #[test]
     fn unique_items_false_duplicates_valid() {
         let item_schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1903,6 +1961,7 @@ mod tests {
             format: None,
         };
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1929,6 +1988,7 @@ mod tests {
     #[test]
     fn unique_items_absent_duplicates_valid() {
         let item_schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1947,6 +2007,7 @@ mod tests {
             format: None,
         };
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1973,6 +2034,7 @@ mod tests {
     #[test]
     fn unique_items_true_empty_array_valid() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -1999,6 +2061,7 @@ mod tests {
     #[test]
     fn min_items_only_pass() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2025,6 +2088,7 @@ mod tests {
     #[test]
     fn min_items_only_fail() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2055,6 +2119,7 @@ mod tests {
     #[test]
     fn min_items_only_edge_len_equals_min() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2081,6 +2146,7 @@ mod tests {
     #[test]
     fn max_items_only_pass() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2107,6 +2173,7 @@ mod tests {
     #[test]
     fn max_items_only_fail() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2137,6 +2204,7 @@ mod tests {
     #[test]
     fn max_items_only_edge_len_equals_max() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2163,6 +2231,7 @@ mod tests {
     #[test]
     fn min_items_max_items_both_pass() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2189,6 +2258,7 @@ mod tests {
     #[test]
     fn min_items_max_items_fail_too_few() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2219,6 +2289,7 @@ mod tests {
     #[test]
     fn min_items_max_items_fail_too_many() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2249,6 +2320,7 @@ mod tests {
     #[test]
     fn min_items_max_items_absent_unchanged() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2275,6 +2347,7 @@ mod tests {
     #[test]
     fn min_items_max_items_not_array_expected_array_only() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2367,6 +2440,7 @@ mod tests {
     #[test]
     fn wrong_type_object_with_number() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2396,6 +2470,7 @@ mod tests {
     #[test]
     fn wrong_type_object_with_null() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2425,6 +2500,7 @@ mod tests {
     #[test]
     fn wrong_type_object_with_array() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -2454,12 +2530,14 @@ mod tests {
     #[test]
     fn no_type_but_properties_object_instance_valid() {
         let schema: JsonSchema = JsonSchema {
+            schema: None,
             type_: None,
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "name".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -2494,12 +2572,14 @@ mod tests {
             m.insert(
                 "address".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("object".to_string()),
                     properties: {
                         let mut inner = BTreeMap::new();
                         inner.insert(
                             "city".to_string(),
                             JsonSchema {
+                                schema: None,
                                 type_: Some("string".to_string()),
                                 ..Default::default()
                             },
@@ -2540,6 +2620,7 @@ mod tests {
             m.insert(
                 "opt".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -2559,6 +2640,7 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -2566,6 +2648,7 @@ mod tests {
             m.insert(
                 "b".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -2573,6 +2656,7 @@ mod tests {
             m.insert(
                 "c".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -2605,6 +2689,7 @@ mod tests {
             m.insert(
                 "x".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -2612,12 +2697,14 @@ mod tests {
             m.insert(
                 "nested".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("object".to_string()),
                     properties: {
                         let mut inner = BTreeMap::new();
                         inner.insert(
                             "y".to_string(),
                             JsonSchema {
+                                schema: None,
                                 type_: Some("string".to_string()),
                                 ..Default::default()
                             },
@@ -2661,12 +2748,14 @@ mod tests {
     fn deeply_nested_instance_does_not_stack_overflow() {
         const DEPTH: usize = 200;
         let mut inner: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "value".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -2690,6 +2779,7 @@ mod tests {
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
+                schema: None,
                 type_: Some("object".to_string()),
                 properties: BTreeMap::new(),
                 required: Some(vec!["child".to_string()]),
@@ -2735,6 +2825,7 @@ mod tests {
             m.insert(
                 "a/b".to_string(),
                 JsonSchema {
+                    schema: None,
                     type_: Some("string".to_string()),
                     ..Default::default()
                 },
@@ -2753,6 +2844,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_exact_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(3),
             ..Default::default()
@@ -2764,6 +2856,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_below_fails() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(5),
             ..Default::default()
@@ -2781,6 +2874,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_above_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(2),
             ..Default::default()
@@ -2792,6 +2886,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_absent_any_length_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             ..Default::default()
         };
@@ -2802,6 +2897,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_exact_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             max_length: Some(5),
             ..Default::default()
@@ -2813,6 +2909,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_above_fails() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             max_length: Some(3),
             ..Default::default()
@@ -2830,6 +2927,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_below_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             max_length: Some(10),
             ..Default::default()
@@ -2841,6 +2939,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_absent_any_length_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             ..Default::default()
         };
@@ -2851,6 +2950,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_zero_allows_empty() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(0),
             ..Default::default()
@@ -2862,6 +2962,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_zero_requires_empty() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             max_length: Some(0),
             ..Default::default()
@@ -2879,6 +2980,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_zero_empty_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             max_length: Some(0),
             ..Default::default()
@@ -2890,6 +2992,7 @@ mod tests {
     #[test]
     fn validate_string_both_constraints_within_range_passes() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(2),
             max_length: Some(10),
@@ -2902,6 +3005,7 @@ mod tests {
     #[test]
     fn validate_string_below_min_length_with_max_also_set() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(5),
             max_length: Some(10),
@@ -2920,6 +3024,7 @@ mod tests {
     #[test]
     fn validate_string_above_max_length_with_min_also_set() {
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(2),
             max_length: Some(4),
@@ -2939,6 +3044,7 @@ mod tests {
     fn validate_string_min_length_unicode_code_points() {
         // "日本語" has 3 Unicode code points but 9 UTF-8 bytes.
         let schema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             min_length: Some(3),
             max_length: Some(3),

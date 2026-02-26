@@ -29,6 +29,7 @@ enum Status {
 #[test]
 fn derive_root_json_schema() {
     let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -58,6 +59,7 @@ fn derive_root_json_schema() {
 #[test]
 fn derive_address_json_schema() {
     let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -187,6 +189,7 @@ fn derive_field_minimum_maximum_integer() {
     byte_schema.minimum = Some(0.0);
     byte_schema.maximum = Some(255.0);
     let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -225,6 +228,7 @@ fn derive_field_minimum_maximum_float() {
     score_schema.minimum = Some(0.0);
     score_schema.maximum = Some(100.0);
     let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -280,6 +284,7 @@ fn derive_field_only_minimum() {
     let mut value_schema: JsonSchema = i64::json_schema();
     value_schema.minimum = Some(10.0);
     let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -317,6 +322,7 @@ fn derive_field_only_maximum() {
     let mut value_schema: JsonSchema = i64::json_schema();
     value_schema.maximum = Some(90.0);
     let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();

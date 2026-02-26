@@ -2074,12 +2074,14 @@ pub struct Root {
     fn deeply_nested_schema_does_not_stack_overflow() {
         const DEPTH: usize = 150;
         let mut inner: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = std::collections::BTreeMap::new();
                 m.insert(
                     "value".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -2103,6 +2105,7 @@ pub struct Root {
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
+                schema: None,
                 type_: Some("object".to_string()),
                 properties: std::collections::BTreeMap::new(),
                 required: None,

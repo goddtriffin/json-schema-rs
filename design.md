@@ -166,9 +166,9 @@ All functions that produce valid Rust identifiers (struct names, field names, mo
 
 ### $schema
 
-TODO.
+**Our implementation:** We parse, store, and serialize `$schema` (round-trip). It is stored as `schema: Option<String>` on [`JsonSchema`] (serde `rename = "$schema"`). The validator accepts and preserves it; it does not change validation outcome. Codegen does not use it to alter generated Rust. **Draft inference:** When [`JsonSchemaSettings::spec_version`] is `None` (default), the effective spec version is inferred from the root schema's `$schema` via [`SpecVersion::from_schema_uri`]; if `$schema` is absent or the URI is unrecognized, we use **Draft 2020-12**. Use `resolved_spec_version(schema, settings)` to obtain the effective version. **Reverse codegen:** The `ToJsonSchema` derive emits a default `$schema` of `https://json-schema.org/draft/2020-12/schema` on the root schema so emitted documents are self-describing. **SpecVersion API:** [`SpecVersion::schema_uri()`] returns the canonical meta-schema URI for each variant; [`SpecVersion::from_schema_uri(s)`] parses a `$schema` URI string and returns the corresponding variant (or `None` for unknown/empty). Legacy draft-04 URI `http://json-schema.org/schema#` is accepted and maps to Draft04.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** Draft 4 deprecated `http://json-schema.org/schema#` ("latest version"); specific version URIs are required for clarity. All drafts define `$schema` as an optional string (URI). It declares the dialect/meta-schema; it is not a validation keyword on instance data. Older drafts (00–02) used hyper-schema URIs in meta-schema files; draft-03 onward use `schema#` or (2019-09, 2020-12) `https://json-schema.org/draft/YYYY-MM/schema`.
 
 ### $id
 

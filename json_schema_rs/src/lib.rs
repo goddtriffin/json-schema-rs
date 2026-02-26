@@ -18,6 +18,7 @@ pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::{
     JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,
     JsonSchemaSettingsBuilder, SpecVersion, parse_schema, parse_schema_from_slice,
+    resolved_spec_version,
 };
 pub use reverse_code_gen::ToJsonSchema;
 pub use validator::{OrderedF64, ValidationError, ValidationResult, validate};

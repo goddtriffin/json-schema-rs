@@ -1,8 +1,8 @@
 //! Integration test: public API for schema parsing and code generation, and CLI binary.
 
 use json_schema_rs::{
-    CodeGenSettings, DedupeMode, JsonSchema, JsonSchemaSettings, ModelNameSource, generate_rust,
-    parse_schema,
+    CodeGenSettings, DedupeMode, JsonSchema, JsonSchemaSettings, ModelNameSource, SpecVersion,
+    generate_rust, parse_schema, resolved_spec_version,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -34,6 +34,33 @@ fn jsonschemars_bin() -> std::path::PathBuf {
         bin.display()
     );
     bin
+}
+
+#[test]
+fn integration_schema_keyword_parse_round_trip_and_resolved_spec_version() {
+    let schema_json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"name":{"type":"string"}}}"#;
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+    let schema: JsonSchema = parse_schema(schema_json, &settings).expect("parse");
+    let expected_uri: Option<String> =
+        Some("https://json-schema.org/draft/2020-12/schema".to_string());
+    assert_eq!(expected_uri, schema.schema);
+
+    let expected_version: SpecVersion = SpecVersion::Draft202012;
+    let actual_version: SpecVersion = resolved_spec_version(&schema, &settings);
+    assert_eq!(expected_version, actual_version);
+
+    let serialized: String = (&schema).try_into().expect("serialize");
+    assert!(
+        serialized.contains("\"$schema\""),
+        "serialized schema must contain $schema key"
+    );
+    assert!(
+        serialized.contains("2020-12"),
+        "serialized schema must contain 2020-12 URI"
+    );
+
+    let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse again");
+    assert_eq!(schema.schema, reparsed.schema);
 }
 
 #[test]
@@ -2057,12 +2084,14 @@ fn write_workspace_scenario_member(
             "deep_nesting" => {
                 const DEPTH: usize = 15;
                 let mut inner: JsonSchema = JsonSchema {
+                    schema: None,
                     type_: Some("object".to_string()),
                     properties: {
                         let mut m = std::collections::BTreeMap::new();
                         m.insert(
                             "value".to_string(),
                             JsonSchema {
+                                schema: None,
                                 type_: Some("string".to_string()),
                                 properties: std::collections::BTreeMap::new(),
                                 required: None,
@@ -2100,6 +2129,7 @@ fn write_workspace_scenario_member(
                 };
                 for i in (0..DEPTH).rev() {
                     let mut wrap: JsonSchema = JsonSchema {
+                        schema: None,
                         type_: Some("object".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,

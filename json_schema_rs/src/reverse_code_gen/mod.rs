@@ -18,6 +18,7 @@ pub trait ToJsonSchema {
 impl ToJsonSchema for String {
     fn json_schema() -> JsonSchema {
         JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -41,6 +42,7 @@ impl ToJsonSchema for String {
 impl ToJsonSchema for bool {
     fn json_schema() -> JsonSchema {
         JsonSchema {
+            schema: None,
             type_: Some("boolean".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -63,6 +65,7 @@ impl ToJsonSchema for bool {
 
 fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
+        schema: None,
         type_: Some("integer".to_string()),
         properties: BTreeMap::new(),
         required: None,
@@ -133,6 +136,7 @@ impl ToJsonSchema for u64 {
 
 fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
+        schema: None,
         type_: Some("number".to_string()),
         properties: BTreeMap::new(),
         required: None,
@@ -173,6 +177,7 @@ impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
 impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
     fn json_schema() -> JsonSchema {
         JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -197,6 +202,7 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
 impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::HashSet<T> {
     fn json_schema() -> JsonSchema {
         JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -224,6 +230,7 @@ pub struct HandWrittenExample;
 impl ToJsonSchema for HandWrittenExample {
     fn json_schema() -> JsonSchema {
         JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -248,6 +255,7 @@ impl ToJsonSchema for HandWrittenExample {
 impl ToJsonSchema for uuid::Uuid {
     fn json_schema() -> JsonSchema {
         JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -276,6 +284,7 @@ mod tests {
     #[test]
     fn string_json_schema() {
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: std::collections::BTreeMap::new(),
             required: None,
@@ -300,6 +309,7 @@ mod tests {
     #[test]
     fn bool_json_schema() {
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("boolean".to_string()),
             properties: std::collections::BTreeMap::new(),
             required: None,
@@ -331,6 +341,7 @@ mod tests {
     #[test]
     fn i64_json_schema() {
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("integer".to_string()),
             properties: std::collections::BTreeMap::new(),
             required: None,
@@ -426,6 +437,7 @@ mod tests {
     #[test]
     fn f64_json_schema() {
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("number".to_string()),
             properties: std::collections::BTreeMap::new(),
             required: None,
@@ -466,6 +478,7 @@ mod tests {
     #[test]
     fn hand_written_example_json_schema() {
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: std::collections::BTreeMap::new(),
             required: None,
@@ -490,6 +503,7 @@ mod tests {
     #[test]
     fn vec_string_json_schema() {
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: std::collections::BTreeMap::new(),
             required: None,
@@ -514,6 +528,7 @@ mod tests {
     #[test]
     fn vec_i64_json_schema() {
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("array".to_string()),
             properties: std::collections::BTreeMap::new(),
             required: None,

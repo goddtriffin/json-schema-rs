@@ -56,6 +56,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
     {
         #[derive(Deserialize)]
         struct JsonSchemaHelper {
+            #[serde(default, rename = "$schema")]
+            schema: Option<String>,
             #[serde(default, deserialize_with = "deserialize_type_optional")]
             #[serde(rename = "type")]
             type_: Option<String>,
@@ -92,6 +94,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
+            schema: h.schema,
             type_: h.type_,
             properties: h.properties.unwrap_or_default(),
             required: h.required,
@@ -168,18 +171,21 @@ pub fn parse_schema_from_slice(
 #[cfg(test)]
 mod tests {
     use super::{JsonSchema, JsonSchemaSettings, parse_schema};
+    use crate::json_schema::{SpecVersion, resolved_spec_version};
     use std::collections::BTreeMap;
 
     #[test]
     fn deserialize_simple_object_schema() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,
@@ -223,12 +229,14 @@ mod tests {
     fn deserialize_with_required() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "x".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,
@@ -250,6 +258,7 @@ mod tests {
                 m.insert(
                     "y".to_string(),
                     JsonSchema {
+                        schema: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
                         required: None,
@@ -294,6 +303,7 @@ mod tests {
         let json =
             r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
         let expected: JsonSchema = JsonSchema {
+            schema: Some("https://example.com".to_string()),
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -319,6 +329,7 @@ mod tests {
     fn deserialize_type_array_takes_first() {
         let json = r#"{"type":["string", "null"],"properties":{}}"#;
         let expected: JsonSchema = JsonSchema {
+            schema: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
             required: None,
@@ -393,6 +404,84 @@ mod tests {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"title":"Root"}"#;
         let result: Result<_, _> = parse_schema(json, &settings);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_with_schema_uri_preserves_schema() {
+        let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: Option<String> =
+            Some("https://json-schema.org/draft/2020-12/schema".to_string());
+        assert_eq!(expected, parsed.schema);
+    }
+
+    #[test]
+    fn parse_without_schema_uri_is_none() {
+        let json = r#"{"type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        assert_eq!(None, parsed.schema);
+    }
+
+    #[test]
+    fn parse_strict_accepts_schema_keyword() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{}}"#;
+        let result: Result<JsonSchema, _> = parse_schema(json, &settings);
+        assert!(result.is_ok());
+        let parsed = result.unwrap();
+        assert_eq!(
+            Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+            parsed.schema
+        );
+    }
+
+    #[test]
+    fn round_trip_preserves_schema_uri() {
+        let json = r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let parsed: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        assert!(
+            serialized.contains("\"$schema\""),
+            "serialized output should contain $schema key: {serialized}"
+        );
+        let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse again");
+        assert_eq!(parsed.schema, reparsed.schema);
+    }
+
+    #[test]
+    fn resolved_spec_version_infers_2020_12_from_schema_uri() {
+        let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let schema: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: SpecVersion = SpecVersion::Draft202012;
+        let actual: SpecVersion = resolved_spec_version(&schema, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolved_spec_version_defaults_to_2020_12_when_schema_absent() {
+        let json = r#"{"type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let schema: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: SpecVersion = SpecVersion::Draft202012;
+        let actual: SpecVersion = resolved_spec_version(&schema, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolved_spec_version_defaults_to_2020_12_when_schema_unknown_uri() {
+        let json =
+            r#"{"$schema":"https://unknown.example/schema","type":"object","properties":{}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let schema: JsonSchema = parse_schema(json, &settings).expect("parse");
+        let expected: SpecVersion = SpecVersion::Draft202012;
+        let actual: SpecVersion = resolved_spec_version(&schema, &settings);
+        assert_eq!(expected, actual);
     }
 
     #[test]
