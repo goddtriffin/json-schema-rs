@@ -32,6 +32,25 @@ struct SuiteTest {
     valid: bool,
 }
 
+/// Per-category failure counts for the test suite run.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SuiteFailureCounts {
+    /// Number of files we failed to read.
+    read_file: u64,
+    /// Number of files we failed to parse into test cases.
+    parse: u64,
+    /// Number of cases where we failed to construct a `JsonSchema`.
+    construct_schema: u64,
+    /// Number of tests where the validation result was wrong.
+    validation_result: u64,
+}
+
+impl SuiteFailureCounts {
+    fn total(&self) -> u64 {
+        self.read_file + self.parse + self.construct_schema + self.validation_result
+    }
+}
+
 /// Recursively collect all `.json` files under `dir`.
 fn collect_json_files(dir: &std::path::Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
@@ -68,7 +87,7 @@ fn json_schema_test_suite() {
         .unwrap_or_else(|e| panic!("failed to walk {}: {}", tests_dir.display(), e));
 
     let mut passed: u64 = 0;
-    let mut failed: u64 = 0;
+    let mut counts = SuiteFailureCounts::default();
     let mut failed_details: Vec<(PathBuf, String, String)> = Vec::new();
     let schema_settings = JsonSchemaSettings::builder()
         .disallow_unknown_fields(true)
@@ -79,7 +98,7 @@ fn json_schema_test_suite() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("failed to read {}: {}", file_path.display(), e);
-                failed += 1;
+                counts.read_file += 1;
                 continue;
             }
         };
@@ -87,7 +106,7 @@ fn json_schema_test_suite() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("failed to parse {}: {}", file_path.display(), e);
-                failed += 1;
+                counts.parse += 1;
                 continue;
             }
         };
@@ -96,7 +115,7 @@ fn json_schema_test_suite() {
                 if let Ok(s) = JsonSchema::new_from_serde_value(&case.schema, &schema_settings) {
                     s
                 } else {
-                    failed += case.tests.len() as u64;
+                    counts.construct_schema += 1;
                     continue;
                 };
             for t in case.tests {
@@ -104,7 +123,7 @@ fn json_schema_test_suite() {
                 if actual_valid == t.valid {
                     passed += 1;
                 } else {
-                    failed += 1;
+                    counts.validation_result += 1;
                     let rel_path = file_path
                         .strip_prefix(&root)
                         .unwrap_or(file_path)
@@ -116,8 +135,13 @@ fn json_schema_test_suite() {
         }
     }
 
-    let total = passed + failed;
-    eprintln!("JSON Schema Test Suite: passed: {passed}, failed: {failed}, total: {total}");
+    let total_failures = counts.total();
+    let total = passed + total_failures;
+    eprintln!(
+        "JSON Schema Test Suite: passed: {passed}, failed: {total_failures}, total: {total} \
+         (read_file: {}, parse: {}, construct_schema: {}, validation_result: {})",
+        counts.read_file, counts.parse, counts.construct_schema, counts.validation_result
+    );
     if !failed_details.is_empty() && failed_details.len() <= 50 {
         for (path, case_desc, test_desc) in &failed_details {
             eprintln!("  {} | {} | {}", path.display(), case_desc, test_desc);
@@ -126,8 +150,14 @@ fn json_schema_test_suite() {
         eprintln!("  ({} failed tests omitted)", failed_details.len());
     }
 
+    let expected = SuiteFailureCounts {
+        read_file: 0,
+        parse: 0,
+        construct_schema: 0,
+        validation_result: 0,
+    };
     assert_eq!(
-        failed, 0,
-        "{failed} tests failed (passed: {passed}, total: {total})"
+        counts, expected,
+        "JSON Schema Test Suite failure breakdown (passed: {passed}, total: {total})"
     );
 }
