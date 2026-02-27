@@ -49,17 +49,15 @@ fn nested_object_deserializes() {
 
 #[test]
 fn nested_object_each_type_json_schema_round_trip() {
-    use json_schema_rs::{JsonSchema, JsonSchemaSettings, ToJsonSchema};
-    let settings = JsonSchemaSettings::builder().build();
+    use json_schema_rs::{JsonSchema, ToJsonSchema};
     let root_schema = schema_0::Root::json_schema();
     let json: String = (&root_schema).try_into().expect("serialize");
-    let reparsed: json_schema_rs::JsonSchema =
-        JsonSchema::new_from_str(&json, &settings).expect("parse");
+    let reparsed: json_schema_rs::JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(root_schema, reparsed, "Root::json_schema() round-trip");
     let address_schema = schema_0::Address::json_schema();
     let json_addr: String = (&address_schema).try_into().expect("serialize");
     let reparsed_addr: json_schema_rs::JsonSchema =
-        JsonSchema::new_from_str(&json_addr, &settings).expect("parse");
+        JsonSchema::try_from(json_addr.as_str()).expect("parse");
     assert_eq!(
         address_schema, reparsed_addr,
         "Address::json_schema() round-trip"

@@ -75,7 +75,7 @@ impl SpecVersion {
     ///
     /// **Default (latest) spec:** [`Draft202012`](SpecVersion::Draft202012) is
     /// the latest supported spec; its settings match
-    /// `JsonSchemaSettings::builder().build()` when no options are set.
+    /// `JsonSchemaSettings::default()` when no options are set.
     #[must_use]
     pub fn default_schema_settings(self) -> JsonSchemaSettings {
         JsonSchemaSettings {
@@ -99,7 +99,7 @@ mod tests {
     /// Default builder output matches Draft 2020-12 (latest spec) settings.
     #[test]
     fn default_settings_match_draft202012() {
-        let from_builder: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let from_builder: JsonSchemaSettings = JsonSchemaSettings::default();
         let from_spec: JsonSchemaSettings = SpecVersion::Draft202012.default_schema_settings();
         assert_eq!(from_builder, from_spec);
     }

@@ -19,12 +19,10 @@ fn min_items_max_items_compiles_and_deserializes() {
 
 #[test]
 fn min_items_max_items_json_schema_round_trip() {
-    use json_schema_rs::{JsonSchema, JsonSchemaSettings, ToJsonSchema};
+    use json_schema_rs::{JsonSchema, ToJsonSchema};
 
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
     let root_schema = schema_0::Root::json_schema();
     let json: String = (&root_schema).try_into().expect("serialize");
-    let reparsed: json_schema_rs::JsonSchema =
-        JsonSchema::new_from_str(&json, &settings).expect("parse");
+    let reparsed: json_schema_rs::JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(root_schema, reparsed, "Root::json_schema() round-trip");
 }

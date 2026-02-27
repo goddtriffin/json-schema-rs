@@ -7,8 +7,8 @@ A Rust library for JSON Schema tooling: **Schema→Rust** codegen (generate Rust
 types from a JSON Schema), **Rust→Schema** reverse codegen, and a **validator**.
 The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We
 target **JSON Schema Draft 2020-12**; default settings (e.g.
-`JsonSchemaSettings::builder().build()`) are tuned for that spec. A script
-downloads specs for every published draft (draft-00 through 2020-12); run
+`JsonSchemaSettings::default()`) are tuned for that spec. A script downloads
+specs for every published draft (draft-00 through 2020-12); run
 `make vendor_specs` to fetch them locally—specs are not stored in the repo.
 Supported keywords include **type**, **properties**, **required**, **enum**
 (string-only; codegen emits Rust enums), **items** (array with single-schema
@@ -106,13 +106,16 @@ json-schema-rs = "0.0.4"
 
 Parse one or more schemas and generate Rust (one buffer per schema, plus an
 optional shared buffer when dedupe finds identical shapes). With default
-settings you can use **TryFrom**: `let schema = JsonSchema::try_from(schema_json)?;` or `schema_json.try_into()?`. For custom settings, use the constructors:
+settings you can use **TryFrom**:
+`let schema = JsonSchema::try_from(schema_json)?;` or `schema_json.try_into()?`.
+For custom settings, use the constructors:
 
 ```rust
 use json_schema_rs::{JsonSchema, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
 use std::io::Read;
 
-let schema_settings = JsonSchemaSettings::builder().build();
+// Default settings: use TryFrom (e.g. JsonSchema::try_from(schema_json_str)?). For custom settings:
+let schema_settings = JsonSchemaSettings::default();
 
 // From a string:
 let json_schema = JsonSchema::new_from_str(schema_json_str, &schema_settings)?;

@@ -1,6 +1,6 @@
 //! Integration test: `#[derive(ToJsonSchema)]` produces the expected JSON Schema.
 
-use json_schema_rs::{JsonSchema, JsonSchemaSettings, ToJsonSchema};
+use json_schema_rs::{JsonSchema, ToJsonSchema};
 use json_schema_rs_macro::ToJsonSchema;
 use std::collections::{BTreeMap, HashSet};
 
@@ -120,8 +120,7 @@ fn derive_unit_enum_json_schema() {
 fn derive_serialize_round_trip() {
     let schema: JsonSchema = Root::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed: JsonSchema = JsonSchema::new_from_str(&json, &settings).expect("parse");
+    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
 }
 
@@ -191,8 +190,7 @@ fn derive_enum_description_attribute() {
 fn derive_round_trip_with_description() {
     let schema: JsonSchema = AttrDescription::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed: JsonSchema = JsonSchema::new_from_str(&json, &settings).expect("parse");
+    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
 }
 
@@ -282,8 +280,7 @@ fn derive_field_minimum_maximum_float() {
 fn derive_minimum_maximum_round_trip() {
     let schema: JsonSchema = WithIntegerMinMax::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed: JsonSchema = JsonSchema::new_from_str(&json, &settings).expect("parse");
+    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
 }
 
@@ -291,8 +288,7 @@ fn derive_minimum_maximum_round_trip() {
 fn derive_minimum_maximum_float_round_trip() {
     let schema: JsonSchema = WithFloatMinMax::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let parsed: JsonSchema = JsonSchema::new_from_str(&json, &settings).expect("parse");
+    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
 }
 

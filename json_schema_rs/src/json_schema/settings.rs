@@ -5,9 +5,9 @@ use super::spec_version::SpecVersion;
 
 /// Settings that affect how JSON Schema definitions are ingested (parsed).
 ///
-/// Default values from [`JsonSchemaSettingsBuilder::build`] target **JSON Schema
-/// Draft 2020-12**. When no spec version is explicitly provided, use
-/// `JsonSchemaSettings::builder().build()`; it is equivalent to
+/// [`Default`] (i.e. `JsonSchemaSettings::default()`) is equivalent to
+/// `JsonSchemaSettings::default()` and targets **JSON Schema Draft 2020-12**.
+/// When no spec version is explicitly provided, it is equivalent to
 /// [`SpecVersion::Draft202012.default_schema_settings()`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonSchemaSettings {
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn builder_default_disallow_is_false() {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         assert!(!settings.disallow_unknown_fields);
     }
 
@@ -126,7 +126,7 @@ mod tests {
             schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
             ..JsonSchema::default()
         };
-        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         let expected: SpecVersion = SpecVersion::Draft202012;
         let actual: SpecVersion = resolved_spec_version(&schema, &settings);
         assert_eq!(expected, actual);
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn resolved_spec_version_defaults_to_2020_12_when_schema_absent() {
         let schema: JsonSchema = JsonSchema::default();
-        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         let expected: SpecVersion = SpecVersion::Draft202012;
         let actual: SpecVersion = resolved_spec_version(&schema, &settings);
         assert_eq!(expected, actual);
@@ -147,7 +147,7 @@ mod tests {
             schema: Some("https://unknown.example/schema".to_string()),
             ..JsonSchema::default()
         };
-        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         let expected: SpecVersion = SpecVersion::Draft202012;
         let actual: SpecVersion = resolved_spec_version(&schema, &settings);
         assert_eq!(expected, actual);
