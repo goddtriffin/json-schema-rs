@@ -13,9 +13,6 @@ For each of these TODO items, check what every other competitor library does, ch
   (when converting JSON Schema to Rust models), as well as reverse coden gen (when
   converting Rust models to JSON Schema). To make this setting available to developers for
   reverse code gen, we should have a Rust macro annotation for configuring this setting.
-- refactor test_json_schema_suite to use the DenyUnknownFieldsJsonSchema instead of the
-  normal JsonSchema. This will give us a higher quality result output because it'll deny
-  JSON Schema features/fields we have not yet implemented.
 - we need access to massive JSON Schema definitions and validate that our library supports them
   with amazing high speed performance and space efficiency.
 - we should create automated testing which takes the test_json_schema_suite, and runs several of the

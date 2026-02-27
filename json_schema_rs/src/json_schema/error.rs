@@ -14,6 +14,8 @@ pub enum JsonSchemaParseError {
         /// JSON Pointer or path to the schema object that contained the key.
         path: String,
     },
+    /// I/O error when reading from a reader or file.
+    Io(std::io::Error),
 }
 
 /// Result type for JSON Schema parsing operations.
@@ -26,6 +28,7 @@ impl fmt::Display for JsonSchemaParseError {
             JsonSchemaParseError::UnknownField { key, path } => {
                 write!(f, "unknown schema key \"{key}\" at {path}")
             }
+            JsonSchemaParseError::Io(e) => write!(f, "io error: {e}"),
         }
     }
 }
@@ -35,6 +38,7 @@ impl std::error::Error for JsonSchemaParseError {
         match self {
             JsonSchemaParseError::Serde(e) => Some(e),
             JsonSchemaParseError::UnknownField { .. } => None,
+            JsonSchemaParseError::Io(e) => Some(e),
         }
     }
 }
@@ -42,5 +46,11 @@ impl std::error::Error for JsonSchemaParseError {
 impl From<serde_json::Error> for JsonSchemaParseError {
     fn from(e: serde_json::Error) -> Self {
         JsonSchemaParseError::Serde(e)
+    }
+}
+
+impl From<std::io::Error> for JsonSchemaParseError {
+    fn from(e: std::io::Error) -> Self {
+        JsonSchemaParseError::Io(e)
     }
 }

@@ -9,6 +9,9 @@ pub mod spec_version;
 
 pub use error::{JsonSchemaParseError, JsonSchemaParseResult};
 pub use json_schema::JsonSchema;
-pub use parser::{parse_schema, parse_schema_from_slice};
+pub use parser::{
+    parse_schema_from_path, parse_schema_from_reader, parse_schema_from_serde_value,
+    parse_schema_from_slice, parse_schema_from_str,
+};
 pub use settings::{JsonSchemaSettings, JsonSchemaSettingsBuilder, resolved_spec_version};
 pub use spec_version::SpecVersion;

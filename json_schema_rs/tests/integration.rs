@@ -2,7 +2,7 @@
 
 use json_schema_rs::{
     CodeGenSettings, DedupeMode, JsonSchema, JsonSchemaSettings, ModelNameSource, SpecVersion,
-    generate_rust, parse_schema, resolved_spec_version,
+    generate_rust, parse_schema_from_str, resolved_spec_version,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -40,7 +40,7 @@ fn jsonschemars_bin() -> std::path::PathBuf {
 fn integration_schema_keyword_parse_round_trip_and_resolved_spec_version() {
     let schema_json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"name":{"type":"string"}}}"#;
     let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(schema_json, &settings).expect("parse");
+    let schema: JsonSchema = parse_schema_from_str(schema_json, &settings).expect("parse");
     let expected_uri: Option<String> =
         Some("https://json-schema.org/draft/2020-12/schema".to_string());
     assert_eq!(expected_uri, schema.schema);
@@ -59,7 +59,7 @@ fn integration_schema_keyword_parse_round_trip_and_resolved_spec_version() {
         "serialized schema must contain 2020-12 URI"
     );
 
-    let reparsed: JsonSchema = parse_schema(&serialized, &settings).expect("parse again");
+    let reparsed: JsonSchema = parse_schema_from_str(&serialized, &settings).expect("parse again");
     assert_eq!(schema.schema, reparsed.schema);
 }
 
@@ -1228,7 +1228,7 @@ fn cli_validate_invalid_payload_exit_nonzero_and_stderr() {
 fn integration_parse_and_generate() {
     let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1249,7 +1249,7 @@ pub struct Root {
 fn integration_parse_and_generate_optional_string() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1270,7 +1270,7 @@ pub struct Root {
 fn integration_parse_and_generate_enum_required() {
     let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1299,7 +1299,7 @@ pub struct Root {
 fn integration_parse_and_generate_description_struct_and_field() {
     let json = r#"{"type":"object","description":"Root type","properties":{"name":{"type":"string","description":"User name"}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1322,7 +1322,7 @@ pub struct Root {
 fn integration_parse_and_generate_enum_optional() {
     let json = r#"{"type":"object","properties":{"level":{"enum":["low","medium","high"]}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1337,7 +1337,7 @@ fn integration_parse_and_generate_enum_optional() {
 fn integration_parse_and_generate_enum_duplicate_values() {
     let json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1378,7 +1378,7 @@ fn integration_parse_and_generate_nested_object() {
           }
         }"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1407,7 +1407,7 @@ fn integration_parse_and_generate_required_integer() {
     let json =
         r#"{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1428,7 +1428,7 @@ pub struct Root {
 fn integration_parse_and_generate_optional_integer() {
     let json = r#"{"type":"object","properties":{"count":{"type":"integer"}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1449,7 +1449,7 @@ pub struct Root {
 fn integration_parse_and_generate_required_float() {
     let json = r#"{"type":"object","properties":{"value":{"type":"number"}},"required":["value"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1470,7 +1470,7 @@ pub struct Root {
 fn integration_parse_and_generate_optional_float() {
     let json = r#"{"type":"object","properties":{"value":{"type":"number"}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1491,7 +1491,7 @@ pub struct Root {
 fn integration_parse_and_generate_integer_with_minimum_maximum_emits_u8() {
     let json = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1512,7 +1512,7 @@ pub struct Root {
 fn integration_parse_and_generate_number_with_min_max_emits_f32() {
     let json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1533,7 +1533,7 @@ pub struct Root {
 fn integration_parse_and_generate_array_required() {
     let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1554,7 +1554,7 @@ pub struct Root {
 fn integration_parse_and_generate_array_unique_items_true() {
     let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1573,7 +1573,7 @@ fn integration_parse_and_generate_array_optional() {
     let json =
         r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1594,7 +1594,7 @@ pub struct Root {
 fn integration_parse_and_generate_array_min_items_max_items() {
     let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5}},"required":["tags"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1616,7 +1616,7 @@ pub struct Root {
 fn integration_parse_and_generate_string_min_length() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2}},"required":["name"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1638,7 +1638,7 @@ pub struct Root {
 fn integration_parse_and_generate_string_max_length() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string","maxLength":50}},"required":["name"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1660,7 +1660,7 @@ pub struct Root {
 fn integration_parse_and_generate_string_min_length_max_length() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}},"required":["name"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1683,7 +1683,7 @@ fn integration_parse_and_generate_string_min_length_max_length_optional() {
     let json =
         r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1705,7 +1705,7 @@ pub struct Root {
 fn integration_parse_and_generate_array_of_objects() {
     let json = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}}}},"required":["items"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1731,7 +1731,7 @@ pub struct Root {
 fn integration_parse_and_generate_hyphenated_property() {
     let json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -1753,7 +1753,7 @@ pub struct Root {
 fn integration_parse_and_generate_root_not_object_errors() {
     let json = r#"{"type":"string"}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let actual = generate_rust(&[schema], &code_gen_settings);
     assert!(actual.is_err(), "root not object should error");
@@ -1944,9 +1944,9 @@ fn write_workspace_scenario_member(
                 let schema_root = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
                 let schema_child = r#"{"type":"object","properties":{"y":{"type":"string"}}}"#;
                 let parsed_root: JsonSchema =
-                    parse_schema(schema_root, schema_settings).expect("parse root");
+                    parse_schema_from_str(schema_root, schema_settings).expect("parse root");
                 let parsed_child: JsonSchema =
-                    parse_schema(schema_child, schema_settings).expect("parse child");
+                    parse_schema_from_str(schema_child, schema_settings).expect("parse child");
                 let output = generate_rust(&[parsed_root, parsed_child], default_code_gen)
                     .expect("generate");
                 let output_relatives: Vec<PathBuf> =
@@ -1988,9 +1988,9 @@ fn write_workspace_scenario_member(
                 let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
                 let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
                 let parsed_a: JsonSchema =
-                    parse_schema(schema_a, schema_settings).expect("parse a");
+                    parse_schema_from_str(schema_a, schema_settings).expect("parse a");
                 let parsed_b: JsonSchema =
-                    parse_schema(schema_b, schema_settings).expect("parse b");
+                    parse_schema_from_str(schema_b, schema_settings).expect("parse b");
                 let output =
                     generate_rust(&[parsed_a, parsed_b], default_code_gen).expect("generate");
                 let main_rs = r##"fn main() {
@@ -2009,9 +2009,9 @@ fn write_workspace_scenario_member(
                 let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
                 let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
                 let parsed_a: JsonSchema =
-                    parse_schema(schema_a, schema_settings).expect("parse a");
+                    parse_schema_from_str(schema_a, schema_settings).expect("parse a");
                 let parsed_b: JsonSchema =
-                    parse_schema(schema_b, schema_settings).expect("parse b");
+                    parse_schema_from_str(schema_b, schema_settings).expect("parse b");
                 let output =
                     generate_rust(&[parsed_a, parsed_b], default_code_gen).expect("generate");
                 let main_rs = r##"fn main() {
@@ -2036,9 +2036,9 @@ fn write_workspace_scenario_member(
             "dedupe_two_identical" => {
                 let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
                 let parsed_a: JsonSchema =
-                    parse_schema(schema_json, schema_settings).expect("parse a");
+                    parse_schema_from_str(schema_json, schema_settings).expect("parse a");
                 let parsed_b: JsonSchema =
-                    parse_schema(schema_json, schema_settings).expect("parse b");
+                    parse_schema_from_str(schema_json, schema_settings).expect("parse b");
                 let code_gen: CodeGenSettings = CodeGenSettings::builder()
                     .dedupe_mode(DedupeMode::Full)
                     .build();
@@ -2069,7 +2069,7 @@ fn write_workspace_scenario_member(
             "model_name_source_property_key" => {
                 let schema_json = r#"{"type":"object","properties":{"address":{"type":"object","title":"FooBar","properties":{"city":{"type":"string"}}}}}"#;
                 let schema: JsonSchema =
-                    parse_schema(schema_json, schema_settings).expect("parse schema");
+                    parse_schema_from_str(schema_json, schema_settings).expect("parse schema");
                 let code_gen: CodeGenSettings = CodeGenSettings::builder()
                     .model_name_source(ModelNameSource::PropertyKeyFirst)
                     .build();
@@ -2166,8 +2166,8 @@ fn write_workspace_scenario_member(
             }
             "allof_merged" => {
                 let schema_json = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}},"required":["b"]}]}"#;
-                let schema: JsonSchema =
-                    parse_schema(schema_json, schema_settings).expect("parse allOf schema");
+                let schema: JsonSchema = parse_schema_from_str(schema_json, schema_settings)
+                    .expect("parse allOf schema");
                 let output = generate_rust(&[schema], default_code_gen).expect("generate");
                 let main_rs = r##"fn main() {
     let _: compile_test::Root = serde_json::from_str(r#"{"a":"x","b":1}"#).unwrap();
@@ -2179,7 +2179,7 @@ fn write_workspace_scenario_member(
                 // One schema exercising many features; main asserts each (same as the individual scenario tests).
                 let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"},"value_required":{"type":"number"},"value_optional":{"type":"number"},"count_required":{"type":"integer"},"count_optional":{"type":"integer"},"byte":{"type":"integer","minimum":0,"maximum":255},"value_f32":{"type":"number","minimum":0.0,"maximum":100.0},"tags_required":{"type":"array","items":{"type":"string"}},"tags_optional":{"type":"array","items":{"type":"string"}},"tags_unique":{"type":"array","items":{"type":"string"},"uniqueItems":true},"tags_min_max":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5},"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}},"name_bounded":{"type":"string","minLength":2,"maxLength":50},"foo-bar":{"type":"string"},"status":{"enum":["open","closed"]},"name_opt":{"type":"string"}},"required":["id","value_required","count_required","byte","value_f32","tags_required","tags_unique","tags_min_max","name_bounded","status"]}"#;
                 let schema: JsonSchema =
-                    parse_schema(schema_json, schema_settings).expect("parse schema");
+                    parse_schema_from_str(schema_json, schema_settings).expect("parse schema");
                 let output = generate_rust(&[schema], default_code_gen).expect("generate");
                 let main_rs = r##"fn main() {
     use std::collections::HashSet;
@@ -2246,7 +2246,7 @@ fn write_workspace_scenario_member(
                     schema_string_min_max,
                 ]
                 .iter()
-                .map(|s| parse_schema(s, schema_settings).expect("parse"))
+                .map(|s| parse_schema_from_str(s, schema_settings).expect("parse"))
                 .collect();
                 let output = generate_rust(&schemas, default_code_gen).expect("generate");
                 let lib_rs: Vec<u8> = "pub mod basic;\npub mod integer;\npub mod number;\npub mod integer_min_max;\npub mod number_min_max;\npub mod string_min_max;\n".into();
@@ -2269,32 +2269,32 @@ fn write_workspace_scenario_member(
                 ];
                 let main_rs = r#"
 fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema, JsonSchemaSettings};
+    use json_schema_rs::{JsonSchema, ToJsonSchema, parse_schema_from_str, JsonSchemaSettings};
     let settings = JsonSchemaSettings::builder().build();
     // round_trip_basic
     let schema = compile_test::basic::Root::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    let reparsed: JsonSchema = parse_schema_from_str(&json, &settings).expect("parse");
     assert_eq!(schema, reparsed, "round-trip basic");
     // round_trip_integer
     let schema = compile_test::integer::Root::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    let reparsed: JsonSchema = parse_schema_from_str(&json, &settings).expect("parse");
     assert_eq!(schema, reparsed, "round-trip integer");
     // round_trip_number
     let schema = compile_test::number::Root::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    let reparsed: JsonSchema = parse_schema_from_str(&json, &settings).expect("parse");
     assert_eq!(schema, reparsed, "round-trip number");
     // round_trip_integer_min_max
     let schema = compile_test::integer_min_max::Root::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    let reparsed: JsonSchema = parse_schema_from_str(&json, &settings).expect("parse");
     assert_eq!(schema, reparsed, "round-trip integer min max");
     // round_trip_number_min_max (tolerance for f32)
     let schema = compile_test::number_min_max::Root::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    let reparsed: JsonSchema = parse_schema_from_str(&json, &settings).expect("parse");
     let value_schema = schema.properties.get("value").expect("value property");
     let value_reparsed = reparsed.properties.get("value").expect("value property");
     assert_eq!(value_schema.type_, value_reparsed.type_, "type must match");
@@ -2305,7 +2305,7 @@ fn main() {
     // round_trip_string_min_length_max_length
     let schema = compile_test::string_min_max::Root::json_schema();
     let json: String = (&schema).try_into().expect("serialize");
-    let reparsed: JsonSchema = parse_schema(&json, &settings).expect("parse");
+    let reparsed: JsonSchema = parse_schema_from_str(&json, &settings).expect("parse");
     assert_eq!(schema, reparsed, "round-trip string min max");
 }
 "#;
@@ -2323,7 +2323,7 @@ fn main() {
                 let schema_duplicate = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
                 let schemas: Vec<JsonSchema> = [schema_collision, schema_dedupe, schema_duplicate]
                     .iter()
-                    .map(|s| parse_schema(s, schema_settings).expect("parse"))
+                    .map(|s| parse_schema_from_str(s, schema_settings).expect("parse"))
                     .collect();
                 let output = generate_rust(&schemas, &code_gen).expect("generate");
                 let lib_rs: Vec<u8> =
@@ -2375,7 +2375,7 @@ fn main() {
 fn integration_parse_and_generate_uuid_property() {
     let json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#;
     let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-    let schema: JsonSchema = parse_schema(json, &schema_settings).expect("parse schema");
+    let schema: JsonSchema = parse_schema_from_str(json, &schema_settings).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");

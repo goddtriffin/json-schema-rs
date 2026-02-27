@@ -75,10 +75,10 @@ json-schema-rs = "0.0.4"
 Parse one or more schemas and generate Rust (one buffer per schema, plus an optional shared buffer when dedupe finds identical shapes):
 
 ```rust
-use json_schema_rs::{parse_schema, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
+use json_schema_rs::{parse_schema_from_str, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
 
 let schema_settings = JsonSchemaSettings::builder().build();
-let schema = parse_schema(schema_json, &schema_settings)?;
+let schema = parse_schema_from_str(schema_json, &schema_settings)?;
 let code_gen_settings = CodeGenSettings::builder().build();
 let output = generate_rust(&[schema], &code_gen_settings)?;
 // output.per_schema.len() == 1; write output.per_schema[0] to a file or stdout

@@ -17,7 +17,8 @@ pub use code_gen::{
 pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::{
     JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,
-    JsonSchemaSettingsBuilder, SpecVersion, parse_schema, parse_schema_from_slice,
+    JsonSchemaSettingsBuilder, SpecVersion, parse_schema_from_path, parse_schema_from_reader,
+    parse_schema_from_serde_value, parse_schema_from_slice, parse_schema_from_str,
     resolved_spec_version,
 };
 pub use reverse_code_gen::ToJsonSchema;

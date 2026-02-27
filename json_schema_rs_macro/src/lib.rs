@@ -12,7 +12,7 @@ mod derive;
 
 use derive::expand_to_json_schema;
 use json_schema_rs::sanitizers::module_name_from_path;
-use json_schema_rs::{CodeGenBackend, CodeGenSettings, JsonSchemaSettings, parse_schema};
+use json_schema_rs::{CodeGenBackend, CodeGenSettings, JsonSchemaSettings, parse_schema_from_str};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -81,7 +81,7 @@ fn json_schema_to_rust_impl(
         };
 
         let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
-        let schema: json_schema_rs::JsonSchema = parse_schema(&json_str, &schema_settings)
+        let schema: json_schema_rs::JsonSchema = parse_schema_from_str(&json_str, &schema_settings)
             .map_err(|e| syn::Error::new(lit.span(), format!("invalid JSON Schema: {e}")))?;
         schemas.push(schema);
         mod_names.push((mod_name, lit.span()));

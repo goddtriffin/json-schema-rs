@@ -4,7 +4,7 @@
 //! `make vendor_test_suite` first). This test is ignored by default; run with
 //! `make test_json_schema_suite` or `cargo test --test json_schema_test_suite -- --ignored`.
 
-use json_schema_rs::{JsonSchema, validate};
+use json_schema_rs::{JsonSchema, JsonSchemaSettings, parse_schema_from_serde_value, validate};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -70,6 +70,9 @@ fn json_schema_test_suite() {
     let mut passed: u64 = 0;
     let mut failed: u64 = 0;
     let mut failed_details: Vec<(PathBuf, String, String)> = Vec::new();
+    let schema_settings = JsonSchemaSettings::builder()
+        .disallow_unknown_fields(true)
+        .build();
 
     for file_path in &json_files {
         let contents = match std::fs::read_to_string(file_path) {
@@ -89,12 +92,13 @@ fn json_schema_test_suite() {
             }
         };
         for case in cases {
-            let schema: JsonSchema = if let Ok(s) = serde_json::from_value(case.schema.clone()) {
-                s
-            } else {
-                failed += case.tests.len() as u64;
-                continue;
-            };
+            let schema: JsonSchema =
+                if let Ok(s) = parse_schema_from_serde_value(&case.schema, &schema_settings) {
+                    s
+                } else {
+                    failed += case.tests.len() as u64;
+                    continue;
+                };
             for t in case.tests {
                 let actual_valid = validate(&schema, &t.data).is_ok();
                 if actual_valid == t.valid {
