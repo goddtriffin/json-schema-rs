@@ -1,7 +1,7 @@
 //! CLI helpers: schema/payload I/O, schema file discovery, mod.rs emission.
 
 use json_schema_rs::sanitizers::{sanitize_output_relative, sanitize_path_component};
-use json_schema_rs::{JsonSchema, JsonSchemaSettings, parse_schema_from_slice};
+use json_schema_rs::{JsonSchema, JsonSchemaSettings};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -16,7 +16,7 @@ pub(crate) fn read_schema_from_reader<R: Read>(
     let mut buf: Vec<u8> = Vec::new();
     r.read_to_end(&mut buf)
         .map_err(|e| format!("failed to read schema: {e}"))?;
-    parse_schema_from_slice(&buf, schema_settings).map_err(|e| e.to_string())
+    JsonSchema::new_from_slice(&buf, schema_settings).map_err(|e| e.to_string())
 }
 
 pub(crate) fn read_schema_from_path(

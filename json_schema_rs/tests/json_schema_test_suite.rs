@@ -4,7 +4,7 @@
 //! `make vendor_test_suite` first). This test is ignored by default; run with
 //! `make test_json_schema_suite` or `cargo test --test json_schema_test_suite -- --ignored`.
 
-use json_schema_rs::{JsonSchema, JsonSchemaSettings, parse_schema_from_serde_value, validate};
+use json_schema_rs::{JsonSchema, JsonSchemaSettings, validate};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -93,7 +93,7 @@ fn json_schema_test_suite() {
         };
         for case in cases {
             let schema: JsonSchema =
-                if let Ok(s) = parse_schema_from_serde_value(&case.schema, &schema_settings) {
+                if let Ok(s) = JsonSchema::new_from_serde_value(&case.schema, &schema_settings) {
                     s
                 } else {
                     failed += case.tests.len() as u64;

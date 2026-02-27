@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+/// Result type for JSON Schema parsing operations.
+pub type JsonSchemaParseResult<T> = Result<T, JsonSchemaParseError>;
+
 /// Error when parsing a JSON Schema with the given settings.
 #[derive(Debug)]
 pub enum JsonSchemaParseError {
@@ -17,9 +20,6 @@ pub enum JsonSchemaParseError {
     /// I/O error when reading from a reader or file.
     Io(std::io::Error),
 }
-
-/// Result type for JSON Schema parsing operations.
-pub type JsonSchemaParseResult<T> = Result<T, JsonSchemaParseError>;
 
 impl fmt::Display for JsonSchemaParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

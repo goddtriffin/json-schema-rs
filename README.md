@@ -5,9 +5,38 @@
 
 A Rust library for JSON Schema tooling: **Schema→Rust** codegen (generate Rust
 types from a JSON Schema), **Rust→Schema** reverse codegen, and a **validator**.
-The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We target **JSON Schema Draft 2020-12**; default settings (e.g. `JsonSchemaSettings::builder().build()`) are tuned for that spec. A script downloads specs for every published draft (draft-00 through 2020-12); run `make vendor_specs` to fetch them locally—specs are not stored in the repo. Supported keywords include **type**, **properties**, **required**, **enum** (string-only; codegen emits Rust enums), **items** (array with single-schema items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true, codegen emits `HashSet<T>` for hashable item types and the validator enforces uniqueness), **minItems** and **maxItems** (array/set length constraints; validator enforces; codegen emits `#[to_json_schema(min_items = ..., max_items = ...)]` on generated array/set fields; reverse codegen supports the same attributes on Vec and HashSet fields), **minimum** and **maximum** (validation and codegen type selection: narrow integer/float types when both bounds are present and valid), **minLength** and **maxLength** (string length constraints in Unicode code points; validator enforces; codegen emits `#[to_json_schema(min_length = ..., max_length = ...)]` on generated string fields; reverse codegen supports the same attributes on String fields), **description** (codegen emits Rust doc comments; reverse codegen via `#[to_json_schema(description = "...")]`), **$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[to_json_schema(comment = "...")]`), and **$schema** (stored and round-tripped; used to infer spec version when not set explicitly; reverse codegen emits Draft 2020-12 URI by default; default is Draft 2020-12 when absent or unrecognized), and **$id** (unique identifier; stored and round-tripped; we support only `$id`, not draft-04 `id`; Full dedupe includes `$id` in the key, Functional does not; reverse codegen via `#[to_json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id` so round-trip preserves it), and **allOf** (validator: instance must validate against every subschema; codegen: branches merged on-the-fly into one Rust model; reverse codegen: not supported). For implementation details and design philosophy, see [design.md](design.md). Generated
-struct and field names are always valid Rust identifiers (reserved words and
-invalid characters are escaped; see design.md for sanitization rules).
+The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We
+target **JSON Schema Draft 2020-12**; default settings (e.g.
+`JsonSchemaSettings::builder().build()`) are tuned for that spec. A script
+downloads specs for every published draft (draft-00 through 2020-12); run
+`make vendor_specs` to fetch them locally—specs are not stored in the repo.
+Supported keywords include **type**, **properties**, **required**, **enum**
+(string-only; codegen emits Rust enums), **items** (array with single-schema
+items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
+codegen emits `HashSet<T>` for hashable item types and the validator enforces
+uniqueness), **minItems** and **maxItems** (array/set length constraints;
+validator enforces; codegen emits
+`#[to_json_schema(min_items = ..., max_items = ...)]` on generated array/set
+fields; reverse codegen supports the same attributes on Vec and HashSet fields),
+**minimum** and **maximum** (validation and codegen type selection: narrow
+integer/float types when both bounds are present and valid), **minLength** and
+**maxLength** (string length constraints in Unicode code points; validator
+enforces; codegen emits `#[to_json_schema(min_length = ..., max_length = ...)]`
+on generated string fields; reverse codegen supports the same attributes on
+String fields), **description** (codegen emits Rust doc comments; reverse
+codegen via `#[to_json_schema(description = "...")]`),
+**$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[to_json_schema(comment = "...")]`), and **$schema**
+(stored and round-tripped; used to infer spec version when not set explicitly;
+reverse codegen emits Draft 2020-12 URI by default; default is Draft 2020-12
+when absent or unrecognized), and
+**$id** (unique identifier; stored and round-tripped; we support only `$id`, not draft-04`id`; Full dedupe includes`
+$id` in the key, Functional does not; reverse codegen via `#[to_json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
+so round-trip preserves it), and **allOf** (validator: instance must validate
+against every subschema; codegen: branches merged on-the-fly into one Rust
+model; reverse codegen: not supported). For implementation details and design
+philosophy, see [design.md](design.md). Generated struct and field names are
+always valid Rust identifiers (reserved words and invalid characters are
+escaped; see design.md for sanitization rules).
 
 ## Example
 
@@ -61,7 +90,10 @@ pub struct Root {
 }
 ```
 
-Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()` returns a `JsonSchema`). Serialize to JSON with `String::try_from(&schema)` or `Vec::<u8>::try_from(&schema)`. See [design.md](design.md) for reverse codegen details.
+Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()`
+returns a `JsonSchema`). Serialize to JSON with `String::try_from(&schema)` or
+`Vec::<u8>::try_from(&schema)`. See [design.md](design.md) for reverse codegen
+details.
 
 ## Using the library
 
@@ -72,24 +104,50 @@ Add to your `Cargo.toml`:
 json-schema-rs = "0.0.4"
 ```
 
-Parse one or more schemas and generate Rust (one buffer per schema, plus an optional shared buffer when dedupe finds identical shapes):
+Parse one or more schemas and generate Rust (one buffer per schema, plus an
+optional shared buffer when dedupe finds identical shapes). Schema can be parsed
+from different sources using these constructors:
 
 ```rust
-use json_schema_rs::{parse_schema_from_str, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
+use json_schema_rs::{JsonSchema, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
+use std::io::Read;
 
 let schema_settings = JsonSchemaSettings::builder().build();
-let schema = parse_schema_from_str(schema_json, &schema_settings)?;
+
+// From a string:
+let json_schema = JsonSchema::new_from_str(schema_json_str, &schema_settings)?;
+// From bytes (e.g. a buffer or file contents):
+let json_schema = JsonSchema::new_from_slice(&bytes[..], &schema_settings)?;
+// From an already-parsed serde_json::Value (avoids string round-trips):
+let json_schema = JsonSchema::new_from_serde_value(&json_value, &schema_settings)?;
+// From a reader (e.g. std::fs::File, std::io::Stdin):
+let json_schema = JsonSchema::new_from_reader(reader, &schema_settings)?;
+// From a file path:
+let json_schema = JsonSchema::new_from_path("path/to/json-schema.json", &schema_settings)?;
+
+// Then generate Rust:
 let code_gen_settings = CodeGenSettings::builder().build();
-let output = generate_rust(&[schema], &code_gen_settings)?;
+let output = generate_rust(&[json_schema], &code_gen_settings)?;
 // output.per_schema.len() == 1; write output.per_schema[0] to a file or stdout
 // When dedupe finds shared structs, output.shared is Some(shared_rust_code)
 ```
 
-Structurally identical object schemas are deduplicated by default (one generated struct per shape, emitted in a shared buffer). Use `CodeGenSettings::builder().dedupe_mode(DedupeMode::Disabled).build()` to turn this off, or `DedupeMode::Functional` to compare only functional fields (see [design.md](design.md)). Use `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject schema definitions with unknown keys. Use `CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()` to prefer property keys over `title` for struct names. CLI: `--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or `property-key`, `--cgs-dedupe-mode disabled|functional|full`.
+Structurally identical object schemas are deduplicated by default (one generated
+struct per shape, emitted in a shared buffer). Use
+`CodeGenSettings::builder().dedupe_mode(DedupeMode::Disabled).build()` to turn
+this off, or `DedupeMode::Functional` to compare only functional fields (see
+[design.md](design.md)). Use
+`JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject
+schema definitions with unknown keys. Use
+`CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()`
+to prefer property keys over `title` for struct names. CLI:
+`--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or
+`property-key`, `--cgs-dedupe-mode disabled|functional|full`.
 
 ## Using the macro (compile-time codegen)
 
-The **`json_schema_to_rust!`** macro generates Rust types at compile time and **inlines** them at the call site (no file is written). Add both crates:
+The **`json_schema_to_rust!`** macro generates Rust types at compile time and
+**inlines** them at the call site (no file is written). Add both crates:
 
 ```toml
 [dependencies]
@@ -103,18 +161,28 @@ Then `use json_schema_rs_macro::json_schema_to_rust` and use any of these forms:
 
   `json_schema_to_rust!("path/to/schema.json")`
 
-- **Multiple file paths:**  
-  `json_schema_to_rust!("a.json", "b.json")`
+- **Multiple file paths:** `json_schema_to_rust!("a.json", "b.json")`
 
-- **Single inline JSON Schema string:**  
+- **Single inline JSON Schema string:**
   `json_schema_to_rust!(r#"{"type":"object", "properties": {...}}"#)`
 
-- **Multiple inline JSON Schema strings:**  
+- **Multiple inline JSON Schema strings:**
   `json_schema_to_rust!(r#"..."#, r#"..."#)`
 
-When you pass **multiple** schemas (paths or inline), each schema’s types are emitted in a **separate Rust module** to avoid name collisions: one module per JSON Schema. Module names come from the file stem for paths (e.g. `simple` from `simple.json`) or `schema_0`, `schema_1`, … for inline strings. Use the generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
+When you pass **multiple** schemas (paths or inline), each schema’s types are
+emitted in a **separate Rust module** to avoid name collisions: one module per
+JSON Schema. Module names come from the file stem for paths (e.g. `simple` from
+`simple.json`) or `schema_0`, `schema_1`, … for inline strings. Use the
+generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
 
-**Reverse codegen (Rust → JSON Schema).** Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()`). Hand-written structs can use `#[derive(ToJsonSchema)]` from `json_schema_rs_macro` with optional `#[to_json_schema(title = "...")]` and, on fields, **`#[to_json_schema(minimum = N, maximum = N)]`** to set JSON Schema bounds for integer/number properties. Convert a schema to JSON with `String::try_from(&schema)` or `.try_into()`. Add **json-schema-rs-macro** when using the derive. Details: [design.md](design.md).
+**Reverse codegen (Rust → JSON Schema).** Every generated struct implements
+**ToJsonSchema** (e.g. `Root::json_schema()`). Hand-written structs can use
+`#[derive(ToJsonSchema)]` from `json_schema_rs_macro` with optional
+`#[to_json_schema(title = "...")]` and, on fields,
+**`#[to_json_schema(minimum = N, maximum = N)]`** to set JSON Schema bounds for
+integer/number properties. Convert a schema to JSON with
+`String::try_from(&schema)` or `.try_into()`. Add **json-schema-rs-macro** when
+using the derive. Details: [design.md](design.md).
 
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
 
@@ -144,7 +212,15 @@ cargo build --release
 
 The binary is at `target/release/jsonschemars`.
 
-**Generate code from one or more JSON Schemas.** The `generate` command takes one or more INPUTs (file paths, directory paths—recursively searched for `.json` files—or `-` for one schema from stdin) and writes generated `.rs` files under the required `-o` output directory. Output file and directory names are **sanitized** for Rust (e.g. hyphens to underscores), and each directory includes a `mod.rs` so the output is a valid Rust module tree. If any schema file fails to read, every failure is logged to stderr with its path and the command exits without writing output. Only **rust** is supported today. See [design.md](design.md) for details.
+**Generate code from one or more JSON Schemas.** The `generate` command takes
+one or more INPUTs (file paths, directory paths—recursively searched for `.json`
+files—or `-` for one schema from stdin) and writes generated `.rs` files under
+the required `-o` output directory. Output file and directory names are
+**sanitized** for Rust (e.g. hyphens to underscores), and each directory
+includes a `mod.rs` so the output is a valid Rust module tree. If any schema
+file fails to read, every failure is logged to stderr with its path and the
+command exits without writing output. Only **rust** is supported today. See
+[design.md](design.md) for details.
 
 ```bash
 jsonschemars generate rust -o out/ schema.json
@@ -152,15 +228,20 @@ jsonschemars generate rust -o out/ dir1/ dir2/ foo.json
 jsonschemars generate rust -o out/ -   # one schema from stdin → out/stdin.rs
 ```
 
-**Validate a JSON payload against a schema** (one schema, one payload; schema via `-s`, payload from stdin or `-p`):
+**Validate a JSON payload against a schema** (one schema, one payload; schema
+via `-s`, payload from stdin or `-p`):
 
 ```bash
 jsonschemars validate -s schema.json < payload.json
 ```
 
-Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use `-s -` to read the schema from stdin (payload then from `-p` or stdin).
+Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use
+`-s -` to read the schema from stdin (payload then from `-p` or stdin).
 
-To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of using the macro, use the library API from a `build.rs` script: `let bytes = generate_rust(&[schema], &CodeGenSettings::builder().build())?;` then write `bytes[0]` to a path and `include!` it in your crate.
+To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of
+using the macro, use the library API from a `build.rs` script:
+`let bytes = generate_rust(&[schema], &CodeGenSettings::builder().build())?;`
+then write `bytes[0]` to a path and `include!` it in your crate.
 
 ## Alternative libraries
 
@@ -174,10 +255,11 @@ Please submit an issue or bug request if the library needs updating.
 - **Commands:** `make lint`, `make test`, `make fix`
 - **Official JSON Schema Test Suite:** To run the library against the full
   [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite),
-  run `make vendor_test_suite` once to clone it into `research/json-schema-test-suite/`
-  (gitignored), then `make test_json_schema_suite` to run the suite. The test is
-  ignored by default and only runs when invoked explicitly; it hard-fails if the
-  suite directory is missing.
+  run `make vendor_test_suite` once to clone it into
+  `research/json-schema-test-suite/` (gitignored), then
+  `make test_json_schema_suite` to run the suite. The test is ignored by default
+  and only runs when invoked explicitly; it hard-fails if the suite directory is
+  missing.
 - **Implementation and philosophy:** If you're curious how something was
   implemented or the philosophy behind our approach, see [design.md](design.md).
 
