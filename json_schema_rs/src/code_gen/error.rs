@@ -33,6 +33,8 @@ pub enum CodeGenError {
     },
     /// Same property has enum in more than one subschema with incompatible value sets.
     AllOfMergeConflictingEnum { property_key: String },
+    /// Same property has const in more than one subschema with different values.
+    AllOfMergeConflictingConst { property_key: String },
     /// Subschema uses unsupported features for merge (e.g. $ref, non-object type).
     AllOfMergeUnsupportedSubschema { index: usize, reason: String },
 }
@@ -73,6 +75,10 @@ impl fmt::Display for CodeGenError {
                 f,
                 "allOf merge: property \"{property_key}\" has conflicting enum values across subschemas"
             ),
+            CodeGenError::AllOfMergeConflictingConst { property_key } => write!(
+                f,
+                "allOf merge: property \"{property_key}\" has conflicting const values across subschemas"
+            ),
             CodeGenError::AllOfMergeUnsupportedSubschema { index, reason } => {
                 write!(
                     f,
@@ -93,6 +99,7 @@ impl std::error::Error for CodeGenError {
             | CodeGenError::AllOfMergeConflictingPropertyType { .. }
             | CodeGenError::AllOfMergeConflictingNumericBounds { .. }
             | CodeGenError::AllOfMergeConflictingEnum { .. }
+            | CodeGenError::AllOfMergeConflictingConst { .. }
             | CodeGenError::AllOfMergeUnsupportedSubschema { .. } => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
         }

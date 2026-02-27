@@ -120,6 +120,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Enum dedupe (same enum in two properties) | Y | — | Y | Y | — |
 | Enum with duplicate values in schema | Y | Y | Y | Y | — |
 | Non-string enum → String fallback | Y | — | — | — | — |
+| Const string property (single-value enum) | Y | Y | Y | Y | Y |
 | Reverse codegen (every struct ToJsonSchema + attributes) | Y | Y | Y | Y | Y |
 | Round-trip (generate → Type::json_schema() → TryFrom → parse → equals) | — | Y | — | Y | Y |
 | description (struct, field, enum doc) | Y | Y | Y | Y | Y |
@@ -291,9 +292,19 @@ The JSON Schema `type` keyword constrains the instance to one or more primitive 
 
 ### const
 
-TODO.
+The JSON Schema `const` keyword (draft-06 and later) requires the instance to be exactly equal to the schema's const value (JSON value equality). It is equivalent to `"enum": [value]` with one element. We support it in the validator, codegen, and reverse codegen.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+
+- **Validator:** When `const_value` is present, the instance must equal that value; otherwise we push `ValidationError::NotConst` with instance path, expected (const) value, and actual (instance) value. We check const before enum; when both are present, satisfying const is sufficient.
+- **Codegen:** Only string const is supported for codegen. When a property (or array items) schema has `const_value` that is a string, we treat it as a single-value string enum and reuse the existing enum emission path (one Rust enum with one variant). Non-string const (number, boolean, null, object, array) falls back to the existing type for that node (e.g. String or the type implied by other keywords) so that generated code always compiles.
+- **Reverse codegen:** When a Rust unit enum has exactly one variant, we emit `const_value: Some(value)` and `enum_values: None` (i.e. `"const": <value>` in JSON). The value comes from the variant name or `#[serde(rename)]`. Multi-variant unit enums continue to emit `enum_values`.
+- **allOf merge:** When merging string subschemas, if both have `const_value`, they must be equal or we return `CodeGenError::AllOfMergeConflictingConst`.
+
+**Spec version quirks:**
+
+- **Draft-04 and earlier:** The `const` keyword does not exist. Strict parsing allows `const` in the schema (we do not reject it for older drafts); validation and codegen apply when the key is present.
+- **Draft-06, 07, 2019-09, 2020-12:** `const` is defined: instance must be equal to the const value. Behavior is identical across these drafts.
 
 ### enum
 

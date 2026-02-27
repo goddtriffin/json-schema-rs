@@ -538,6 +538,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     description: #description_expr,
                     comment: #comment_expr,
                     enum_values: None,
+                    const_value: None,
                     items: None,
                     unique_items: None,
                     min_items: None,
@@ -611,12 +612,28 @@ fn expand_enum_to_json_schema(
         enum_value_lits.push(LitStr::new(&external, variant.ident.span()));
     }
 
+    let is_single_variant: bool = enum_value_lits.len() == 1;
+
+    let (enum_values_expr, const_value_expr): (TokenStream2, TokenStream2) = if is_single_variant {
+        let lit = &enum_value_lits[0];
+        (
+            quote! { None },
+            quote! { Some(::serde_json::Value::String(#lit.to_string())) },
+        )
+    } else {
+        (
+            quote! {
+                Some(vec![
+                    #(::serde_json::Value::String(#enum_value_lits.to_string())),*
+                ])
+            },
+            quote! { None },
+        )
+    };
+
     Ok(quote! {
         impl ::json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> ::json_schema_rs::JsonSchema {
-                let enum_values = vec![
-                    #(::serde_json::Value::String(#enum_value_lits.to_string())),*
-                ];
                 ::json_schema_rs::JsonSchema {
                     schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
                     id: #id_expr,
@@ -626,7 +643,8 @@ fn expand_enum_to_json_schema(
                     title: #title_expr,
                     description: #description_expr,
                     comment: #comment_expr,
-                    enum_values: Some(enum_values),
+                    enum_values: #enum_values_expr,
+                    const_value: #const_value_expr,
                     items: None,
                     unique_items: None,
                     min_items: None,

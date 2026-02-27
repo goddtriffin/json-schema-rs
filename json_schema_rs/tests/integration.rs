@@ -2070,6 +2070,7 @@ fn write_workspace_scenario_member(
                                 description: None,
                                 comment: None,
                                 enum_values: None,
+                                const_value: None,
                                 items: None,
                                 unique_items: None,
                                 min_items: None,
@@ -2089,6 +2090,7 @@ fn write_workspace_scenario_member(
                     description: None,
                     comment: None,
                     enum_values: None,
+                    const_value: None,
                     items: None,
                     unique_items: None,
                     min_items: None,
@@ -2111,6 +2113,7 @@ fn write_workspace_scenario_member(
                         description: None,
                         comment: None,
                         enum_values: None,
+                        const_value: None,
                         items: None,
                         unique_items: None,
                         min_items: None,
@@ -2145,13 +2148,13 @@ fn write_workspace_scenario_member(
             }
             "kitchen_sink" => {
                 // One schema exercising many features; main asserts each (same as the individual scenario tests).
-                let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"},"value_required":{"type":"number"},"value_optional":{"type":"number"},"count_required":{"type":"integer"},"count_optional":{"type":"integer"},"byte":{"type":"integer","minimum":0,"maximum":255},"value_f32":{"type":"number","minimum":0.0,"maximum":100.0},"tags_required":{"type":"array","items":{"type":"string"}},"tags_optional":{"type":"array","items":{"type":"string"}},"tags_unique":{"type":"array","items":{"type":"string"},"uniqueItems":true},"tags_min_max":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5},"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}},"name_bounded":{"type":"string","minLength":2,"maxLength":50},"foo-bar":{"type":"string"},"status":{"enum":["open","closed"]},"name_opt":{"type":"string"}},"required":["id","value_required","count_required","byte","value_f32","tags_required","tags_unique","tags_min_max","name_bounded","status"]}"#;
+                let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"},"value_required":{"type":"number"},"value_optional":{"type":"number"},"count_required":{"type":"integer"},"count_optional":{"type":"integer"},"byte":{"type":"integer","minimum":0,"maximum":255},"value_f32":{"type":"number","minimum":0.0,"maximum":100.0},"tags_required":{"type":"array","items":{"type":"string"}},"tags_optional":{"type":"array","items":{"type":"string"}},"tags_unique":{"type":"array","items":{"type":"string"},"uniqueItems":true},"tags_min_max":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5},"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}},"name_bounded":{"type":"string","minLength":2,"maxLength":50},"foo-bar":{"type":"string"},"status":{"enum":["open","closed"]},"fixed":{"const":"only"},"name_opt":{"type":"string"}},"required":["id","value_required","count_required","byte","value_f32","tags_required","tags_unique","tags_min_max","name_bounded","status","fixed"]}"#;
                 let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse schema");
                 let output = generate_rust(&[schema], default_code_gen).expect("generate");
                 let main_rs = r##"fn main() {
     use std::collections::HashSet;
     // single_schema / description: required id
-    let root: compile_test::Root = serde_json::from_str(r#"{"id":"x","value_required":3.14,"count_required":42,"byte":42,"value_f32":3.14,"tags_required":["a","b","c"],"tags_unique":["a","b","c"],"tags_min_max":["a","b","c"],"name_bounded":"Alice","status":"open"}"#).unwrap();
+    let root: compile_test::Root = serde_json::from_str(r#"{"id":"x","value_required":3.14,"count_required":42,"byte":42,"value_f32":3.14,"tags_required":["a","b","c"],"tags_unique":["a","b","c"],"tags_min_max":["a","b","c"],"name_bounded":"Alice","status":"open","fixed":"only"}"#).unwrap();
     assert_eq!(root.id, "x".to_string());
     // required_float
     assert_eq!(root.value_required, 3.14);
@@ -2172,25 +2175,27 @@ fn write_workspace_scenario_member(
     assert_eq!(root.name_bounded, "Alice".to_string());
     // enum_basic
     assert_eq!(root.status, compile_test::Status::Open);
+    // const_string_property
+    assert_eq!(root.fixed, compile_test::Fixed::Only);
     // optional_float
-    let r2: compile_test::Root = serde_json::from_str(r#"{"id":"y","value_required":1.0,"value_optional":2.5,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["x","y"],"name_bounded":"ab","status":"closed"}"#).unwrap();
+    let r2: compile_test::Root = serde_json::from_str(r#"{"id":"y","value_required":1.0,"value_optional":2.5,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["x","y"],"name_bounded":"ab","status":"closed","fixed":"only"}"#).unwrap();
     assert_eq!(r2.value_optional, Some(2.5));
     // optional_integer
-    let r3: compile_test::Root = serde_json::from_str(r#"{"id":"z","value_required":0.0,"count_required":0,"count_optional":1,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"xy","status":"open"}"#).unwrap();
+    let r3: compile_test::Root = serde_json::from_str(r#"{"id":"z","value_required":0.0,"count_required":0,"count_optional":1,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"xy","status":"open","fixed":"only"}"#).unwrap();
     assert_eq!(r3.count_optional, Some(1));
     // array_optional
-    let r4: compile_test::Root = serde_json::from_str(r#"{"id":"w","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_optional":["x","y"],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open"}"#).unwrap();
+    let r4: compile_test::Root = serde_json::from_str(r#"{"id":"w","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_optional":["x","y"],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","fixed":"only"}"#).unwrap();
     assert_eq!(r4.tags_optional, Some(vec!["x".to_string(), "y".to_string()]));
     // optional_string
-    let r_opt: compile_test::Root = serde_json::from_str(r#"{"id":"o","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","name_opt":"optional"}"#).unwrap();
+    let r_opt: compile_test::Root = serde_json::from_str(r#"{"id":"o","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","fixed":"only","name_opt":"optional"}"#).unwrap();
     assert_eq!(r_opt.name_opt.as_deref(), Some("optional"));
     // nested_object
-    let r5: compile_test::Root = serde_json::from_str(r#"{"id":"n","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","address":{"city":"NYC","street_address":"5th Ave"}}"#).unwrap();
+    let r5: compile_test::Root = serde_json::from_str(r#"{"id":"n","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","fixed":"only","address":{"city":"NYC","street_address":"5th Ave"}}"#).unwrap();
     assert!(r5.address.is_some());
     assert_eq!(r5.address.as_ref().unwrap().city.as_deref(), Some("NYC"));
     assert_eq!(r5.address.as_ref().unwrap().street_address.as_deref(), Some("5th Ave"));
     // hyphenated_property
-    let r6: compile_test::Root = serde_json::from_str(r#"{"id":"h","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","foo-bar":"baz"}"#).unwrap();
+    let r6: compile_test::Root = serde_json::from_str(r#"{"id":"h","value_required":0.0,"count_required":0,"byte":0,"value_f32":0.0,"tags_required":[],"tags_unique":[],"tags_min_max":["a","b"],"name_bounded":"ab","status":"open","fixed":"only","foo-bar":"baz"}"#).unwrap();
     assert_eq!(r6.foo_bar.as_deref(), Some("baz"));
 }
 "##;

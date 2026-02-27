@@ -55,6 +55,18 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
     stack.push((schema, instance, JsonPointer::root()));
 
     while let Some((schema, instance, instance_path)) = stack.pop() {
+        if let Some(ref expected) = schema.const_value
+            && instance != expected
+        {
+            let expected_str: String = value_to_display_string(expected);
+            let actual_str: String = value_to_display_string(instance);
+            errors.push(ValidationError::NotConst {
+                instance_path: instance_path.clone(),
+                expected: expected_str,
+                actual: actual_str,
+            });
+            continue;
+        }
         if let Some(ref allowed) = schema.enum_values
             && !allowed.is_empty()
             && !allowed.iter().any(|a| a == instance)
@@ -324,6 +336,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -403,6 +416,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -463,6 +477,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -516,6 +531,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -580,6 +596,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -609,6 +626,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -666,6 +684,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -706,6 +725,7 @@ mod tests {
                         description: Some("User name".to_string()),
                         comment: None,
                         enum_values: None,
+                        const_value: None,
                         items: None,
                         unique_items: None,
                         min_items: None,
@@ -725,6 +745,7 @@ mod tests {
             description: Some("Root type".to_string()),
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -756,6 +777,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -777,6 +799,7 @@ mod tests {
             description: None,
             comment: Some("Editor note".to_string()),
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -810,6 +833,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -839,6 +863,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -868,6 +893,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -900,6 +926,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -932,6 +959,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -964,6 +992,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -996,6 +1025,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1031,6 +1061,7 @@ mod tests {
                 serde_json::Value::String("open".to_string()),
                 serde_json::Value::String("closed".to_string()),
             ]),
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1063,6 +1094,7 @@ mod tests {
                 serde_json::Value::String("open".to_string()),
                 serde_json::Value::String("closed".to_string()),
             ]),
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1099,6 +1131,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1131,6 +1164,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1153,6 +1187,184 @@ mod tests {
     }
 
     #[test]
+    fn const_valid_string() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: Some(serde_json::Value::String("ok".to_string())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let instance = json!("ok");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_invalid_string() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: Some(serde_json::Value::String("expected".to_string())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let instance = json!("actual");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let errs = actual.as_ref().expect_err("expected NotConst error");
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(
+            &errs[0],
+            ValidationError::NotConst {
+                expected: e,
+                actual: a,
+                ..
+            } if e == "\"expected\"" && a == "\"actual\""
+        ));
+    }
+
+    #[test]
+    fn const_valid_number() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: Some(serde_json::Value::Number(42_i64.into())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let instance = json!(42);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_with_enum_instance_equals_const_valid() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("a".to_string()),
+                serde_json::Value::String("b".to_string()),
+            ]),
+            const_value: Some(serde_json::Value::String("a".to_string())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let instance = json!("a");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_with_enum_instance_not_const_not_const_error() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: Some(vec![
+                serde_json::Value::String("a".to_string()),
+                serde_json::Value::String("b".to_string()),
+            ]),
+            const_value: Some(serde_json::Value::String("a".to_string())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let instance = json!("b");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let errs = actual.as_ref().expect_err("expected NotConst");
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(&errs[0], ValidationError::NotConst { .. }));
+    }
+
+    #[test]
+    fn validation_error_not_const_display() {
+        let err: ValidationError = ValidationError::NotConst {
+            instance_path: JsonPointer::root(),
+            expected: "\"foo\"".to_string(),
+            actual: "\"bar\"".to_string(),
+        };
+        let expected: String =
+            "root: value \"bar\" does not match const (expected: \"foo\")".to_string();
+        let actual: String = err.to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn root_type_integer_valid_42() {
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -1164,6 +1376,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1193,6 +1406,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1222,6 +1436,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1251,6 +1466,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1283,6 +1499,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1315,6 +1532,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1347,6 +1565,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1379,6 +1598,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1411,6 +1631,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1506,6 +1727,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1535,6 +1757,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1564,6 +1787,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1596,6 +1820,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1628,6 +1853,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1660,6 +1886,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1692,6 +1919,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1724,6 +1952,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1753,6 +1982,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1786,6 +2016,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1819,6 +2050,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1848,6 +2080,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1877,6 +2110,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1910,6 +2144,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1951,6 +2186,7 @@ mod tests {
                         description: None,
                         comment: None,
                         enum_values: None,
+                        const_value: None,
                         items: None,
                         unique_items: None,
                         min_items: None,
@@ -1975,6 +2211,7 @@ mod tests {
                         description: None,
                         comment: None,
                         enum_values: None,
+                        const_value: None,
                         items: None,
                         unique_items: None,
                         min_items: None,
@@ -1994,6 +2231,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2034,6 +2272,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2063,6 +2302,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2092,6 +2332,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2124,6 +2365,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2145,6 +2387,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
             min_items: None,
@@ -2174,6 +2417,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2195,6 +2439,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
             min_items: None,
@@ -2227,6 +2472,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2248,6 +2494,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: Some(Box::new(item_schema)),
             unique_items: Some(true),
             min_items: None,
@@ -2277,6 +2524,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2298,6 +2546,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: Some(Box::new(item_schema)),
             unique_items: Some(true),
             min_items: None,
@@ -2333,6 +2582,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2354,6 +2604,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: Some(Box::new(item_schema)),
             unique_items: Some(false),
             min_items: None,
@@ -2383,6 +2634,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2404,6 +2656,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
             min_items: None,
@@ -2433,6 +2686,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: Some(true),
             min_items: None,
@@ -2462,6 +2716,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: Some(2),
@@ -2491,6 +2746,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: Some(3),
@@ -2524,6 +2780,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: Some(2),
@@ -2553,6 +2810,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2582,6 +2840,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2615,6 +2874,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2644,6 +2904,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: Some(2),
@@ -2673,6 +2934,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: Some(2),
@@ -2706,6 +2968,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: Some(2),
@@ -2739,6 +3002,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2768,6 +3032,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: Some(2),
@@ -2863,6 +3128,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2895,6 +3161,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2927,6 +3194,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2970,6 +3238,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -3015,6 +3284,7 @@ mod tests {
                     description: None,
                     comment: None,
                     enum_values: None,
+                    const_value: None,
                     items: None,
                     unique_items: None,
                     min_items: None,
@@ -3148,6 +3418,7 @@ mod tests {
                     description: None,
                     comment: None,
                     enum_values: None,
+                    const_value: None,
                     items: None,
                     unique_items: None,
                     min_items: None,
@@ -3201,6 +3472,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -3223,6 +3495,7 @@ mod tests {
                 description: None,
                 comment: None,
                 enum_values: None,
+                const_value: None,
                 items: None,
                 unique_items: None,
                 min_items: None,

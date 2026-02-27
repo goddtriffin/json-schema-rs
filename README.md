@@ -10,7 +10,8 @@ target **JSON Schema Draft 2020-12**; default settings (e.g.
 `JsonSchemaSettings::default()`) are tuned for that spec. A script downloads
 specs for every published draft (draft-00 through 2020-12); run
 `make vendor_specs` to fetch them locally—specs are not stored in the repo.
-Supported keywords include **type**, **properties**, **required**, **enum**
+Supported keywords include **type**, **properties**, **required**, **const** (draft-06+;
+validator: instance must equal const; codegen: string const → single-value enum, non-string const → fallback; reverse: single-variant unit enum → const), **enum**
 (string-only; codegen emits Rust enums), **items** (array with single-schema
 items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
 codegen emits `HashSet<T>` for hashable item types and the validator enforces

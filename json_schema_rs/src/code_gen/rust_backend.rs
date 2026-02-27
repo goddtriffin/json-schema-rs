@@ -101,6 +101,22 @@ fn string_enum_values(schema: &JsonSchema) -> Option<Vec<String>> {
     Some(out)
 }
 
+/// Returns effective string enum values: either from `enum` (string-only) or from `const` when it is a string (single-value).
+fn string_enum_or_const_values(schema: &JsonSchema) -> Option<Vec<String>> {
+    if let Some(values) = string_enum_values(schema) {
+        return Some(values);
+    }
+    if schema.is_string_const() {
+        let s: String = schema
+            .const_value
+            .as_ref()
+            .and_then(|v| v.as_str().map(String::from))
+            .expect("string const");
+        return Some(vec![s]);
+    }
+    None
+}
+
 /// Key for deduplication: canonical representation of an object schema for a given mode.
 /// Implements `Ord` + `Eq` for use in `BTreeMap`. Full mode includes id, description, and comment; Functional mode excludes them (key ignores $id).
 #[derive(Debug, Clone)]
@@ -554,6 +570,15 @@ fn merge_property_schemas(
         } else if b.enum_values.is_some() {
             out.enum_values.clone_from(&b.enum_values);
         }
+        if let (Some(ca), Some(cb)) = (&a.const_value, &b.const_value) {
+            if ca != cb {
+                return Err(CodeGenError::AllOfMergeConflictingConst {
+                    property_key: property_key.to_string(),
+                });
+            }
+        } else if b.const_value.is_some() {
+            out.const_value.clone_from(&b.const_value);
+        }
         return Ok(out);
     }
     if a.is_integer() && b.is_integer() || a.is_number() && b.is_number() {
@@ -626,7 +651,7 @@ fn rust_type_for_item_schema(
     settings: &CodeGenSettings,
     mode: DedupeMode,
 ) -> String {
-    if let Some(values) = string_enum_values(schema)
+    if let Some(values) = string_enum_or_const_values(schema)
         && let Some(m) = enum_values_to_name
         && let Some(name) = m.get(&values)
     {
@@ -634,6 +659,7 @@ fn rust_type_for_item_schema(
     }
     if schema.is_string()
         || (schema.enum_values.as_ref().is_some_and(|v| !v.is_empty()) && !schema.is_string_enum())
+        || (schema.const_value.is_some() && !schema.is_string_const())
     {
         #[cfg(feature = "uuid")]
         {
@@ -687,7 +713,7 @@ fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToE
     let mut stack: Vec<&JsonSchema> = vec![schema];
     while let Some(node) = stack.pop() {
         for (key, prop_schema) in &node.properties {
-            if let Some(values) = string_enum_values(prop_schema) {
+            if let Some(values) = string_enum_or_const_values(prop_schema) {
                 key_to_name_desc.entry(values.clone()).or_insert_with(|| {
                     let name: String =
                         struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings);
@@ -705,7 +731,7 @@ fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToE
             if prop_schema.is_array_with_items()
                 && let Some(ref items) = prop_schema.items
             {
-                if let Some(values) = string_enum_values(items) {
+                if let Some(values) = string_enum_or_const_values(items) {
                     key_to_name_desc.entry(values.clone()).or_insert_with(|| {
                         let name: String =
                             struct_name_from(items.title.as_deref(), Some(key), false, settings);
@@ -1069,7 +1095,7 @@ fn generate_rust_with_dedupe(
                             used_shared.insert(cn.clone());
                         }
                     }
-                    if let Some(values) = string_enum_values(prop_schema)
+                    if let Some(values) = string_enum_or_const_values(prop_schema)
                         && let Some((enum_name, _)) = enum_values_to_name.get(&values)
                     {
                         used_shared.insert(enum_name.clone());
@@ -1215,7 +1241,7 @@ fn emit_struct_fields_with_resolver(
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
-        if let Some(values) = string_enum_values(prop_schema) {
+        if let Some(values) = string_enum_or_const_values(prop_schema) {
             let enum_name: &String = enum_values_to_name
                 .and_then(|m| m.get(&values).map(|(n, _)| n))
                 .expect("enum name for string enum");
@@ -1353,7 +1379,7 @@ fn emit_struct_fields(
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
-        if let Some(values) = string_enum_values(prop_schema) {
+        if let Some(values) = string_enum_or_const_values(prop_schema) {
             let enum_name: &String = enum_values_to_name
                 .and_then(|m| m.get(&values))
                 .expect("enum name for string enum");
@@ -1647,6 +1673,70 @@ pub struct Root {
 
 "#;
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_string_property_emits_single_variant_enum() {
+        let json = r#"{"type":"object","properties":{"key":{"const":"only"}},"required":["key"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Key {
+    #[serde(rename = "only")]
+    Only,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub key: Key,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn all_of_merge_same_const_ok() {
+        let s1: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"x":{"type":"string","const":"same"}}}"#,
+        )
+        .unwrap();
+        let s2: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"x":{"type":"string","const":"same"}}}"#,
+        )
+        .unwrap();
+        let actual: Result<JsonSchema, _> = merge_all_of(&[s1, s2]);
+        assert!(actual.is_ok());
+        let merged: JsonSchema = actual.unwrap();
+        let x_schema: &JsonSchema = merged.properties.get("x").expect("property x");
+        assert_eq!(
+            x_schema.const_value.as_ref(),
+            Some(&serde_json::Value::String("same".to_string()))
+        );
+    }
+
+    #[test]
+    fn all_of_merge_conflicting_const_err() {
+        let s1: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"x":{"type":"string","const":"a"}}}"#,
+        )
+        .unwrap();
+        let s2: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"x":{"type":"string","const":"b"}}}"#,
+        )
+        .unwrap();
+        let actual: Result<JsonSchema, CodeGenError> = merge_all_of(&[s1, s2]);
+        let err = actual.expect_err("expected AllOfMergeConflictingConst");
+        assert!(matches!(
+            err,
+            CodeGenError::AllOfMergeConflictingConst { .. }
+        ));
     }
 
     #[test]
@@ -2465,6 +2555,7 @@ pub struct Root {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -2487,6 +2578,7 @@ pub struct Root {
                 description: None,
                 comment: None,
                 enum_values: None,
+                const_value: None,
                 items: None,
                 unique_items: None,
                 min_items: None,

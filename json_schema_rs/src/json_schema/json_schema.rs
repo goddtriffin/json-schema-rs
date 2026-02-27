@@ -91,6 +91,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) comment: Option<String>,
     #[serde(default, rename = "enum")]
     pub(crate) enum_values: Option<Vec<serde_json::Value>>,
+    #[serde(default, rename = "const")]
+    pub(crate) const_value: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) items: Option<Box<DenyUnknownFieldsJsonSchema>>,
     #[serde(default, rename = "uniqueItems")]
@@ -139,6 +141,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         description: h.description,
         comment: h.comment,
         enum_values: h.enum_values,
+        const_value: h.const_value,
         items,
         unique_items: h.unique_items,
         min_items: h.min_items,
@@ -190,6 +193,10 @@ pub struct JsonSchema {
     /// Allowed values for the instance (JSON Schema `enum`). When present and non-empty, instance must equal one of these. Codegen uses only string-only enums.
     #[serde(rename = "enum", skip_serializing_if = "skip_enum_values")]
     pub enum_values: Option<Vec<serde_json::Value>>,
+
+    /// Single allowed value for the instance (JSON Schema `const`, draft-06+). When present, instance must equal this value. Codegen uses only string const (single-variant enum).
+    #[serde(rename = "const", skip_serializing_if = "Option::is_none")]
+    pub const_value: Option<serde_json::Value>,
 
     /// Schema for all array elements (when type is "array"). Single-schema form only; tuple-typing (array of schemas) not supported.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,6 +266,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             comment: Option<String>,
             #[serde(default, rename = "enum")]
             enum_values: Option<Vec<serde_json::Value>>,
+            #[serde(default, rename = "const")]
+            const_value: Option<serde_json::Value>,
             #[serde(default)]
             items: Option<Box<JsonSchema>>,
             #[serde(default, rename = "uniqueItems")]
@@ -291,6 +300,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             description: h.description,
             comment: h.comment,
             enum_values: h.enum_values,
+            const_value: h.const_value,
             items: h.items,
             unique_items: h.unique_items,
             min_items: h.min_items,
@@ -373,6 +383,14 @@ impl JsonSchema {
         self.enum_values
             .as_ref()
             .is_some_and(|v| !v.is_empty() && v.iter().all(serde_json::Value::is_string))
+    }
+
+    /// Returns true when this schema has a string const (single allowed string value). Used for codegen to treat as single-value enum.
+    #[must_use]
+    pub(crate) fn is_string_const(&self) -> bool {
+        self.const_value
+            .as_ref()
+            .is_some_and(serde_json::Value::is_string)
     }
 
     /// Parse a JSON Schema from a string with the given settings.
@@ -603,6 +621,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -631,6 +650,7 @@ mod tests {
             description: None,
             comment: Some("Created by John Doe".to_string()),
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -662,6 +682,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -857,6 +878,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -911,6 +933,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -939,6 +962,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -961,6 +985,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: Some(vec![]),
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -986,6 +1011,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1011,6 +1037,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::Number(42_i64.into()),
             ]),
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1063,6 +1090,7 @@ mod tests {
                     description: None,
                     comment: None,
                     enum_values: None,
+                    const_value: None,
                     items: None,
                     unique_items: None,
                     min_items: None,
@@ -1093,6 +1121,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1114,6 +1143,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: Some(Box::new(item_schema)),
             unique_items: None,
             min_items: None,
@@ -1270,6 +1300,7 @@ mod tests {
                         description: None,
                         comment: None,
                         enum_values: None,
+                        const_value: None,
                         items: None,
                         unique_items: None,
                         min_items: None,
@@ -1289,6 +1320,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1400,6 +1432,7 @@ mod tests {
                         description: None,
                         comment: None,
                         enum_values: None,
+                        const_value: None,
                         items: None,
                         unique_items: None,
                         min_items: None,
@@ -1424,6 +1457,7 @@ mod tests {
                         description: None,
                         comment: None,
                         enum_values: None,
+                        const_value: None,
                         items: None,
                         unique_items: None,
                         min_items: None,
@@ -1443,6 +1477,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1472,6 +1507,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1500,6 +1536,7 @@ mod tests {
             description: None,
             comment: None,
             enum_values: None,
+            const_value: None,
             items: None,
             unique_items: None,
             min_items: None,
@@ -1740,6 +1777,122 @@ mod tests {
         let json = r#"{"type":"object","properties":{"x":{"enum":["a","b"]}}}"#;
         let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_const_string() {
+        let json = r#"{"const":"only"}"#;
+        let schema: JsonSchema = serde_json::from_str(json).expect("parse");
+        let expected: Option<serde_json::Value> =
+            Some(serde_json::Value::String("only".to_string()));
+        let actual: Option<&serde_json::Value> = schema.const_value.as_ref();
+        assert_eq!(expected.as_ref(), actual);
+    }
+
+    #[test]
+    fn parse_const_number() {
+        let json = r#"{"const":42}"#;
+        let schema: JsonSchema = serde_json::from_str(json).expect("parse");
+        let expected: Option<serde_json::Value> = Some(serde_json::Value::Number(42_i64.into()));
+        let actual: Option<&serde_json::Value> = schema.const_value.as_ref();
+        assert_eq!(expected.as_ref(), actual);
+    }
+
+    #[test]
+    fn parse_const_round_trip() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: Some(serde_json::Value::String("x".to_string())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let json: String = serde_json::to_string(&schema).expect("serialize");
+        let parsed: JsonSchema = serde_json::from_str(&json).expect("parse");
+        assert_eq!(schema.const_value, parsed.const_value);
+    }
+
+    #[test]
+    fn parse_strict_accepts_const_key() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"object","properties":{"x":{"const":"fixed"}}}"#;
+        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn is_string_const_true_when_string() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: Some(serde_json::Value::String("a".to_string())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let expected: bool = true;
+        let actual: bool = schema.is_string_const();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn is_string_const_false_when_non_string() {
+        let schema: JsonSchema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: Some(serde_json::Value::Number(1_i64.into())),
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+        };
+        let expected: bool = false;
+        let actual: bool = schema.is_string_const();
+        assert_eq!(expected, actual);
     }
 
     #[test]

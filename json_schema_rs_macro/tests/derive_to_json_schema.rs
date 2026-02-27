@@ -33,6 +33,12 @@ enum Status {
     Closed,
 }
 
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+enum SingleVariant {
+    Only,
+}
+
 #[test]
 fn derive_root_json_schema() {
     let expected: JsonSchema = JsonSchema {
@@ -50,6 +56,7 @@ fn derive_root_json_schema() {
         description: None,
         comment: None,
         enum_values: None,
+        const_value: None,
         items: None,
         unique_items: None,
         min_items: None,
@@ -82,6 +89,7 @@ fn derive_address_json_schema() {
         description: None,
         comment: None,
         enum_values: None,
+        const_value: None,
         items: None,
         unique_items: None,
         min_items: None,
@@ -114,6 +122,21 @@ fn derive_unit_enum_json_schema() {
     assert_eq!(actual_enum.len(), 2);
     assert!(actual_enum.contains(&serde_json::Value::String("Open".to_string())));
     assert!(actual_enum.contains(&serde_json::Value::String("Closed".to_string())));
+}
+
+#[test]
+fn derive_single_variant_enum_emits_const() {
+    let actual: JsonSchema = SingleVariant::json_schema();
+    let expected_type: Option<&str> = Some("string");
+    let actual_type: Option<&str> = actual.type_.as_deref();
+    assert_eq!(expected_type, actual_type);
+    let expected_const: Option<&serde_json::Value> =
+        Some(&serde_json::Value::String("Only".to_string()));
+    let actual_const: Option<&serde_json::Value> = actual.const_value.as_ref();
+    assert_eq!(expected_const, actual_const);
+    let expected_enum_none: bool = true;
+    let actual_enum_none: bool = actual.enum_values.is_none();
+    assert_eq!(expected_enum_none, actual_enum_none);
 }
 
 #[test]
@@ -220,6 +243,7 @@ fn derive_field_minimum_maximum_integer() {
         description: None,
         comment: None,
         enum_values: None,
+        const_value: None,
         items: None,
         unique_items: None,
         min_items: None,
@@ -261,6 +285,7 @@ fn derive_field_minimum_maximum_float() {
         description: None,
         comment: None,
         enum_values: None,
+        const_value: None,
         items: None,
         unique_items: None,
         min_items: None,
@@ -317,6 +342,7 @@ fn derive_field_only_minimum() {
         description: None,
         comment: None,
         enum_values: None,
+        const_value: None,
         items: None,
         unique_items: None,
         min_items: None,
@@ -357,6 +383,7 @@ fn derive_field_only_maximum() {
         description: None,
         comment: None,
         enum_values: None,
+        const_value: None,
         items: None,
         unique_items: None,
         min_items: None,

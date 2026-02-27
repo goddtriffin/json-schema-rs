@@ -94,6 +94,15 @@ pub enum ValidationError {
         /// Serialized allowed enum values (for user-facing context).
         allowed: Vec<String>,
     },
+    /// Schema had `const` but the instance value was not equal to the const value.
+    NotConst {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// Serialized expected (const) value (for user-facing context).
+        expected: String,
+        /// Serialized actual instance value (for user-facing context).
+        actual: String,
+    },
     /// Instance was below the schema's `minimum` (inclusive lower bound).
     BelowMinimum {
         /// JSON Pointer to the instance that failed.
@@ -156,6 +165,7 @@ impl ValidationError {
             | ValidationError::TooManyItems { instance_path, .. }
             | ValidationError::MissingRequired { instance_path, .. }
             | ValidationError::NotInEnum { instance_path, .. }
+            | ValidationError::NotConst { instance_path, .. }
             | ValidationError::BelowMinimum { instance_path, .. }
             | ValidationError::AboveMaximum { instance_path, .. }
             | ValidationError::TooShort { instance_path, .. }
@@ -226,6 +236,14 @@ impl fmt::Display for ValidationError {
                 write!(
                     f,
                     "{location}: value {invalid_value} not in enum (allowed: {allowed_str})"
+                )
+            }
+            ValidationError::NotConst {
+                expected, actual, ..
+            } => {
+                write!(
+                    f,
+                    "{location}: value {actual} does not match const (expected: {expected})"
                 )
             }
             ValidationError::BelowMinimum {
