@@ -471,6 +471,85 @@ impl JsonSchema {
     }
 }
 
+// TryFrom: parse into JsonSchema with default settings
+
+/// Parses a JSON Schema from a string using default [`JsonSchemaSettings`](super::settings::JsonSchemaSettings).
+/// For custom settings, use [`JsonSchema::new_from_str`](Self::new_from_str).
+impl TryFrom<&str> for JsonSchema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        JsonSchema::new_from_str(value, &settings)
+    }
+}
+
+/// Parses a JSON Schema from an owned string using default settings.
+/// For custom settings, use [`JsonSchema::new_from_str`](Self::new_from_str).
+impl TryFrom<String> for JsonSchema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        JsonSchema::new_from_str(value.as_str(), &settings)
+    }
+}
+
+/// Parses a JSON Schema from a byte slice using default settings.
+/// For custom settings, use [`JsonSchema::new_from_slice`](Self::new_from_slice).
+impl TryFrom<&[u8]> for JsonSchema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        JsonSchema::new_from_slice(value, &settings)
+    }
+}
+
+/// Parses a JSON Schema from an already-parsed [`serde_json::Value`] using default settings.
+/// For custom settings, use [`JsonSchema::new_from_serde_value`](Self::new_from_serde_value).
+impl TryFrom<&serde_json::Value> for JsonSchema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        JsonSchema::new_from_serde_value(value, &settings)
+    }
+}
+
+/// Parses a JSON Schema from an open file using default settings. I/O errors are reported as [`JsonSchemaParseError::Io`].
+/// For custom settings, use [`JsonSchema::new_from_reader`](Self::new_from_reader).
+impl TryFrom<std::fs::File> for JsonSchema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: std::fs::File) -> Result<Self, Self::Error> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        JsonSchema::new_from_reader(value, &settings)
+    }
+}
+
+/// Parses a JSON Schema from a file path using default settings. I/O errors (e.g. file not found) are reported as [`JsonSchemaParseError::Io`].
+/// For custom settings, use [`JsonSchema::new_from_path`](Self::new_from_path).
+impl TryFrom<&std::path::Path> for JsonSchema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &std::path::Path) -> Result<Self, Self::Error> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        JsonSchema::new_from_path(value, &settings)
+    }
+}
+
+/// Parses a JSON Schema from an owned path using default settings. I/O errors are reported as [`JsonSchemaParseError::Io`].
+/// For custom settings, use [`JsonSchema::new_from_path`](Self::new_from_path).
+impl TryFrom<std::path::PathBuf> for JsonSchema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: std::path::PathBuf) -> Result<Self, Self::Error> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().build();
+        JsonSchema::new_from_path(&value, &settings)
+    }
+}
+
 impl TryFrom<&JsonSchema> for String {
     type Error = JsonSchemaParseError;
 
@@ -619,6 +698,108 @@ mod tests {
         let reparsed: JsonSchema =
             JsonSchema::new_from_slice(&bytes, &settings).expect("parse again");
         assert_eq!(parsed, reparsed);
+    }
+
+    // TryFrom: parse into JsonSchema with default settings
+
+    #[test]
+    fn try_from_str_success() {
+        let json: &str = r#"{"type":"object","properties":{}}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("try_from");
+        let expected_type: Option<&str> = Some("object");
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn try_from_str_invalid_json() {
+        let json: &str = "not json";
+        let result: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(json);
+        assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+    }
+
+    #[test]
+    fn try_from_string_success() {
+        let json: String = r#"{"type":"string"}"#.to_string();
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("try_from");
+        let expected_type: Option<&str> = Some("string");
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn try_from_slice_success() {
+        let bytes: &[u8] = r#"{"type":"array","items":{"type":"string"}}"#.as_bytes();
+        let actual: JsonSchema = JsonSchema::try_from(bytes).expect("try_from");
+        let expected_type: Option<&str> = Some("array");
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn try_from_serde_value_success() {
+        let value: serde_json::Value =
+            serde_json::json!({"type": "object", "properties": {"a": {"type": "integer"}}});
+        let actual: JsonSchema = JsonSchema::try_from(&value).expect("try_from");
+        let expected_type: Option<&str> = Some("object");
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn try_from_serde_value_invalid_type() {
+        let value: serde_json::Value = serde_json::json!("not an object");
+        let result: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(&value);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn try_from_file_success() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let schema_path = temp_dir.path().join("schema.json");
+        let schema_json = r#"{"type":"object","properties":{}}"#;
+        std::fs::write(&schema_path, schema_json).expect("write temp file");
+        let f: std::fs::File = std::fs::File::open(&schema_path).expect("open");
+        let actual: JsonSchema = JsonSchema::try_from(f).expect("try_from");
+        let expected_type: Option<&str> = Some("object");
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn try_from_file_invalid_json() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let schema_path = temp_dir.path().join("bad.json");
+        std::fs::write(&schema_path, "not json").expect("write temp file");
+        let f: std::fs::File = std::fs::File::open(&schema_path).expect("open");
+        let result: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(f);
+        assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+    }
+
+    #[test]
+    fn try_from_path_success() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let schema_path: std::path::PathBuf = temp_dir.path().join("schema.json");
+        let schema_json = r#"{"type":"array","items":{"type":"string"}}"#;
+        std::fs::write(&schema_path, schema_json).expect("write temp file");
+        let actual: JsonSchema = JsonSchema::try_from(schema_path.as_path()).expect("try_from");
+        let expected_type: Option<&str> = Some("array");
+        assert_eq!(expected_type, actual.type_.as_deref());
+    }
+
+    #[test]
+    fn try_from_path_file_not_found() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let missing_path: std::path::PathBuf = temp_dir.path().join("nonexistent.json");
+        let result: Result<JsonSchema, JsonSchemaParseError> =
+            JsonSchema::try_from(missing_path.as_path());
+        assert!(matches!(result, Err(JsonSchemaParseError::Io(_))));
+    }
+
+    #[test]
+    fn try_from_path_buf_success() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let schema_path: std::path::PathBuf = temp_dir.path().join("schema.json");
+        let schema_json = r#"{"type":"number"}"#;
+        std::fs::write(&schema_path, schema_json).expect("write temp file");
+        let actual: JsonSchema = JsonSchema::try_from(schema_path).expect("try_from");
+        let expected_type: Option<&str> = Some("number");
+        assert_eq!(expected_type, actual.type_.as_deref());
     }
 
     #[test]

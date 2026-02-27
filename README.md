@@ -105,8 +105,8 @@ json-schema-rs = "0.0.4"
 ```
 
 Parse one or more schemas and generate Rust (one buffer per schema, plus an
-optional shared buffer when dedupe finds identical shapes). Schema can be parsed
-from different sources using these constructors:
+optional shared buffer when dedupe finds identical shapes). With default
+settings you can use **TryFrom**: `let schema = JsonSchema::try_from(schema_json)?;` or `schema_json.try_into()?`. For custom settings, use the constructors:
 
 ```rust
 use json_schema_rs::{JsonSchema, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
