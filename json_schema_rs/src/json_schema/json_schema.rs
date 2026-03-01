@@ -36,6 +36,57 @@ fn skip_one_of(v: &Option<Vec<JsonSchema>>) -> bool {
     v.as_ref().is_none_or(Vec::is_empty)
 }
 
+/// Returns true when `additional_properties` should be omitted from serialized output (None).
+#[expect(clippy::ref_option)]
+fn skip_additional_properties(v: &Option<AdditionalProperties>) -> bool {
+    v.is_none()
+}
+
+/// Value of the JSON Schema `additionalProperties` keyword: allow (true), forbid (false), or a schema for additional property values.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdditionalProperties {
+    /// Additional properties are allowed (keyword `true` or absent).
+    Allow,
+    /// No additional properties allowed (keyword `false`).
+    Forbid,
+    /// Each additional property's value must validate against this schema.
+    Schema(Box<JsonSchema>),
+}
+
+impl Serialize for AdditionalProperties {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            AdditionalProperties::Allow => serializer.serialize_bool(true),
+            AdditionalProperties::Forbid => serializer.serialize_bool(false),
+            AdditionalProperties::Schema(s) => s.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AdditionalProperties {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::Bool(true) => Ok(AdditionalProperties::Allow),
+            serde_json::Value::Bool(false) => Ok(AdditionalProperties::Forbid),
+            serde_json::Value::Object(_) => {
+                let schema: JsonSchema =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                Ok(AdditionalProperties::Schema(Box::new(schema)))
+            }
+            _ => Err(serde::de::Error::custom(
+                "additionalProperties must be a boolean or a schema object",
+            )),
+        }
+    }
+}
+
 /// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
 /// First type in the array is used; codegen uses `object` and `string`.
 fn deserialize_type_optional<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -93,6 +144,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) type_: Option<String>,
     #[serde(default)]
     pub(crate) properties: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>,
+    #[serde(default, rename = "additionalProperties")]
+    pub(crate) additional_properties: Option<AdditionalProperties>,
     #[serde(default)]
     pub(crate) required: Option<Vec<String>>,
     #[serde(default)]
@@ -162,6 +215,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         id: h.id,
         type_: h.type_,
         properties,
+        additional_properties: h.additional_properties,
         required: h.required,
         title: h.title,
         description: h.description,
@@ -201,6 +255,13 @@ pub struct JsonSchema {
     /// Object properties (only when type is "object"). Default empty; use `BTreeMap` for stable ordering.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, JsonSchema>,
+
+    /// When set, controls whether properties not in `properties` are allowed (Allow/absent), forbidden (Forbid), or must validate against a schema (Schema). We do not implement `patternProperties` yet, so "additional" means any key not in `properties`.
+    #[serde(
+        rename = "additionalProperties",
+        skip_serializing_if = "skip_additional_properties"
+    )]
+    pub additional_properties: Option<AdditionalProperties>,
 
     /// Required property names at this object level. When absent, all properties are optional.
     #[serde(skip_serializing_if = "skip_required")]
@@ -292,6 +353,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             type_: Option<String>,
             #[serde(default)]
             properties: Option<BTreeMap<String, JsonSchema>>,
+            #[serde(default, rename = "additionalProperties")]
+            additional_properties: Option<AdditionalProperties>,
             #[serde(default)]
             required: Option<Vec<String>>,
             #[serde(default)]
@@ -335,6 +398,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             id: h.id,
             type_: h.type_,
             properties: h.properties.unwrap_or_default(),
+            additional_properties: h.additional_properties,
             required: h.required,
             title: h.title,
             description: h.description,
@@ -658,6 +722,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: Some("Root".to_string()),
             description: None,
@@ -689,6 +754,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -723,6 +789,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -921,6 +988,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -978,6 +1046,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1010,6 +1079,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1035,6 +1105,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1060,6 +1131,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1088,6 +1160,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1146,6 +1219,7 @@ mod tests {
                     id: None,
                     type_: Some("string".to_string()),
                     properties: BTreeMap::new(),
+                    additional_properties: None,
                     required: None,
                     title: None,
                     description: None,
@@ -1179,6 +1253,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1203,6 +1278,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1362,6 +1438,7 @@ mod tests {
                         id: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
+                        additional_properties: None,
                         required: None,
                         title: None,
                         description: None,
@@ -1384,6 +1461,7 @@ mod tests {
                 );
                 m
             },
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1612,6 +1690,7 @@ mod tests {
                         id: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
+                        additional_properties: None,
                         required: None,
                         title: None,
                         description: None,
@@ -1639,6 +1718,7 @@ mod tests {
                         id: None,
                         type_: Some("string".to_string()),
                         properties: std::collections::BTreeMap::new(),
+                        additional_properties: None,
                         required: None,
                         title: None,
                         description: None,
@@ -1661,6 +1741,7 @@ mod tests {
                 );
                 m
             },
+            additional_properties: None,
             required: Some(vec!["x".to_string()]),
             title: None,
             description: None,
@@ -1693,6 +1774,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1724,6 +1806,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2000,6 +2083,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2041,6 +2125,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2072,6 +2157,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,

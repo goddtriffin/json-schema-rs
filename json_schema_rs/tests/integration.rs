@@ -2065,6 +2065,7 @@ fn write_workspace_scenario_member(
                                 id: None,
                                 type_: Some("string".to_string()),
                                 properties: std::collections::BTreeMap::new(),
+                                additional_properties: None,
                                 required: None,
                                 title: None,
                                 description: None,
@@ -2087,6 +2088,7 @@ fn write_workspace_scenario_member(
                         );
                         m
                     },
+                    additional_properties: None,
                     required: None,
                     title: Some("Leaf".to_string()),
                     description: None,
@@ -2112,6 +2114,7 @@ fn write_workspace_scenario_member(
                         id: None,
                         type_: Some("object".to_string()),
                         properties: std::collections::BTreeMap::new(),
+                        additional_properties: None,
                         required: None,
                         title: Some(format!("Level{i}")),
                         description: None,
@@ -2162,6 +2165,40 @@ fn write_workspace_scenario_member(
     let v1: compile_test::RootOneOf = serde_json::from_str(r#"{"Variant1":{"b":42}}"#).unwrap();
     assert!(matches!(v0, compile_test::RootOneOf::Variant0(_)));
     assert!(matches!(v1, compile_test::RootOneOf::Variant1(_)));
+}
+"##;
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
+            "additional_properties_false" => {
+                let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}"#;
+                let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse schema");
+                let output = generate_rust(&[schema], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
+    let root: compile_test::Root = serde_json::from_str(r#"{"id":"x"}"#).unwrap();
+    assert_eq!(root.id, "x");
+    let err = serde_json::from_str::<compile_test::Root>(r#"{"id":"x","extra":1}"#).unwrap_err();
+    assert!(err.to_string().contains("unknown field"));
+}
+"##;
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
+            "additional_properties_schema" => {
+                let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":{"type":"string"}}"#;
+                let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse schema");
+                let output = generate_rust(&[schema], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
+    let root: compile_test::Root = serde_json::from_str(r#"{"id":"x"}"#).unwrap();
+    assert_eq!(root.id, "x");
+    assert!(root.additional.is_empty());
+    let with_extra = compile_test::Root {
+        id: "y".to_string(),
+        additional: [("foo".to_string(), "bar".to_string()), ("baz".to_string(), "quux".to_string())].into_iter().collect(),
+    };
+    let json = serde_json::to_string(&with_extra).unwrap();
+    let back: compile_test::Root = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.id, "y");
+    assert_eq!(back.additional.get("foo").map(String::as_str), Some("bar"));
+    assert_eq!(back.additional.get("baz").map(String::as_str), Some("quux"));
 }
 "##;
                 (output.per_schema[0].clone(), vec![], main_rs)
@@ -2415,6 +2452,70 @@ fn cli_generate_rust_uuid_property() {
 }
 
 #[test]
+fn cli_generate_rust_additional_properties_false() {
+    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(
+        actual.contains("#[serde(deny_unknown_fields)]"),
+        "additionalProperties: false should emit deny_unknown_fields: {actual}"
+    );
+}
+
+#[test]
+fn cli_generate_rust_additional_properties_schema() {
+    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":{"type":"string"}}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    assert!(
+        output.status.success(),
+        "exit success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out_path = out_dir.path().join("schema.rs");
+    let actual = std::fs::read_to_string(&out_path).expect("read output");
+    assert!(
+        actual.contains("BTreeMap<String, String>"),
+        "additionalProperties schema string should emit BTreeMap<String, String>: {actual}"
+    );
+    assert!(
+        actual.contains("pub additional:"),
+        "additionalProperties schema should emit 'additional' field: {actual}"
+    );
+}
+
+#[test]
 fn generated_rust_build_and_deserialize_all_scenarios() {
     let default_code_gen: CodeGenSettings = CodeGenSettings::builder().build();
 
@@ -2434,6 +2535,8 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "deep_nesting",
         "allof_merged",
         "oneof_union",
+        "additional_properties_false",
+        "additional_properties_schema",
     ];
 
     for name in &scenario_list {

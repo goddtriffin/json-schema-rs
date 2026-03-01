@@ -6,6 +6,7 @@ use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
 use crate::json_schema::JsonSchema;
+use crate::json_schema::json_schema::AdditionalProperties;
 use crate::sanitizers::{
     enum_variant_names_with_collision_resolution, sanitize_field_name, sanitize_struct_name,
 };
@@ -33,7 +34,8 @@ impl CodeGenBackend for RustBackend {
                         source: Box::new(e),
                     })?;
                     per_schema.push({
-                        let result = maybe_prepend_hash_set_use(out.into_inner());
+                        let result = maybe_prepend_btreemap_use(out.into_inner());
+                        let result = maybe_prepend_hash_set_use(result);
                         #[cfg(feature = "uuid")]
                         let result = maybe_prepend_uuid_use(result);
                         result
@@ -129,6 +131,13 @@ fn string_enum_or_const_values(schema: &JsonSchema) -> Option<Vec<String>> {
     None
 }
 
+/// For dedupe key: additionalProperties as Forbid or Schema(sub key).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum AdditionalPropertiesDedupe {
+    Forbid,
+    Schema(Box<DedupeKey>),
+}
+
 /// Key for deduplication: canonical representation of an object schema for a given mode.
 /// Implements `Ord` + `Eq` for use in `BTreeMap`. Full mode includes id, description, and comment; Functional mode excludes them (key ignores $id).
 #[derive(Debug, Clone)]
@@ -136,6 +145,7 @@ struct DedupeKey {
     id: Option<String>,
     type_: Option<String>,
     properties: BTreeMap<String, DedupeKey>,
+    additional_properties: Option<AdditionalPropertiesDedupe>,
     required: Option<Vec<String>>,
     title: Option<String>,
     description: Option<String>,
@@ -154,6 +164,7 @@ impl PartialEq for DedupeKey {
         self.id == other.id
             && self.type_ == other.type_
             && self.properties == other.properties
+            && self.additional_properties == other.additional_properties
             && self.required == other.required
             && self.title == other.title
             && self.description == other.description
@@ -197,6 +208,7 @@ impl Ord for DedupeKey {
                         self.properties.len().cmp(&other.properties.len())
                     })
             })
+            .then_with(|| self.additional_properties.cmp(&other.additional_properties))
             .then_with(|| compare_option_vec(self.required.as_ref(), other.required.as_ref()))
             .then_with(|| self.title.cmp(&other.title))
             .then_with(|| self.description.cmp(&other.description))
@@ -221,6 +233,22 @@ fn compare_option_vec(a: Option<&Vec<String>>, b: Option<&Vec<String>>) -> Order
 }
 
 /// If the buffer contains "`HashSet`", insert `use std::collections::HashSet;` after the serde use line.
+fn maybe_prepend_btreemap_use(mut buf: Vec<u8>) -> Vec<u8> {
+    if !buf.windows(8).any(|w| w == b"BTreeMap") {
+        return buf;
+    }
+    let needle = b"use serde::{Deserialize, Serialize};\n";
+    let pos = buf
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|i| i + needle.len());
+    if let Some(insert_at) = pos {
+        let line = b"use std::collections::BTreeMap;\n";
+        buf.splice(insert_at..insert_at, line.iter().copied());
+    }
+    buf
+}
+
 fn maybe_prepend_hash_set_use(mut buf: Vec<u8>) -> Vec<u8> {
     if !buf.windows(7).any(|w| w == b"HashSet") {
         return buf;
@@ -287,6 +315,13 @@ fn emit_struct_derive_and_attrs(
         let escaped = i.replace('\\', "\\\\").replace('"', "\\\"");
         writeln!(out, "#[to_json_schema(id = \"{escaped}\")]")?;
     }
+    if schema
+        .additional_properties
+        .as_ref()
+        .is_some_and(|ap| matches!(ap, AdditionalProperties::Forbid))
+    {
+        writeln!(out, "#[serde(deny_unknown_fields)]")?;
+    }
     writeln!(out, "pub struct {name} {{")?;
     Ok(())
 }
@@ -333,6 +368,14 @@ impl DedupeKey {
         } else {
             None
         };
+        let additional_properties: Option<AdditionalPropertiesDedupe> =
+            match schema.additional_properties.as_ref() {
+                None | Some(AdditionalProperties::Allow) => None,
+                Some(AdditionalProperties::Forbid) => Some(AdditionalPropertiesDedupe::Forbid),
+                Some(AdditionalProperties::Schema(s)) => Some(AdditionalPropertiesDedupe::Schema(
+                    Box::new(DedupeKey::from_schema(s, mode)),
+                )),
+            };
         DedupeKey {
             id: match mode {
                 DedupeMode::Full => schema.id.clone(),
@@ -340,6 +383,7 @@ impl DedupeKey {
             },
             type_: schema.type_.clone(),
             properties,
+            additional_properties,
             required: schema.required.clone(),
             title: schema.title.clone(),
             description: match mode {
@@ -1102,7 +1146,8 @@ fn generate_rust_with_dedupe(
                 source: Box::new(e),
             })?;
             per_schema.push({
-                let result = maybe_prepend_hash_set_use(out.into_inner());
+                let result = maybe_prepend_btreemap_use(out.into_inner());
+                let result = maybe_prepend_hash_set_use(result);
                 #[cfg(feature = "uuid")]
                 let result = maybe_prepend_uuid_use(result);
                 result
@@ -1180,7 +1225,8 @@ fn generate_rust_with_dedupe(
             writeln!(out)?;
         }
         {
-            let result = maybe_prepend_hash_set_use(out.into_inner());
+            let result = maybe_prepend_btreemap_use(out.into_inner());
+            let result = maybe_prepend_hash_set_use(result);
             #[cfg(feature = "uuid")]
             let result = maybe_prepend_uuid_use(result);
             result
@@ -1299,7 +1345,8 @@ fn generate_rust_with_dedupe(
                 writeln!(buf).ok();
             }
             {
-                let result = maybe_prepend_hash_set_use(buf.into_inner());
+                let result = maybe_prepend_btreemap_use(buf.into_inner());
+                let result = maybe_prepend_hash_set_use(result);
                 #[cfg(feature = "uuid")]
                 let result = maybe_prepend_uuid_use(result);
                 result
@@ -1543,6 +1590,18 @@ fn emit_struct_fields_with_resolver(
             writeln!(out, "    pub {field_name}: {ty},")?;
         }
     }
+    if let Some(AdditionalProperties::Schema(sub)) = &schema.additional_properties {
+        let value_ty: String = rust_type_for_item_schema(
+            sub,
+            Some("additional"),
+            enum_names_simple.as_ref(),
+            key_to_name,
+            settings,
+            mode,
+        );
+        writeln!(out, "    #[serde(default)]")?;
+        writeln!(out, "    pub additional: BTreeMap<String, {value_ty}>,")?;
+    }
     Ok(())
 }
 
@@ -1698,6 +1757,18 @@ fn emit_struct_fields(
             }
             writeln!(out, "    pub {field_name}: {ty},")?;
         }
+    }
+    if let Some(AdditionalProperties::Schema(sub)) = &schema.additional_properties {
+        let value_ty: String = rust_type_for_item_schema(
+            sub,
+            Some("additional"),
+            enum_values_to_name,
+            None,
+            settings,
+            settings.dedupe_mode,
+        );
+        writeln!(out, "    #[serde(default)]")?;
+        writeln!(out, "    pub additional: BTreeMap<String, {value_ty}>,")?;
     }
     Ok(())
 }
@@ -1866,6 +1937,44 @@ mod tests {
             "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
             "#[to_json_schema(id = \"http://example.com/schema\")]\n",
             "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_false_emits_deny_unknown_fields() {
+        let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "#[serde(deny_unknown_fields)]\n",
+            "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_schema_emits_map_field() {
+        let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":{"type":"string"}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n",
+            "use std::collections::BTreeMap;\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
+            "    #[serde(default)]\n",
+            "    pub additional: BTreeMap<String, String>,\n",
+            "}\n\n"
         );
         assert_eq!(expected, actual);
     }
@@ -2961,6 +3070,7 @@ pub struct Root {
                 );
                 m
             },
+            additional_properties: None,
             required: None,
             title: Some("Leaf".to_string()),
             description: None,
@@ -2986,6 +3096,7 @@ pub struct Root {
                 id: None,
                 type_: Some("object".to_string()),
                 properties: std::collections::BTreeMap::new(),
+                additional_properties: None,
                 required: None,
                 title: Some(format!("Level{i}")),
                 description: None,

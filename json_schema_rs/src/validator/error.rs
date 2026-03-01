@@ -85,6 +85,13 @@ pub enum ValidationError {
         /// The required property name that was missing.
         property: String,
     },
+    /// Schema had `additionalProperties: false` but the instance contained a property not in `properties`.
+    DisallowedAdditionalProperty {
+        /// JSON Pointer to the instance (the additional property).
+        instance_path: JsonPointer,
+        /// The property name that is not allowed.
+        property: String,
+    },
     /// Schema had `enum` but the instance value was not one of the allowed values.
     NotInEnum {
         /// JSON Pointer to the instance that failed.
@@ -180,6 +187,7 @@ impl ValidationError {
             | ValidationError::TooFewItems { instance_path, .. }
             | ValidationError::TooManyItems { instance_path, .. }
             | ValidationError::MissingRequired { instance_path, .. }
+            | ValidationError::DisallowedAdditionalProperty { instance_path, .. }
             | ValidationError::NotInEnum { instance_path, .. }
             | ValidationError::NotConst { instance_path, .. }
             | ValidationError::BelowMinimum { instance_path, .. }
@@ -244,6 +252,12 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::MissingRequired { property, .. } => {
                 write!(f, "{location}: missing required property \"{property}\"")
+            }
+            ValidationError::DisallowedAdditionalProperty { property, .. } => {
+                write!(
+                    f,
+                    "{location}: additional property \"{property}\" not allowed"
+                )
             }
             ValidationError::NotInEnum {
                 invalid_value,

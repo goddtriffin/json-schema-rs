@@ -7,6 +7,7 @@ pub use error::{OrderedF64, ValidationError, ValidationResult};
 
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::JsonSchema;
+use crate::json_schema::json_schema::AdditionalProperties;
 use serde_json::Value;
 
 /// Returns the JSON type name of the value for use in "got" error messages.
@@ -171,6 +172,33 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                 }
                 for item in pending.into_iter().rev() {
                     stack.push(item);
+                }
+                // additionalProperties: keys not in properties are "additional"
+                let additional_keys: Vec<&str> = obj
+                    .keys()
+                    .filter(|k| !schema.properties.contains_key(*k))
+                    .map(String::as_str)
+                    .collect();
+                if !additional_keys.is_empty() {
+                    match schema.additional_properties.as_ref() {
+                        None | Some(AdditionalProperties::Allow) => {}
+                        Some(AdditionalProperties::Forbid) => {
+                            for key in additional_keys {
+                                errors.push(ValidationError::DisallowedAdditionalProperty {
+                                    instance_path: instance_path.push(key),
+                                    property: key.to_string(),
+                                });
+                            }
+                        }
+                        Some(AdditionalProperties::Schema(sub_schema)) => {
+                            for key in additional_keys {
+                                if let Some(value) = obj.get(key) {
+                                    let path = instance_path.push(key);
+                                    stack.push((sub_schema, value, path));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Some("string") => {
@@ -372,6 +400,7 @@ mod tests {
     use super::{OrderedF64, ValidationError, ValidationResult, validate};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
+    use crate::json_schema::json_schema::AdditionalProperties;
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -384,6 +413,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties,
+            additional_properties: None,
             required: Some(required.into_iter().map(String::from).collect()),
             title: None,
             description: None,
@@ -460,12 +490,253 @@ mod tests {
     }
 
     #[test]
+    fn additional_properties_absent_allows_extra_key() {
+        let schema = schema_object_with_required(vec!["a"], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_string(),
+                JsonSchema {
+                    schema: None,
+                    id: None,
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        let instance = json!({"a": "x", "extra": 1});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_false_rejects_one_extra_key() {
+        let mut schema = schema_object_with_required(vec!["a"], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_string(),
+                JsonSchema {
+                    schema: None,
+                    id: None,
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        let instance = json!({"a": "x", "extra": 1});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::DisallowedAdditionalProperty {
+            instance_path: JsonPointer::root().push("extra"),
+            property: "extra".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_false_rejects_multiple_extra_keys() {
+        let mut schema = schema_object_with_required(vec!["a"], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_string(),
+                JsonSchema {
+                    schema: None,
+                    id: None,
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        let instance = json!({"a": "x", "extra1": 1, "extra2": 2});
+        let actual_result: ValidationResult = validate(&schema, &instance);
+        let expected_errors: Vec<ValidationError> = vec![
+            ValidationError::DisallowedAdditionalProperty {
+                instance_path: JsonPointer::root().push("extra1"),
+                property: "extra1".to_string(),
+            },
+            ValidationError::DisallowedAdditionalProperty {
+                instance_path: JsonPointer::root().push("extra2"),
+                property: "extra2".to_string(),
+            },
+        ];
+        let mut expected_sorted = expected_errors;
+        expected_sorted.sort_by(|a, b| {
+            a.instance_path()
+                .to_string()
+                .cmp(&b.instance_path().to_string())
+        });
+        let mut actual_errors = actual_result.expect_err("expected validation errors");
+        actual_errors.sort_by(|a, b| {
+            a.instance_path()
+                .to_string()
+                .cmp(&b.instance_path().to_string())
+        });
+        let expected: ValidationResult = Err(expected_sorted);
+        let actual: ValidationResult = Err(actual_errors);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_false_empty_object_valid() {
+        let mut schema = schema_object_with_required(vec![], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_string(),
+                JsonSchema {
+                    schema: None,
+                    id: None,
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        let instance = json!({});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_false_only_known_keys_valid() {
+        let mut schema = schema_object_with_required(vec!["a"], {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_string(),
+                JsonSchema {
+                    schema: None,
+                    id: None,
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        });
+        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        let instance = json!({"a": "x"});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_schema_valid_when_value_passes() {
+        let sub = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("string".to_string()),
+            ..Default::default()
+        };
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "a".to_string(),
+                    JsonSchema {
+                        schema: None,
+                        id: None,
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            additional_properties: Some(AdditionalProperties::Schema(Box::new(sub))),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: None,
+        };
+        let instance = json!({"a": "x", "extra": "allowed"});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_schema_invalid_when_value_fails() {
+        let sub = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("integer".to_string()),
+            ..Default::default()
+        };
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("object".to_string()),
+            properties: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "a".to_string(),
+                    JsonSchema {
+                        schema: None,
+                        id: None,
+                        type_: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            additional_properties: Some(AdditionalProperties::Schema(Box::new(sub))),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: None,
+        };
+        let instance = json!({"a": "x", "extra": "not_an_integer"});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
+            instance_path: JsonPointer::root().push("extra"),
+            got: "string".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn all_of_all_subschemas_pass() {
         let schema = JsonSchema {
             schema: None,
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -529,6 +800,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -585,6 +857,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -652,6 +925,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -684,6 +958,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -744,6 +1019,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -789,6 +1065,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -839,6 +1116,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -880,6 +1158,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -915,6 +1194,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -957,6 +1237,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -998,6 +1279,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1046,6 +1328,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1092,6 +1375,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1131,6 +1415,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1166,6 +1451,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1208,6 +1494,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1251,6 +1538,7 @@ mod tests {
                         id: None,
                         type_: Some("string".to_string()),
                         properties: BTreeMap::new(),
+                        additional_properties: None,
                         required: None,
                         title: None,
                         description: Some("User name".to_string()),
@@ -1273,6 +1561,7 @@ mod tests {
                 );
                 m
             },
+            additional_properties: None,
             required: None,
             title: None,
             description: Some("Root type".to_string()),
@@ -1307,6 +1596,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1331,6 +1621,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1367,6 +1658,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1399,6 +1691,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1431,6 +1724,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1466,6 +1760,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1501,6 +1796,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1536,6 +1832,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1571,6 +1868,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1606,6 +1904,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1641,6 +1940,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1680,6 +1980,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1715,6 +2016,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1754,6 +2056,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1786,6 +2089,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1826,6 +2130,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1858,6 +2163,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1893,6 +2199,7 @@ mod tests {
             id: None,
             type_: None,
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1942,6 +2249,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -1974,6 +2282,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2006,6 +2315,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2038,6 +2348,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2073,6 +2384,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2108,6 +2420,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2143,6 +2456,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2178,6 +2492,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2213,6 +2528,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2311,6 +2627,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2343,6 +2660,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2375,6 +2693,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2410,6 +2729,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2445,6 +2765,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2480,6 +2801,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2515,6 +2837,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2550,6 +2873,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2582,6 +2906,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2618,6 +2943,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2654,6 +2980,7 @@ mod tests {
             id: None,
             type_: Some("integer".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2686,6 +3013,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2718,6 +3046,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2754,6 +3083,7 @@ mod tests {
             id: None,
             type_: Some("number".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2798,6 +3128,7 @@ mod tests {
                         id: None,
                         type_: Some("integer".to_string()),
                         properties: BTreeMap::new(),
+                        additional_properties: None,
                         required: None,
                         title: None,
                         description: None,
@@ -2825,6 +3156,7 @@ mod tests {
                         id: None,
                         type_: Some("integer".to_string()),
                         properties: BTreeMap::new(),
+                        additional_properties: None,
                         required: None,
                         title: None,
                         description: None,
@@ -2847,6 +3179,7 @@ mod tests {
                 );
                 m
             },
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2890,6 +3223,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2922,6 +3256,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2954,6 +3289,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -2989,6 +3325,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3013,6 +3350,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3045,6 +3383,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3069,6 +3408,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3104,6 +3444,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3128,6 +3469,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3160,6 +3502,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3184,6 +3527,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3222,6 +3566,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3246,6 +3591,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3278,6 +3624,7 @@ mod tests {
             id: None,
             type_: Some("string".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3302,6 +3649,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3334,6 +3682,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3366,6 +3715,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3398,6 +3748,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3434,6 +3785,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3466,6 +3818,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3498,6 +3851,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3534,6 +3888,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3566,6 +3921,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3598,6 +3954,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3634,6 +3991,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3670,6 +4028,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3702,6 +4061,7 @@ mod tests {
             id: None,
             type_: Some("array".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3800,6 +4160,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3835,6 +4196,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3870,6 +4232,7 @@ mod tests {
             id: None,
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
+            additional_properties: None,
             required: None,
             title: None,
             description: None,
@@ -3916,6 +4279,7 @@ mod tests {
                 );
                 m
             },
+            additional_properties: None,
             required: Some(vec!["name".to_string()]),
             title: None,
             description: None,
@@ -3964,6 +4328,7 @@ mod tests {
                         );
                         inner
                     },
+                    additional_properties: None,
                     required: Some(vec!["city".to_string()]),
                     title: None,
                     description: None,
@@ -4100,6 +4465,7 @@ mod tests {
                         );
                         inner
                     },
+                    additional_properties: None,
                     required: Some(vec!["y".to_string()]),
                     title: None,
                     description: None,
@@ -4156,6 +4522,7 @@ mod tests {
                 );
                 m
             },
+            additional_properties: None,
             required: Some(vec!["value".to_string()]),
             title: None,
             description: None,
@@ -4181,6 +4548,7 @@ mod tests {
                 id: None,
                 type_: Some("object".to_string()),
                 properties: BTreeMap::new(),
+                additional_properties: None,
                 required: Some(vec!["child".to_string()]),
                 title: None,
                 description: None,
