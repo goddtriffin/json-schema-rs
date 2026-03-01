@@ -2082,6 +2082,7 @@ fn write_workspace_scenario_member(
                                 format: None,
                                 all_of: None,
                                 any_of: None,
+                                one_of: None,
                             },
                         );
                         m
@@ -2103,6 +2104,7 @@ fn write_workspace_scenario_member(
                     format: None,
                     all_of: None,
                     any_of: None,
+                    one_of: None,
                 };
                 for i in (0..DEPTH).rev() {
                     let mut wrap: JsonSchema = JsonSchema {
@@ -2127,6 +2129,7 @@ fn write_workspace_scenario_member(
                         format: None,
                         all_of: None,
                         any_of: None,
+                        one_of: None,
                     };
                     wrap.properties.insert("child".to_string(), inner);
                     inner = wrap;
@@ -2145,6 +2148,20 @@ fn write_workspace_scenario_member(
                 let output = generate_rust(&[schema], default_code_gen).expect("generate");
                 let main_rs = r##"fn main() {
     let _: compile_test::Root = serde_json::from_str(r#"{"a":"x","b":1}"#).unwrap();
+}
+"##;
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
+            "oneof_union" => {
+                let schema_json = r#"{"oneOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}}}]}"#;
+                let schema: JsonSchema =
+                    JsonSchema::try_from(schema_json).expect("parse oneOf schema");
+                let output = generate_rust(&[schema], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
+    let v0: compile_test::RootOneOf = serde_json::from_str(r#"{"Variant0":{"a":"x"}}"#).unwrap();
+    let v1: compile_test::RootOneOf = serde_json::from_str(r#"{"Variant1":{"b":42}}"#).unwrap();
+    assert!(matches!(v0, compile_test::RootOneOf::Variant0(_)));
+    assert!(matches!(v1, compile_test::RootOneOf::Variant1(_)));
 }
 "##;
                 (output.per_schema[0].clone(), vec![], main_rs)
@@ -2416,6 +2433,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "model_name_source_property_key",
         "deep_nesting",
         "allof_merged",
+        "oneof_union",
     ];
 
     for name in &scenario_list {

@@ -65,7 +65,7 @@ Keyword list derived from vendored draft 2020-12 meta-schemas under `specs/json-
 | minProperties | no | Not used for codegen. |
 | multipleOf | partial | Considered in convert_integer but TODO in code; not enforced. |
 | not | partial | Special cases: bool invert, empty object → false, enum deny list via `convert_not`. |
-| oneOf | yes | Mapped to Rust enum (various serde representations). |
+| oneOf | yes | Mapped to Rust enum (various serde representations). json-schema-rs: oneOf → union enum; validator enforces exactly one. |
 | pattern | partial | Stored in `StringValidation`; regress crate used for validation in generated code where applicable. |
 | patternProperties | partial | Single pattern + matching object shape → map; otherwise must be empty (merge asserts empty in some paths). |
 | prefixItems | partial | Schemars uses `items` as array for tuple; same behavior as 2020-12 prefixItems for fixed-length arrays. |

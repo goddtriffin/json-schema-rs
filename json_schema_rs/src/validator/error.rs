@@ -154,6 +154,15 @@ pub enum ValidationError {
         /// Number of subschemas in the anyOf (for user-facing context).
         subschema_count: usize,
     },
+    /// Schema had `oneOf` but the instance validated against more than one subschema.
+    MultipleSubschemasMatched {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// Number of subschemas in the oneOf (for user-facing context).
+        subschema_count: usize,
+        /// Number of subschemas that passed validation (must be >= 2 for this error).
+        match_count: usize,
+    },
 }
 
 impl std::error::Error for ValidationError {}
@@ -177,7 +186,8 @@ impl ValidationError {
             | ValidationError::AboveMaximum { instance_path, .. }
             | ValidationError::TooShort { instance_path, .. }
             | ValidationError::TooLong { instance_path, .. }
-            | ValidationError::NoSubschemaMatched { instance_path, .. } => instance_path,
+            | ValidationError::NoSubschemaMatched { instance_path, .. }
+            | ValidationError::MultipleSubschemasMatched { instance_path, .. } => instance_path,
             #[cfg(feature = "uuid")]
             ValidationError::InvalidUuidFormat { instance_path, .. } => instance_path,
         }
@@ -302,6 +312,16 @@ impl fmt::Display for ValidationError {
                 write!(
                     f,
                     "{location}: instance does not match any of the {subschema_count} subschema(s)"
+                )
+            }
+            ValidationError::MultipleSubschemasMatched {
+                subschema_count,
+                match_count,
+                ..
+            } => {
+                write!(
+                    f,
+                    "{location}: instance matches {match_count} of the {subschema_count} oneOf subschema(s), exactly one required"
                 )
             }
         }

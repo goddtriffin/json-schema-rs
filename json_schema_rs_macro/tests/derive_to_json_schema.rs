@@ -68,6 +68,7 @@ fn derive_root_json_schema() {
         format: None,
         all_of: None,
         any_of: None,
+        one_of: None,
     };
     let actual: JsonSchema = Root::json_schema();
     assert_eq!(expected, actual);
@@ -102,6 +103,7 @@ fn derive_address_json_schema() {
         format: None,
         all_of: None,
         any_of: None,
+        one_of: None,
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
@@ -257,6 +259,7 @@ fn derive_field_minimum_maximum_integer() {
         format: None,
         all_of: None,
         any_of: None,
+        one_of: None,
     };
     let actual: JsonSchema = WithIntegerMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -300,6 +303,7 @@ fn derive_field_minimum_maximum_float() {
         format: None,
         all_of: None,
         any_of: None,
+        one_of: None,
     };
     let actual: JsonSchema = WithFloatMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -358,6 +362,7 @@ fn derive_field_only_minimum() {
         format: None,
         all_of: None,
         any_of: None,
+        one_of: None,
     };
     let actual: JsonSchema = WithOnlyMinimum::json_schema();
     assert_eq!(expected, actual);
@@ -400,6 +405,7 @@ fn derive_field_only_maximum() {
         format: None,
         all_of: None,
         any_of: None,
+        one_of: None,
     };
     let actual: JsonSchema = WithOnlyMaximum::json_schema();
     assert_eq!(expected, actual);

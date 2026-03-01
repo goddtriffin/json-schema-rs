@@ -104,6 +104,35 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
             }
             continue;
         }
+        if let Some(ref one_of) = schema.one_of {
+            if one_of.is_empty() {
+                errors.push(ValidationError::NoSubschemaMatched {
+                    instance_path: instance_path.clone(),
+                    subschema_count: 0,
+                });
+            } else {
+                let mut pass_count: usize = 0;
+                for subschema in one_of {
+                    let sub_result: ValidationResult = validate(subschema, instance);
+                    if sub_result.is_ok() {
+                        pass_count += 1;
+                    }
+                }
+                if pass_count == 0 {
+                    errors.push(ValidationError::NoSubschemaMatched {
+                        instance_path: instance_path.clone(),
+                        subschema_count: one_of.len(),
+                    });
+                } else if pass_count > 1 {
+                    errors.push(ValidationError::MultipleSubschemasMatched {
+                        instance_path: instance_path.clone(),
+                        subschema_count: one_of.len(),
+                        match_count: pass_count,
+                    });
+                }
+            }
+            continue;
+        }
         if let Some(ref all_of) = schema.all_of
             && !all_of.is_empty()
         {
@@ -372,6 +401,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         }
     }
 
@@ -484,6 +514,7 @@ mod tests {
                 },
             ]),
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"a": "ok", "b": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -537,6 +568,7 @@ mod tests {
                 },
             ]),
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"a": "x"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -603,6 +635,7 @@ mod tests {
                 },
             ]),
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"a": 1, "b": "x"});
         let result: ValidationResult = validate(&schema, &instance);
@@ -636,6 +669,7 @@ mod tests {
             format: None,
             all_of: Some(vec![]),
             any_of: None,
+            one_of: None,
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -691,6 +725,7 @@ mod tests {
                 },
             ]),
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"s": "c"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -735,6 +770,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
+            one_of: None,
         };
         let instance_str = json!("hello");
         let actual_str: ValidationResult = validate(&schema, &instance_str);
@@ -779,6 +815,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
+            one_of: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -819,6 +856,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: Some(vec![]),
+            one_of: None,
         };
         let instance = json!(1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -862,6 +900,7 @@ mod tests {
                 type_: Some("number".to_string()),
                 ..Default::default()
             }]),
+            one_of: None,
         };
         let instance = json!(std::f64::consts::PI);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -893,6 +932,258 @@ mod tests {
             format: None,
             all_of: None,
             any_of: Some(vec![JsonSchema {
+                type_: Some("string".to_string()),
+                ..Default::default()
+            }]),
+            one_of: None,
+        };
+        let instance = json!(42);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let errs = actual.unwrap_err();
+        assert_eq!(1, errs.len());
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            ValidationError::NoSubschemaMatched {
+                subschema_count: 1,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn one_of_exactly_one_subschema_passes() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: Some(vec![
+                JsonSchema {
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+                JsonSchema {
+                    type_: Some("integer".to_string()),
+                    ..Default::default()
+                },
+            ]),
+        };
+        let instance = json!("hello");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn one_of_no_subschema_passes() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: Some(vec![
+                JsonSchema {
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+                JsonSchema {
+                    type_: Some("integer".to_string()),
+                    ..Default::default()
+                },
+            ]),
+        };
+        let instance = json!(1.5);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let errs = actual.unwrap_err();
+        assert_eq!(1, errs.len());
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            ValidationError::NoSubschemaMatched {
+                subschema_count: 2,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn one_of_multiple_subschemas_pass() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: Some(vec![
+                JsonSchema::default(),
+                JsonSchema {
+                    type_: Some("string".to_string()),
+                    ..Default::default()
+                },
+            ]),
+        };
+        let instance = json!("x");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let errs = actual.unwrap_err();
+        assert_eq!(1, errs.len());
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            ValidationError::MultipleSubschemasMatched {
+                subschema_count: 2,
+                match_count: 2,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn one_of_empty_no_subschema_matches() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: Some(vec![]),
+        };
+        let instance = json!(1);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let errs = actual.unwrap_err();
+        assert_eq!(1, errs.len());
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            ValidationError::NoSubschemaMatched {
+                subschema_count: 0,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn one_of_single_subschema_passes() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: Some(vec![JsonSchema {
+                type_: Some("number".to_string()),
+                ..Default::default()
+            }]),
+        };
+        let instance = json!(std::f64::consts::PI);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn one_of_single_subschema_fails() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: None,
+            properties: BTreeMap::new(),
+            required: None,
+            title: None,
+            description: None,
+            comment: None,
+            enum_values: None,
+            const_value: None,
+            items: None,
+            unique_items: None,
+            min_items: None,
+            max_items: None,
+            minimum: None,
+            maximum: None,
+            min_length: None,
+            max_length: None,
+            format: None,
+            all_of: None,
+            any_of: None,
+            one_of: Some(vec![JsonSchema {
                 type_: Some("string".to_string()),
                 ..Default::default()
             }]),
@@ -934,6 +1225,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("not an object");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -976,6 +1268,7 @@ mod tests {
                         format: None,
                         all_of: None,
                         any_of: None,
+                        one_of: None,
                     },
                 );
                 m
@@ -997,6 +1290,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let valid_instance = json!({"name": "Alice"});
         let actual_valid: ValidationResult = validate(&schema, &valid_instance);
@@ -1030,6 +1324,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema_with_comment: JsonSchema = JsonSchema {
             schema: None,
@@ -1053,6 +1348,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let valid_instance = json!("hello");
         let invalid_instance = json!(42);
@@ -1088,6 +1384,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1119,6 +1416,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1150,6 +1448,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1184,6 +1483,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1218,6 +1518,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1252,6 +1553,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1286,6 +1588,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1323,6 +1626,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("open");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1357,6 +1661,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("pending");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1395,6 +1700,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("a");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1429,6 +1735,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("c");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1464,6 +1771,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1495,6 +1803,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("actual");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1534,6 +1843,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1568,6 +1878,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("a");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1602,6 +1913,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("b");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1647,6 +1959,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1678,6 +1991,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1709,6 +2023,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(-1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1740,6 +2055,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1774,6 +2090,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("42");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1808,6 +2125,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1842,6 +2160,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1876,6 +2195,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1910,6 +2230,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2007,6 +2328,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2038,6 +2360,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2069,6 +2392,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("3.14");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2103,6 +2427,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2137,6 +2462,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2171,6 +2497,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1.0]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2205,6 +2532,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2239,6 +2567,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(100);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2270,6 +2599,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2305,6 +2635,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(20);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2340,6 +2671,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2371,6 +2703,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(50.0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2402,6 +2735,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(0.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2437,6 +2771,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2480,6 +2815,7 @@ mod tests {
                         format: None,
                         all_of: None,
                         any_of: None,
+                        one_of: None,
                     },
                 );
                 m.insert(
@@ -2506,6 +2842,7 @@ mod tests {
                         format: None,
                         all_of: None,
                         any_of: None,
+                        one_of: None,
                     },
                 );
                 m
@@ -2527,6 +2864,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"low": 5, "high": 200});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2569,6 +2907,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2600,6 +2939,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2631,6 +2971,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2665,6 +3006,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -2688,6 +3030,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(["a", "b", "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2719,6 +3062,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -2742,6 +3086,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(["a", 42, "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2776,6 +3121,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -2799,6 +3145,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(["a", "b", "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2830,6 +3177,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -2853,6 +3201,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(["a", "b", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2890,6 +3239,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -2913,6 +3263,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(["a", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2944,6 +3295,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -2967,6 +3319,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(["a", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2998,6 +3351,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3029,6 +3383,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3060,6 +3415,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3095,6 +3451,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3126,6 +3483,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3157,6 +3515,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3192,6 +3551,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3223,6 +3583,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3254,6 +3615,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3289,6 +3651,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2, 3, 4, 5, 6]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3324,6 +3687,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3355,6 +3719,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3452,6 +3817,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3486,6 +3852,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3520,6 +3887,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3565,6 +3933,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let instance = json!({"name": "Alice"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3612,6 +3981,7 @@ mod tests {
                     format: None,
                     all_of: None,
                     any_of: None,
+                    one_of: None,
                 },
             );
             m
@@ -3747,6 +4117,7 @@ mod tests {
                     format: None,
                     all_of: None,
                     any_of: None,
+                    one_of: None,
                 },
             );
             m
@@ -3802,6 +4173,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
@@ -3826,6 +4198,7 @@ mod tests {
                 format: None,
                 all_of: None,
                 any_of: None,
+                one_of: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

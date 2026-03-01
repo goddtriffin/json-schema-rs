@@ -30,6 +30,12 @@ fn skip_any_of(v: &Option<Vec<JsonSchema>>) -> bool {
     v.as_ref().is_none_or(Vec::is_empty)
 }
 
+/// Returns true when `one_of` should be omitted from serialized output (None or empty).
+#[expect(clippy::ref_option)]
+fn skip_one_of(v: &Option<Vec<JsonSchema>>) -> bool {
+    v.as_ref().is_none_or(Vec::is_empty)
+}
+
 /// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
 /// First type in the array is used; codegen uses `object` and `string`.
 fn deserialize_type_optional<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -121,6 +127,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) all_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
     #[serde(default, rename = "anyOf")]
     pub(crate) any_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
+    #[serde(default, rename = "oneOf")]
+    pub(crate) one_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
 }
 
 /// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
@@ -140,6 +148,11 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
             .collect()
     });
     let any_of: Option<Vec<JsonSchema>> = h.any_of.map(|v| {
+        v.into_iter()
+            .map(deny_unknown_fields_helper_to_schema)
+            .collect()
+    });
+    let one_of: Option<Vec<JsonSchema>> = h.one_of.map(|v| {
         v.into_iter()
             .map(deny_unknown_fields_helper_to_schema)
             .collect()
@@ -166,6 +179,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         format: h.format,
         all_of,
         any_of,
+        one_of,
     }
 }
 
@@ -256,6 +270,10 @@ pub struct JsonSchema {
     /// anyOf: instance must validate against at least one subschema. Stored as-is at ingestion; validator and codegen (union enum) use it. Not emitted by reverse codegen.
     #[serde(rename = "anyOf", skip_serializing_if = "skip_any_of")]
     pub any_of: Option<Vec<JsonSchema>>,
+
+    /// oneOf: instance must validate against exactly one subschema. Stored as-is at ingestion; validator and codegen (union enum) use it. Not emitted by reverse codegen.
+    #[serde(rename = "oneOf", skip_serializing_if = "skip_one_of")]
+    pub one_of: Option<Vec<JsonSchema>>,
 }
 
 impl<'de> Deserialize<'de> for JsonSchema {
@@ -308,6 +326,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             all_of: Option<Vec<JsonSchema>>,
             #[serde(default, rename = "anyOf")]
             any_of: Option<Vec<JsonSchema>>,
+            #[serde(default, rename = "oneOf")]
+            one_of: Option<Vec<JsonSchema>>,
         }
         let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
         Ok(JsonSchema {
@@ -332,6 +352,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             format: h.format,
             all_of: h.all_of,
             any_of: h.any_of,
+            one_of: h.one_of,
         })
     }
 }
@@ -654,6 +675,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"object","title":"Root"}"#;
@@ -684,6 +706,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: String = (&schema).try_into().expect("serialize");
         let expected_contains = r#""$comment":"Created by John Doe""#;
@@ -717,6 +740,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"string\"}";
@@ -914,6 +938,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
@@ -970,6 +995,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"number\"}";
@@ -1001,6 +1027,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         assert!(!no_enum.is_string_enum());
         let empty_enum: JsonSchema = JsonSchema {
@@ -1025,6 +1052,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         assert!(!empty_enum.is_string_enum());
         let string_enum: JsonSchema = JsonSchema {
@@ -1052,6 +1080,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         assert!(string_enum.is_string_enum());
         let mixed_enum: JsonSchema = JsonSchema {
@@ -1079,6 +1108,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         assert!(!mixed_enum.is_string_enum());
     }
@@ -1133,6 +1163,7 @@ mod tests {
                     format: None,
                     all_of: None,
                     any_of: None,
+                    one_of: None,
                 }));
                 s.is_array_with_items()
             },
@@ -1165,6 +1196,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -1188,6 +1220,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"array","items":{"type":"string"}}"#;
@@ -1346,6 +1379,7 @@ mod tests {
                         format: None,
                         all_of: None,
                         any_of: None,
+                        one_of: None,
                     },
                 );
                 m
@@ -1367,6 +1401,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -1505,6 +1540,63 @@ mod tests {
     }
 
     #[test]
+    fn parse_one_of_present() {
+        let json = r#"{"oneOf":[{"type":"string"},{"type":"integer"}]}"#;
+        let parsed = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<Vec<JsonSchema>> = Some(vec![
+            JsonSchema {
+                type_: Some("string".to_string()),
+                ..Default::default()
+            },
+            JsonSchema {
+                type_: Some("integer".to_string()),
+                ..Default::default()
+            },
+        ]);
+        let actual = parsed.one_of.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_one_of_absent() {
+        let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
+        let parsed = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<Vec<JsonSchema>> = None;
+        let actual = parsed.one_of.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_one_of_empty_array() {
+        let json = r#"{"oneOf":[]}"#;
+        let parsed = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<Vec<JsonSchema>> = Some(vec![]);
+        let actual = parsed.one_of.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_one_of_single_subschema() {
+        let json = r#"{"oneOf":[{"type":"object","properties":{"x":{"type":"string"}}}]}"#;
+        let parsed = JsonSchema::try_from(json).expect("parse");
+        let mut props = BTreeMap::new();
+        props.insert(
+            "x".to_string(),
+            JsonSchema {
+                type_: Some("string".to_string()),
+                ..Default::default()
+            },
+        );
+        let expected: Option<Vec<JsonSchema>> = Some(vec![JsonSchema {
+            type_: Some("object".to_string()),
+            properties: props,
+            ..Default::default()
+        }]);
+        let actual = parsed.one_of.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn deserialize_with_required() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
         let expected: JsonSchema = JsonSchema {
@@ -1537,6 +1629,7 @@ mod tests {
                         format: None,
                         all_of: None,
                         any_of: None,
+                        one_of: None,
                     },
                 );
                 m.insert(
@@ -1563,6 +1656,7 @@ mod tests {
                         format: None,
                         all_of: None,
                         any_of: None,
+                        one_of: None,
                     },
                 );
                 m
@@ -1584,6 +1678,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -1615,6 +1710,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -1645,6 +1741,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -1920,6 +2017,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let json: String = serde_json::to_string(&schema).expect("serialize");
         let parsed: JsonSchema = serde_json::from_str(&json).expect("parse");
@@ -1960,6 +2058,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let expected: bool = true;
         let actual: bool = schema.is_string_const();
@@ -1990,6 +2089,7 @@ mod tests {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         let expected: bool = false;
         let actual: bool = schema.is_string_const();

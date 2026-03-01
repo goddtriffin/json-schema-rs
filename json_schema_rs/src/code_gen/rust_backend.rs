@@ -73,6 +73,12 @@ struct AnyOfEnumToEmit {
     variants: Vec<(String, String)>,
 }
 
+/// One oneOf enum to emit: name and list of (`variant_name`, `rust_type_string`).
+struct OneOfEnumToEmit {
+    name: String,
+    variants: Vec<(String, String)>,
+}
+
 /// Returns doc comment lines for emission: empty if description is None or whitespace-only; else one line per non-empty trimmed line (no blank lines).
 fn doc_lines(s: Option<&str>) -> Vec<String> {
     let Some(trimmed) = s.map(str::trim) else {
@@ -759,6 +765,11 @@ fn collect_enums(schema: &JsonSchema, settings: &CodeGenSettings) -> Vec<EnumToE
                 stack.push(sub.clone());
             }
         }
+        if let Some(ref one_of) = node.one_of {
+            for sub in one_of {
+                stack.push(sub.clone());
+            }
+        }
     }
     key_to_name_desc
         .into_iter()
@@ -818,6 +829,54 @@ fn collect_anyof_enums(
     Ok(out)
 }
 
+/// Collect all oneOf enums from a schema (root and nested). Each node with non-empty oneOf produces one enum.
+fn collect_oneof_enums(
+    schema: &JsonSchema,
+    settings: &CodeGenSettings,
+    enum_values_to_name: &BTreeMap<Vec<String>, String>,
+) -> CodeGenResult<Vec<OneOfEnumToEmit>> {
+    let mut out: Vec<OneOfEnumToEmit> = vec![];
+    let mut stack: Vec<(JsonSchema, Option<String>)> = vec![(schema.clone(), None)];
+    while let Some((node, from_key)) = stack.pop() {
+        if let Some(ref one_of) = node.one_of {
+            if one_of.is_empty() {
+                return Err(CodeGenError::OneOfEmpty);
+            }
+            let name = match &from_key {
+                Some(k) => sanitize_struct_name(k) + "OneOf",
+                None => node.title.as_deref().map_or_else(
+                    || "RootOneOf".to_string(),
+                    |t| sanitize_struct_name(t) + "OneOf",
+                ),
+            };
+            let mut variants = Vec::with_capacity(one_of.len());
+            for (i, sub) in one_of.iter().enumerate() {
+                let resolved = resolve_all_of_for_codegen(sub)?;
+                let variant_from_key =
+                    format!("{}_Variant{i}", from_key.as_deref().unwrap_or("Root"));
+                let ty = rust_type_for_item_schema(
+                    &resolved,
+                    Some(&variant_from_key),
+                    Some(enum_values_to_name),
+                    None,
+                    settings,
+                    DedupeMode::Full,
+                );
+                variants.push((format!("Variant{i}"), ty));
+            }
+            out.push(OneOfEnumToEmit { name, variants });
+            for sub in one_of {
+                let resolved = resolve_all_of_for_codegen(sub)?;
+                stack.push((resolved, None));
+            }
+        }
+        for (key, prop_schema) in &node.properties {
+            stack.push((prop_schema.clone(), Some(key.clone())));
+        }
+    }
+    Ok(out)
+}
+
 /// Collect all object schemas that need a struct in topological order (children before parents).
 /// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
 /// Resolves allOf for each node before use (merge on-the-fly).
@@ -855,6 +914,25 @@ fn collect_structs(
                 .is_some_and(|v| !v.is_empty())
             {
                 for (i, sub) in child_resolved.any_of.as_ref().unwrap().iter().enumerate() {
+                    let sub_resolved = resolve_all_of_for_codegen(sub)?;
+                    let variant_key = format!("{key}_Variant{i}");
+                    if sub_resolved.is_object_with_properties() {
+                        stack.push((sub_resolved, Some(variant_key), 0, false));
+                    } else if sub_resolved.is_array_with_items()
+                        && let Some(ref items) = sub_resolved.items
+                    {
+                        let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                        if items_resolved.is_object_with_properties() {
+                            stack.push((items_resolved, Some(variant_key), 0, false));
+                        }
+                    }
+                }
+            } else if child_resolved
+                .one_of
+                .as_ref()
+                .is_some_and(|v| !v.is_empty())
+            {
+                for (i, sub) in child_resolved.one_of.as_ref().unwrap().iter().enumerate() {
                     let sub_resolved = resolve_all_of_for_codegen(sub)?;
                     let variant_key = format!("{key}_Variant{i}");
                     if sub_resolved.is_object_with_properties() {
@@ -1301,11 +1379,22 @@ fn emit_enum_from_pairs(
 }
 
 /// Emit a single anyOf enum (union) to `out`.
+/// We do not derive `ToJsonSchema` (macro supports only unit enums) or PartialEq/Eq (variant structs may not implement them).
 fn emit_anyof_enum(out: &mut impl Write, a: &AnyOfEnumToEmit) -> CodeGenResult<()> {
-    writeln!(
-        out,
-        "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
-    )?;
+    writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
+    writeln!(out, "pub enum {} {{", a.name)?;
+    for (variant_name, ty) in &a.variants {
+        writeln!(out, "    {variant_name}({ty}),")?;
+    }
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+    Ok(())
+}
+
+/// Emit a single oneOf enum (union) to `out`.
+/// We do not derive `ToJsonSchema` (macro supports only unit enums) or PartialEq/Eq (variant structs may not implement them).
+fn emit_oneof_enum(out: &mut impl Write, a: &OneOfEnumToEmit) -> CodeGenResult<()> {
+    writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
     writeln!(out, "pub enum {} {{", a.name)?;
     for (variant_name, ty) in &a.variants {
         writeln!(out, "    {variant_name}({ty}),")?;
@@ -1465,6 +1554,7 @@ fn emit_struct_fields(
     settings: &CodeGenSettings,
     enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
     _anyof_enums: Option<&[AnyOfEnumToEmit]>,
+    _oneof_enums: Option<&[OneOfEnumToEmit]>,
 ) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
         for line in doc_lines(prop_schema.description.as_deref()) {
@@ -1475,6 +1565,17 @@ fn emit_struct_fields(
 
         if prop_schema.any_of.as_ref().is_some_and(|v| !v.is_empty()) {
             let enum_name = sanitize_struct_name(key) + "AnyOf";
+            let ty = if schema.is_required(key) {
+                enum_name.clone()
+            } else {
+                format!("Option<{enum_name}>")
+            };
+            if needs_rename {
+                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
+            }
+            writeln!(out, "    pub {field_name}: {ty},")?;
+        } else if prop_schema.one_of.as_ref().is_some_and(|v| !v.is_empty()) {
+            let enum_name = sanitize_struct_name(key) + "OneOf";
             let ty = if schema.is_required(key) {
                 enum_name.clone()
             } else {
@@ -1611,8 +1712,18 @@ fn emit_rust(
     if root.any_of.as_ref().is_some_and(std::vec::Vec::is_empty) {
         return Err(CodeGenError::AnyOfEmpty);
     }
-    let roots_for_structs: Vec<JsonSchema> = if root.any_of.as_ref().is_some_and(|v| !v.is_empty())
+    if root.one_of.as_ref().is_some_and(std::vec::Vec::is_empty) {
+        return Err(CodeGenError::OneOfEmpty);
+    }
+    let roots_for_structs: Vec<JsonSchema> = if root.one_of.as_ref().is_some_and(|v| !v.is_empty())
     {
+        root.one_of
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(resolve_all_of_for_codegen)
+            .collect::<CodeGenResult<Vec<_>>>()?
+    } else if root.any_of.as_ref().is_some_and(|v| !v.is_empty()) {
         root.any_of
             .as_ref()
             .unwrap()
@@ -1634,12 +1745,15 @@ fn emit_rust(
 
     let anyof_enums: Vec<AnyOfEnumToEmit> =
         collect_anyof_enums(&root, settings, &enum_values_to_name)?;
+    let oneof_enums: Vec<OneOfEnumToEmit> =
+        collect_oneof_enums(&root, settings, &enum_values_to_name)?;
 
     let mut structs: Vec<StructToEmit> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let root_is_anyof = root.any_of.as_ref().is_some_and(|v| !v.is_empty());
+    let root_is_oneof = root.one_of.as_ref().is_some_and(|v| !v.is_empty());
     for (i, r) in roots_for_structs.iter().enumerate() {
-        let from_key = if root_is_anyof {
+        let from_key = if root_is_anyof || root_is_oneof {
             Some(format!("Root_Variant{i}"))
         } else {
             None
@@ -1664,6 +1778,10 @@ fn emit_rust(
         emit_anyof_enum(out, a)?;
     }
 
+    for o in &oneof_enums {
+        emit_oneof_enum(out, o)?;
+    }
+
     for st in &structs {
         emit_struct_derive_and_attrs(out, &st.name, &st.schema)?;
         emit_struct_fields(
@@ -1672,6 +1790,7 @@ fn emit_rust(
             settings,
             Some(&enum_values_to_name),
             Some(&anyof_enums),
+            Some(&oneof_enums),
         )?;
         writeln!(out, "}}")?;
         writeln!(out)?;
@@ -1911,7 +2030,7 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FooAnyOf {
     Variant0(String),
     Variant1(FooVariant1),
@@ -1942,7 +2061,7 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RootAnyOf {
     Variant0(RootVariant0),
     Variant1(RootVariant1),
@@ -1973,6 +2092,82 @@ pub struct RootVariant1 {
         assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
         if let CodeGenError::Batch { source, .. } = actual {
             assert!(matches!(*source, CodeGenError::AnyOfEmpty));
+        }
+    }
+
+    #[test]
+    fn oneof_property_golden() {
+        let json = r#"{"type":"object","properties":{"foo":{"oneOf":[{"type":"string"},{"type":"object","properties":{"x":{"type":"integer"}}}]}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FooOneOf {
+    Variant0(String),
+    Variant1(FooVariant1),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct FooVariant1 {
+    pub x: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub foo: Option<FooOneOf>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn oneof_root_golden() {
+        let json = r#"{"oneOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RootOneOf {
+    Variant0(RootVariant0),
+    Variant1(RootVariant1),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct RootVariant0 {
+    pub a: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct RootVariant1 {
+    pub b: Option<i64>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn oneof_empty_errors() {
+        let schema: JsonSchema = JsonSchema {
+            one_of: Some(vec![]),
+            ..Default::default()
+        };
+        let settings = default_settings();
+        let actual = generate_rust(&[schema], &settings).unwrap_err();
+        assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
+        if let CodeGenError::Batch { source, .. } = actual {
+            assert!(matches!(*source, CodeGenError::OneOfEmpty));
         }
     }
 
@@ -2783,6 +2978,7 @@ pub struct Root {
             format: None,
             all_of: None,
             any_of: None,
+            one_of: None,
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
@@ -2807,6 +3003,7 @@ pub struct Root {
                 format: None,
                 all_of: None,
                 any_of: None,
+                one_of: None,
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

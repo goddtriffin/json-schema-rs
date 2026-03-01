@@ -135,6 +135,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Array of objects (nested struct) | Y | Y | Y | Y | Y |
 | Array of arrays (e.g. Vec\<Vec\<String\>\>) | Y | — | Y | Y | Y |
 | anyOf (union enum, property-level + root) | Y | — | Y | Y | Y |
+| oneOf (union enum, property-level + root) | Y | — | Y | Y | Y |
 
 ### Rust codegen: name sanitization
 
@@ -285,9 +286,25 @@ Either approach requires macro parsing of the attribute/enum and a corresponding
 
 ### oneOf
 
-TODO.
+The JSON Schema `oneOf` keyword is an array of schemas; an instance validates if it validates against **exactly one** element (not zero, not two or more). (Draft-03 and later; draft-00/01/02 do not define oneOf in the core meta-schema we vendor.)
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+
+- **Ingestion:** We store `oneOf` as-is. The in-memory `JsonSchema` has `one_of: Option<Vec<JsonSchema>>`. No merging at parse time.
+- **Validator:** When `one_of` is present, we treat the schema as an **exactly-one** choice:
+  - If the array is empty, there is no subschema to match; we report a single `ValidationError::NoSubschemaMatched { instance_path, subschema_count: 0 }`.
+  - Otherwise, we validate the instance against each subschema in turn. If **exactly one** subschema yields no errors, validation for this keyword succeeds. If **zero** subschemas pass, we emit one `NoSubschemaMatched { instance_path, subschema_count }`. If **two or more** subschemas pass, we emit one `MultipleSubschemasMatched { instance_path, subschema_count, match_count }`.
+- **Codegen (forward, JSON Schema → Rust):** We treat `oneOf` as a **union** (same shape as anyOf):
+  - Every schema node with non-empty `one_of` produces a Rust **enum** with one variant per subschema. Each variant's type is the type for that branch (struct name, primitive, or nested enum) after resolving `allOf` for that branch. We do not merge branches.
+  - Root-level `oneOf` is supported: when the root schema has non-empty `one_of`, we generate a root enum (one variant per subschema) plus structs for each branch.
+  - Property-level `oneOf` is supported: when a property schema has non-empty `one_of`, the field type is the corresponding oneOf enum (or `Option<...>` if not required).
+  - Struct collection traverses into every `one_of` branch. Empty `one_of` is rejected in codegen with `CodeGenError::OneOfEmpty`.
+- **Reverse codegen:** **Not supported.** We do not emit `oneOf` from Rust types (no attribute; round-trip is lossy). Same options as anyOf for future work (explicit `any_of`/`one_of` attribute or enum inference).
+
+**Spec version quirks:**
+
+- **Draft-00, 01, 02:** `oneOf` is not present in the core meta-schema we vendor.
+- **Draft-03 and later (including 2020-12):** `oneOf` is defined as an array of schemas; an instance must validate against exactly one subschema. The 2020-12 applicator vocabulary defines `schemaArray` with `minItems: 1` for `oneOf` in the meta-schema; schemas in the wild may still contain empty arrays. We accept empty arrays at parse time and treat them as "no subschema matches" in the validator and as an error (`OneOfEmpty`) in codegen.
 
 ### not
 

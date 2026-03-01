@@ -39,6 +39,8 @@ pub enum CodeGenError {
     AllOfMergeUnsupportedSubschema { index: usize, reason: String },
     /// anyOf is present but empty (no subschemas).
     AnyOfEmpty,
+    /// oneOf is present but empty (no subschemas).
+    OneOfEmpty,
 }
 
 impl fmt::Display for CodeGenError {
@@ -90,6 +92,9 @@ impl fmt::Display for CodeGenError {
             CodeGenError::AnyOfEmpty => {
                 write!(f, "anyOf is present but empty (no subschemas)")
             }
+            CodeGenError::OneOfEmpty => {
+                write!(f, "oneOf is present but empty (no subschemas)")
+            }
         }
     }
 }
@@ -106,7 +111,8 @@ impl std::error::Error for CodeGenError {
             | CodeGenError::AllOfMergeConflictingEnum { .. }
             | CodeGenError::AllOfMergeConflictingConst { .. }
             | CodeGenError::AllOfMergeUnsupportedSubschema { .. }
-            | CodeGenError::AnyOfEmpty => None,
+            | CodeGenError::AnyOfEmpty
+            | CodeGenError::OneOfEmpty => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
         }
     }
