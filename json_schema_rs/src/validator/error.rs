@@ -147,6 +147,13 @@ pub enum ValidationError {
         /// The invalid string value (for user-facing context).
         value: String,
     },
+    /// Schema had `anyOf` but the instance did not validate against any of the subschemas.
+    NoSubschemaMatched {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// Number of subschemas in the anyOf (for user-facing context).
+        subschema_count: usize,
+    },
 }
 
 impl std::error::Error for ValidationError {}
@@ -169,7 +176,8 @@ impl ValidationError {
             | ValidationError::BelowMinimum { instance_path, .. }
             | ValidationError::AboveMaximum { instance_path, .. }
             | ValidationError::TooShort { instance_path, .. }
-            | ValidationError::TooLong { instance_path, .. } => instance_path,
+            | ValidationError::TooLong { instance_path, .. }
+            | ValidationError::NoSubschemaMatched { instance_path, .. } => instance_path,
             #[cfg(feature = "uuid")]
             ValidationError::InvalidUuidFormat { instance_path, .. } => instance_path,
         }
@@ -287,6 +295,14 @@ impl fmt::Display for ValidationError {
             #[cfg(feature = "uuid")]
             ValidationError::InvalidUuidFormat { value, .. } => {
                 write!(f, "{location}: string \"{value}\" is not a valid UUID")
+            }
+            ValidationError::NoSubschemaMatched {
+                subschema_count, ..
+            } => {
+                write!(
+                    f,
+                    "{location}: instance does not match any of the {subschema_count} subschema(s)"
+                )
             }
         }
     }

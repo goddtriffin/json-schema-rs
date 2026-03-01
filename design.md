@@ -134,6 +134,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | allOf (merged object) | Y | — | — | Y | — |
 | Array of objects (nested struct) | Y | Y | Y | Y | Y |
 | Array of arrays (e.g. Vec\<Vec\<String\>\>) | Y | — | Y | Y | Y |
+| anyOf (union enum, property-level + root) | Y | — | Y | Y | Y |
 
 ### Rust codegen: name sanitization
 
@@ -250,9 +251,37 @@ The JSON Schema `allOf` keyword is an array of schemas; an instance validates if
 
 ### anyOf
 
-TODO.
+The JSON Schema `anyOf` keyword is an array of schemas; an instance validates if it validates against **at least one** element. (Draft-03 and later; draft-00/01/02 do not define anyOf in the core meta-schema we vendor.)
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+
+- **Ingestion:** We store `anyOf` as-is. The in-memory `JsonSchema` has `any_of: Option<Vec<JsonSchema>>`. No merging at parse time.
+- **Validator:** When `any_of` is present, we treat the schema as an **at-least-one** choice:
+  - If the array is empty, there is no subschema to match; we report a single `ValidationError::NoSubschemaMatched { instance_path, subschema_count: 0 }`.
+  - Otherwise, we validate the instance against each subschema in turn using the same validator loop. If **any** subschema yields no errors, validation for this keyword succeeds and we do not emit an error. If **all** subschemas fail, we emit one `NoSubschemaMatched { instance_path, subschema_count }` error for this anyOf.
+- **Codegen (forward, JSON Schema → Rust):** We treat `anyOf` as a **union**:
+  - Every schema node with non-empty `any_of` produces a Rust **enum** with one variant per subschema. Each variant’s type is the type for that branch (struct name, primitive, or nested enum) after resolving `allOf` for that branch. We do not merge branches.
+  - Root-level `anyOf` is supported: when the root schema has non-empty `any_of`, we generate a root enum (one variant per subschema) plus structs for each branch. Root is no longer required to be `type: "object"` with `properties` in this case.
+  - Property-level `anyOf` is supported: when a property schema has non-empty `any_of`, the field type is the corresponding anyOf enum (or `Option<...>` when not required).
+  - Struct collection traverses into every `any_of` branch, so structs from all branches are emitted even when only some branches are reachable from a given property.
+  - Empty `any_of` is rejected in codegen with `CodeGenError::AnyOfEmpty` (and the batch wrapper reports a per-schema error).
+- **Reverse codegen:** **Not supported.** We do not emit `anyOf` from Rust types today (no attribute for `anyOf`, and no special handling in the derive). Round-trip is intentionally lossy for `anyOf` (schema → Rust → schema) in the same way it is for `allOf`.
+
+**Round-trip and reverse codegen:** Schema round-trip (parse → serialize) preserves `anyOf` when present, but reverse codegen does not attempt to reconstruct it from Rust types. See the reverse-codegen note below.
+
+**Spec version quirks:**
+
+- **Draft-00, 01, 02:** `anyOf` is not present in the core meta-schema we vendor.
+- **Draft-03 and later (including 2020-12):** `anyOf` is defined as an array of schemas; an instance must validate against at least one subschema. The 2020-12 applicator vocabulary defines `schemaArray` with `minItems: 1` for `anyOf`, so the *meta-schema* forbids empty arrays, but schemas in the wild may still contain them. We accept empty arrays at parse time and treat them as “no subschema matches” in the validator and as an error (`AnyOfEmpty`) in codegen.
+
+**Reverse codegen (not implemented):**
+
+Reverse codegen for `anyOf` is intentionally **not** implemented yet. We do not emit `anyOf` from Rust types (no attribute; round-trip is lossy). To add it later, we expect two complementary approaches:
+
+1. **Explicit types:** A field attribute such as `#[to_json_schema(any_of = (TypeA, TypeB))]` so derive builds a property schema with `any_of: Some(vec![TypeA::json_schema(), TypeB::json_schema(), ...])`.
+2. **Enum inference:** Extend the enum derive to support enums with data and emit `anyOf` (one subschema per variant type); optionally allow a struct-field flag like `#[to_json_schema(any_of)]` to document enum-typed fields as `anyOf`.
+
+Either approach requires macro parsing of the attribute/enum and a corresponding `JsonSchema::any_of` field in the emitted struct; the explicit attribute is self-contained per field, while enum inference reuses the enum’s shape.
 
 ### oneOf
 

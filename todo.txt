@@ -5,6 +5,9 @@ For each of these TODO items, check what every other competitor library does, ch
   It should spit out individual results for the relevant metrics of our library, the same for
   competitor libraries, and then compare them all against each other to clearly mark a winner
   for each given category.
+- NOTE: anyOf is now supported in the schema model, validator, and codegen (union enum); reverse codegen
+  support for anyOf remains intentionally unimplemented and is documented in design.md.
+  This item is kept for future consideration as a separate setting.
 - add code gen and reverse code gen setting for: "flatten single entry combinator".
   This is a boolean flag, which is disabled by default. If enabled, whenever an allOf/anyOf/oneOf
   is encountered, if it only has a single entry within it, then we "flatten" it - aka we

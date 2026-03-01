@@ -37,6 +37,8 @@ pub enum CodeGenError {
     AllOfMergeConflictingConst { property_key: String },
     /// Subschema uses unsupported features for merge (e.g. $ref, non-object type).
     AllOfMergeUnsupportedSubschema { index: usize, reason: String },
+    /// anyOf is present but empty (no subschemas).
+    AnyOfEmpty,
 }
 
 impl fmt::Display for CodeGenError {
@@ -85,6 +87,9 @@ impl fmt::Display for CodeGenError {
                     "allOf subschema at index {index} is unsupported for merge: {reason}"
                 )
             }
+            CodeGenError::AnyOfEmpty => {
+                write!(f, "anyOf is present but empty (no subschemas)")
+            }
         }
     }
 }
@@ -100,7 +105,8 @@ impl std::error::Error for CodeGenError {
             | CodeGenError::AllOfMergeConflictingNumericBounds { .. }
             | CodeGenError::AllOfMergeConflictingEnum { .. }
             | CodeGenError::AllOfMergeConflictingConst { .. }
-            | CodeGenError::AllOfMergeUnsupportedSubschema { .. } => None,
+            | CodeGenError::AllOfMergeUnsupportedSubschema { .. }
+            | CodeGenError::AnyOfEmpty => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
         }
     }

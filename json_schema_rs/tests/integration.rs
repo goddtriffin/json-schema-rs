@@ -2081,6 +2081,7 @@ fn write_workspace_scenario_member(
                                 max_length: None,
                                 format: None,
                                 all_of: None,
+                                any_of: None,
                             },
                         );
                         m
@@ -2101,6 +2102,7 @@ fn write_workspace_scenario_member(
                     max_length: None,
                     format: None,
                     all_of: None,
+                    any_of: None,
                 };
                 for i in (0..DEPTH).rev() {
                     let mut wrap: JsonSchema = JsonSchema {
@@ -2124,6 +2126,7 @@ fn write_workspace_scenario_member(
                         max_length: None,
                         format: None,
                         all_of: None,
+                        any_of: None,
                     };
                     wrap.properties.insert("child".to_string(), inner);
                     inner = wrap;
