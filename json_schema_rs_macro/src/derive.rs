@@ -353,6 +353,39 @@ fn field_pattern(field: &Field) -> SynResult<Option<String>> {
     field_str_attr(field, "pattern")
 }
 
+/// Extracts `deprecated = true` from a field's `#[json_schema(...)]` attribute.
+fn field_deprecated(field: &Field) -> SynResult<Option<bool>> {
+    for attr in &field.attrs {
+        if !attr.path().is_ident("json_schema") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if !nv.path.is_ident("deprecated") {
+                continue;
+            }
+            let syn::Expr::Lit(expr_lit) = &nv.value else {
+                return Err(Error::new_spanned(
+                    &nv.value,
+                    "json_schema(deprecated = ...) requires a boolean literal (true or false)",
+                ));
+            };
+            let syn::Lit::Bool(b) = &expr_lit.lit else {
+                return Err(Error::new_spanned(
+                    &expr_lit.lit,
+                    "json_schema(deprecated = ...) requires a boolean literal (true or false)",
+                ));
+            };
+            return Ok(Some(b.value()));
+        }
+    }
+    Ok(None)
+}
+
 /// Extracts `default = <literal>` from a field's `#[json_schema(...)]` attribute.
 /// Supports string, integer, float, and bool literals (maps to JSON default value).
 /// Returns the expression to use for `default_value` (e.g. `Some(serde_json::json!(42))`).
@@ -574,6 +607,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         let field_min_length: Option<u64> = field_min_length(field)?;
         let field_max_length: Option<u64> = field_max_length(field)?;
         let field_pattern_val: Option<String> = field_pattern(field)?;
+        let field_deprecated_val: Option<bool> = field_deprecated(field)?;
         let field_default_expr: Option<Expr> = field_default(field)?;
         let default_value_override: Option<TokenStream2> =
             field_default_expr.as_ref().map(|expr| {
@@ -627,6 +661,12 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             quote! { None }
         };
 
+        let deprecated_expr: TokenStream2 = if field_deprecated_val == Some(true) {
+            quote! { Some(true) }
+        } else {
+            quote! { None }
+        };
+
         let has_overrides: bool = field_desc.is_some()
             || field_min.is_some()
             || field_max.is_some()
@@ -635,6 +675,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             || field_min_length.is_some()
             || field_max_length.is_some()
             || field_pattern_val.is_some()
+            || field_deprecated_val.is_some()
             || field_default_expr.is_some();
 
         if let Some(def_key) = def_key_for_type(schema_ty)
@@ -653,6 +694,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 {
                     let schema = ::json_schema_rs::JsonSchema {
                         ref_: Some(#ref_lit.to_string()),
+                        deprecated: #deprecated_expr,
                         ..::json_schema_rs::JsonSchema::default()
                     };
                     properties.insert(#key_lit.to_string(), schema);
@@ -671,6 +713,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     schema.min_length = #min_length_expr.or(schema.min_length);
                     schema.max_length = #max_length_expr.or(schema.max_length);
                     schema.pattern = #pattern_expr.or(schema.pattern);
+                    schema.deprecated = #deprecated_expr.or(schema.deprecated);
                     #set_default_value
                     properties.insert(#key_lit.to_string(), schema);
                 }

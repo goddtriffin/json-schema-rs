@@ -118,6 +118,51 @@ fn examples_doc_lines(examples: Option<&[serde_json::Value]>) -> Vec<String> {
     lines
 }
 
+/// Emits `#[deprecated]` or `#[deprecated = "description"]` when schema has `deprecated: true`.
+/// Uses the first line of description for the message when present and non-empty.
+fn emit_deprecated_attr(out: &mut impl Write, schema: &JsonSchema) -> CodeGenResult<()> {
+    if schema.deprecated != Some(true) {
+        return Ok(());
+    }
+    let msg: Option<String> = schema
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.split('\n').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('\\', "\\\\").replace('"', "\\\""));
+    if let Some(m) = msg {
+        writeln!(out, "    #[deprecated = \"{m}\"]")?;
+    } else {
+        writeln!(out, "    #[deprecated]")?;
+    }
+    Ok(())
+}
+
+/// Emits struct-level `#[deprecated]` when schema has `deprecated: true`.
+fn emit_struct_deprecated_attr(out: &mut impl Write, schema: &JsonSchema) -> CodeGenResult<()> {
+    if schema.deprecated != Some(true) {
+        return Ok(());
+    }
+    let msg: Option<String> = schema
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.split('\n').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('\\', "\\\\").replace('"', "\\\""));
+    if let Some(m) = msg {
+        writeln!(out, "#[deprecated = \"{m}\"]")?;
+    } else {
+        writeln!(out, "#[deprecated]")?;
+    }
+    Ok(())
+}
+
 /// Returns sorted, deduplicated string values if the schema is a string enum; otherwise None.
 fn string_enum_values(schema: &JsonSchema) -> Option<Vec<String>> {
     if !schema.is_string_enum() {
@@ -171,6 +216,7 @@ struct DedupeKey {
     title: Option<String>,
     description: Option<String>,
     comment: Option<String>,
+    deprecated: Option<bool>,
     examples: Option<Vec<serde_json::Value>>,
     items: Option<Box<DedupeKey>>,
     unique_items: Option<bool>,
@@ -193,6 +239,7 @@ impl PartialEq for DedupeKey {
             && self.title == other.title
             && self.description == other.description
             && self.comment == other.comment
+            && self.deprecated == other.deprecated
             && self.examples == other.examples
             && self.items == other.items
             && self.unique_items == other.unique_items
@@ -240,6 +287,7 @@ impl Ord for DedupeKey {
             .then_with(|| self.title.cmp(&other.title))
             .then_with(|| self.description.cmp(&other.description))
             .then_with(|| self.comment.cmp(&other.comment))
+            .then_with(|| self.deprecated.cmp(&other.deprecated))
             .then_with(|| compare_option_vec_value(self.examples.as_ref(), other.examples.as_ref()))
             .then_with(|| self.items.cmp(&other.items))
             .then_with(|| self.unique_items.cmp(&other.unique_items))
@@ -435,6 +483,7 @@ fn emit_struct_derive_and_attrs(
     for line in examples_doc_lines(schema.examples.as_deref()) {
         writeln!(out, "/// {line}")?;
     }
+    emit_struct_deprecated_attr(out, schema)?;
     writeln!(
         out,
         "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
@@ -532,6 +581,10 @@ impl DedupeKey {
             },
             comment: match mode {
                 DedupeMode::Full => schema.comment.clone(),
+                DedupeMode::Functional | DedupeMode::Disabled => None,
+            },
+            deprecated: match mode {
+                DedupeMode::Full => schema.deprecated,
                 DedupeMode::Functional | DedupeMode::Disabled => None,
             },
             examples: match mode {
@@ -721,6 +774,9 @@ fn merge_object_schema_into(
     }
     if target.comment.is_none() {
         target.comment.clone_from(&other.comment);
+    }
+    if target.deprecated.is_none() {
+        target.deprecated = other.deprecated;
     }
     if target.examples.is_none() {
         target.examples.clone_from(&other.examples);
@@ -1924,6 +1980,7 @@ fn emit_struct_fields_with_resolver(
         for line in doc_lines(prop_schema.description.as_deref()) {
             writeln!(out, "    /// {line}")?;
         }
+        emit_deprecated_attr(out, prop_schema)?;
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
@@ -2106,6 +2163,7 @@ fn emit_struct_fields(
         for line in doc_lines(prop_schema.description.as_deref()) {
             writeln!(out, "    /// {line}")?;
         }
+        emit_deprecated_attr(out, prop_schema)?;
         let field_name = sanitize_field_name(key);
         let needs_rename = field_name != *key;
 
@@ -2483,6 +2541,64 @@ mod tests {
             "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
             "#[serde(deny_unknown_fields)]\n",
             "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deprecated_property_emits_deprecated_attr() {
+        let json =
+            r#"{"type":"object","properties":{"legacy":{"type":"string","deprecated":true}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    #[deprecated]\n",
+            "    pub legacy: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deprecated_property_with_description_emits_deprecated_with_message() {
+        let json = r#"{"type":"object","properties":{"old":{"type":"string","deprecated":true,"description":"Use 'new' instead"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    /// Use 'new' instead\n",
+            "    #[deprecated = \"Use 'new' instead\"]\n",
+            "    pub old: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deprecated_false_emits_no_attr() {
+        let json = r#"{"type":"object","properties":{"x":{"type":"string","deprecated":false}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub x: Option<String>,\n",
+            "}\n\n"
         );
         assert_eq!(expected, actual);
     }

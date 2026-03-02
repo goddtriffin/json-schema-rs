@@ -557,3 +557,40 @@ fn derive_uuid_field_json_schema() {
         "secondary_id should not be required"
     );
 }
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithDeprecatedField {
+    #[json_schema(deprecated = true)]
+    legacy: String,
+}
+
+#[test]
+fn derive_field_deprecated_emits_deprecated_in_schema() {
+    let mut legacy_schema: JsonSchema = String::json_schema();
+    legacy_schema.deprecated = Some(true);
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert("legacy".to_string(), legacy_schema);
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["legacy".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = WithDeprecatedField::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_deprecated_round_trip() {
+    let schema: JsonSchema = WithDeprecatedField::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let expected: JsonSchema = schema;
+    let actual: JsonSchema = parsed;
+    assert_eq!(expected, actual);
+}

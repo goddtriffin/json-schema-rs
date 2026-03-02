@@ -1290,6 +1290,18 @@ mod tests {
     }
 
     #[test]
+    fn schema_with_deprecated_property_valid_instance_passes() {
+        let schema: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"legacy":{"type":"string","deprecated":true}}}"#,
+        )
+        .expect("parse schema");
+        let instance = json!({"legacy": "still-valid"});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn schema_with_examples_invalid_instance_same_errors_as_without() {
         let schema: JsonSchema = serde_json::from_str(
             r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":[{"x":"foo"}]}"#,

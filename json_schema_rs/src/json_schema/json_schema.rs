@@ -193,6 +193,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     #[serde(default, rename = "default")]
     pub(crate) default_value: Option<serde_json::Value>,
     #[serde(default)]
+    pub(crate) deprecated: Option<bool>,
+    #[serde(default)]
     pub(crate) examples: Option<Vec<serde_json::Value>>,
     #[serde(default, rename = "allOf")]
     pub(crate) all_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
@@ -264,6 +266,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         pattern: h.pattern,
         format: h.format,
         default_value: h.default_value,
+        deprecated: h.deprecated,
         examples: h.examples,
         all_of,
         any_of,
@@ -378,6 +381,10 @@ pub struct JsonSchema {
     #[serde(rename = "default", skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
 
+    /// Deprecation flag (meta-data/annotation, draft 2019-09+). When true, indicates the instance or property should not be used. Does not affect validation. Codegen emits `#[deprecated]` on the corresponding Rust field or type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<bool>,
+
     /// Example values (meta-data/annotation, draft-06+). Does not affect validation. Stored and round-tripped; not emitted as Rust.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub examples: Option<Vec<serde_json::Value>>,
@@ -454,6 +461,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             #[serde(default, rename = "default")]
             default_value: Option<serde_json::Value>,
             #[serde(default)]
+            deprecated: Option<bool>,
+            #[serde(default)]
             examples: Option<Vec<serde_json::Value>>,
             #[serde(default, rename = "allOf")]
             all_of: Option<Vec<JsonSchema>>,
@@ -489,6 +498,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             pattern: h.pattern,
             format: h.format,
             default_value: h.default_value,
+            deprecated: h.deprecated,
             examples: h.examples,
             all_of: h.all_of,
             any_of: h.any_of,
@@ -911,6 +921,79 @@ mod tests {
             type_: Some("object".to_string()),
             properties: BTreeMap::new(),
             examples: Some(vec![serde_json::json!(1)]),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    // deprecated keyword (meta-data, draft 2019-09+)
+
+    #[test]
+    fn parse_deprecated_true() {
+        let json = r#"{"type":"string","deprecated":true}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            deprecated: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_deprecated_false() {
+        let json = r#"{"type":"string","deprecated":false}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            deprecated: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_deprecated_absent() {
+        let json = r#"{"type":"string"}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn round_trip_deprecated_unchanged() {
+        let json = r#"{"type":"object","properties":{"old":{"type":"string","deprecated":true}}}"#;
+        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let expected: JsonSchema = parsed;
+        let actual: JsonSchema = reparsed;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_parse_schema_with_deprecated_succeeds() {
+        let json = r#"{"type":"object","properties":{"x":{"type":"string","deprecated":true}}}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let actual: JsonSchema =
+            JsonSchema::new_from_str(json, &settings).expect("parse with strict");
+        let mut properties: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        properties.insert(
+            "x".to_string(),
+            JsonSchema {
+                type_: Some("string".to_string()),
+                deprecated: Some(true),
+                ..Default::default()
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties,
             ..Default::default()
         };
         assert_eq!(expected, actual);
