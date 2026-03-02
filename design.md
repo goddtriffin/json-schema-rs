@@ -286,6 +286,7 @@ The JSON Schema `$defs` keyword (draft 2019-09, 2020-12) is a container for reus
   - The integration scenario `defs_ref` covers CLI codegen, compilation, and runtime deserialization for a schema that uses `$defs` plus `$ref`.
 - **Role in reverse codegen:**
   - The derive macro for structs emits `$defs` and `$ref` for nested custom types (including inside `Vec`, `Option`, `HashSet`, `Box`). Shared types (two or more fields with the same type) produce one entry in `$defs` and `$ref` at each use site. Recursive types are detected at macro expansion time; the struct is placed in `$defs` and the recursive edge emits only `$ref` to avoid infinite expansion.
+  - The derive emits a single root-level `$defs` map; nested struct defs are flattened via `merge_nested_defs_into_root` so schemas with multiple levels of nesting (e.g. Root → Outer → Inner) have `$defs: { Outer, Inner }` at root with no nested `$defs` inside subschemas.
   - Primitives and container types (`String`, `Vec<T>`, etc.) do not add to `$defs`; they are inlined. Structs and enums with `#[derive(ToJsonSchema)]` that are referenced from other structs appear in `$defs`.
 
 **Spec version quirks:**

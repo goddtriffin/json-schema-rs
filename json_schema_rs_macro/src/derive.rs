@@ -778,9 +778,11 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 }
             } else {
                 defs_inserts.push(quote! {
-                    defs.entry(#def_key_lit.to_string()).or_insert_with(|| {
-                        <#effective_schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema()
-                    });
+                    if !defs.contains_key(&#def_key_lit.to_string()) {
+                        let raw = <#effective_schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
+                        let flat = ::json_schema_rs::reverse_code_gen::merge_nested_defs_into_root(raw, &mut defs);
+                        defs.insert(#def_key_lit.to_string(), flat);
+                    }
                 });
                 if is_array_like {
                     let is_hash_set: bool = if let Type::Path(tp) = schema_ty {

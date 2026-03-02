@@ -52,6 +52,24 @@ struct WithAddressList {
 }
 
 #[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct Inner {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct Outer {
+    b: Inner,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct RootWithNested {
+    a: Outer,
+}
+
+#[derive(ToJsonSchema)]
 #[json_schema(id = "http://example.com/with-id")]
 #[expect(dead_code)]
 struct WithId {
@@ -292,6 +310,42 @@ fn derive_vec_nested_struct_emits_defs() {
         ..Default::default()
     };
     let actual: JsonSchema = WithAddressList::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_three_level_nested_emits_flat_defs() {
+    use json_schema_rs::reverse_code_gen::merge_nested_defs_into_root;
+
+    let inner_schema: JsonSchema = Inner::json_schema();
+    let mut temp_defs: BTreeMap<String, JsonSchema> = BTreeMap::new();
+    let outer_schema: JsonSchema =
+        merge_nested_defs_into_root(Outer::json_schema(), &mut temp_defs);
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: {
+            let mut m = BTreeMap::new();
+            m.insert("Inner".to_string(), inner_schema);
+            m.insert("Outer".to_string(), outer_schema);
+            Some(m)
+        },
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_string(),
+                JsonSchema {
+                    ref_: Some("#/$defs/Outer".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["a".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = RootWithNested::json_schema();
     assert_eq!(expected, actual);
 }
 
