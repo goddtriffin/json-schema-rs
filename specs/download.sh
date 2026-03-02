@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vendor JSON Schema specifications from json-schema.org and IETF.
-# Run from repo root: ./specs/download.sh  or  make vendor-specs
+# Run from repo root: ./specs/download.sh  or  make vendor_specs
 # All URLs and destination paths are hard-coded below for easy refresh and updates.
 
 set -e
@@ -16,7 +16,8 @@ fetch() {
   curl -L -f -s -o "$path" "$url" || { echo "Failed: $url" >&2; exit 1; }
 }
 
-# ---- IETF (Relative JSON Pointer, JSON Reference) ----
+# ---- IETF (RFC 6901 JSON Pointer, Relative JSON Pointer, JSON Reference) ----
+fetch "https://www.rfc-editor.org/rfc/rfc6901.txt" "specs/ietf/rfc6901.txt"
 BASE_IETF="https://tools.ietf.org/html"
 fetch "${BASE_IETF}/draft-bhutton-relative-json-pointer-00" "specs/ietf/draft-bhutton-relative-json-pointer-00.html"
 fetch "${BASE_IETF}/draft-handrews-relative-json-pointer-02" "specs/ietf/draft-handrews-relative-json-pointer-02.html"

@@ -3,172 +3,66 @@
 [![Version](https://img.shields.io/crates/v/json-schema-rs)](https://crates.io/crates/json-schema-rs)
 [![Docs](https://docs.rs/json-schema-rs/badge.svg)](https://docs.rs/json-schema-rs)
 
-A Rust library to generate Rust structs from JSON Schema.
+A Rust library for JSON Schema tooling: **Schema→Rust** codegen (generate Rust
+types from a JSON Schema), **Rust→Schema** reverse codegen, and a **validator**.
+The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We
+target **JSON Schema Draft 2020-12**; default settings (e.g.
+`JsonSchemaSettings::default()`) are tuned for that spec. A script downloads
+specs for every published draft (draft-00 through 2020-12); run
+`make vendor_specs` to fetch them locally—specs are not stored in the repo.
+Supported keywords include **type**, **properties**, **required**, **const** (draft-06+;
+validator: instance must equal const; codegen: string const → single-value enum, non-string const → fallback; reverse: single-variant unit enum → const), **enum**
+(string-only; codegen emits Rust enums), **items** (array with single-schema
+items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
+codegen emits `HashSet<T>` for hashable item types and the validator enforces
+uniqueness), **minItems** and **maxItems** (array/set length constraints;
+validator enforces; codegen emits
+`#[json_schema(min_items = ..., max_items = ...)]` on generated array/set
+fields; reverse codegen supports the same attributes on Vec and HashSet fields),
+**minimum** and **maximum** (validation and codegen type selection: narrow
+integer/float types when both bounds are present and valid), **minLength** and
+**maxLength** (string length constraints in Unicode code points; validator
+enforces; codegen emits `#[json_schema(min_length = ..., max_length = ...)]`
+on generated string fields; reverse codegen supports the same attributes on
+String fields), **pattern** (string constraint as ECMA 262 regex; validator
+enforces via regress; codegen emits `#[json_schema(pattern = "...")]`;
+reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen emits `#[serde(default)]` or `#[serde(default = "fn")]` so missing keys get the schema default; reverse codegen via `#[json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
+codegen via `#[json_schema(description = "...")]`),
+**examples** (draft-06+; meta-data only; stored and round-tripped; codegen emits examples in doc comments for structs and enums; not used for validation; Full dedupe includes in key, Functional excludes), **deprecated** (draft 2019-09+; meta-data only; codegen emits `#[deprecated]` on the corresponding field or struct; reverse codegen via `#[json_schema(deprecated = true)]`), **$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[json_schema(comment = "...")]`), and **$schema**
+(stored and round-tripped; used to infer spec version when not set explicitly;
+reverse codegen emits Draft 2020-12 URI by default; default is Draft 2020-12
+when absent or unrecognized), and
+**$id** (unique identifier; stored and round-tripped; we support only `$id`, not draft-04`id`; Full dedupe includes`
+$id` in the key, Functional does not; reverse codegen via `#[json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
+so round-trip preserves it), **allOf** (validator: instance must validate
+against every subschema; codegen: branches merged on-the-fly into one Rust
+model; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: non-empty anyOf becomes a Rust enum with one variant per branch, including root anyOf; reverse codegen: not currently emitted), **oneOf** (validator: instance must validate against exactly one subschema; codegen: non-empty oneOf becomes a Rust enum with one variant per branch, including root oneOf; reverse codegen: not currently emitted), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: false → `#[serde(deny_unknown_fields)]`, schema → `additional: BTreeMap<String, T>`; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). For implementation details and design
+philosophy, see [design.md](design.md). Generated struct and field names are
+always valid Rust identifiers (reserved words and invalid characters are
+escaped; see design.md for sanitization rules).
 
-## Features
-
-- **Unsupported keys are ignored.** Unknown keywords and unsupported types do
-  not cause an error; they are skipped.
-
-### Objects
-
-The root schema must have `type: "object"`. Object schemas are traversed
-recursively; each object with `properties` yields a Rust struct. Non-object
-types at the root cause generation to fail.
-
-The `properties` key defines the shape of each object. Each property becomes a
-struct field. Property keys are sanitized for Rust (e.g. `-` becomes `_`); when
-the Rust field name differs from the JSON key, generated code includes
-`#[serde(rename = "...")]`.
-
-Nested `properties` produce nested structs. Child structs are emitted before
-parent structs (topological order), so the generated Rust compiles without
-reordering.
-
-The `title` of an object schema is used as the struct name (PascalCase). If
-`title` is missing or empty, the struct name is derived from the property key
-that references it.
-
-### Strings
-
-Properties with `type: "string"` are emitted as `String`.
-
-### format (uuid)
-
-Properties with `type: "string"` and `format: "uuid"` (or `uuid1`, `uuid2`, `uuid3`,
-`uuid4`, `uuid5`, `uuid6`, `uuid7`, `uuid8`, case-insensitive) are emitted as
-`Uuid` from the [uuid](https://crates.io/crates/uuid) crate. Consumers of
-generated code must add `uuid = { version = "1", features = ["serde"] }` to
-their `Cargo.toml`. Supported defaults: a UUID string or `null` for optional
-fields.
-
-### Enums
-
-When a property has an `enum` of string values, generates a Rust enum instead of
-`String`. Variant names are PascalCase. If multiple JSON values map to the same
-variant name (e.g. `"PENDING"` and `"pending"`), suffixes like `_0`, `_1` are
-applied so variant names stay unique.
-
-### Booleans
-
-Properties with `type: "boolean"` are emitted as `bool`.
-
-### Numbers
-
-Properties with `type: "integer"` are emitted as the smallest Rust integer type
-that fits the range: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, or `u64`.
-When `minimum` and `maximum` are both present and valid integers, the generator
-picks the smallest type that can hold the range; otherwise it uses `i64`.
-
-Properties with `type: "number"` are emitted as `f32` when both `minimum` and
-`maximum` are present and within f32 range (approximately ±3.4e38); otherwise
-`f64`. No validation is performed—min/max are used only for type selection.
-Float selection is range-based only; `f32` may lose precision for some decimal
-values.
-
-### Arrays
-
-Properties with `type: "array"` and an `items` schema are emitted as `Vec<T>` or
-`Option<Vec<T>>`. If `items` is missing or has an unsupported type, the property
-is skipped.
-
-### Required vs Optional
-
-The `required` array lists property names that are required at that object
-level. Required properties are emitted as `T`; others as `Option<T>`. If
-`required` is absent, all properties are treated as optional.
-
-The non-standard per-property `optional` keyword is recognized but **ignored**;
-required vs optional is determined only by the `required` array. Future versions
-may offer strict spec adherence or options for non-standard keywords.
-
-### default
-
-Properties with a `default` value get `#[serde(default)]` or
-`#[serde(default =
-"fn")]` so missing JSON keys use the default when
-deserializing:
-
-- When the default equals the type's `Default` (e.g. `false` for bool, `0` for
-  integer, `""` for string, `[]` for array, `null` for optional), emits
-  `#[serde(default)]`.
-- Otherwise, generates a module-level function and emits
-  `#[serde(default = "default_StructName_field")]`.
-
-Supported defaults: `boolean`, `integer`, `number`, `string`, `uuid` (string),
-string `enum`, and empty array `[]`. Object defaults and non-empty array
-defaults are not supported.
-
-### additionalProperties
-
-The `additionalProperties` keyword controls extra keys on an object:
-
-- **`additionalProperties: false`** — No extra keys allowed. The generated
-  struct gets `#[serde(deny_unknown_fields)]`.
-- **`additionalProperties: true`** or absent — Extra keys are allowed and
-  ignored (default serde behavior).
-- **`additionalProperties: { "type": "string" }`** (or another schema) — Extra
-  keys are captured in a flattened `BTreeMap<String, T>` field
-  `additional_properties`, where `T` is the type from the schema.
-
-### description
-
-The `description` keyword is emitted as Rust `///` doc comments. Empty or
-whitespace-only descriptions are omitted.
-
-### Unsupported features
-
-| Feature                                                | Description                                                                                                        |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `$ref` / `definitions` / `$defs`                       | Schema reuse and shared types                                                                                      |
-| `minLength` / `maxLength` / `pattern`                  | String validation or custom deserialization                                                                        |
-| `oneOf` / `anyOf` / `allOf`                            | Composition; enum or flattened structs                                                                             |
-| `optional`                                             | Recognized but ignored; required/optional from `required` only. Future: strict mode or options to allow/interpret. |
-| `$id`                                                  | Schema identification/referencing                                                                                  |
-| `examples`                                             | Documentation/tests                                                                                                |
-| `const`                                                | Single allowed value                                                                                               |
-| `not`                                                  | Exclusion                                                                                                          |
-| `minProperties` / `maxProperties`                      | Object size constraints                                                                                            |
-| `minItems` / `maxItems` / `uniqueItems`                | Array constraints                                                                                                  |
-| `exclusiveMinimum` / `exclusiveMaximum` / `multipleOf` | Number constraints                                                                                                 |
-| `readOnly` / `writeOnly` / `deprecated`                | Metadata                                                                                                           |
-| `propertyNames` / `additionalItems`                    | Object/array constraints                                                                                           |
-| `null` type / type array                               | Multiple types                                                                                                     |
-
-## Examples
+## Example
 
 JSON Schema:
 
 ```json
 {
   "type": "object",
-  "title": "Record",
-  "description": "A record with id and optional fields.",
-  "required": ["id"],
-  "additionalProperties": { "type": "string" },
   "properties": {
-    "active": { "type": "boolean" },
-    "count": { "type": "integer", "minimum": 0, "maximum": 255 },
-    "id": { "type": "string", "format": "uuid", "description": "Unique identifier." },
-    "name": { "type": "string" },
-    "score": { "type": "number", "minimum": 0, "maximum": 1 },
-    "status": {
-      "type": "string",
-      "enum": ["active", "inactive"],
-      "default": "active",
-      "description": "Current status."
-    },
-    "nested": {
+    "first_name": { "type": "string" },
+    "last_name": { "type": "string" },
+    "birthday": { "type": "string" },
+    "age": { "type": "integer" },
+    "score": { "type": "number" },
+    "address": {
       "type": "object",
-      "title": "NestedInfo",
-      "required": ["value"],
       "properties": {
-        "value": { "type": "string" },
-        "kind": { "type": "string", "enum": ["A", "a"] }
+        "street_address": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "country": { "type": "string" }
       }
-    },
-    "foo-bar": { "type": "string" },
-    "tags": { "type": "array", "items": { "type": "string" } }
+    }
   }
 }
 ```
@@ -179,83 +73,186 @@ Generated Rust:
 //! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use uuid::Uuid;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum Kind {
-    #[serde(rename = "A")]
-    A_0,
-    #[serde(rename = "a")]
-    A_1,
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Address {
+    pub city: Option<String>,
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub street_address: Option<String>,
 }
 
-/// Current status.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum Status {
-    #[serde(rename = "active")]
-    Active,
-    #[serde(rename = "inactive")]
-    Inactive,
-}
-
-fn default_Record_status() -> Option<Status> {
-    Some(Status::Active)
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct NestedInfo {
-    pub kind: Option<Kind>,
-    pub value: String,
-}
-
-/// A record with id and optional fields.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Record {
-    #[serde(flatten)]
-    pub additional_properties: BTreeMap<String, String>,
-    pub active: Option<bool>,
-    pub count: Option<u8>,
-    #[serde(rename = "foo-bar")]
-    pub foo_bar: Option<String>,
-    /// Unique identifier.
-    pub id: Uuid,
-    pub name: Option<String>,
-    pub nested: Option<NestedInfo>,
-    pub score: Option<f32>,
-    /// Current status.
-    #[serde(default = "default_Record_status")]
-    pub status: Option<Status>,
-    pub tags: Option<Vec<String>>,
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub address: Option<Address>,
+    pub age: Option<i64>,
+    pub birthday: Option<String>,
+    pub score: Option<f64>,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
 }
 ```
 
-[View full example in `examples/readme_example.rs`](examples/readme_example.rs)
+Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()`
+returns a `JsonSchema`). Serialize to JSON with `String::try_from(&schema)` or
+`Vec::<u8>::try_from(&schema)`. Reverse codegen emits a flat root-level `$defs`
+map with `$ref` for shared and recursive types. See [design.md](design.md) for
+reverse codegen details. The library supports **in-document `$ref`** resolving against root
+`$defs` / `definitions` containers (fragments `#`, `#/$defs/Name`,
+`#/definitions/Name`) for both validation and Rust codegen; remote refs and
+anchors are out of scope for this implementation.
+
+## Using the library
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+json-schema-rs = "0.0.4"
+```
+
+Parse one or more schemas and generate Rust (one buffer per schema, plus an
+optional shared buffer when dedupe finds identical shapes). With default
+settings you can use **TryFrom**:
+`let schema = JsonSchema::try_from(schema_json)?;` or `schema_json.try_into()?`.
+For custom settings, use the constructors:
+
+```rust
+use json_schema_rs::{JsonSchema, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
+use std::io::Read;
+
+// Default settings: use TryFrom (e.g. JsonSchema::try_from(schema_json_str)?). For custom settings:
+let schema_settings = JsonSchemaSettings::default();
+
+// From a string:
+let json_schema = JsonSchema::new_from_str(schema_json_str, &schema_settings)?;
+// From bytes (e.g. a buffer or file contents):
+let json_schema = JsonSchema::new_from_slice(&bytes[..], &schema_settings)?;
+// From an already-parsed serde_json::Value (avoids string round-trips):
+let json_schema = JsonSchema::new_from_serde_value(&json_value, &schema_settings)?;
+// From a reader (e.g. std::fs::File, std::io::Stdin):
+let json_schema = JsonSchema::new_from_reader(reader, &schema_settings)?;
+// From a file path:
+let json_schema = JsonSchema::new_from_path("path/to/json-schema.json", &schema_settings)?;
+
+// Then generate Rust:
+let code_gen_settings = CodeGenSettings::builder().build();
+let output = generate_rust(&[json_schema], &code_gen_settings)?;
+// output.per_schema.len() == 1; write output.per_schema[0] to a file or stdout
+// When dedupe finds shared structs, output.shared is Some(shared_rust_code)
+```
+
+Structurally identical object schemas are deduplicated by default (one generated
+struct per shape, emitted in a shared buffer). Use
+`CodeGenSettings::builder().dedupe_mode(DedupeMode::Disabled).build()` to turn
+this off, or `DedupeMode::Functional` to compare only functional fields (see
+[design.md](design.md)). Use
+`JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject
+schema definitions with unknown keys. Use
+`CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()`
+to prefer property keys over `title` for struct names. CLI:
+`--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or
+`property-key`, `--cgs-dedupe-mode disabled|functional|full`.
+
+## Using the macro (compile-time codegen)
+
+The **`json_schema_to_rust!`** macro generates Rust types at compile time and
+**inlines** them at the call site (no file is written). Add both crates:
+
+```toml
+[dependencies]
+json-schema-rs = "0.0.4"
+json-schema-rs-macro = "0.0.4"
+```
+
+Then `use json_schema_rs_macro::json_schema_to_rust` and use any of these forms:
+
+- **Single file path** (relative to your crate root, i.e. `CARGO_MANIFEST_DIR`):
+
+  `json_schema_to_rust!("path/to/schema.json")`
+
+- **Multiple file paths:** `json_schema_to_rust!("a.json", "b.json")`
+
+- **Single inline JSON Schema string:**
+  `json_schema_to_rust!(r#"{"type":"object", "properties": {...}}"#)`
+
+- **Multiple inline JSON Schema strings:**
+  `json_schema_to_rust!(r#"..."#, r#"..."#)`
+
+When you pass **multiple** schemas (paths or inline), each schema’s types are
+emitted in a **separate Rust module** to avoid name collisions: one module per
+JSON Schema. Module names come from the file stem for paths (e.g. `simple` from
+`simple.json`) or `schema_0`, `schema_1`, … for inline strings. Use the
+generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
+
+**Reverse codegen (Rust → JSON Schema).** Every generated struct implements
+**ToJsonSchema** (e.g. `Root::json_schema()`). Hand-written structs can use
+`#[derive(ToJsonSchema)]` from `json_schema_rs_macro` with optional
+`#[json_schema(title = "...")]` and, on fields,
+**`#[json_schema(minimum = N, maximum = N)]`** to set JSON Schema bounds for
+integer/number properties. Convert a schema to JSON with
+`String::try_from(&schema)` or `.try_into()`. Emits `$defs` and `$ref` for shared
+and recursive types. Add **json-schema-rs-macro** when using the derive. Details:
+[design.md](design.md).
+
+Validate a JSON instance against a schema (returns all errors, no fail-fast):
+
+```rust
+use json_schema_rs::{validate, JsonSchema};
+use serde_json::Value;
+
+let schema: JsonSchema = serde_json::from_str(schema_json)?;
+let instance: Value = serde_json::from_str(instance_json)?;
+let result = validate(&schema, &instance);
+if let Err(errors) = result {
+    for err in &errors {
+        eprintln!("{}", err);
+    }
+}
+```
 
 ## Running the binary
 
-The crate includes a CLI binary `json-schema-gen` that reads a JSON Schema from
-stdin and writes generated Rust code to stdout.
+Build and run the CLI:
 
-**Build the binary:**
+**Build:**
 
 ```bash
 cargo build --release
 ```
 
-The binary is at `target/release/json-schema-gen`.
+The binary is at `target/release/jsonschemars`.
 
-**Run it:**
+**Generate code from one or more JSON Schemas.** The `generate` command takes
+one or more INPUTs (file paths, directory paths—recursively searched for `.json`
+files—or `-` for one schema from stdin) and writes generated `.rs` files under
+the required `-o` output directory. Output file and directory names are
+**sanitized** for Rust (e.g. hyphens to underscores), and each directory
+includes a `mod.rs` so the output is a valid Rust module tree. If any schema
+file fails to read, every failure is logged to stderr with its path and the
+command exits without writing output. Only **rust** is supported today. See
+[design.md](design.md) for details.
 
 ```bash
-json-schema-gen < schema.json > output.rs
+jsonschemars generate rust -o out/ schema.json
+jsonschemars generate rust -o out/ dir1/ dir2/ foo.json
+jsonschemars generate rust -o out/ -   # one schema from stdin → out/stdin.rs
 ```
 
-Or pipe from another command:
+**Validate a JSON payload against a schema** (one schema, one payload; schema
+via `-s`, payload from stdin or `-p`):
 
 ```bash
-cat schema.json | json-schema-gen > output.rs
+jsonschemars validate -s schema.json < payload.json
 ```
+
+Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use
+`-s -` to read the schema from stdin (payload then from `-p` or stdin).
+
+To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of
+using the macro, use the library API from a `build.rs` script:
+`let bytes = generate_rust(&[schema], &CodeGenSettings::builder().build())?;`
+then write `bytes[0]` to a path and `include!` it in your crate.
 
 ## Alternative libraries
 
@@ -263,20 +260,19 @@ TODO
 
 ## Developers
 
-**Project is under active maintenance - even if there are no recent commits!
-Please submit an issue / bug request if the library needs updating for any
-reason!**
+**Project is under active maintenance**—even if there are no recent commits.
+Please submit an issue or bug request if the library needs updating.
 
-### Philosophy
-
-- Generates idiomatic Rust
-- Can handle every JSON Schema specification version
-
-### Commands
-
-- `make lint`
-- `make test`
-- `make fix`
+- **Commands:** `make lint`, `make test`, `make fix`
+- **Official JSON Schema Test Suite:** To run the library against the full
+  [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite),
+  run `make vendor_test_suite` once to clone it into
+  `research/json-schema-test-suite/` (gitignored), then
+  `make test_json_schema_suite` to run the suite. The test is ignored by default
+  and only runs when invoked explicitly; it hard-fails if the suite directory is
+  missing.
+- **Implementation and philosophy:** If you're curious how something was
+  implemented or the philosophy behind our approach, see [design.md](design.md).
 
 ## Credits
 

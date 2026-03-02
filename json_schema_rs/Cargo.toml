@@ -1,0 +1,37 @@
+[package]
+name = "json-schema-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description.workspace = true
+license-file.workspace = true
+keywords.workspace = true
+categories.workspace = true
+exclude.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "jsonschemars"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+uuid = ["dep:uuid"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+regress = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"

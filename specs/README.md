@@ -1,27 +1,30 @@
-# Vendored JSON Schema specifications
+# JSON Schema specifications (local copy)
 
-This directory contains a local copy of every published JSON Schema
+This directory holds a **local copy** of every published JSON Schema
 specification from [json-schema.org](https://json-schema.org/specification) and
-related IETF drafts (Relative JSON Pointer, JSON Reference). The files are
-vendored so the repo is self-contained and can be used offline or without
-depending on external URLs.
+related IETF drafts (Relative JSON Pointer, JSON Reference). The spec files
+are **not** committed to the repo—they are gitignored. Contributors run
+`make vendor_specs` or `./specs/download.sh` from the repository root to
+download them; the result is a local, offline-capable copy under `specs/`.
 
 ## Contents
 
 - **`json-schema.org/`** — Specification documents (HTML, PDF, TXT),
   meta-schemas (JSON), output schemas/examples, and release notes for drafts 00
   through 07, 2019-09, and 2020-12.
-- **`ietf/`** — IETF Internet-Drafts: Relative JSON Pointer and JSON Reference
-  (HTML).
+- **`ietf/`** — RFC 6901 (JSON Pointer, TXT) and IETF Internet-Drafts: Relative
+  JSON Pointer and JSON Reference (HTML). JSON Pointer is used by JSON Schema for
+  fragment identification; the `JsonPointer` type in code follows RFC 6901 for
+  encoding and decoding.
 - **`download.sh`** — Script that downloads all of the above. URLs and
   destination paths are hard-coded in the script.
 
-## Updating (refreshing) vendored specs
+## Updating (refreshing) the local spec copy
 
 From the **repository root** run:
 
 ```bash
-make vendor-specs
+make vendor_specs
 ```
 
 or:
@@ -30,9 +33,9 @@ or:
 ./specs/download.sh
 ```
 
-This re-downloads every file from the canonical URLs. If json-schema.org or IETF
-change URLs in the future, edit the URLs in `specs/download.sh` and run the
-script again.
+This re-downloads every file from the canonical URLs. The downloaded files are
+gitignored and are not committed. If json-schema.org or IETF change URLs in the
+future, edit the URLs in `specs/download.sh` and run the script again.
 
 ## Adding new specs
 

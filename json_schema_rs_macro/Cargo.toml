@@ -1,0 +1,36 @@
+[package]
+name = "json-schema-rs-macro"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Procedural macro json_schema_to_rust! for json-schema-rs"
+license-file.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+path = "src/lib.rs"
+proc-macro = true
+
+[features]
+uuid = ["dep:uuid", "json-schema-rs/uuid"]
+
+[lints]
+workspace = true
+
+[dependencies]
+json-schema-rs = { path = "../json_schema_rs" }
+proc-macro2 = "1"
+quote = "1"
+serde_json.workspace = true
+syn = "2"
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
