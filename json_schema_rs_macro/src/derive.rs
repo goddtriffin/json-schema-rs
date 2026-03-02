@@ -318,6 +318,43 @@ fn field_pattern(field: &Field) -> SynResult<Option<String>> {
     field_str_attr(field, "pattern")
 }
 
+/// Extracts `default = <literal>` from a field's `#[to_json_schema(...)]` attribute.
+/// Supports string, integer, float, and bool literals (maps to JSON default value).
+/// Returns the expression to use for `default_value` (e.g. `Some(serde_json::json!(42))`).
+fn field_default(field: &Field) -> SynResult<Option<Expr>> {
+    for attr in &field.attrs {
+        if !attr.path().is_ident("to_json_schema") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if !nv.path.is_ident("default") {
+                continue;
+            }
+            let expr = &nv.value;
+            let valid = matches!(
+                expr,
+                Expr::Lit(expr_lit) if matches!(
+                    &expr_lit.lit,
+                    Lit::Str(_) | Lit::Int(_) | Lit::Float(_) | Lit::Bool(_)
+                )
+            );
+            if valid {
+                return Ok(Some(expr.clone()));
+            }
+            return Err(Error::new_spanned(
+                expr,
+                "to_json_schema(default = ...) requires a string, integer, float, or bool literal",
+            ));
+        }
+    }
+    Ok(None)
+}
+
 /// Returns the JSON property key for a field: serde rename or field name.
 fn field_property_key(field: &Field) -> SynResult<String> {
     for attr in &field.attrs {
@@ -501,6 +538,16 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         let field_min_length: Option<u64> = field_min_length(field)?;
         let field_max_length: Option<u64> = field_max_length(field)?;
         let field_pattern_val: Option<String> = field_pattern(field)?;
+        let field_default_expr: Option<Expr> = field_default(field)?;
+        let default_value_override: Option<TokenStream2> =
+            field_default_expr.as_ref().map(|expr| {
+                quote! { Some(::serde_json::json!(#expr)) }
+            });
+        let set_default_value: TokenStream2 = if let Some(ref ov) = default_value_override {
+            quote! { schema.default_value = #ov; }
+        } else {
+            quote! {}
+        };
         let min_expr: TokenStream2 = if let Some(m) = field_min {
             let lit = proc_macro2::Literal::f64_unsuffixed(m);
             quote! { Some(#lit) }
@@ -546,17 +593,17 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         property_inserts.push(quote! {
             {
                 let base = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
-                properties.insert(#key_lit.to_string(), ::json_schema_rs::JsonSchema {
-                    description: #field_desc_expr,
-                    minimum: #min_expr.or(base.minimum),
-                    maximum: #max_expr.or(base.maximum),
-                    min_items: #min_items_expr.or(base.min_items),
-                    max_items: #max_items_expr.or(base.max_items),
-                    min_length: #min_length_expr.or(base.min_length),
-                    max_length: #max_length_expr.or(base.max_length),
-                    pattern: #pattern_expr.or(base.pattern),
-                    ..base
-                });
+                let mut schema = base.clone();
+                schema.description = #field_desc_expr.or(schema.description);
+                schema.minimum = #min_expr.or(schema.minimum);
+                schema.maximum = #max_expr.or(schema.maximum);
+                schema.min_items = #min_items_expr.or(schema.min_items);
+                schema.max_items = #max_items_expr.or(schema.max_items);
+                schema.min_length = #min_length_expr.or(schema.min_length);
+                schema.max_length = #max_length_expr.or(schema.max_length);
+                schema.pattern = #pattern_expr.or(schema.pattern);
+                #set_default_value
+                properties.insert(#key_lit.to_string(), schema);
             }
         });
     }
@@ -601,6 +648,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     max_length: None,
                     pattern: None,
                     format: None,
+                    default_value: None,
                     all_of: None,
                     any_of: None,
                     one_of: None,
@@ -711,6 +759,7 @@ fn expand_enum_to_json_schema(
                     max_length: None,
                     pattern: None,
                     format: None,
+                    default_value: None,
                     all_of: None,
                     any_of: None,
                     one_of: None,

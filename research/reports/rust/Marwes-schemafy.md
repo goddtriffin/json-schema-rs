@@ -28,7 +28,7 @@ Keyword list derived from vendored draft-04 meta-schema: `specs/json-schema.org/
 | additionalProperties | yes | Object with schema → `BTreeMap<String, T>`; `false` → struct with optional `#[serde(deny_unknown_fields)]`. |
 | allOf | yes | Merged via `merge_all_of` (properties, required, description, ref_, type_). |
 | anyOf | partial | Special case: two branches with one array of same item type → `Vec<T>` with one-or-many serde; otherwise → `serde_json::Value`. |
-| default | partial | Used only for `#[serde(default)]` and `Default` derive when applicable (e.g. optional fields, empty object default); actual default value not emitted. |
+| default | partial | Used only for `#[serde(default)]` and `Default` derive when applicable (e.g. optional fields, empty object default); **actual default value not emitted** (e.g. `default: 42` for optional int does not produce a literal 42 in generated code). *json-schema-rs* emits the literal via Typify-style default functions when schema default ≠ type default. |
 | definitions | yes | Resolved via `schema_ref`; each definition expanded to a named type. |
 | dependencies | no | Parsed but not used for codegen. |
 | description | yes | Emitted as `///` doc comments on structs and fields. |

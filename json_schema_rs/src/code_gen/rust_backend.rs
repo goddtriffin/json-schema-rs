@@ -158,6 +158,7 @@ struct DedupeKey {
     max_length: Option<u64>,
     pattern: Option<String>,
     format: Option<String>,
+    default_value: Option<serde_json::Value>,
 }
 
 impl PartialEq for DedupeKey {
@@ -178,6 +179,7 @@ impl PartialEq for DedupeKey {
             && self.max_length == other.max_length
             && self.pattern == other.pattern
             && self.format == other.format
+            && self.default_value == other.default_value
     }
 }
 
@@ -223,7 +225,86 @@ impl Ord for DedupeKey {
             .then_with(|| self.max_length.cmp(&other.max_length))
             .then_with(|| self.pattern.cmp(&other.pattern))
             .then_with(|| self.format.cmp(&other.format))
+            .then_with(|| {
+                compare_option_value(self.default_value.as_ref(), other.default_value.as_ref())
+            })
     }
+}
+
+fn compare_option_value(a: Option<&serde_json::Value>, b: Option<&serde_json::Value>) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(a_val), Some(b_val)) => {
+            let a_str: String = serde_json::to_string(a_val).unwrap_or_default();
+            let b_str: String = serde_json::to_string(b_val).unwrap_or_default();
+            a_str.cmp(&b_str)
+        }
+    }
+}
+
+/// Returns true when the JSON default value equals the Rust type default (so we can use `#[serde(default)]`).
+fn json_value_equals_rust_type_default(
+    value: &serde_json::Value,
+    _type_str: &str,
+    is_optional: bool,
+) -> bool {
+    if is_optional {
+        return value.is_null();
+    }
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Bool(b) => !*b,
+        serde_json::Value::Number(n) => {
+            if n.as_i64() == Some(0) {
+                return true;
+            }
+            if n.as_f64() == Some(0.0) {
+                return true;
+            }
+            false
+        }
+        serde_json::Value::String(s) => s.is_empty(),
+        serde_json::Value::Array(a) => a.is_empty(),
+        serde_json::Value::Object(o) => o.is_empty(),
+    }
+}
+
+/// Returns the default function name for a struct field (e.g. `default_Root_my_field`).
+fn default_function_name(struct_name: &str, field_name: &str) -> String {
+    format!("default_{struct_name}_{field_name}")
+}
+
+/// Returns Rust expression for a JSON default value for the given type (e.g. `Some("foo".to_string())` for Option<String>).
+fn json_default_to_rust_expr(
+    value: &serde_json::Value,
+    _ty: &str,
+    is_optional: bool,
+) -> Option<String> {
+    let inner: String = match value {
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => {
+            if n.is_i64() {
+                n.as_i64().unwrap().to_string()
+            } else {
+                n.as_f64().unwrap().to_string()
+            }
+        }
+        serde_json::Value::String(s) => {
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{escaped}\".to_string()")
+        }
+        serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            return None;
+        }
+    };
+    let expr: String = if is_optional {
+        format!("Some({inner})")
+    } else {
+        inner
+    };
+    Some(expr)
 }
 
 fn compare_option_vec(a: Option<&Vec<String>>, b: Option<&Vec<String>>) -> Ordering {
@@ -410,6 +491,7 @@ impl DedupeKey {
             max_length,
             pattern,
             format,
+            default_value: schema.default_value.clone(),
         }
     }
 }
@@ -1230,8 +1312,10 @@ fn generate_rust_with_dedupe(
             emit_enum_from_pairs(&mut out, &e.name, &pairs, e.description.as_deref())?;
         }
         for (name, schema) in &shared_structs {
+            emit_default_functions_for_struct(&mut out, name, schema)?;
             emit_struct_derive_and_attrs(&mut out, name, schema)?;
             emit_struct_fields_with_resolver(
+                name,
                 schema,
                 &mut out,
                 settings,
@@ -1349,8 +1433,10 @@ fn generate_rust_with_dedupe(
                 writeln!(buf).ok();
             }
             for (name, schema) in &local_structs {
+                emit_default_functions_for_struct(&mut buf, name, schema).ok();
                 emit_struct_derive_and_attrs(&mut buf, name, schema).ok();
                 emit_struct_fields_with_resolver(
+                    name,
                     schema,
                     &mut buf,
                     settings,
@@ -1469,9 +1555,78 @@ fn emit_oneof_enum(out: &mut impl Write, a: &OneOfEnumToEmit) -> CodeGenResult<(
     Ok(())
 }
 
+/// Emits `#[serde(default)]` or `#[serde(default = "fn")]` when the property has a default value.
+/// Default functions are emitted at module level by `emit_default_functions_for_struct`.
+fn emit_default_attr(
+    out: &mut impl Write,
+    struct_name: &str,
+    field_name: &str,
+    prop_schema: &JsonSchema,
+    ty: &str,
+    is_required: bool,
+) -> CodeGenResult<()> {
+    let Some(ref value) = prop_schema.default_value else {
+        return Ok(());
+    };
+    let is_optional: bool = !is_required;
+    if json_value_equals_rust_type_default(value, ty, is_optional) {
+        writeln!(out, "    #[serde(default)]")?;
+        return Ok(());
+    }
+    let Some(_expr) = json_default_to_rust_expr(value, ty, is_optional) else {
+        return Ok(());
+    };
+    let fn_name: String = default_function_name(struct_name, field_name);
+    writeln!(out, "    #[serde(default = \"{fn_name}\")]")?;
+    Ok(())
+}
+
+/// Emits module-level default functions for all properties of the struct that have a custom default value.
+fn emit_default_functions_for_struct(
+    out: &mut impl Write,
+    struct_name: &str,
+    schema: &JsonSchema,
+) -> CodeGenResult<()> {
+    for (key, prop_schema) in &schema.properties {
+        let Some(ref value) = prop_schema.default_value else {
+            continue;
+        };
+        let field_name = sanitize_field_name(key);
+        let is_required = schema.is_required(key);
+        let is_optional = !is_required;
+        let ty: String = if prop_schema.is_string() {
+            if is_required {
+                "String".to_string()
+            } else {
+                "Option<String>".to_string()
+            }
+        } else if prop_schema.is_integer() || prop_schema.is_number() {
+            let inner = rust_numeric_type_for_schema(prop_schema);
+            if is_required {
+                inner
+            } else {
+                format!("Option<{inner}>")
+            }
+        } else {
+            continue;
+        };
+        if json_value_equals_rust_type_default(value, &ty, is_optional) {
+            continue;
+        }
+        let Some(expr) = json_default_to_rust_expr(value, &ty, is_optional) else {
+            continue;
+        };
+        let fn_name = default_function_name(struct_name, &field_name);
+        writeln!(out, "fn {fn_name}() -> {ty} {{ {expr} }}")?;
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
 /// Emit struct fields; when resolver is Some (dedupe mode), use canonical type names for nested objects.
 #[expect(clippy::too_many_lines)]
 fn emit_struct_fields_with_resolver(
+    struct_name: &str,
     schema: &JsonSchema,
     out: &mut impl Write,
     settings: &CodeGenSettings,
@@ -1547,6 +1702,14 @@ fn emit_struct_fields_with_resolver(
                 }
                 writeln!(out, "    #[to_json_schema({})]", attrs.join(", "))?;
             }
+            emit_default_attr(
+                out,
+                struct_name,
+                &field_name,
+                prop_schema,
+                &ty,
+                schema.is_required(key),
+            )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
         } else if prop_schema.is_integer() || prop_schema.is_number() {
             let inner: String = rust_numeric_type_for_schema(prop_schema);
@@ -1558,6 +1721,14 @@ fn emit_struct_fields_with_resolver(
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
             }
+            emit_default_attr(
+                out,
+                struct_name,
+                &field_name,
+                prop_schema,
+                &ty,
+                schema.is_required(key),
+            )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
         } else if prop_schema.is_array_with_items() {
             let item_schema: &JsonSchema = prop_schema
@@ -1633,6 +1804,7 @@ fn emit_struct_fields_with_resolver(
 /// Emit a single struct's fields to `out`.
 #[expect(clippy::too_many_lines)]
 fn emit_struct_fields(
+    struct_name: &str,
     schema: &JsonSchema,
     out: &mut impl Write,
     settings: &CodeGenSettings,
@@ -1728,6 +1900,14 @@ fn emit_struct_fields(
                 }
                 writeln!(out, "    #[to_json_schema({})]", attrs.join(", "))?;
             }
+            emit_default_attr(
+                out,
+                struct_name,
+                &field_name,
+                prop_schema,
+                &ty,
+                schema.is_required(key),
+            )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
         } else if prop_schema.is_integer() || prop_schema.is_number() {
             let inner: String = rust_numeric_type_for_schema(prop_schema);
@@ -1739,6 +1919,14 @@ fn emit_struct_fields(
             if needs_rename {
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
             }
+            emit_default_attr(
+                out,
+                struct_name,
+                &field_name,
+                prop_schema,
+                &ty,
+                schema.is_required(key),
+            )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
         } else if prop_schema.is_array_with_items() {
             let item_schema: &JsonSchema = prop_schema
@@ -1886,8 +2074,10 @@ fn emit_rust(
     }
 
     for st in &structs {
+        emit_default_functions_for_struct(out, &st.name, &st.schema)?;
         emit_struct_derive_and_attrs(out, &st.name, &st.schema)?;
         emit_struct_fields(
+            &st.name,
             &st.schema,
             out,
             settings,
@@ -3178,6 +3368,7 @@ pub struct Root {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -3205,6 +3396,7 @@ pub struct Root {
                 max_length: None,
                 pattern: None,
                 format: None,
+                default_value: None,
                 all_of: None,
                 any_of: None,
                 one_of: None,

@@ -178,6 +178,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) pattern: Option<String>,
     #[serde(default)]
     pub(crate) format: Option<String>,
+    #[serde(default, rename = "default")]
+    pub(crate) default_value: Option<serde_json::Value>,
     #[serde(default, rename = "allOf")]
     pub(crate) all_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
     #[serde(default, rename = "anyOf")]
@@ -234,6 +236,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         max_length: h.max_length,
         pattern: h.pattern,
         format: h.format,
+        default_value: h.default_value,
         all_of,
         any_of,
         one_of,
@@ -331,6 +334,10 @@ pub struct JsonSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
 
+    /// Default value (meta-data/annotation). Does not affect validation. Codegen uses it for `#[serde(default)]` or default functions.
+    #[serde(rename = "default", skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<serde_json::Value>,
+
     /// allOf: instance must validate against every subschema. Stored as-is at ingestion; validator validates each; codegen merges on-the-fly. Not preserved on round-trip or reverse codegen.
     #[serde(rename = "allOf", skip_serializing_if = "skip_all_of")]
     pub all_of: Option<Vec<JsonSchema>>,
@@ -394,6 +401,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             pattern: Option<String>,
             #[serde(default)]
             format: Option<String>,
+            #[serde(default, rename = "default")]
+            default_value: Option<serde_json::Value>,
             #[serde(default, rename = "allOf")]
             all_of: Option<Vec<JsonSchema>>,
             #[serde(default, rename = "anyOf")]
@@ -424,6 +433,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             max_length: h.max_length,
             pattern: h.pattern,
             format: h.format,
+            default_value: h.default_value,
             all_of: h.all_of,
             any_of: h.any_of,
             one_of: h.one_of,
@@ -749,6 +759,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -782,6 +793,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -818,6 +830,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1018,6 +1031,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1077,6 +1091,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1111,6 +1126,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1138,6 +1154,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1168,6 +1185,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1198,6 +1216,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1255,6 +1274,7 @@ mod tests {
                     max_length: None,
                     pattern: None,
                     format: None,
+                    default_value: None,
                     all_of: None,
                     any_of: None,
                     one_of: None,
@@ -1290,6 +1310,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1316,6 +1337,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1506,6 +1528,7 @@ mod tests {
                         max_length: None,
                         pattern: None,
                         format: None,
+                        default_value: None,
                         all_of: None,
                         any_of: None,
                         one_of: None,
@@ -1530,6 +1553,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1760,6 +1784,7 @@ mod tests {
                         max_length: None,
                         pattern: None,
                         format: None,
+                        default_value: None,
                         all_of: None,
                         any_of: None,
                         one_of: None,
@@ -1789,6 +1814,7 @@ mod tests {
                         max_length: None,
                         pattern: None,
                         format: None,
+                        default_value: None,
                         all_of: None,
                         any_of: None,
                         one_of: None,
@@ -1813,6 +1839,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1847,6 +1874,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -1880,6 +1908,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -2158,6 +2187,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -2175,6 +2205,85 @@ mod tests {
         let json = r#"{"type":"object","properties":{"x":{"const":"fixed"}}}"#;
         let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_default_string_has_value() {
+        let json = r#"{"type":"string","default":"foo"}"#;
+        let schema: JsonSchema = serde_json::from_str(json).expect("parse");
+        let expected: Option<serde_json::Value> =
+            Some(serde_json::Value::String("foo".to_string()));
+        let actual: Option<serde_json::Value> = schema.default_value.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_default_string_round_trip() {
+        let json = r#"{"type":"string","default":"foo"}"#;
+        let schema: JsonSchema = serde_json::from_str(json).expect("parse");
+        let serialized: String = serde_json::to_string(&schema).expect("serialize");
+        let round_trip: JsonSchema = serde_json::from_str(&serialized).expect("round-trip");
+        let expected: Option<serde_json::Value> = schema.default_value.clone();
+        let actual: Option<serde_json::Value> = round_trip.default_value.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_default_number_has_value() {
+        let json = r#"{"type":"integer","default":42}"#;
+        let schema: JsonSchema = serde_json::from_str(json).expect("parse");
+        let expected: Option<serde_json::Value> = Some(serde_json::Value::Number(42_i64.into()));
+        let actual: Option<serde_json::Value> = schema.default_value.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_default_number_round_trip() {
+        let json = r#"{"type":"integer","default":42}"#;
+        let schema: JsonSchema = serde_json::from_str(json).expect("parse");
+        let serialized: String = serde_json::to_string(&schema).expect("serialize");
+        let round_trip: JsonSchema = serde_json::from_str(&serialized).expect("round-trip");
+        let expected: Option<serde_json::Value> = schema.default_value.clone();
+        let actual: Option<serde_json::Value> = round_trip.default_value.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_default_null_accepted() {
+        let json = r#"{"type":"string","default":null}"#;
+        let schema: JsonSchema = serde_json::from_str(json).expect("parse");
+        // Serde deserializes JSON null into Option<Value> as None; we assert the parsed value.
+        let expected: Option<serde_json::Value> = None;
+        let actual: Option<serde_json::Value> = schema.default_value.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_strict_accepts_default_key() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json = r#"{"type":"object","properties":{"a":{"type":"string","default":"x"}}}"#;
+        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let expected: bool = true;
+        let actual: bool = result.is_ok();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_object_two_properties_with_default() {
+        let one_str: JsonSchema = JsonSchema::try_from(
+            r#"{"type":"object","properties":{"name":{"type":"string","default":"foo"}}}"#,
+        )
+        .expect("parse one string default");
+        let expected: Option<&serde_json::Value> = Some(&serde_json::json!("foo"));
+        let actual: Option<&serde_json::Value> = one_str
+            .properties
+            .get("name")
+            .unwrap()
+            .default_value
+            .as_ref();
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -2201,6 +2310,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,
@@ -2234,6 +2344,7 @@ mod tests {
             max_length: None,
             pattern: None,
             format: None,
+            default_value: None,
             all_of: None,
             any_of: None,
             one_of: None,

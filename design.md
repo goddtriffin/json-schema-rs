@@ -139,6 +139,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | oneOf (union enum, property-level + root) | Y | — | Y | Y | Y |
 | additionalProperties false (deny_unknown_fields) | Y | — | Y | Y | — |
 | additionalProperties schema (map field) | Y | — | Y | Y | — |
+| Property with default (optional/required + default) | Y | Y | Y | Y | Y |
 
 ### Rust codegen: name sanitization
 
@@ -623,9 +624,13 @@ We use `title` for struct naming (PascalCase) when **model name source** is defa
 
 ### default
 
-TODO. (Planned: preserve JSON `null` in default (Absent vs Present(Value)); serde `Option<Value>` with null loses that distinction. Two strategies: `UseTypeDefault` → `#[serde(default)]` when schema value equals type Default; `Custom` → generated function + `#[serde(default = "fn")]`. Optional + null: use `#[serde(default)]`. Emission order: enums first, then default functions, then structs. Out of scope: object defaults, non-empty array defaults.)
+The `default` keyword is a meta-data/annotation keyword. It specifies a value that may be used when the instance is absent; it does **not** affect validation. Validators must not reject or accept instances based on `default`.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We store `default` as `default_value: Option<serde_json::Value>` on `JsonSchema` (serialized as `"default"`). JSON `null` is stored as `Some(Value::Null)`; absent key is `None`. **Validator:** Parse and store only; no validation logic. **Codegen (schema → Rust):** UseTypeDefault — when schema default equals the Rust type's default (e.g. null, false, 0, `""`, `[]`, `{}`), emit `#[serde(default)]`. Custom — otherwise emit a generated default function and `#[serde(default = "fn")]`. Optional + null: use `#[serde(default)]`. Emission order: enums first, then default functions, then structs. **Dedupe:** Both Functional and Full modes include `default_value` in the dedupe key (identical defaults required for dedupe). **Reverse codegen:** Field-level `#[to_json_schema(default = "...")]` (or literal) merges into property schema `default_value`. **Macro:** Derive parses `default = ...` and passes into property_inserts. Out of scope: object defaults, non-empty array defaults.
+
+**Spec version quirks:** In all drafts we support (draft-00 through 2020-12), `default` is defined as meta-data/annotation only with no validation effect. Draft 2019-09 and 2020-12 place it in the meta-data vocabulary explicitly. No behavioral differences between drafts for validation or codegen purposes.
+
+**Parse note:** An object with two or more properties each having a `default` key can hit a serde_json map deserialization quirk (EOF while parsing). Single-property default and top-level schema default parse reliably; integration scenario and tests use a single property with default.
 
 ### examples
 

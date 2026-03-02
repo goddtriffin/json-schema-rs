@@ -69,6 +69,7 @@ fn derive_root_json_schema() {
         max_length: None,
         pattern: None,
         format: None,
+        default_value: None,
         all_of: None,
         any_of: None,
         one_of: None,
@@ -106,6 +107,7 @@ fn derive_address_json_schema() {
         max_length: None,
         pattern: None,
         format: None,
+        default_value: None,
         all_of: None,
         any_of: None,
         one_of: None,
@@ -264,6 +266,7 @@ fn derive_field_minimum_maximum_integer() {
         max_length: None,
         pattern: None,
         format: None,
+        default_value: None,
         all_of: None,
         any_of: None,
         one_of: None,
@@ -310,6 +313,7 @@ fn derive_field_minimum_maximum_float() {
         max_length: None,
         pattern: None,
         format: None,
+        default_value: None,
         all_of: None,
         any_of: None,
         one_of: None,
@@ -371,6 +375,7 @@ fn derive_field_only_minimum() {
         max_length: None,
         pattern: None,
         format: None,
+        default_value: None,
         all_of: None,
         any_of: None,
         one_of: None,
@@ -416,6 +421,7 @@ fn derive_field_only_maximum() {
         max_length: None,
         pattern: None,
         format: None,
+        default_value: None,
         all_of: None,
         any_of: None,
         one_of: None,
@@ -593,6 +599,43 @@ fn macro_derive_to_json_schema_string_pattern() {
     let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
     let expected: Option<String> = Some("^x+$".to_string());
     let actual: Option<String> = name_schema.pattern.clone();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithDefaultField {
+    #[to_json_schema(default = 42)]
+    count: Option<i64>,
+    #[to_json_schema(default = "foo")]
+    name: Option<String>,
+}
+
+#[test]
+fn derive_field_default_count_emits_default_in_schema() {
+    let schema: JsonSchema = WithDefaultField::json_schema();
+    let count_schema: &JsonSchema = schema.properties.get("count").expect("count property");
+    let expected: Option<serde_json::Value> = Some(serde_json::json!(42));
+    let actual: Option<serde_json::Value> = count_schema.default_value.clone();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_field_default_name_emits_default_in_schema() {
+    let schema: JsonSchema = WithDefaultField::json_schema();
+    let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
+    let expected: Option<serde_json::Value> = Some(serde_json::json!("foo"));
+    let actual: Option<serde_json::Value> = name_schema.default_value.clone();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_field_default_round_trip_serializes_and_parses() {
+    let schema: JsonSchema = WithDefaultField::json_schema();
+    let json: String = (&schema).try_into().expect("serialize");
+    let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let expected: JsonSchema = schema.clone();
+    let actual: JsonSchema = reparsed;
     assert_eq!(expected, actual);
 }
 

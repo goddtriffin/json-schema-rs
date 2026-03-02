@@ -81,6 +81,10 @@ Keyword list derived from vendored draft 2020-12 meta-schemas under `specs/json-
 | uniqueItems | yes | `true` → `HashSet<T>`, otherwise `Vec<T>`. |
 | writeOnly | no | Not used. |
 
+## Default keyword (json-schema-rs comparison)
+
+Typify emits `#[serde(default)]` when the schema default equals the Rust type default, and a generated default function in a `defaults` module with `#[serde(default = "…")]` otherwise; it also validates the default value against the schema. *json-schema-rs* follows the same strategy: UseTypeDefault → `#[serde(default)]`, Custom → module-level default function + `#[serde(default = "fn")]`; emission order is enums, then default functions, then structs. Both include default in dedupe so structurally identical schemas with different defaults are not merged.
+
 ## Constraints
 
 Validation keywords are used only for structure and type selection, not enforced as value constraints in the generated Rust types. The README states that bounded numbers (e.g. `minimum`/`maximum`) “won’t enforce those value constraints.” In the code: `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum` are used to choose integer Rust types (e.g. i8, u64, NonZeroU64) and to validate default values; they are not emitted as runtime checks. For strings, `minLength`/`maxLength`/`pattern` are stored in newtype constraints and can be used for validation (e.g. via regress). *json-schema-rs* also uses regress for pattern but enforces in the central validator and emits `#[to_json_schema(pattern = "...")]` for round-trip; Typify validates pattern in generated code. Array `minItems`/`maxItems` are used for tuple length but marked TODO for enforcement. The `validate` module and `schema_value_validate` are used internally for merge/compatibility checks, not for user-facing validation of generated types.
