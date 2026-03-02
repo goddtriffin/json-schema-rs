@@ -38,11 +38,52 @@ fn def_key_for_type(ty: &Type) -> Option<String> {
             | "HashSet"
             | "BTreeMap"
             | "BTreeSet"
+            | "Box"
     );
     if is_builtin {
         return None;
     }
     Some(name)
+}
+
+/// Inner type of `Vec<T>`, `Option<T>`, `HashSet<T>`, or `Box<T>`.
+fn inner_type_for_container(ty: &Type) -> Option<&Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let seg = type_path.path.segments.last()?;
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    let first = args.args.first()?;
+    let syn::GenericArgument::Type(t) = first else {
+        return None;
+    };
+    let name: &str = &seg.ident.to_string();
+    let is_container: bool = matches!(name, "Vec" | "Option" | "HashSet" | "Box");
+    if is_container { Some(t) } else { None }
+}
+
+/// Def key for a field type, peeling Vec/Option/HashSet/Box. Returns (`def_key`, `is_array_like`, `is_recursive`).
+/// `is_array_like`: true for `Vec<T>` and `HashSet<T>` (need `items: { $ref }`).
+fn def_key_for_field_type(ty: &Type, current_struct: &Ident) -> Option<(String, bool, bool)> {
+    let current_name: &str = &current_struct.to_string();
+    let effective_ty: &Type = inner_type_for_container(ty).unwrap_or(ty);
+    // Peel Option if nested (e.g. Option<Vec<Address>>).
+    let effective_ty: &Type = inner_type_for_container(effective_ty).unwrap_or(effective_ty);
+    let def_key: String = def_key_for_type(effective_ty)?;
+    let is_array_like: bool = {
+        let Type::Path(tp) = ty else {
+            return Some((def_key.clone(), false, def_key == current_name));
+        };
+        let seg = tp.path.segments.last();
+        seg.is_some_and(|s| {
+            let n: &str = &s.ident.to_string();
+            n == "Vec" || n == "HashSet"
+        })
+    };
+    let is_recursive: bool = def_key == current_name;
+    Some((def_key, is_array_like, is_recursive))
 }
 
 /// Parser for doc attribute value: `= "string"` or just `"string"`.
@@ -578,6 +619,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     let mut property_inserts: Vec<TokenStream2> = Vec::new();
     let mut required_keys: Vec<String> = Vec::new();
     let mut defs_inserts: Vec<TokenStream2> = Vec::new();
+    let mut has_recursive_field: bool = false;
 
     for field in fields {
         let key: String = field_property_key(field)?;
@@ -678,28 +720,112 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             || field_deprecated_val.is_some()
             || field_default_expr.is_some();
 
-        if let Some(def_key) = def_key_for_type(schema_ty)
+        let field_def_info: Option<(String, bool, bool)> = def_key_for_field_type(schema_ty, &name);
+
+        if let Some((def_key, is_array_like, is_recursive)) = field_def_info
             && !has_overrides
         {
             let def_key_lit: LitStr = LitStr::new(&def_key, span);
             let ref_str: String = format!("#/$defs/{def_key}");
             let ref_lit: LitStr = LitStr::new(&ref_str, span);
+            let effective_schema_ty: &Type =
+                inner_type_for_container(schema_ty).unwrap_or(schema_ty);
 
-            defs_inserts.push(quote! {
-                defs.entry(#def_key_lit.to_string()).or_insert_with(|| {
-                    <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema()
-                });
-            });
-            property_inserts.push(quote! {
-                {
-                    let schema = ::json_schema_rs::JsonSchema {
-                        ref_: Some(#ref_lit.to_string()),
-                        deprecated: #deprecated_expr,
-                        ..::json_schema_rs::JsonSchema::default()
+            if is_recursive {
+                has_recursive_field = true;
+                if is_array_like {
+                    let is_hash_set: bool = if let Type::Path(tp) = schema_ty {
+                        tp.path
+                            .segments
+                            .last()
+                            .is_some_and(|s| s.ident == "HashSet")
+                    } else {
+                        false
                     };
-                    properties.insert(#key_lit.to_string(), schema);
+                    let unique_items_expr: TokenStream2 = if is_hash_set {
+                        quote! { unique_items: Some(true), }
+                    } else {
+                        quote! {}
+                    };
+                    property_inserts.push(quote! {
+                        {
+                            let schema = ::json_schema_rs::JsonSchema {
+                                type_: Some("array".to_string()),
+                                items: Some(::std::boxed::Box::new(
+                                    ::json_schema_rs::JsonSchema {
+                                        ref_: Some(#ref_lit.to_string()),
+                                        ..::json_schema_rs::JsonSchema::default()
+                                    }
+                                )),
+                                #unique_items_expr
+                                deprecated: #deprecated_expr,
+                                ..::json_schema_rs::JsonSchema::default()
+                            };
+                            properties.insert(#key_lit.to_string(), schema);
+                        }
+                    });
+                } else {
+                    property_inserts.push(quote! {
+                        {
+                            let schema = ::json_schema_rs::JsonSchema {
+                                ref_: Some(#ref_lit.to_string()),
+                                deprecated: #deprecated_expr,
+                                ..::json_schema_rs::JsonSchema::default()
+                            };
+                            properties.insert(#key_lit.to_string(), schema);
+                        }
+                    });
                 }
-            });
+            } else {
+                defs_inserts.push(quote! {
+                    defs.entry(#def_key_lit.to_string()).or_insert_with(|| {
+                        <#effective_schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema()
+                    });
+                });
+                if is_array_like {
+                    let is_hash_set: bool = if let Type::Path(tp) = schema_ty {
+                        tp.path
+                            .segments
+                            .last()
+                            .is_some_and(|s| s.ident == "HashSet")
+                    } else {
+                        false
+                    };
+                    let unique_items_expr: TokenStream2 = if is_hash_set {
+                        quote! { unique_items: Some(true), }
+                    } else {
+                        quote! {}
+                    };
+                    property_inserts.push(quote! {
+                        {
+                            let schema = ::json_schema_rs::JsonSchema {
+                                type_: Some("array".to_string()),
+                                items: Some(::std::boxed::Box::new(
+                                    ::json_schema_rs::JsonSchema {
+                                        ref_: Some(#ref_lit.to_string()),
+                                        ..::json_schema_rs::JsonSchema::default()
+                                    }
+                                )),
+                                #unique_items_expr
+                                deprecated: #deprecated_expr,
+                                ..::json_schema_rs::JsonSchema::default()
+                            };
+                            properties.insert(#key_lit.to_string(), schema);
+                        }
+                    });
+                } else {
+                    property_inserts.push(quote! {
+                        {
+                            let schema = ::json_schema_rs::JsonSchema {
+                                ref_: Some(#ref_lit.to_string()),
+                                deprecated: #deprecated_expr,
+                                ..::json_schema_rs::JsonSchema::default()
+                            };
+                            properties.insert(#key_lit.to_string(), schema);
+                        }
+                    });
+                }
+            }
         } else {
             property_inserts.push(quote! {
                 {
@@ -734,6 +860,25 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         quote! { Some(vec![#(#keys),*]) }
     };
 
+    let struct_name_str: String = name.to_string();
+    let recursive_def_insert: TokenStream2 = if has_recursive_field {
+        let name_lit: LitStr = LitStr::new(&struct_name_str, name.span());
+        quote! {
+            {
+                let struct_schema = ::json_schema_rs::JsonSchema {
+                    type_: Some("object".to_string()),
+                    properties: properties.clone(),
+                    additional_properties: Some(::json_schema_rs::json_schema::json_schema::AdditionalProperties::Forbid),
+                    required: #required_expr,
+                    ..::json_schema_rs::JsonSchema::default()
+                };
+                defs.insert(#name_lit.to_string(), struct_schema);
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         impl ::json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> ::json_schema_rs::JsonSchema {
@@ -741,6 +886,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 let mut defs = ::std::collections::BTreeMap::new();
                 #(#defs_inserts)*
                 #(#property_inserts)*
+                #recursive_def_insert
                 let defs = if defs.is_empty() { None } else { Some(defs) };
                 ::json_schema_rs::JsonSchema {
                     schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),

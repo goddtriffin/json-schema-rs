@@ -21,6 +21,37 @@ struct Address {
 }
 
 #[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct RootWithAddress {
+    address: Address,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct TwoAddresses {
+    addr1: Address,
+    addr2: Address,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct Tree {
+    children: Vec<Tree>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithOptionalAddress {
+    address: Option<Address>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithAddressList {
+    addresses: Vec<Address>,
+}
+
+#[derive(ToJsonSchema)]
 #[json_schema(id = "http://example.com/with-id")]
 #[expect(dead_code)]
 struct WithId {
@@ -76,6 +107,191 @@ fn derive_address_json_schema() {
         ..Default::default()
     };
     let actual: JsonSchema = Address::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_nested_struct_emits_defs_and_ref() {
+    let address_schema: JsonSchema = Address::json_schema();
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: {
+            let mut m = BTreeMap::new();
+            m.insert("Address".to_string(), address_schema);
+            Some(m)
+        },
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "address".to_string(),
+                JsonSchema {
+                    ref_: Some("#/$defs/Address".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["address".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = RootWithAddress::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_two_fields_same_type_one_defs_entry() {
+    let address_schema: JsonSchema = Address::json_schema();
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: {
+            let mut m = BTreeMap::new();
+            m.insert("Address".to_string(), address_schema);
+            Some(m)
+        },
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "addr1".to_string(),
+                JsonSchema {
+                    ref_: Some("#/$defs/Address".to_string()),
+                    ..Default::default()
+                },
+            );
+            m.insert(
+                "addr2".to_string(),
+                JsonSchema {
+                    ref_: Some("#/$defs/Address".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["addr1".to_string(), "addr2".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = TwoAddresses::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_recursive_type_emits_defs_and_ref_no_stack_overflow() {
+    let tree_def_schema: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "children".to_string(),
+                JsonSchema {
+                    type_: Some("array".to_string()),
+                    items: Some(Box::new(JsonSchema {
+                        ref_: Some("#/$defs/Tree".to_string()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            );
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["children".to_string()]),
+        ..Default::default()
+    };
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: {
+            let mut m = BTreeMap::new();
+            m.insert("Tree".to_string(), tree_def_schema);
+            Some(m)
+        },
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "children".to_string(),
+                JsonSchema {
+                    type_: Some("array".to_string()),
+                    items: Some(Box::new(JsonSchema {
+                        ref_: Some("#/$defs/Tree".to_string()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            );
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["children".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = Tree::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_option_nested_struct_emits_defs() {
+    let address_schema: JsonSchema = Address::json_schema();
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: {
+            let mut m = BTreeMap::new();
+            m.insert("Address".to_string(), address_schema);
+            Some(m)
+        },
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "address".to_string(),
+                JsonSchema {
+                    ref_: Some("#/$defs/Address".to_string()),
+                    ..Default::default()
+                },
+            );
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: None,
+        ..Default::default()
+    };
+    let actual: JsonSchema = WithOptionalAddress::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_vec_nested_struct_emits_defs() {
+    let address_schema: JsonSchema = Address::json_schema();
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: {
+            let mut m = BTreeMap::new();
+            m.insert("Address".to_string(), address_schema);
+            Some(m)
+        },
+        properties: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "addresses".to_string(),
+                JsonSchema {
+                    type_: Some("array".to_string()),
+                    items: Some(Box::new(JsonSchema {
+                        ref_: Some("#/$defs/Address".to_string()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            );
+            m
+        },
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["addresses".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = WithAddressList::json_schema();
     assert_eq!(expected, actual);
 }
 

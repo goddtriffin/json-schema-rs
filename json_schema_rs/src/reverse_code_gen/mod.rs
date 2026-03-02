@@ -151,6 +151,12 @@ impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
     }
 }
 
+impl<T: ToJsonSchema> ToJsonSchema for Box<T> {
+    fn json_schema() -> JsonSchema {
+        T::json_schema()
+    }
+}
+
 /// Minimal hand-written struct implementing [`ToJsonSchema`] (used to validate trait shape).
 #[derive(Debug, Clone)]
 pub struct HandWrittenExample;

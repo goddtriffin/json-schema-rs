@@ -252,7 +252,7 @@ The JSON Schema `$ref` keyword references another schema by URI. Full resolution
     - Reuse the **definition key** (e.g. `"Address"`) as the struct name when the target is object-like (via `sanitize_struct_name`).
   - Resolution failures are surfaced as `CodeGenError::RefResolution { ref_str, reason }`. The CLI reports these per-schema; there is no fallback to `serde_json::Value` or silent inlining.
   - Enum and combination helpers (`collect_enums`, `collect_anyof_enums`, `collect_oneof_enums`, `collect_structs`) always resolve refs before inspecting types or traversing into child schemas.
-- **Reverse codegen:** `ToJsonSchema` and the derive macro currently build a **single-tree schema** per Rust type. They populate `ref_` only when explicitly requested (e.g. future attributes) and do not yet build a global `$defs` graph. See `$defs` below for the planned direction.
+- **Reverse codegen:** `ToJsonSchema` and the derive macro emit `$defs` and `$ref` for nested custom types. Shared types (e.g. two fields with the same struct type) are placed in `$defs` and referenced via `$ref` at use sites. Recursive types (e.g. `struct Tree { children: Vec<Tree> }`) are handled with cycle detection: the struct is added to `$defs` and the recursive edge uses `$ref` to avoid infinite expansion.
 
 **Spec version quirks:**
 
@@ -285,8 +285,8 @@ The JSON Schema `$defs` keyword (draft 2019-09, 2020-12) is a container for reus
     - Reuse the same Rust type wherever that definition is referenced.
   - The integration scenario `defs_ref` covers CLI codegen, compilation, and runtime deserialization for a schema that uses `$defs` plus `$ref`.
 - **Role in reverse codegen:**
-  - Today, `ToJsonSchema` for primitives and container types does **not** emit `$defs`; all emitted schemas leave `defs` and `definitions` as `None`.
-  - The derive macro for structs and enums builds a flat schema per Rust type. A future change will introduce a graph-style builder that places shared/recursive Rust types under `$defs` and emits `$ref` at use sites, as described in the `$defs` section of the implementation plan.
+  - The derive macro for structs emits `$defs` and `$ref` for nested custom types (including inside `Vec`, `Option`, `HashSet`, `Box`). Shared types (two or more fields with the same type) produce one entry in `$defs` and `$ref` at each use site. Recursive types are detected at macro expansion time; the struct is placed in `$defs` and the recursive edge emits only `$ref` to avoid infinite expansion.
+  - Primitives and container types (`String`, `Vec<T>`, etc.) do not add to `$defs`; they are inlined. Structs and enums with `#[derive(ToJsonSchema)]` that are referenced from other structs appear in `$defs`.
 
 **Spec version quirks:**
 
