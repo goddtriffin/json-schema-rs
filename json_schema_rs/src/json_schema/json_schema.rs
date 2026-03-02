@@ -192,6 +192,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) format: Option<String>,
     #[serde(default, rename = "default")]
     pub(crate) default_value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) examples: Option<Vec<serde_json::Value>>,
     #[serde(default, rename = "allOf")]
     pub(crate) all_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
     #[serde(default, rename = "anyOf")]
@@ -262,6 +264,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         pattern: h.pattern,
         format: h.format,
         default_value: h.default_value,
+        examples: h.examples,
         all_of,
         any_of,
         one_of,
@@ -375,6 +378,10 @@ pub struct JsonSchema {
     #[serde(rename = "default", skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
 
+    /// Example values (meta-data/annotation, draft-06+). Does not affect validation. Stored and round-tripped; not emitted as Rust.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub examples: Option<Vec<serde_json::Value>>,
+
     /// allOf: instance must validate against every subschema. Stored as-is at ingestion; validator validates each; codegen merges on-the-fly. Not preserved on round-trip or reverse codegen.
     #[serde(rename = "allOf", skip_serializing_if = "skip_all_of")]
     pub all_of: Option<Vec<JsonSchema>>,
@@ -446,6 +453,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             format: Option<String>,
             #[serde(default, rename = "default")]
             default_value: Option<serde_json::Value>,
+            #[serde(default)]
+            examples: Option<Vec<serde_json::Value>>,
             #[serde(default, rename = "allOf")]
             all_of: Option<Vec<JsonSchema>>,
             #[serde(default, rename = "anyOf")]
@@ -480,6 +489,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             pattern: h.pattern,
             format: h.format,
             default_value: h.default_value,
+            examples: h.examples,
             all_of: h.all_of,
             any_of: h.any_of,
             one_of: h.one_of,
@@ -835,6 +845,75 @@ mod tests {
         let bytes: Vec<u8> = (&parsed).try_into().expect("serialize");
         let reparsed: JsonSchema = JsonSchema::try_from(bytes.as_slice()).expect("parse again");
         assert_eq!(parsed, reparsed);
+    }
+
+    // examples keyword (meta-data, draft-06+)
+
+    #[test]
+    fn parse_examples_present() {
+        let json = r#"{"type":"string","examples":[1,"a",{"b":true}]}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            examples: Some(vec![
+                serde_json::json!(1),
+                serde_json::json!("a"),
+                serde_json::json!({"b": true}),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_examples_absent() {
+        let json = r#"{"type":"string"}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_examples_empty_array() {
+        let json = r#"{"type":"string","examples":[]}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("string".to_string()),
+            examples: Some(vec![]),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn round_trip_examples_unchanged() {
+        let json = r#"{"type":"object","examples":[1,2,3]}"#;
+        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let expected: JsonSchema = parsed;
+        let actual: JsonSchema = reparsed;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_parse_schema_with_examples_succeeds() {
+        let json = r#"{"type":"object","properties":{},"examples":[1]}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let actual: JsonSchema =
+            JsonSchema::new_from_str(json, &settings).expect("parse with strict");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            examples: Some(vec![serde_json::json!(1)]),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
     }
 
     // TryFrom: parse into JsonSchema with default settings

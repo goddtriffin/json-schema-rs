@@ -28,7 +28,7 @@ String fields), **pattern** (string constraint as ECMA 262 regex; validator
 enforces via regress; codegen emits `#[json_schema(pattern = "...")]`;
 reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen emits `#[serde(default)]` or `#[serde(default = "fn")]` so missing keys get the schema default; reverse codegen via `#[json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
 codegen via `#[json_schema(description = "...")]`),
-**$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[json_schema(comment = "...")]`), and **$schema**
+**examples** (draft-06+; meta-data only; stored and round-tripped; not used for validation or codegen emission; Full dedupe includes in key, Functional excludes), **$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[json_schema(comment = "...")]`), and **$schema**
 (stored and round-tripped; used to infer spec version when not set explicitly;
 reverse codegen emits Draft 2020-12 URI by default; default is Draft 2020-12
 when absent or unrecognized), and

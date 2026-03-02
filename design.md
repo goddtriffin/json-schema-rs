@@ -127,6 +127,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Round-trip (generate → Type::json_schema() → TryFrom → parse → equals) | — | Y | — | Y | Y |
 | description (struct, field, enum doc) | Y | Y | Y | Y | Y |
 | $comment (round-trip; reverse via comment attribute) | Y | Y | Y | Y | Y |
+| Schema with examples (annotation only; stored, round-trip; dedupe Full/Functional) | Y | — | Y | Y | Y |
 | $id (round-trip; id attribute emitted when present; reverse via id attribute) | Y | — | — | — | — |
 | Required array property (e.g. Vec\<String\>) | Y | Y | Y | Y | Y |
 | Optional array property | Y | Y | Y | Y | Y |
@@ -693,9 +694,11 @@ The `default` keyword is a meta-data/annotation keyword. It specifies a value th
 
 ### examples
 
-TODO.
+The `examples` keyword is meta-data/annotation (draft-06+). Its value is an array of example JSON values; there are no restrictions on the values. It does **not** affect validation. Validators must not reject or accept instances based on `examples`.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:** We store `examples` as `Option<Vec<serde_json::Value>>` on `JsonSchema` (serialized as `"examples"`). **Validator:** Parse and store only; no validation logic. **Codegen (schema → Rust):** We do not emit Rust from examples (no doc, no const). **Dedupe:** Full mode includes `examples` in the dedupe key (same shape with different examples yields two structs); Functional mode excludes it (different examples yield one struct). **Reverse codegen:** Serializing a `JsonSchema` that has `examples` emits them; hand-written structs do not set examples unless a future attribute is added. **allOf merge:** When merging object schemas, if the target has no examples we copy from the other subschema.
+
+**Spec version quirks:** `examples` appears in draft-06 and later only; draft-00 through draft-05 do not define it. Draft-07 adds: when multiple occurrences of `examples` apply to a single sub-instance, implementations MUST provide a flat array of all values. We do not merge examples from multiple subschemas (e.g. allOf); we only copy when the target has none.
 
 ### deprecated
 

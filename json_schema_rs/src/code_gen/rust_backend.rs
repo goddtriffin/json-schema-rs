@@ -140,7 +140,7 @@ enum AdditionalPropertiesDedupe {
 }
 
 /// Key for deduplication: canonical representation of an object schema for a given mode.
-/// Implements `Ord` + `Eq` for use in `BTreeMap`. Full mode includes id, description, and comment; Functional mode excludes them (key ignores $id).
+/// Implements `Ord` + `Eq` for use in `BTreeMap`. Full mode includes id, description, comment, and examples; Functional mode excludes them (key ignores $id).
 #[derive(Debug, Clone)]
 struct DedupeKey {
     id: Option<String>,
@@ -151,6 +151,7 @@ struct DedupeKey {
     title: Option<String>,
     description: Option<String>,
     comment: Option<String>,
+    examples: Option<Vec<serde_json::Value>>,
     items: Option<Box<DedupeKey>>,
     unique_items: Option<bool>,
     min_items: Option<u64>,
@@ -172,6 +173,7 @@ impl PartialEq for DedupeKey {
             && self.title == other.title
             && self.description == other.description
             && self.comment == other.comment
+            && self.examples == other.examples
             && self.items == other.items
             && self.unique_items == other.unique_items
             && self.min_items == other.min_items
@@ -218,6 +220,7 @@ impl Ord for DedupeKey {
             .then_with(|| self.title.cmp(&other.title))
             .then_with(|| self.description.cmp(&other.description))
             .then_with(|| self.comment.cmp(&other.comment))
+            .then_with(|| compare_option_vec_value(self.examples.as_ref(), other.examples.as_ref()))
             .then_with(|| self.items.cmp(&other.items))
             .then_with(|| self.unique_items.cmp(&other.unique_items))
             .then_with(|| self.min_items.cmp(&other.min_items))
@@ -241,6 +244,30 @@ fn compare_option_value(a: Option<&serde_json::Value>, b: Option<&serde_json::Va
             let a_str: String = serde_json::to_string(a_val).unwrap_or_default();
             let b_str: String = serde_json::to_string(b_val).unwrap_or_default();
             a_str.cmp(&b_str)
+        }
+    }
+}
+
+fn compare_option_vec_value(
+    a: Option<&Vec<serde_json::Value>>,
+    b: Option<&Vec<serde_json::Value>>,
+) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(aa), Some(bb)) => {
+            let len_cmp: Ordering = aa.len().cmp(&bb.len());
+            if len_cmp != Ordering::Equal {
+                return len_cmp;
+            }
+            for (a_val, b_val) in aa.iter().zip(bb.iter()) {
+                let c: Ordering = compare_option_value(Some(a_val), Some(b_val));
+                if c != Ordering::Equal {
+                    return c;
+                }
+            }
+            Ordering::Equal
         }
     }
 }
@@ -484,6 +511,10 @@ impl DedupeKey {
                 DedupeMode::Full => schema.comment.clone(),
                 DedupeMode::Functional | DedupeMode::Disabled => None,
             },
+            examples: match mode {
+                DedupeMode::Full => schema.examples.clone(),
+                DedupeMode::Functional | DedupeMode::Disabled => None,
+            },
             items,
             unique_items,
             min_items,
@@ -667,6 +698,9 @@ fn merge_object_schema_into(
     }
     if target.comment.is_none() {
         target.comment.clone_from(&other.comment);
+    }
+    if target.examples.is_none() {
+        target.examples.clone_from(&other.examples);
     }
     Ok(())
 }
@@ -4082,6 +4116,53 @@ pub struct Root {
         let actual_shared_some = output.shared.is_some();
         assert_eq!(expected_shared_some, actual_shared_some);
         assert_eq!(2, output.per_schema.len());
+    }
+
+    #[test]
+    fn examples_golden_same_rust_with_or_without() {
+        let json_without: &str =
+            r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}"#;
+        let json_with: &str = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":["foo"]}"#;
+        let schema_without: JsonSchema = serde_json::from_str(json_without).unwrap();
+        let schema_with: JsonSchema = serde_json::from_str(json_with).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::default();
+        let output_without: super::GenerateRustOutput =
+            generate_rust(&[schema_without], &settings).unwrap();
+        let output_with: super::GenerateRustOutput =
+            generate_rust(&[schema_with], &settings).unwrap();
+        let expected: String = String::from_utf8(output_without.per_schema[0].clone()).unwrap();
+        let actual: String = String::from_utf8(output_with.per_schema[0].clone()).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dedupe_full_same_shape_different_examples_two_structs() {
+        let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[1]}"#;
+        let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[2]}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Full)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected: (bool, usize) = (false, 2);
+        let actual: (bool, usize) = (output.shared.is_some(), output.per_schema.len());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dedupe_functional_same_shape_different_examples_one_struct() {
+        let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[1]}"#;
+        let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[2]}"#;
+        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
+        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Functional)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let expected_shared_some = true;
+        let actual_shared_some = output.shared.is_some();
+        assert_eq!(expected_shared_some, actual_shared_some);
     }
 
     #[test]

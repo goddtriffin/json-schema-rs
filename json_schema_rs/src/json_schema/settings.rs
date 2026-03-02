@@ -12,7 +12,7 @@ use super::spec_version::SpecVersion;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonSchemaSettings {
     /// When `true`, schema ingestion fails if any schema object contains keys
-    /// other than the known keywords we model (including `$schema`, `type`, `properties`, `required`, `title`, `description`, etc.).
+    /// other than the known keywords we model (including `$schema`, `type`, `properties`, `required`, `title`, `description`, `examples`, etc.).
     pub disallow_unknown_fields: bool,
 
     /// Explicit spec version to use. When `Some(v)`, that version is used and `$schema` is not used for draft selection.

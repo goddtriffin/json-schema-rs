@@ -2569,6 +2569,16 @@ fn main() {
 "##;
                 (lib_rs, extra, main_rs)
             }
+            "examples_annotation" => {
+                let schema_json = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":["foo"]}"#;
+                let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse schema");
+                let output = generate_rust(&[schema], default_code_gen).expect("generate");
+                let main_rs = r##"fn main() {
+    let _: compile_test::Root = serde_json::from_str(r#"{"x":"foo"}"#).unwrap();
+}
+"##;
+                (output.per_schema[0].clone(), vec![], main_rs)
+            }
             _ => panic!("unknown scenario: {scenario_name}"),
         };
 
@@ -2726,6 +2736,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "additional_properties_schema",
         "string_pattern",
         "default",
+        "examples_annotation",
     ];
 
     for name in &scenario_list {
