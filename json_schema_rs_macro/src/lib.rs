@@ -6,7 +6,7 @@
 //! `json_schema_to_rust!(r#"{"type":"object", ...}"#)`.
 //!
 //! For reverse codegen (Rust → JSON Schema), use `#[derive(ToJsonSchema)]` with optional
-//! `#[to_json_schema(title = "...")]` on the struct and `#[serde(rename = "...")]` on fields.
+//! `#[json_schema(title = "...")]` on the struct and `#[serde(rename = "...")]` on fields.
 
 mod derive;
 
@@ -36,7 +36,7 @@ impl Parse for SchemaInputs {
     }
 }
 
-#[proc_macro_derive(ToJsonSchema, attributes(to_json_schema, json_schema))]
+#[proc_macro_derive(ToJsonSchema, attributes(json_schema))]
 pub fn derive_to_json_schema(input: TokenStream) -> TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input as DeriveInput);
     match expand_to_json_schema(input) {

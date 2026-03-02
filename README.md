@@ -17,23 +17,23 @@ items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
 codegen emits `HashSet<T>` for hashable item types and the validator enforces
 uniqueness), **minItems** and **maxItems** (array/set length constraints;
 validator enforces; codegen emits
-`#[to_json_schema(min_items = ..., max_items = ...)]` on generated array/set
+`#[json_schema(min_items = ..., max_items = ...)]` on generated array/set
 fields; reverse codegen supports the same attributes on Vec and HashSet fields),
 **minimum** and **maximum** (validation and codegen type selection: narrow
 integer/float types when both bounds are present and valid), **minLength** and
 **maxLength** (string length constraints in Unicode code points; validator
-enforces; codegen emits `#[to_json_schema(min_length = ..., max_length = ...)]`
+enforces; codegen emits `#[json_schema(min_length = ..., max_length = ...)]`
 on generated string fields; reverse codegen supports the same attributes on
 String fields), **pattern** (string constraint as ECMA 262 regex; validator
-enforces via regress; codegen emits `#[to_json_schema(pattern = "...")]`;
-reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen emits `#[serde(default)]` or `#[serde(default = "fn")]` so missing keys get the schema default; reverse codegen via `#[to_json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
-codegen via `#[to_json_schema(description = "...")]`),
-**$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[to_json_schema(comment = "...")]`), and **$schema**
+enforces via regress; codegen emits `#[json_schema(pattern = "...")]`;
+reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen emits `#[serde(default)]` or `#[serde(default = "fn")]` so missing keys get the schema default; reverse codegen via `#[json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
+codegen via `#[json_schema(description = "...")]`),
+**$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[json_schema(comment = "...")]`), and **$schema**
 (stored and round-tripped; used to infer spec version when not set explicitly;
 reverse codegen emits Draft 2020-12 URI by default; default is Draft 2020-12
 when absent or unrecognized), and
 **$id** (unique identifier; stored and round-tripped; we support only `$id`, not draft-04`id`; Full dedupe includes`
-$id` in the key, Functional does not; reverse codegen via `#[to_json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
+$id` in the key, Functional does not; reverse codegen via `#[json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
 so round-trip preserves it), **allOf** (validator: instance must validate
 against every subschema; codegen: branches merged on-the-fly into one Rust
 model; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: non-empty anyOf becomes a Rust enum with one variant per branch, including root anyOf; reverse codegen: not currently emitted), **oneOf** (validator: instance must validate against exactly one subschema; codegen: non-empty oneOf becomes a Rust enum with one variant per branch, including root oneOf; reverse codegen: not currently emitted), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: false → `#[serde(deny_unknown_fields)]`, schema → `additional: BTreeMap<String, T>`; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). For implementation details and design
@@ -184,8 +184,8 @@ generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
 **Reverse codegen (Rust → JSON Schema).** Every generated struct implements
 **ToJsonSchema** (e.g. `Root::json_schema()`). Hand-written structs can use
 `#[derive(ToJsonSchema)]` from `json_schema_rs_macro` with optional
-`#[to_json_schema(title = "...")]` and, on fields,
-**`#[to_json_schema(minimum = N, maximum = N)]`** to set JSON Schema bounds for
+`#[json_schema(title = "...")]` and, on fields,
+**`#[json_schema(minimum = N, maximum = N)]`** to set JSON Schema bounds for
 integer/number properties. Convert a schema to JSON with
 `String::try_from(&schema)` or `.try_into()`. Add **json-schema-rs-macro** when
 using the derive. Details: [design.md](design.md).

@@ -6,7 +6,7 @@ use json_schema_rs_macro::ToJsonSchema;
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(ToJsonSchema)]
-#[to_json_schema(title = "Root")]
+#[json_schema(title = "Root")]
 #[expect(dead_code)]
 struct Root {
     id: String,
@@ -21,7 +21,7 @@ struct Address {
 }
 
 #[derive(ToJsonSchema)]
-#[to_json_schema(id = "http://example.com/with-id")]
+#[json_schema(id = "http://example.com/with-id")]
 #[expect(dead_code)]
 struct WithId {
     value: String,
@@ -159,7 +159,7 @@ fn derive_serialize_round_trip() {
 }
 
 #[derive(ToJsonSchema)]
-#[to_json_schema(description = "From attribute")]
+#[json_schema(description = "From attribute")]
 #[expect(dead_code)]
 struct AttrDescription {
     y: i64,
@@ -173,7 +173,7 @@ fn derive_attribute_description() {
 }
 
 #[derive(ToJsonSchema)]
-#[to_json_schema(comment = "Created by X")]
+#[json_schema(comment = "Created by X")]
 #[expect(dead_code)]
 struct WithCommentAttr {
     id: String,
@@ -192,7 +192,7 @@ fn derive_attribute_comment() {
 }
 
 #[derive(ToJsonSchema)]
-#[to_json_schema(description = "Struct with description attribute")]
+#[json_schema(description = "Struct with description attribute")]
 #[expect(dead_code)]
 struct WithDocAttr {
     x: String,
@@ -206,7 +206,7 @@ fn derive_struct_description_attribute() {
 }
 
 #[derive(ToJsonSchema)]
-#[to_json_schema(description = "Enum description")]
+#[json_schema(description = "Enum description")]
 #[expect(dead_code)]
 enum EnumWithDescAttr {
     A,
@@ -231,7 +231,7 @@ fn derive_round_trip_with_description() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithIntegerMinMax {
-    #[to_json_schema(minimum = 0, maximum = 255)]
+    #[json_schema(minimum = 0, maximum = 255)]
     byte: i64,
 }
 
@@ -278,7 +278,7 @@ fn derive_field_minimum_maximum_integer() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithFloatMinMax {
-    #[to_json_schema(minimum = 0.0, maximum = 100.0)]
+    #[json_schema(minimum = 0.0, maximum = 100.0)]
     score: f64,
 }
 
@@ -341,7 +341,7 @@ fn derive_minimum_maximum_float_round_trip() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithOnlyMinimum {
-    #[to_json_schema(minimum = 10)]
+    #[json_schema(minimum = 10)]
     value: i64,
 }
 
@@ -387,7 +387,7 @@ fn derive_field_only_minimum() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithOnlyMaximum {
-    #[to_json_schema(maximum = 90)]
+    #[json_schema(maximum = 90)]
     value: i64,
 }
 
@@ -470,7 +470,7 @@ fn derive_struct_with_hash_set_field_emits_unique_items_true() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithVecFieldMinMax {
-    #[to_json_schema(min_items = 1, max_items = 10)]
+    #[json_schema(min_items = 1, max_items = 10)]
     tags: Vec<String>,
 }
 
@@ -489,7 +489,7 @@ fn derive_struct_with_vec_field_min_items_max_items_emits_bounds() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithHashSetFieldMinMax {
-    #[to_json_schema(min_items = 2, max_items = 5)]
+    #[json_schema(min_items = 2, max_items = 5)]
     ids: HashSet<String>,
 }
 
@@ -525,7 +525,7 @@ fn hash_set_string_json_schema_has_min_items_max_items_none() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithStringMinLength {
-    #[to_json_schema(min_length = 3)]
+    #[json_schema(min_length = 3)]
     name: String,
 }
 
@@ -540,7 +540,7 @@ fn macro_derive_to_json_schema_string_min_length() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithStringMaxLength {
-    #[to_json_schema(max_length = 10)]
+    #[json_schema(max_length = 10)]
     name: String,
 }
 
@@ -555,7 +555,7 @@ fn macro_derive_to_json_schema_string_max_length() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithStringBothLengths {
-    #[to_json_schema(min_length = 2, max_length = 50)]
+    #[json_schema(min_length = 2, max_length = 50)]
     name: String,
 }
 
@@ -589,7 +589,7 @@ fn macro_derive_to_json_schema_string_no_length_constraints() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithStringPattern {
-    #[to_json_schema(pattern = "^x+$")]
+    #[json_schema(pattern = "^x+$")]
     name: String,
 }
 
@@ -605,9 +605,9 @@ fn macro_derive_to_json_schema_string_pattern() {
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithDefaultField {
-    #[to_json_schema(default = 42)]
+    #[json_schema(default = 42)]
     count: Option<i64>,
-    #[to_json_schema(default = "foo")]
+    #[json_schema(default = "foo")]
     name: Option<String>,
 }
 

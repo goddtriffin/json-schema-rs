@@ -17,10 +17,10 @@ fn parse_doc_value(input: syn::parse::ParseStream) -> SynResult<String> {
     Ok(lit.value())
 }
 
-/// Extracts `title = "..."` from `#[to_json_schema(...)]` container attribute.
+/// Extracts `title = "..."` from `#[json_schema(...)]` container attribute.
 fn container_title(attrs: &[Attribute]) -> SynResult<Option<String>> {
     for attr in attrs {
-        if !attr.path().is_ident("to_json_schema") {
+        if !attr.path().is_ident("json_schema") {
             continue;
         }
         let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
@@ -44,10 +44,10 @@ fn container_title(attrs: &[Attribute]) -> SynResult<Option<String>> {
     Ok(None)
 }
 
-/// Extracts `id = "..."` from `#[to_json_schema(...)]` container attribute.
+/// Extracts `id = "..."` from `#[json_schema(...)]` container attribute.
 fn container_id(attrs: &[Attribute]) -> SynResult<Option<String>> {
     for attr in attrs {
-        if !attr.path().is_ident("to_json_schema") {
+        if !attr.path().is_ident("json_schema") {
             continue;
         }
         let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
@@ -71,12 +71,12 @@ fn container_id(attrs: &[Attribute]) -> SynResult<Option<String>> {
     Ok(None)
 }
 
-/// Extracts `description = "..."` from `#[to_json_schema(...)]` container attribute, or from `///` doc comments (joined with newline). Attribute takes precedence.
+/// Extracts `description = "..."` from `#[json_schema(...)]` container attribute, or from `///` doc comments (joined with newline). Attribute takes precedence.
 fn container_description(attrs: &[Attribute]) -> SynResult<Option<String>> {
     let mut from_attr: Option<String> = None;
     let mut doc_lines: Vec<String> = Vec::new();
     for attr in attrs {
-        if attr.path().is_ident("to_json_schema") {
+        if attr.path().is_ident("json_schema") {
             let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
             let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
             for meta in metas {
@@ -111,10 +111,10 @@ fn container_description(attrs: &[Attribute]) -> SynResult<Option<String>> {
     }
 }
 
-/// Extracts `comment = "..."` from `#[to_json_schema(...)]` container attribute.
+/// Extracts `comment = "..."` from `#[json_schema(...)]` container attribute.
 fn container_comment(attrs: &[Attribute]) -> SynResult<Option<String>> {
     for attr in attrs {
-        if !attr.path().is_ident("to_json_schema") {
+        if !attr.path().is_ident("json_schema") {
             continue;
         }
         let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
@@ -157,10 +157,10 @@ fn field_description(field: &Field) -> SynResult<Option<String>> {
     }
 }
 
-/// Extracts a numeric value (integer or float literal) from `#[to_json_schema(key = N)]` on a field.
+/// Extracts a numeric value (integer or float literal) from `#[json_schema(key = N)]` on a field.
 fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<f64>> {
     for attr in &field.attrs {
-        if !attr.path().is_ident("to_json_schema") {
+        if !attr.path().is_ident("json_schema") {
             continue;
         }
         let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
@@ -185,7 +185,7 @@ fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<f64>> {
                         return Err(Error::new_spanned(
                             &nv.value,
                             format!(
-                                "to_json_schema({key} = ...) requires an integer or float literal"
+                                "json_schema({key} = ...) requires an integer or float literal"
                             ),
                         ));
                     }
@@ -193,7 +193,7 @@ fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<f64>> {
                 _ => {
                     return Err(Error::new_spanned(
                         &nv.value,
-                        format!("to_json_schema({key} = ...) requires an integer or float literal"),
+                        format!("json_schema({key} = ...) requires an integer or float literal"),
                     ));
                 }
             };
@@ -203,20 +203,20 @@ fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<f64>> {
     Ok(None)
 }
 
-/// Extracts `minimum = N` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `minimum = N` from a field's `#[json_schema(...)]` attribute.
 fn field_minimum(field: &Field) -> SynResult<Option<f64>> {
     field_numeric_attr(field, "minimum")
 }
 
-/// Extracts `maximum = N` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `maximum = N` from a field's `#[json_schema(...)]` attribute.
 fn field_maximum(field: &Field) -> SynResult<Option<f64>> {
     field_numeric_attr(field, "maximum")
 }
 
-/// Extracts an integer value (u64) from `#[to_json_schema(key = N)]` on a field.
+/// Extracts an integer value (u64) from `#[json_schema(key = N)]` on a field.
 fn field_u64_attr(field: &Field, key: &str) -> SynResult<Option<u64>> {
     for attr in &field.attrs {
-        if !attr.path().is_ident("to_json_schema") {
+        if !attr.path().is_ident("json_schema") {
             continue;
         }
         let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
@@ -235,7 +235,7 @@ fn field_u64_attr(field: &Field, key: &str) -> SynResult<Option<u64>> {
                         return Err(Error::new_spanned(
                             &nv.value,
                             format!(
-                                "to_json_schema({key} = ...) requires a non-negative integer literal"
+                                "json_schema({key} = ...) requires a non-negative integer literal"
                             ),
                         ));
                     }
@@ -243,9 +243,7 @@ fn field_u64_attr(field: &Field, key: &str) -> SynResult<Option<u64>> {
                 _ => {
                     return Err(Error::new_spanned(
                         &nv.value,
-                        format!(
-                            "to_json_schema({key} = ...) requires a non-negative integer literal"
-                        ),
+                        format!("json_schema({key} = ...) requires a non-negative integer literal"),
                     ));
                 }
             };
@@ -255,30 +253,30 @@ fn field_u64_attr(field: &Field, key: &str) -> SynResult<Option<u64>> {
     Ok(None)
 }
 
-/// Extracts `min_items = N` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `min_items = N` from a field's `#[json_schema(...)]` attribute.
 fn field_min_items(field: &Field) -> SynResult<Option<u64>> {
     field_u64_attr(field, "min_items")
 }
 
-/// Extracts `max_items = N` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `max_items = N` from a field's `#[json_schema(...)]` attribute.
 fn field_max_items(field: &Field) -> SynResult<Option<u64>> {
     field_u64_attr(field, "max_items")
 }
 
-/// Extracts `min_length = N` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `min_length = N` from a field's `#[json_schema(...)]` attribute.
 fn field_min_length(field: &Field) -> SynResult<Option<u64>> {
     field_u64_attr(field, "min_length")
 }
 
-/// Extracts `max_length = N` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `max_length = N` from a field's `#[json_schema(...)]` attribute.
 fn field_max_length(field: &Field) -> SynResult<Option<u64>> {
     field_u64_attr(field, "max_length")
 }
 
-/// Extracts a string value from `#[to_json_schema(key = "value")]` on a field.
+/// Extracts a string value from `#[json_schema(key = "value")]` on a field.
 fn field_str_attr(field: &Field, key: &str) -> SynResult<Option<String>> {
     for attr in &field.attrs {
-        if !attr.path().is_ident("to_json_schema") {
+        if !attr.path().is_ident("json_schema") {
             continue;
         }
         let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
@@ -296,14 +294,14 @@ fn field_str_attr(field: &Field, key: &str) -> SynResult<Option<String>> {
                     _ => {
                         return Err(Error::new_spanned(
                             &nv.value,
-                            format!("to_json_schema({key} = ...) requires a string literal"),
+                            format!("json_schema({key} = ...) requires a string literal"),
                         ));
                     }
                 },
                 _ => {
                     return Err(Error::new_spanned(
                         &nv.value,
-                        format!("to_json_schema({key} = ...) requires a string literal"),
+                        format!("json_schema({key} = ...) requires a string literal"),
                     ));
                 }
             };
@@ -313,17 +311,17 @@ fn field_str_attr(field: &Field, key: &str) -> SynResult<Option<String>> {
     Ok(None)
 }
 
-/// Extracts `pattern = "..."` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `pattern = "..."` from a field's `#[json_schema(...)]` attribute.
 fn field_pattern(field: &Field) -> SynResult<Option<String>> {
     field_str_attr(field, "pattern")
 }
 
-/// Extracts `default = <literal>` from a field's `#[to_json_schema(...)]` attribute.
+/// Extracts `default = <literal>` from a field's `#[json_schema(...)]` attribute.
 /// Supports string, integer, float, and bool literals (maps to JSON default value).
 /// Returns the expression to use for `default_value` (e.g. `Some(serde_json::json!(42))`).
 fn field_default(field: &Field) -> SynResult<Option<Expr>> {
     for attr in &field.attrs {
-        if !attr.path().is_ident("to_json_schema") {
+        if !attr.path().is_ident("json_schema") {
             continue;
         }
         let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
@@ -348,7 +346,7 @@ fn field_default(field: &Field) -> SynResult<Option<Expr>> {
             }
             return Err(Error::new_spanned(
                 expr,
-                "to_json_schema(default = ...) requires a string, integer, float, or bool literal",
+                "json_schema(default = ...) requires a string, integer, float, or bool literal",
             ));
         }
     }

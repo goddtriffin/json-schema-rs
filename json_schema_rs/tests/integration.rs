@@ -593,7 +593,7 @@ fn cli_generate_rust_array_min_items_max_items() {
     let out_path = out_dir.path().join("schema.rs");
     let actual = std::fs::read_to_string(&out_path).expect("read output");
     assert!(
-        actual.contains("#[to_json_schema(min_items = 2, max_items = 5)]"),
+        actual.contains("#[json_schema(min_items = 2, max_items = 5)]"),
         "expected min_items/max_items attribute: {actual}"
     );
     assert!(actual.contains("pub tags: Vec<String>"));
@@ -624,7 +624,7 @@ fn cli_generate_rust_string_min_length_max_length() {
     let out_path = out_dir.path().join("schema.rs");
     let actual = std::fs::read_to_string(&out_path).expect("read output");
     assert!(
-        actual.contains("#[to_json_schema(min_length = 2, max_length = 50)]"),
+        actual.contains("#[json_schema(min_length = 2, max_length = 50)]"),
         "expected min_length/max_length attribute: {actual}"
     );
     assert!(actual.contains("pub name: String"));
@@ -659,7 +659,7 @@ fn cli_generate_rust_string_pattern() {
             "use serde::{Deserialize, Serialize};\n\n",
             "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
             "pub struct Root {\n",
-            "    #[to_json_schema(pattern = \"^[a-z]+$\")]\n",
+            "    #[json_schema(pattern = \"^[a-z]+$\")]\n",
             "    pub name: String,\n",
             "}\n\n"
         )
@@ -1649,7 +1649,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[to_json_schema(min_items = 2, max_items = 5)]
+    #[json_schema(min_items = 2, max_items = 5)]
     pub tags: Vec<String>,
 }
 
@@ -1670,7 +1670,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[to_json_schema(min_length = 2)]
+    #[json_schema(min_length = 2)]
     pub name: String,
 }
 
@@ -1691,7 +1691,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[to_json_schema(max_length = 50)]
+    #[json_schema(max_length = 50)]
     pub name: String,
 }
 
@@ -1712,7 +1712,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[to_json_schema(min_length = 2, max_length = 50)]
+    #[json_schema(min_length = 2, max_length = 50)]
     pub name: String,
 }
 
@@ -1734,7 +1734,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[to_json_schema(min_length = 2, max_length = 50)]
+    #[json_schema(min_length = 2, max_length = 50)]
     pub name: Option<String>,
 }
 
@@ -1754,7 +1754,7 @@ fn integration_parse_and_generate_string_pattern() {
         "use serde::{Deserialize, Serialize};\n\n",
         "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
         "pub struct Root {\n",
-        "    #[to_json_schema(pattern = \"^[a-z]+$\")]\n",
+        "    #[json_schema(pattern = \"^[a-z]+$\")]\n",
         "    pub name: String,\n",
         "}\n\n"
     );
