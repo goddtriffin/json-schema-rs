@@ -42,6 +42,7 @@ These drive design decisions and how we rank competitors:
 - **Performance**: efficient algorithms and data structures; avoid unnecessary work.
 - **Testability**: core APIs work with in-memory writers (e.g. `Vec<u8>`) and test doubles, not only file I/O.
 - **Benchmarks**: we maintain benchmarks so we can measure and guard performance.
+- **Idiomatic Rust**: Code adheres to idiomatic Rust conventions, the Rust API Guidelines, and standard library patterns. We prioritize clarity and maintainability over brevity or non-Rust idioms from other languages.
 
 ### Design principles
 
@@ -50,6 +51,7 @@ These drive design decisions and how we rank competitors:
 - **Schema model**: Only model schema fields we need. Use serde with `#[serde(default)]` and `Option` for optional keys.
 - **Errors**: Use a custom error enum with manual `Debug`, `Display`, `Error`, and `From` impls (no thiserror unless the project adopts it).
 - **No literal recursion**: Use an explicit stack (or queue) and iterative loops instead of recursive calls so depth is limited by heap, not call stack. Avoids stack overflow on deeply nested schemas or instances.
+- **Prefer `..Default::default()` when constructing large structs**: When constructing structs with many optional fields (e.g. `JsonSchema`), set only the fields that matter for the context and use `..Default::default()` for the rest. Improves clarity about intent.
 
 ### Schema model: struct vs enum
 

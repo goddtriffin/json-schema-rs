@@ -19,34 +19,8 @@ pub trait ToJsonSchema {
 impl ToJsonSchema for String {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("string".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
     }
 }
@@ -54,68 +28,18 @@ impl ToJsonSchema for String {
 impl ToJsonSchema for bool {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("boolean".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
     }
 }
 
 fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
-        schema: None,
-        id: None,
-        ref_: None,
         type_: Some("integer".to_string()),
-        defs: None,
-        definitions: None,
-        properties: BTreeMap::new(),
-        additional_properties: None,
-        required: None,
-        title: None,
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
         minimum: Some(min),
         maximum: Some(max),
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     }
 }
 
@@ -170,34 +94,10 @@ impl ToJsonSchema for u64 {
 
 fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
-        schema: None,
-        id: None,
-        ref_: None,
         type_: Some("number".to_string()),
-        defs: None,
-        definitions: None,
-        properties: BTreeMap::new(),
-        additional_properties: None,
-        required: None,
-        title: None,
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
         minimum: Some(min),
         maximum: Some(max),
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     }
 }
 
@@ -222,34 +122,9 @@ impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
 impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("array".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
             items: Some(Box::new(T::json_schema())),
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
     }
 }
@@ -258,34 +133,10 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
 impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::HashSet<T> {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("array".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
             items: Some(Box::new(T::json_schema())),
             unique_items: Some(true),
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
     }
 }
@@ -293,34 +144,9 @@ impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::
 impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("object".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
             additional_properties: Some(AdditionalProperties::Schema(Box::new(V::json_schema()))),
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
     }
 }
@@ -332,34 +158,9 @@ pub struct HandWrittenExample;
 impl ToJsonSchema for HandWrittenExample {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("object".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
             title: Some("HandWrittenExample".to_string()),
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
     }
 }
@@ -368,31 +169,9 @@ impl ToJsonSchema for HandWrittenExample {
 impl ToJsonSchema for uuid::Uuid {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("string".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
             format: Some("uuid".to_string()),
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
     }
 }

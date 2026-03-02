@@ -3637,76 +3637,26 @@ pub struct Root {
     fn deeply_nested_schema_does_not_stack_overflow() {
         const DEPTH: usize = 150;
         let mut inner: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("object".to_string()),
-            defs: None,
-            definitions: None,
             properties: {
                 let mut m = std::collections::BTreeMap::new();
                 m.insert(
                     "value".to_string(),
                     JsonSchema {
-                        schema: None,
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
                 );
                 m
             },
-            additional_properties: None,
-            required: None,
             title: Some("Leaf".to_string()),
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
-                schema: None,
-                id: None,
-                ref_: None,
                 type_: Some("object".to_string()),
-                defs: None,
-                definitions: None,
-                properties: std::collections::BTreeMap::new(),
-                additional_properties: None,
-                required: None,
                 title: Some(format!("Level{i}")),
-                description: None,
-                comment: None,
-                enum_values: None,
-                const_value: None,
-                items: None,
-                unique_items: None,
-                min_items: None,
-                max_items: None,
-                minimum: None,
-                maximum: None,
-                min_length: None,
-                max_length: None,
-                pattern: None,
-                format: None,
-                default_value: None,
-                all_of: None,
-                any_of: None,
-                one_of: None,
+                ..Default::default()
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

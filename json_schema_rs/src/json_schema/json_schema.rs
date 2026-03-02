@@ -784,34 +784,9 @@ mod tests {
     #[test]
     fn try_from_schema_to_string() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("object".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
             title: Some("Root".to_string()),
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"object","title":"Root"}"#;
@@ -821,34 +796,9 @@ mod tests {
     #[test]
     fn try_from_schema_with_comment_serializes_dollar_comment() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            ref_: None,
             type_: Some("object".to_string()),
-            defs: None,
-            definitions: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
             comment: Some("Created by John Doe".to_string()),
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: String = (&schema).try_into().expect("serialize");
         let expected_contains = r#""$comment":"Created by John Doe""#;
@@ -861,8 +811,6 @@ mod tests {
     #[test]
     fn try_from_schema_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("string".to_string()),
             ..Default::default()
         };
