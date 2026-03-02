@@ -223,7 +223,10 @@ flowchart TB
   cause errors.
 - **Pattern engines**: Fancy-regex and standard regex; pattern options
   configurable. Patterns are translated from JSON Schema (ECMA) to Rust regex
-  and cached in `Context`.
+  and cached in `Context`. *json-schema-rs* uses regress (single ECMA 262
+  engine) in the validator and emits `#[to_json_schema(pattern = "...")]` for
+  round-trip; no translation layer, spec-aligned; jsonschema offers
+  configurable dual engines and caching.
 
 ## Output and integration
 

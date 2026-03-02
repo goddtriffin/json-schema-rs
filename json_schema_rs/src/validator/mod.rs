@@ -229,6 +229,25 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
                             actual_length: char_count,
                         });
                     }
+                    if let Some(ref pattern) = schema.pattern {
+                        match regress::Regex::new(pattern) {
+                            Ok(re) => {
+                                if re.find(s).is_none() {
+                                    errors.push(ValidationError::PatternMismatch {
+                                        instance_path: instance_path.clone(),
+                                        pattern: pattern.clone(),
+                                        value: s.to_string(),
+                                    });
+                                }
+                            }
+                            Err(_) => {
+                                errors.push(ValidationError::InvalidPatternInSchema {
+                                    instance_path: instance_path.clone(),
+                                    pattern: pattern.clone(),
+                                });
+                            }
+                        }
+                    }
                 }
                 #[cfg(feature = "uuid")]
                 if schema.format.as_deref() == Some("uuid") {
@@ -428,6 +447,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -664,6 +684,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -715,6 +736,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -751,6 +773,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: Some(vec![
                 JsonSchema {
@@ -815,6 +838,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: Some(vec![
                 JsonSchema {
@@ -872,6 +896,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: Some(vec![
                 JsonSchema {
@@ -940,6 +965,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: Some(vec![]),
             any_of: None,
@@ -973,6 +999,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: Some(vec![
                 JsonSchema {
@@ -1034,6 +1061,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: Some(vec![
@@ -1080,6 +1108,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: Some(vec![
@@ -1131,6 +1160,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: Some(vec![]),
@@ -1173,6 +1203,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: Some(vec![JsonSchema {
@@ -1209,6 +1240,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: Some(vec![JsonSchema {
@@ -1252,6 +1284,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1294,6 +1327,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1343,6 +1377,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1390,6 +1425,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1430,6 +1466,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1466,6 +1503,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1509,6 +1547,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1553,6 +1592,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        pattern: None,
                         format: None,
                         all_of: None,
                         any_of: None,
@@ -1576,6 +1616,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1611,6 +1652,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1636,6 +1678,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1673,6 +1716,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1706,6 +1750,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1739,6 +1784,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1775,6 +1821,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1811,6 +1858,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1847,6 +1895,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1883,6 +1932,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1922,6 +1972,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1958,6 +2009,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1998,6 +2050,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2034,6 +2087,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2071,6 +2125,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2104,6 +2159,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2145,6 +2201,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2181,6 +2238,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2217,6 +2275,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2264,6 +2323,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2297,6 +2357,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2330,6 +2391,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2363,6 +2425,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2399,6 +2462,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2435,6 +2499,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2471,6 +2536,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2507,6 +2573,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2543,6 +2610,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2642,6 +2710,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2675,6 +2744,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2708,6 +2778,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2744,6 +2815,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2780,6 +2852,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2816,6 +2889,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2852,6 +2926,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2888,6 +2963,7 @@ mod tests {
             maximum: Some(255.0),
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2921,6 +2997,7 @@ mod tests {
             maximum: Some(100.0),
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2958,6 +3035,7 @@ mod tests {
             maximum: Some(10.0),
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2995,6 +3073,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3028,6 +3107,7 @@ mod tests {
             maximum: Some(99.5),
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3061,6 +3141,7 @@ mod tests {
             maximum: Some(10.0),
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3098,6 +3179,7 @@ mod tests {
             maximum: Some(1.0),
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3114,6 +3196,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines)]
     fn integer_and_number_min_max_violations_collected_from_multiple_properties() {
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -3143,6 +3226,7 @@ mod tests {
                         maximum: Some(100.0),
                         min_length: None,
                         max_length: None,
+                        pattern: None,
                         format: None,
                         all_of: None,
                         any_of: None,
@@ -3171,6 +3255,7 @@ mod tests {
                         maximum: Some(100.0),
                         min_length: None,
                         max_length: None,
+                        pattern: None,
                         format: None,
                         all_of: None,
                         any_of: None,
@@ -3194,6 +3279,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3238,6 +3324,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3271,6 +3358,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3304,6 +3392,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3340,6 +3429,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3365,6 +3455,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3398,6 +3489,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3423,6 +3515,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3459,6 +3552,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3484,6 +3578,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3517,6 +3612,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3542,6 +3638,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3581,6 +3678,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3606,6 +3704,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3639,6 +3738,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3664,6 +3764,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3697,6 +3798,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3730,6 +3832,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3763,6 +3866,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3800,6 +3904,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3833,6 +3938,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3866,6 +3972,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3903,6 +4010,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3936,6 +4044,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -3969,6 +4078,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4006,6 +4116,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4043,6 +4154,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4076,6 +4188,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4175,6 +4288,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4211,6 +4325,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4247,6 +4362,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4294,6 +4410,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4343,6 +4460,7 @@ mod tests {
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    pattern: None,
                     format: None,
                     all_of: None,
                     any_of: None,
@@ -4480,6 +4598,7 @@ mod tests {
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    pattern: None,
                     format: None,
                     all_of: None,
                     any_of: None,
@@ -4537,6 +4656,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -4563,6 +4683,7 @@ mod tests {
                 maximum: None,
                 min_length: None,
                 max_length: None,
+                pattern: None,
                 format: None,
                 all_of: None,
                 any_of: None,
@@ -4839,6 +4960,118 @@ mod tests {
         };
         let instance = json!("日本語");
         assert_eq!(Ok(()), validate(&schema, &instance));
+    }
+
+    #[test]
+    fn validate_string_pattern_partial_match_passes() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("string".to_string()),
+            pattern: Some("a".to_string()),
+            ..Default::default()
+        };
+        let instance = json!("cat");
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_string_pattern_full_match_passes() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("string".to_string()),
+            pattern: Some("^[0-9]+$".to_string()),
+            ..Default::default()
+        };
+        let instance = json!("123");
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_string_pattern_mismatch_fails() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("string".to_string()),
+            pattern: Some("^[0-9]+$".to_string()),
+            ..Default::default()
+        };
+        let instance = json!("12a3");
+        let expected: ValidationResult = Err(vec![ValidationError::PatternMismatch {
+            instance_path: JsonPointer::root(),
+            pattern: "^[0-9]+$".to_string(),
+            value: "12a3".to_string(),
+        }]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_string_pattern_non_string_instance_only_expected_string() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("string".to_string()),
+            pattern: Some("^[0-9]+$".to_string()),
+            ..Default::default()
+        };
+        let instance = json!(42);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+            got: "number".to_string(),
+        }]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_string_pattern_invalid_regex_in_schema() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("string".to_string()),
+            pattern: Some("[".to_string()),
+            ..Default::default()
+        };
+        let instance = json!("x");
+        let expected: ValidationResult = Err(vec![ValidationError::InvalidPatternInSchema {
+            instance_path: JsonPointer::root(),
+            pattern: "[".to_string(),
+        }]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_string_pattern_and_max_length_multiple_errors() {
+        let schema = JsonSchema {
+            schema: None,
+            id: None,
+            type_: Some("string".to_string()),
+            pattern: Some("^[0-9]+$".to_string()),
+            max_length: Some(2),
+            ..Default::default()
+        };
+        let instance = json!("12a");
+        let expected: ValidationResult = Err(vec![
+            ValidationError::TooLong {
+                instance_path: JsonPointer::root(),
+                max_length: 2,
+                actual_length: 3,
+            },
+            ValidationError::PatternMismatch {
+                instance_path: JsonPointer::root(),
+                pattern: "^[0-9]+$".to_string(),
+                value: "12a".to_string(),
+            },
+        ]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
     }
 
     #[cfg(feature = "uuid")]

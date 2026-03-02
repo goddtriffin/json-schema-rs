@@ -67,6 +67,7 @@ fn derive_root_json_schema() {
         maximum: None,
         min_length: None,
         max_length: None,
+        pattern: None,
         format: None,
         all_of: None,
         any_of: None,
@@ -103,6 +104,7 @@ fn derive_address_json_schema() {
         maximum: None,
         min_length: None,
         max_length: None,
+        pattern: None,
         format: None,
         all_of: None,
         any_of: None,
@@ -260,6 +262,7 @@ fn derive_field_minimum_maximum_integer() {
         maximum: None,
         min_length: None,
         max_length: None,
+        pattern: None,
         format: None,
         all_of: None,
         any_of: None,
@@ -305,6 +308,7 @@ fn derive_field_minimum_maximum_float() {
         maximum: None,
         min_length: None,
         max_length: None,
+        pattern: None,
         format: None,
         all_of: None,
         any_of: None,
@@ -365,6 +369,7 @@ fn derive_field_only_minimum() {
         maximum: None,
         min_length: None,
         max_length: None,
+        pattern: None,
         format: None,
         all_of: None,
         any_of: None,
@@ -409,6 +414,7 @@ fn derive_field_only_maximum() {
         maximum: None,
         min_length: None,
         max_length: None,
+        pattern: None,
         format: None,
         all_of: None,
         any_of: None,
@@ -565,8 +571,29 @@ struct WithStringNoLengthConstraints {
 fn macro_derive_to_json_schema_string_no_length_constraints() {
     let schema: JsonSchema = WithStringNoLengthConstraints::json_schema();
     let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
-    assert_eq!(None, name_schema.min_length);
-    assert_eq!(None, name_schema.max_length);
+    let expected: (Option<u64>, Option<u64>, Option<String>) = (None, None, None);
+    let actual: (Option<u64>, Option<u64>, Option<String>) = (
+        name_schema.min_length,
+        name_schema.max_length,
+        name_schema.pattern.clone(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithStringPattern {
+    #[to_json_schema(pattern = "^x+$")]
+    name: String,
+}
+
+#[test]
+fn macro_derive_to_json_schema_string_pattern() {
+    let schema: JsonSchema = WithStringPattern::json_schema();
+    let name_schema: &JsonSchema = schema.properties.get("name").expect("name property");
+    let expected: Option<String> = Some("^x+$".to_string());
+    let actual: Option<String> = name_schema.pattern.clone();
+    assert_eq!(expected, actual);
 }
 
 #[cfg(feature = "uuid")]

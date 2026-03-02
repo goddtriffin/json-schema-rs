@@ -24,7 +24,9 @@ integer/float types when both bounds are present and valid), **minLength** and
 **maxLength** (string length constraints in Unicode code points; validator
 enforces; codegen emits `#[to_json_schema(min_length = ..., max_length = ...)]`
 on generated string fields; reverse codegen supports the same attributes on
-String fields), **description** (codegen emits Rust doc comments; reverse
+String fields), **pattern** (string constraint as ECMA 262 regex; validator
+enforces via regress; codegen emits `#[to_json_schema(pattern = "...")]`;
+reverse codegen supports the same attribute on String fields), **description** (codegen emits Rust doc comments; reverse
 codegen via `#[to_json_schema(description = "...")]`),
 **$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[to_json_schema(comment = "...")]`), and **$schema**
 (stored and round-tripped; used to infer spec version when not set explicitly;

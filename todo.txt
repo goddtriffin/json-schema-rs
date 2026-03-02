@@ -25,3 +25,5 @@ For each of these TODO items, check what every other competitor library does, ch
   generally the same quality/usefulness validation error messages)
 - should all generated Rust models implement the Hash derive macro trait?
   This would enable all code gen models to play well with uniqueItems by default.
+- maybe our generated Rust models which store a regex pattern could store the regex pattern not as
+  a string, but as a pre-compiled regress regex struct/object/model.

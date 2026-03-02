@@ -49,7 +49,7 @@ Keyword list derived from vendored draft-04 meta-schema: `specs/json-schema.org/
 | multipleOf | no | Not used for codegen. |
 | not | no | Parsed but not used in expand. |
 | oneOf | yes | Generates untagged enum of variant types; supports refs and inline schemas. |
-| pattern | no | Not used for codegen. |
+| pattern | no | Not used for codegen. *json-schema-rs* supports pattern (validator with regress, codegen/reverse attribute for round-trip). |
 | patternProperties | partial | Only affects whether `#[serde(deny_unknown_fields)]` is emitted when combined with `additionalProperties: false`; no map-from-pattern codegen. |
 | properties | yes | Drives struct fields; field names and optional/required handled. |
 | required | yes | Non-required fields emitted as `Option<T>`; `skip_serializing_if="Option::is_none"` added. |

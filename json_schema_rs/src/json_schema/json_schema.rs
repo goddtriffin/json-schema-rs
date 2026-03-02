@@ -175,6 +175,8 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     #[serde(default, rename = "maxLength")]
     pub(crate) max_length: Option<u64>,
     #[serde(default)]
+    pub(crate) pattern: Option<String>,
+    #[serde(default)]
     pub(crate) format: Option<String>,
     #[serde(default, rename = "allOf")]
     pub(crate) all_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
@@ -230,6 +232,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         maximum: h.maximum,
         min_length: h.min_length,
         max_length: h.max_length,
+        pattern: h.pattern,
         format: h.format,
         all_of,
         any_of,
@@ -319,6 +322,10 @@ pub struct JsonSchema {
     #[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
     pub max_length: Option<u64>,
 
+    /// ECMA 262 regex pattern; string instance is valid if the pattern matches anywhere in the string. String-only; used by validator and codegen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+
     /// Format annotation for string instances (e.g. "uuid"). When the `uuid` feature is enabled,
     /// `"uuid"` drives type selection in codegen and format validation.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -384,6 +391,8 @@ impl<'de> Deserialize<'de> for JsonSchema {
             #[serde(default, rename = "maxLength")]
             max_length: Option<u64>,
             #[serde(default)]
+            pattern: Option<String>,
+            #[serde(default)]
             format: Option<String>,
             #[serde(default, rename = "allOf")]
             all_of: Option<Vec<JsonSchema>>,
@@ -413,6 +422,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             maximum: h.maximum,
             min_length: h.min_length,
             max_length: h.max_length,
+            pattern: h.pattern,
             format: h.format,
             all_of: h.all_of,
             any_of: h.any_of,
@@ -737,6 +747,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -769,6 +780,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -804,6 +816,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1003,6 +1016,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1061,6 +1075,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1094,6 +1109,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1120,6 +1136,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1149,6 +1166,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1178,6 +1196,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1234,6 +1253,7 @@ mod tests {
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    pattern: None,
                     format: None,
                     all_of: None,
                     any_of: None,
@@ -1268,6 +1288,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1293,6 +1314,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1385,6 +1407,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_pattern() {
+        let json = r#"{"type":"string","pattern":"^\\d+$"}"#;
+        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<String> = Some(r"^\d+$".to_string());
+        let actual: Option<String> = parsed.pattern.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_pattern_absent() {
+        let json = r#"{"type":"string"}"#;
+        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<String> = None;
+        let actual: Option<String> = parsed.pattern.clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn round_trip_parse_serialize_parse_with_pattern() {
+        let json = r#"{"type":"string","pattern":"^[a-z]+$"}"#;
+        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let serialized: String = (&parsed).try_into().expect("serialize");
+        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let expected: JsonSchema = parsed;
+        let actual: JsonSchema = reparsed;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn round_trip_parse_serialize_parse_with_min_length_max_length() {
         let json = r#"{"type":"string","minLength":2,"maxLength":50}"#;
         let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
@@ -1453,6 +1504,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        pattern: None,
                         format: None,
                         all_of: None,
                         any_of: None,
@@ -1476,6 +1528,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1705,6 +1758,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        pattern: None,
                         format: None,
                         all_of: None,
                         any_of: None,
@@ -1733,6 +1787,7 @@ mod tests {
                         maximum: None,
                         min_length: None,
                         max_length: None,
+                        pattern: None,
                         format: None,
                         all_of: None,
                         any_of: None,
@@ -1756,6 +1811,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1789,6 +1845,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -1821,6 +1878,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2098,6 +2156,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2140,6 +2199,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,
@@ -2172,6 +2232,7 @@ mod tests {
             maximum: None,
             min_length: None,
             max_length: None,
+            pattern: None,
             format: None,
             all_of: None,
             any_of: None,

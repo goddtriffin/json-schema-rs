@@ -275,6 +275,49 @@ fn field_max_length(field: &Field) -> SynResult<Option<u64>> {
     field_u64_attr(field, "max_length")
 }
 
+/// Extracts a string value from `#[to_json_schema(key = "value")]` on a field.
+fn field_str_attr(field: &Field, key: &str) -> SynResult<Option<String>> {
+    for attr in &field.attrs {
+        if !attr.path().is_ident("to_json_schema") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if !nv.path.is_ident(key) {
+                continue;
+            }
+            let value: String = match &nv.value {
+                Expr::Lit(expr_lit) => match &expr_lit.lit {
+                    Lit::Str(lit_str) => lit_str.value(),
+                    _ => {
+                        return Err(Error::new_spanned(
+                            &nv.value,
+                            format!("to_json_schema({key} = ...) requires a string literal"),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(Error::new_spanned(
+                        &nv.value,
+                        format!("to_json_schema({key} = ...) requires a string literal"),
+                    ));
+                }
+            };
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+/// Extracts `pattern = "..."` from a field's `#[to_json_schema(...)]` attribute.
+fn field_pattern(field: &Field) -> SynResult<Option<String>> {
+    field_str_attr(field, "pattern")
+}
+
 /// Returns the JSON property key for a field: serde rename or field name.
 fn field_property_key(field: &Field) -> SynResult<String> {
     for attr in &field.attrs {
@@ -457,6 +500,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         let field_max_items: Option<u64> = field_max_items(field)?;
         let field_min_length: Option<u64> = field_min_length(field)?;
         let field_max_length: Option<u64> = field_max_length(field)?;
+        let field_pattern_val: Option<String> = field_pattern(field)?;
         let min_expr: TokenStream2 = if let Some(m) = field_min {
             let lit = proc_macro2::Literal::f64_unsuffixed(m);
             quote! { Some(#lit) }
@@ -493,6 +537,12 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         } else {
             quote! { None }
         };
+        let pattern_expr: TokenStream2 = if let Some(ref p) = field_pattern_val {
+            let lit = LitStr::new(p, span);
+            quote! { Some(#lit.to_string()) }
+        } else {
+            quote! { None }
+        };
         property_inserts.push(quote! {
             {
                 let base = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
@@ -504,6 +554,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     max_items: #max_items_expr.or(base.max_items),
                     min_length: #min_length_expr.or(base.min_length),
                     max_length: #max_length_expr.or(base.max_length),
+                    pattern: #pattern_expr.or(base.pattern),
                     ..base
                 });
             }
@@ -548,6 +599,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    pattern: None,
                     format: None,
                     all_of: None,
                     any_of: None,
@@ -657,6 +709,7 @@ fn expand_enum_to_json_schema(
                     maximum: None,
                     min_length: None,
                     max_length: None,
+                    pattern: None,
                     format: None,
                     all_of: None,
                     any_of: None,

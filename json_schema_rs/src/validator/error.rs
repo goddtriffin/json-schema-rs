@@ -146,6 +146,22 @@ pub enum ValidationError {
         /// Actual Unicode code point count (for user-facing context).
         actual_length: u64,
     },
+    /// Schema had `pattern` but the string did not match the ECMA 262 regex.
+    PatternMismatch {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's pattern value (ECMA 262 regex string).
+        pattern: String,
+        /// The instance string value (for user-facing context).
+        value: String,
+    },
+    /// Schema had an invalid `pattern` (not a valid ECMA 262 regex); compilation failed.
+    InvalidPatternInSchema {
+        /// JSON Pointer to the instance (schema location where pattern was applied).
+        instance_path: JsonPointer,
+        /// The invalid pattern string from the schema.
+        pattern: String,
+    },
     /// The string instance does not parse as a valid UUID (only emitted when the `uuid` feature is enabled).
     #[cfg(feature = "uuid")]
     InvalidUuidFormat {
@@ -194,6 +210,8 @@ impl ValidationError {
             | ValidationError::AboveMaximum { instance_path, .. }
             | ValidationError::TooShort { instance_path, .. }
             | ValidationError::TooLong { instance_path, .. }
+            | ValidationError::PatternMismatch { instance_path, .. }
+            | ValidationError::InvalidPatternInSchema { instance_path, .. }
             | ValidationError::NoSubschemaMatched { instance_path, .. }
             | ValidationError::MultipleSubschemasMatched { instance_path, .. } => instance_path,
             #[cfg(feature = "uuid")]
@@ -315,6 +333,15 @@ impl fmt::Display for ValidationError {
                     f,
                     "{location}: string has {actual_length} code points, maxLength is {max_length}"
                 )
+            }
+            ValidationError::PatternMismatch { pattern, value, .. } => {
+                write!(
+                    f,
+                    "{location}: string \"{value}\" does not match pattern \"{pattern}\""
+                )
+            }
+            ValidationError::InvalidPatternInSchema { pattern, .. } => {
+                write!(f, "{location}: schema has invalid pattern \"{pattern}\"")
             }
             #[cfg(feature = "uuid")]
             ValidationError::InvalidUuidFormat { value, .. } => {

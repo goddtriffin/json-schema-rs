@@ -68,7 +68,7 @@ Keyword list derived from vendored draft 2020-12 meta-schemas under `specs/json-
 | multipleOf | yes | `multiple_of: Option<MultipleOf>`. |
 | not | yes | `not: Option<Box<JSONSchema>>`. |
 | oneOf | yes | `one_of: Option<SchemaArray>`. |
-| pattern | yes | `pattern: Option<Pattern>`. |
+| pattern | yes | `pattern: Option<Pattern>`. Schema model only; no validator or codegen. *json-schema-rs* implements pattern in schema model, validator (regress), and codegen/reverse (attribute for round-trip). |
 | patternProperties | yes | `pattern_properties: Option<PatternProperties>`. |
 | prefixItems | no | Not in schema or struct (draft-07 uses `items` only). |
 | properties | yes | `properties: Option<Properties>`. |
