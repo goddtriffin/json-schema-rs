@@ -18,6 +18,15 @@ pub type ValidationResult = Result<(), Vec<ValidationError>>;
 /// A single validation failure: kind and instance location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
+    /// Schema had an invalid or unsupported `$ref`, or the reference could not be resolved.
+    InvalidRef {
+        /// JSON Pointer to the instance location where the referenced schema was applied.
+        instance_path: JsonPointer,
+        /// The `$ref` string from the schema.
+        ref_str: String,
+        /// Human-readable reason (for user-facing context).
+        reason: String,
+    },
     /// Schema had `type: "object"` but the instance was not an object.
     ExpectedObject {
         /// JSON Pointer to the instance that failed.
@@ -194,7 +203,8 @@ impl ValidationError {
     #[must_use]
     pub fn instance_path(&self) -> &JsonPointer {
         match self {
-            ValidationError::ExpectedObject { instance_path, .. }
+            ValidationError::InvalidRef { instance_path, .. }
+            | ValidationError::ExpectedObject { instance_path, .. }
             | ValidationError::ExpectedString { instance_path, .. }
             | ValidationError::ExpectedInteger { instance_path, .. }
             | ValidationError::ExpectedNumber { instance_path, .. }
@@ -225,6 +235,14 @@ impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let location = self.instance_path().display_root_or_path();
         match self {
+            ValidationError::InvalidRef {
+                ref_str, reason, ..
+            } => {
+                write!(
+                    f,
+                    "{location}: could not resolve $ref \"{ref_str}\": {reason}"
+                )
+            }
             ValidationError::ExpectedObject { got, .. } => {
                 write!(f, "{location}: expected object, got {got}")
             }

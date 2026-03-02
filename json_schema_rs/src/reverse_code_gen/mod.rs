@@ -21,7 +21,10 @@ impl ToJsonSchema for String {
         JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("string".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -53,7 +56,10 @@ impl ToJsonSchema for bool {
         JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("boolean".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -84,7 +90,10 @@ fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
         schema: None,
         id: None,
+        ref_: None,
         type_: Some("integer".to_string()),
+        defs: None,
+        definitions: None,
         properties: BTreeMap::new(),
         additional_properties: None,
         required: None,
@@ -163,7 +172,10 @@ fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
         schema: None,
         id: None,
+        ref_: None,
         type_: Some("number".to_string()),
+        defs: None,
+        definitions: None,
         properties: BTreeMap::new(),
         additional_properties: None,
         required: None,
@@ -212,7 +224,10 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
         JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("array".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -245,7 +260,10 @@ impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::
         JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("array".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -277,7 +295,10 @@ impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
         JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("object".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: Some(AdditionalProperties::Schema(Box::new(V::json_schema()))),
             required: None,
@@ -313,7 +334,10 @@ impl ToJsonSchema for HandWrittenExample {
         JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("object".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -381,31 +405,8 @@ mod tests {
     #[test]
     fn string_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("string".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = String::json_schema();
         assert_eq!(expected, actual);
@@ -414,31 +415,8 @@ mod tests {
     #[test]
     fn bool_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("boolean".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = bool::json_schema();
         assert_eq!(expected, actual);
@@ -454,32 +432,11 @@ mod tests {
     #[test]
     fn i64_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("integer".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
             #[expect(clippy::cast_precision_loss)]
             minimum: Some(i64::MIN as f64),
             maximum: Some(9_223_372_036_854_775_807.0_f64),
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = i64::json_schema();
         assert_eq!(expected, actual);
@@ -558,31 +515,10 @@ mod tests {
     #[test]
     fn f64_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("number".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
             minimum: Some(f64::MIN),
             maximum: Some(f64::MAX),
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = f64::json_schema();
         assert_eq!(expected, actual);
@@ -607,31 +543,9 @@ mod tests {
     #[test]
     fn hand_written_example_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            additional_properties: None,
-            required: None,
             title: Some("HandWrittenExample".to_string()),
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = super::HandWrittenExample::json_schema();
         assert_eq!(expected, actual);
@@ -640,31 +554,9 @@ mod tests {
     #[test]
     fn vec_string_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("array".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
             items: Some(Box::new(String::json_schema())),
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = Vec::<String>::json_schema();
         assert_eq!(expected, actual);
@@ -673,31 +565,9 @@ mod tests {
     #[test]
     fn vec_i64_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("array".to_string()),
-            properties: std::collections::BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
             items: Some(Box::new(i64::json_schema())),
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = Vec::<i64>::json_schema();
         assert_eq!(expected, actual);

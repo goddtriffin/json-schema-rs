@@ -3,6 +3,7 @@
 pub mod error;
 #[expect(clippy::module_inception)]
 pub mod json_schema;
+pub mod ref_resolver;
 pub mod settings;
 pub mod spec_version;
 

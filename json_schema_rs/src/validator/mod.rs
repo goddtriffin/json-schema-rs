@@ -8,6 +8,7 @@ pub use error::{OrderedF64, ValidationError, ValidationResult};
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::JsonSchema;
 use crate::json_schema::json_schema::AdditionalProperties;
+use crate::json_schema::ref_resolver;
 use serde_json::Value;
 
 /// Returns the JSON type name of the value for use in "got" error messages.
@@ -31,7 +32,7 @@ fn value_to_display_string(v: &Value) -> String {
 /// and returns them in a single result (no fail-fast).
 ///
 /// Validates using the `type` (object, string, integer, number), `required`, and `properties`
-/// keywords. Does not resolve `$ref` or `$defs`; additional properties are allowed.
+/// keywords. Resolves fragment-only `$ref` against the root schema; additional properties are allowed.
 ///
 /// # Errors
 ///
@@ -49,13 +50,37 @@ fn value_to_display_string(v: &Value) -> String {
 /// let result = validate(&schema, &instance);
 /// assert!(result.is_ok());
 /// ```
-#[expect(clippy::too_many_lines)]
 pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
+    validate_with_root(schema, schema, instance)
+}
+
+#[expect(clippy::too_many_lines)]
+fn validate_with_root(
+    root: &JsonSchema,
+    schema: &JsonSchema,
+    instance: &Value,
+) -> ValidationResult {
     let mut errors: Vec<ValidationError> = Vec::new();
     let mut stack: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
     stack.push((schema, instance, JsonPointer::root()));
 
     while let Some((schema, instance, instance_path)) = stack.pop() {
+        let schema: &JsonSchema = match ref_resolver::resolve_schema_ref_transitive(root, schema) {
+            Ok(s) => s,
+            Err(e) => {
+                let ref_str: String = schema
+                    .ref_
+                    .clone()
+                    .unwrap_or_else(|| "<missing>".to_string());
+                errors.push(ValidationError::InvalidRef {
+                    instance_path: instance_path.clone(),
+                    ref_str,
+                    reason: format!("{e:?}"),
+                });
+                continue;
+            }
+        };
+
         if let Some(ref expected) = schema.const_value
             && instance != expected
         {
@@ -90,7 +115,8 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
             } else {
                 let mut at_least_one_passed: bool = false;
                 for subschema in any_of {
-                    let sub_result: ValidationResult = validate(subschema, instance);
+                    let sub_result: ValidationResult =
+                        validate_with_root(root, subschema, instance);
                     if sub_result.is_ok() {
                         at_least_one_passed = true;
                         break;
@@ -114,7 +140,8 @@ pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
             } else {
                 let mut pass_count: usize = 0;
                 for subschema in one_of {
-                    let sub_result: ValidationResult = validate(subschema, instance);
+                    let sub_result: ValidationResult =
+                        validate_with_root(root, subschema, instance);
                     if sub_result.is_ok() {
                         pass_count += 1;
                     }
@@ -420,6 +447,7 @@ mod tests {
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
     use crate::json_schema::json_schema::AdditionalProperties;
+    use crate::json_schema::ref_resolver::RefResolutionError;
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -428,32 +456,88 @@ mod tests {
         properties: BTreeMap<String, JsonSchema>,
     ) -> JsonSchema {
         JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
             properties,
-            additional_properties: None,
             required: Some(required.into_iter().map(String::from).collect()),
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn validate_ref_to_defs_valid() {
+        let schema: JsonSchema = serde_json::from_str(
+            r##"{
+  "$defs": {
+    "Address": {
+      "type": "object",
+      "properties": { "city": { "type": "string" } },
+      "required": ["city"]
+    }
+  },
+  "type": "object",
+  "properties": { "address": { "$ref": "#/$defs/Address" } },
+  "required": ["address"]
+}"##,
+        )
+        .expect("parse schema");
+        let instance = json!({"address": {"city": "NYC"}});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_ref_to_missing_defs_emits_invalid_ref() {
+        let schema: JsonSchema = serde_json::from_str(
+            r##"{
+  "type": "object",
+  "properties": { "x": { "$ref": "#/$defs/Missing" } }
+}"##,
+        )
+        .expect("parse schema");
+        let instance = json!({"x": "hi"});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected_reason: String = format!(
+            "{:?}",
+            RefResolutionError::DefsMissing {
+                ref_str: "#/$defs/Missing".to_string()
+            }
+        );
+        let expected: ValidationResult = Err(vec![ValidationError::InvalidRef {
+            instance_path: JsonPointer::root().push("x"),
+            ref_str: "#/$defs/Missing".to_string(),
+            reason: expected_reason,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_ref_cycle_in_defs_emits_invalid_ref() {
+        let schema: JsonSchema = serde_json::from_str(
+            r##"{
+  "$defs": {
+    "A": { "$ref": "#/$defs/B" },
+    "B": { "$ref": "#/$defs/A" }
+  },
+  "type": "object",
+  "properties": { "x": { "$ref": "#/$defs/A" } }
+}"##,
+        )
+        .expect("parse schema");
+        let instance = json!({"x": 42});
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected_reason: String = format!(
+            "{:?}",
+            RefResolutionError::RefCycle {
+                ref_str: "#/$defs/A".to_string()
+            }
+        );
+        let expected: ValidationResult = Err(vec![ValidationError::InvalidRef {
+            instance_path: JsonPointer::root().push("x"),
+            ref_str: "#/$defs/A".to_string(),
+            reason: expected_reason,
+        }]);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -654,16 +738,12 @@ mod tests {
             ..Default::default()
         };
         let schema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
                     JsonSchema {
-                        schema: None,
-                        id: None,
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -671,26 +751,7 @@ mod tests {
                 m
             },
             additional_properties: Some(AdditionalProperties::Schema(Box::new(sub))),
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!({"a": "x", "extra": "allowed"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -707,16 +768,12 @@ mod tests {
             ..Default::default()
         };
         let schema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
                     JsonSchema {
-                        schema: None,
-                        id: None,
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
@@ -724,26 +781,7 @@ mod tests {
                 m
             },
             additional_properties: Some(AdditionalProperties::Schema(Box::new(sub))),
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!({"a": "x", "extra": "not_an_integer"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -757,28 +795,6 @@ mod tests {
     #[test]
     fn all_of_all_subschemas_pass() {
         let schema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
             all_of: Some(vec![
                 JsonSchema {
                     type_: Some("object".to_string()),
@@ -811,8 +827,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!({"a": "ok", "b": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -823,28 +838,6 @@ mod tests {
     #[test]
     fn all_of_one_subschema_fails_required() {
         let schema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
             all_of: Some(vec![
                 JsonSchema {
                     type_: Some("object".to_string()),
@@ -868,8 +861,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!({"a": "x"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -882,28 +874,6 @@ mod tests {
     #[test]
     fn all_of_multiple_subschemas_fail() {
         let schema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
             all_of: Some(vec![
                 JsonSchema {
                     type_: Some("object".to_string()),
@@ -938,8 +908,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!({"a": 1, "b": "x"});
         let result: ValidationResult = validate(&schema, &instance);
@@ -952,31 +921,8 @@ mod tests {
     #[test]
     fn all_of_empty_valid() {
         let schema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
             all_of: Some(vec![]),
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -987,28 +933,6 @@ mod tests {
     #[test]
     fn all_of_enum_in_one_subschema_fails_when_not_in_enum() {
         let schema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
             all_of: Some(vec![
                 JsonSchema {
                     type_: Some("object".to_string()),
@@ -1034,8 +958,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!({"s": "c"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1084,6 +1007,7 @@ mod tests {
                 },
             ]),
             one_of: None,
+            ..Default::default()
         };
         let instance_str = json!("hello");
         let actual_str: ValidationResult = validate(&schema, &instance_str);
@@ -1098,29 +1022,6 @@ mod tests {
     #[test]
     fn any_of_no_subschema_passes() {
         let schema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
             any_of: Some(vec![
                 JsonSchema {
                     type_: Some("string".to_string()),
@@ -1131,7 +1032,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1176,6 +1077,7 @@ mod tests {
             all_of: None,
             any_of: Some(vec![]),
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1223,6 +1125,7 @@ mod tests {
                 ..Default::default()
             }]),
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(std::f64::consts::PI);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1261,6 +1164,7 @@ mod tests {
                 ..Default::default()
             }]),
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1312,6 +1216,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
+            ..Default::default()
         };
         let instance = json!("hello");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1356,6 +1261,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
+            ..Default::default()
         };
         let instance = json!(1.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1404,6 +1310,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
+            ..Default::default()
         };
         let instance = json!("x");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1447,6 +1354,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: Some(vec![]),
+            ..Default::default()
         };
         let instance = json!(1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1492,6 +1400,7 @@ mod tests {
                 type_: Some("number".to_string()),
                 ..Default::default()
             }]),
+            ..Default::default()
         };
         let instance = json!(std::f64::consts::PI);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1530,6 +1439,7 @@ mod tests {
                 type_: Some("string".to_string()),
                 ..Default::default()
             }]),
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1547,31 +1457,8 @@ mod tests {
     #[test]
     fn wrong_type_string_instead_of_object() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let instance = json!("not an object");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1618,6 +1505,7 @@ mod tests {
                         all_of: None,
                         any_of: None,
                         one_of: None,
+                        ..Default::default()
                     },
                 );
                 m
@@ -1643,6 +1531,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let valid_instance = json!({"name": "Alice"});
         let actual_valid: ValidationResult = validate(&schema, &valid_instance);
@@ -1680,6 +1569,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema_with_comment: JsonSchema = JsonSchema {
             schema: None,
@@ -1707,6 +1597,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let valid_instance = json!("hello");
         let invalid_instance = json!(42);
@@ -1750,6 +1641,7 @@ mod tests {
                 all_of: None,
                 any_of: None,
                 one_of: None,
+                ..Default::default()
             },
         );
         let mut properties_with_default: BTreeMap<String, JsonSchema> = BTreeMap::new();
@@ -1781,6 +1673,7 @@ mod tests {
                 all_of: None,
                 any_of: None,
                 one_of: None,
+                ..Default::default()
             },
         );
         let schema_without: JsonSchema = JsonSchema {
@@ -1809,6 +1702,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema_with_default: JsonSchema = JsonSchema {
             schema: None,
@@ -1836,6 +1730,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let empty_instance = json!({});
         let expected: ValidationResult = validate(&schema_without, &empty_instance);
@@ -1871,6 +1766,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1906,6 +1802,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1941,6 +1838,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -1979,6 +1877,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2017,6 +1916,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2055,6 +1955,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2093,6 +1994,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2134,6 +2036,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("open");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2172,6 +2075,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("pending");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2214,6 +2118,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("a");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2252,6 +2157,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("c");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2291,6 +2197,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("ok");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2326,6 +2233,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("actual");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2369,6 +2277,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2407,6 +2316,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("a");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2445,6 +2355,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("b");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2494,6 +2405,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2529,6 +2441,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2564,6 +2477,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(-1);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2599,6 +2513,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2637,6 +2552,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("42");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2675,6 +2591,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2713,6 +2630,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2751,6 +2669,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2789,6 +2708,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2890,6 +2810,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2925,6 +2846,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2960,6 +2882,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("3.14");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -2998,6 +2921,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3036,6 +2960,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3074,6 +2999,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1.0]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3112,6 +3038,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3150,6 +3077,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(100);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3185,6 +3113,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3224,6 +3153,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(20);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3263,6 +3193,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3298,6 +3229,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(50.0);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3333,6 +3265,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(0.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3372,6 +3305,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3420,6 +3354,7 @@ mod tests {
                         all_of: None,
                         any_of: None,
                         one_of: None,
+                        ..Default::default()
                     },
                 );
                 m.insert(
@@ -3450,6 +3385,7 @@ mod tests {
                         all_of: None,
                         any_of: None,
                         one_of: None,
+                        ..Default::default()
                     },
                 );
                 m
@@ -3475,6 +3411,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!({"low": 5, "high": 200});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3521,6 +3458,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3556,6 +3494,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3591,6 +3530,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3629,6 +3569,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -3656,6 +3597,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(["a", "b", "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3691,6 +3633,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -3718,6 +3661,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(["a", 42, "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3756,6 +3700,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -3783,6 +3728,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(["a", "b", "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3818,6 +3764,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -3845,6 +3792,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(["a", "b", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3886,6 +3834,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -3913,6 +3862,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(["a", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -3948,6 +3898,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
             schema: None,
@@ -3975,6 +3926,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(["a", "a"]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4010,6 +3962,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4045,6 +3998,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4080,6 +4034,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4119,6 +4074,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4154,6 +4110,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4189,6 +4146,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4228,6 +4186,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4263,6 +4222,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4298,6 +4258,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4337,6 +4298,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2, 3, 4, 5, 6]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4376,6 +4338,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4411,6 +4374,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4512,6 +4476,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4550,6 +4515,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4588,6 +4554,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4637,6 +4604,7 @@ mod tests {
             all_of: None,
             any_of: None,
             one_of: None,
+            ..Default::default()
         };
         let instance = json!({"name": "Alice"});
         let actual: ValidationResult = validate(&schema, &instance);
@@ -4688,6 +4656,7 @@ mod tests {
                     all_of: None,
                     any_of: None,
                     one_of: None,
+                    ..Default::default()
                 },
             );
             m
@@ -4827,6 +4796,7 @@ mod tests {
                     all_of: None,
                     any_of: None,
                     one_of: None,
+                    ..Default::default()
                 },
             );
             m
@@ -4850,70 +4820,27 @@ mod tests {
     fn deeply_nested_instance_does_not_stack_overflow() {
         const DEPTH: usize = 200;
         let mut inner: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "value".to_string(),
                     JsonSchema {
-                        schema: None,
                         type_: Some("string".to_string()),
                         ..Default::default()
                     },
                 );
                 m
             },
-            additional_properties: None,
             required: Some(vec!["value".to_string()]),
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
-                schema: None,
-                id: None,
                 type_: Some("object".to_string()),
                 properties: BTreeMap::new(),
-                additional_properties: None,
                 required: Some(vec!["child".to_string()]),
-                title: None,
-                description: None,
-                comment: None,
-                enum_values: None,
-                const_value: None,
-                items: None,
-                unique_items: None,
-                min_items: None,
-                max_items: None,
-                minimum: None,
-                maximum: None,
-                min_length: None,
-                max_length: None,
-                pattern: None,
-                format: None,
-                default_value: None,
-                all_of: None,
-                any_of: None,
-                one_of: None,
+                ..Default::default()
             };
             wrap.properties.insert("child".to_string(), inner);
             inner = wrap;

@@ -43,6 +43,8 @@ pub enum CodeGenError {
     AnyOfEmpty,
     /// oneOf is present but empty (no subschemas).
     OneOfEmpty,
+    /// `$ref` could not be resolved (or is unsupported in this crate).
+    RefResolution { ref_str: String, reason: String },
 }
 
 impl fmt::Display for CodeGenError {
@@ -101,6 +103,9 @@ impl fmt::Display for CodeGenError {
             CodeGenError::OneOfEmpty => {
                 write!(f, "oneOf is present but empty (no subschemas)")
             }
+            CodeGenError::RefResolution { ref_str, reason } => {
+                write!(f, "could not resolve $ref \"{ref_str}\": {reason}")
+            }
         }
     }
 }
@@ -119,7 +124,8 @@ impl std::error::Error for CodeGenError {
             | CodeGenError::AllOfMergeConflictingPattern { .. }
             | CodeGenError::AllOfMergeUnsupportedSubschema { .. }
             | CodeGenError::AnyOfEmpty
-            | CodeGenError::OneOfEmpty => None,
+            | CodeGenError::OneOfEmpty
+            | CodeGenError::RefResolution { .. } => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
         }
     }

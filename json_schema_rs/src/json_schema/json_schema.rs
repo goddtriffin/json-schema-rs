@@ -12,6 +12,12 @@ fn skip_required(v: &Option<Vec<String>>) -> bool {
     v.as_ref().is_none_or(Vec::is_empty)
 }
 
+/// Returns true when a defs/definitions map should be omitted from serialized output (None or empty).
+#[expect(clippy::ref_option)]
+fn skip_defs_map(v: &Option<BTreeMap<String, JsonSchema>>) -> bool {
+    v.as_ref().is_none_or(BTreeMap::is_empty)
+}
+
 /// Returns true when `enum_values` should be omitted from serialized output (None or empty).
 #[expect(clippy::ref_option)]
 fn skip_enum_values(v: &Option<Vec<serde_json::Value>>) -> bool {
@@ -136,12 +142,18 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) schema: Option<String>,
     #[serde(default, rename = "$id")]
     pub(crate) id: Option<String>,
+    #[serde(default, rename = "$ref")]
+    pub(crate) ref_: Option<String>,
     #[serde(
         default,
         deserialize_with = "deserialize_type_optional_deny_unknown_fields",
         rename = "type"
     )]
     pub(crate) type_: Option<String>,
+    #[serde(default, rename = "$defs")]
+    pub(crate) defs: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>,
+    #[serde(default)]
+    pub(crate) definitions: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>,
     #[serde(default)]
     pub(crate) properties: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>,
     #[serde(default, rename = "additionalProperties")]
@@ -190,6 +202,16 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
 
 /// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
 pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchema) -> JsonSchema {
+    let defs: Option<BTreeMap<String, JsonSchema>> = h.defs.map(|m| {
+        m.into_iter()
+            .map(|(k, v)| (k, deny_unknown_fields_helper_to_schema(v)))
+            .collect()
+    });
+    let definitions: Option<BTreeMap<String, JsonSchema>> = h.definitions.map(|m| {
+        m.into_iter()
+            .map(|(k, v)| (k, deny_unknown_fields_helper_to_schema(v)))
+            .collect()
+    });
     let properties: BTreeMap<String, JsonSchema> = h
         .properties
         .unwrap_or_default()
@@ -217,7 +239,10 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
     JsonSchema {
         schema: h.schema,
         id: h.id,
+        ref_: h.ref_,
         type_: h.type_,
+        defs,
+        definitions,
         properties,
         additional_properties: h.additional_properties,
         required: h.required,
@@ -254,9 +279,21 @@ pub struct JsonSchema {
     #[serde(rename = "$id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 
+    /// Direct schema reference (applicator). Stored and round-tripped. Only fragment-only `#...` refs are resolved by this crate.
+    #[serde(rename = "$ref", skip_serializing_if = "Option::is_none")]
+    pub ref_: Option<String>,
+
     /// Schema type; `object`, `string`, `integer`, and `number` drive codegen; others are ignored.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
+
+    /// Reusable subschemas (draft 2019-09+). Stored and round-tripped.
+    #[serde(rename = "$defs", skip_serializing_if = "skip_defs_map")]
+    pub defs: Option<BTreeMap<String, JsonSchema>>,
+
+    /// Reusable subschemas (legacy drafts). Stored and round-tripped.
+    #[serde(skip_serializing_if = "skip_defs_map")]
+    pub definitions: Option<BTreeMap<String, JsonSchema>>,
 
     /// Object properties (only when type is "object"). Default empty; use `BTreeMap` for stable ordering.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -362,9 +399,15 @@ impl<'de> Deserialize<'de> for JsonSchema {
             schema: Option<String>,
             #[serde(default, rename = "$id")]
             id: Option<String>,
+            #[serde(default, rename = "$ref")]
+            ref_: Option<String>,
             #[serde(default, deserialize_with = "deserialize_type_optional")]
             #[serde(rename = "type")]
             type_: Option<String>,
+            #[serde(default, rename = "$defs")]
+            defs: Option<BTreeMap<String, JsonSchema>>,
+            #[serde(default)]
+            definitions: Option<BTreeMap<String, JsonSchema>>,
             #[serde(default)]
             properties: Option<BTreeMap<String, JsonSchema>>,
             #[serde(default, rename = "additionalProperties")]
@@ -414,7 +457,10 @@ impl<'de> Deserialize<'de> for JsonSchema {
         Ok(JsonSchema {
             schema: h.schema,
             id: h.id,
+            ref_: h.ref_,
             type_: h.type_,
+            defs: h.defs,
+            definitions: h.definitions,
             properties: h.properties.unwrap_or_default(),
             additional_properties: h.additional_properties,
             required: h.required,
@@ -740,7 +786,10 @@ mod tests {
         let schema: JsonSchema = JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("object".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -774,7 +823,10 @@ mod tests {
         let schema: JsonSchema = JsonSchema {
             schema: None,
             id: None,
+            ref_: None,
             type_: Some("object".to_string()),
+            defs: None,
+            definitions: None,
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -812,28 +864,7 @@ mod tests {
             schema: None,
             id: None,
             type_: Some("string".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"string\"}";
@@ -1010,31 +1041,8 @@ mod tests {
     #[test]
     fn try_from_schema_integer_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("integer".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"integer\"}";
@@ -1070,31 +1078,8 @@ mod tests {
     #[test]
     fn try_from_schema_number_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("number".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
         let expected: &[u8] = b"{\"type\":\"number\"}";
@@ -1102,124 +1087,31 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines)]
     fn is_string_enum() {
         let no_enum: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("string".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         assert!(!no_enum.is_string_enum());
         let empty_enum: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
             enum_values: Some(vec![]),
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         assert!(!empty_enum.is_string_enum());
         let string_enum: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         assert!(string_enum.is_string_enum());
         let mixed_enum: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::Number(42_i64.into()),
             ]),
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         assert!(!mixed_enum.is_string_enum());
     }
@@ -1253,31 +1145,8 @@ mod tests {
             },
             {
                 s.items = Some(Box::new(JsonSchema {
-                    schema: None,
-                    id: None,
                     type_: Some("string".to_string()),
-                    properties: BTreeMap::new(),
-                    additional_properties: None,
-                    required: None,
-                    title: None,
-                    description: None,
-                    comment: None,
-                    enum_values: None,
-                    const_value: None,
-                    items: None,
-                    unique_items: None,
-                    min_items: None,
-                    max_items: None,
-                    minimum: None,
-                    maximum: None,
-                    min_length: None,
-                    max_length: None,
-                    pattern: None,
-                    format: None,
-                    default_value: None,
-                    all_of: None,
-                    any_of: None,
-                    one_of: None,
+                    ..Default::default()
                 }));
                 s.is_array_with_items()
             },
@@ -1289,58 +1158,13 @@ mod tests {
     #[test]
     fn try_from_schema_array_with_items_to_string() {
         let item_schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("string".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("array".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
             items: Some(Box::new(item_schema)),
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: String = schema.try_into().expect("serialize");
         let expected = r#"{"type":"array","items":{"type":"string"}}"#;
@@ -1499,64 +1323,19 @@ mod tests {
     fn deserialize_simple_object_schema() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
                     JsonSchema {
-                        schema: None,
-                        id: None,
                         type_: Some("string".to_string()),
-                        properties: std::collections::BTreeMap::new(),
-                        additional_properties: None,
-                        required: None,
-                        title: None,
-                        description: None,
-                        comment: None,
-                        enum_values: None,
-                        const_value: None,
-                        items: None,
-                        unique_items: None,
-                        min_items: None,
-                        max_items: None,
-                        minimum: None,
-                        maximum: None,
-                        min_length: None,
-                        max_length: None,
-                        pattern: None,
-                        format: None,
-                        default_value: None,
-                        all_of: None,
-                        any_of: None,
-                        one_of: None,
+                        ..Default::default()
                     },
                 );
                 m
             },
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -1755,94 +1534,27 @@ mod tests {
     fn deserialize_with_required() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("object".to_string()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "x".to_string(),
                     JsonSchema {
-                        schema: None,
-                        id: None,
                         type_: Some("string".to_string()),
-                        properties: std::collections::BTreeMap::new(),
-                        additional_properties: None,
-                        required: None,
-                        title: None,
-                        description: None,
-                        comment: None,
-                        enum_values: None,
-                        const_value: None,
-                        items: None,
-                        unique_items: None,
-                        min_items: None,
-                        max_items: None,
-                        minimum: None,
-                        maximum: None,
-                        min_length: None,
-                        max_length: None,
-                        pattern: None,
-                        format: None,
-                        default_value: None,
-                        all_of: None,
-                        any_of: None,
-                        one_of: None,
+                        ..Default::default()
                     },
                 );
                 m.insert(
                     "y".to_string(),
                     JsonSchema {
-                        schema: None,
-                        id: None,
                         type_: Some("string".to_string()),
-                        properties: std::collections::BTreeMap::new(),
-                        additional_properties: None,
-                        required: None,
-                        title: None,
-                        description: None,
-                        comment: None,
-                        enum_values: None,
-                        const_value: None,
-                        items: None,
-                        unique_items: None,
-                        min_items: None,
-                        max_items: None,
-                        minimum: None,
-                        maximum: None,
-                        min_length: None,
-                        max_length: None,
-                        pattern: None,
-                        format: None,
-                        default_value: None,
-                        all_of: None,
-                        any_of: None,
-                        one_of: None,
+                        ..Default::default()
                     },
                 );
                 m
             },
-            additional_properties: None,
             required: Some(vec!["x".to_string()]),
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -1854,30 +1566,8 @@ mod tests {
             r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
         let expected: JsonSchema = JsonSchema {
             schema: Some("https://example.com".to_string()),
-            id: None,
             type_: Some("object".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -1887,31 +1577,8 @@ mod tests {
     fn deserialize_type_array_takes_first() {
         let json = r#"{"type":["string", "null"],"properties":{}}"#;
         let expected: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
             type_: Some("string".to_string()),
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
-            const_value: None,
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
         assert_eq!(expected, actual);
@@ -2166,31 +1833,8 @@ mod tests {
     #[test]
     fn parse_const_round_trip() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
             const_value: Some(serde_json::Value::String("x".to_string())),
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let json: String = serde_json::to_string(&schema).expect("serialize");
         let parsed: JsonSchema = serde_json::from_str(&json).expect("parse");
@@ -2289,31 +1933,8 @@ mod tests {
     #[test]
     fn is_string_const_true_when_string() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
             const_value: Some(serde_json::Value::String("a".to_string())),
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let expected: bool = true;
         let actual: bool = schema.is_string_const();
@@ -2323,31 +1944,8 @@ mod tests {
     #[test]
     fn is_string_const_false_when_non_string() {
         let schema: JsonSchema = JsonSchema {
-            schema: None,
-            id: None,
-            type_: None,
-            properties: BTreeMap::new(),
-            additional_properties: None,
-            required: None,
-            title: None,
-            description: None,
-            comment: None,
-            enum_values: None,
             const_value: Some(serde_json::Value::Number(1_i64.into())),
-            items: None,
-            unique_items: None,
-            min_items: None,
-            max_items: None,
-            minimum: None,
-            maximum: None,
-            min_length: None,
-            max_length: None,
-            pattern: None,
-            format: None,
-            default_value: None,
-            all_of: None,
-            any_of: None,
-            one_of: None,
+            ..Default::default()
         };
         let expected: bool = false;
         let actual: bool = schema.is_string_const();
@@ -2587,5 +2185,130 @@ mod tests {
         let result: Result<JsonSchema, JsonSchemaParseError> =
             JsonSchema::try_from(schema_path.as_path());
         assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+    }
+
+    #[test]
+    fn parse_defs_present() {
+        let json = r#"{"$defs":{"Foo":{"type":"string"}}}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let mut expected_defs: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        expected_defs.insert(
+            "Foo".to_string(),
+            JsonSchema {
+                type_: Some("string".to_string()),
+                ..Default::default()
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(expected_defs),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_defs_empty_object() {
+        let json = r#"{"$defs":{}}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(BTreeMap::new()),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_defs_absent_is_none() {
+        let json = r#"{"type":"object","properties":{}}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_definitions_present() {
+        let json = r#"{"definitions":{"Bar":{"type":"integer"}}}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let mut expected_definitions: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        expected_definitions.insert(
+            "Bar".to_string(),
+            JsonSchema {
+                type_: Some("integer".to_string()),
+                ..Default::default()
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            definitions: Some(expected_definitions),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_definitions_empty_object() {
+        let json = r#"{"definitions":{}}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            definitions: Some(BTreeMap::new()),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_definitions_absent_is_none() {
+        let json = r#"{"type":"object","properties":{}}"#;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("object".to_string()),
+            properties: BTreeMap::new(),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn round_trip_with_defs_and_definitions() {
+        let mut defs: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        defs.insert(
+            "Foo".to_string(),
+            JsonSchema {
+                type_: Some("string".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut definitions: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        definitions.insert(
+            "Bar".to_string(),
+            JsonSchema {
+                type_: Some("integer".to_string()),
+                ..Default::default()
+            },
+        );
+        let schema: JsonSchema = JsonSchema {
+            defs: Some(defs),
+            definitions: Some(definitions),
+            ..Default::default()
+        };
+        let json: String = (&schema).try_into().expect("serialize");
+        let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+        let expected: JsonSchema = schema;
+        let actual: JsonSchema = reparsed;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_ref_only_schema_stores_ref_string() {
+        let json = r##"{"$ref":"#/$defs/Foo"}"##;
+        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: JsonSchema = JsonSchema {
+            ref_: Some("#/$defs/Foo".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
     }
 }

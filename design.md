@@ -25,7 +25,7 @@ We have three separate pipelines: Schema→Rust, Rust→Schema, and the validato
 
 The validator takes the same **JsonSchema** type used by codegen and a JSON instance (`serde_json::Value`) and returns `Result<(), Vec<ValidationError>>` (type alias **ValidationResult**). It collects **all** validation errors (no fail-fast) and returns them at the end. Inputs: `&JsonSchema`, `&Value`. Output: `Ok(())` when valid, `Err(errors)` when invalid.
 
-**Supported keywords:** `type` (object, string, integer, number), `required`, `properties` (recursive), `additionalProperties` (boolean or schema). Does not resolve `$ref` or `$defs`. The validator reuses the same JsonSchema struct as codegen; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same schema model would be used.
+**Supported keywords:** `$schema`, `$id`, `$ref` (fragment-only: `#`, `#/$defs/Name`, `#/definitions/Name`), `$defs` / `definitions` (container only), `type` (object, string, integer, number), `required`, `properties` (recursive), `additionalProperties` (boolean or schema), `enum`, `const`, `allOf`, `anyOf`, `oneOf`, `pattern`, numeric and length bounds, and selected `format`s. The validator and codegen reuse the same `JsonSchema` struct; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same schema model would be used.
 
 **Validation errors:** Each `ValidationError` variant includes instance context (actual value, count, length, or "got" type) and the schema constraint where applicable. Display messages are one line per error and actionable (e.g. `/: value "pending" not in enum (allowed: "open", "closed")`; `/: array has 2 item(s), minimum is 3`; `/: value 15 is above maximum 10`). Messages are never truncated; full allowed sets, values, and lengths are shown.
 
@@ -140,6 +140,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | additionalProperties false (deny_unknown_fields) | Y | — | Y | Y | — |
 | additionalProperties schema (map field) | Y | — | Y | Y | — |
 | Property with default (optional/required + default) | Y | Y | Y | Y | Y |
+| $ref to $defs (defs_ref) | Y | Y | Y | Y | Y |
 
 ### Rust codegen: name sanitization
 
@@ -223,15 +224,71 @@ TODO.
 
 ### $ref
 
-TODO.
+The JSON Schema `$ref` keyword references another schema by URI. Full resolution in the spec supports remote documents, `$id`-relative resolution, anchors, and arbitrary JSON Pointer fragments.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+
+- **Scope:** We support **fragment-only, in-document** `$ref` today:
+  - `"#"` or `""` → the **root** schema.
+  - `"#/$defs/Name"` → look up `Name` under the root’s `$defs` map.
+  - `"#/definitions/Name"` → look up `Name` under the root’s `definitions` map.
+- **Schema model:** `$ref` is stored and round-tripped as
+  `ref_: Option<String>` on [`JsonSchema`] (serde `rename = "$ref"`).
+- **Resolution helper:** `json_schema_rs/src/json_schema/ref_resolver.rs` provides:
+  - `parse_ref(&str) -> Result<ParsedRef, RefResolutionError>` for cheap parsing/validation.
+  - `resolve_ref(root, ref_str) -> Result<&JsonSchema, RefResolutionError>` for single-step lookup.
+  - `resolve_schema_ref_transitive(root, schema) -> Result<&JsonSchema, RefResolutionError>` which follows a `$ref` chain transitively until it reaches a schema with no `$ref`, using an explicit **visited set** of ref strings to detect cycles (`RefResolutionError::RefCycle`).
+- **Validator:** The validator always receives the **root** schema and resolves `$ref` at the top of the loop:
+  - For each `(schema, instance, path)` popped from the stack, we call
+    `resolve_schema_ref_transitive(root, schema)`. When resolution succeeds, we validate against the **effective** (fully dereferenced) schema.
+  - When resolution fails (unsupported ref, missing container, missing definition, invalid escape, or cycle), we emit **one** `ValidationError::InvalidRef { instance_path, ref_str, reason }` and continue validating other queued work. No failure is silent, and we never partially validate against a truncated schema.
+- **Codegen (forward, JSON Schema → Rust):**
+  - Codegen never ignores `$ref`. Helpers such as `resolve_ref_for_codegen` and `rust_type_for_item_schema` use `resolve_schema_ref_transitive` plus `parse_ref` to:
+    - Detect whether a node is a `$ref` to `$defs` / `definitions` or root.
+    - Reuse the **definition key** (e.g. `"Address"`) as the struct name when the target is object-like (via `sanitize_struct_name`).
+  - Resolution failures are surfaced as `CodeGenError::RefResolution { ref_str, reason }`. The CLI reports these per-schema; there is no fallback to `serde_json::Value` or silent inlining.
+  - Enum and combination helpers (`collect_enums`, `collect_anyof_enums`, `collect_oneof_enums`, `collect_structs`) always resolve refs before inspecting types or traversing into child schemas.
+- **Reverse codegen:** `ToJsonSchema` and the derive macro currently build a **single-tree schema** per Rust type. They populate `ref_` only when explicitly requested (e.g. future attributes) and do not yet build a global `$defs` graph. See `$defs` below for the planned direction.
+
+**Spec version quirks:**
+
+- **Draft-04, 06, 07:** `$ref` typically targets `#/definitions/...`. Our implementation accepts both `#/definitions/Name` and `#` for these drafts but does not enforce the dialect; the fragment path drives the container choice.
+- **Draft 2019-09, 2020-12:** `$ref` typically targets `#/$defs/...`. We accept `#/$defs/Name` and `#`. Again, the fragment path (not `$schema`) controls which container we use.
+- **Remote refs and anchors:** We do **not** resolve remote URIs, `$id`-relative refs, or anchors today. Any `$ref` that does not start with `'#'` is rejected with `RefResolutionError::UnsupportedRef`, which surfaces as `ValidationError::InvalidRef` or `CodeGenError::RefResolution`.
 
 ### $defs
 
-TODO.
+The JSON Schema `$defs` keyword (draft 2019-09, 2020-12) is a container for reusable subschemas on the root or any subschema. Older drafts use `definitions` with the same semantics.
 
-**Spec version quirks:** (placeholder or blank)
+**Our implementation:**
+
+- **Schema model and parsing:**
+  - The in-memory model stores both containers:
+    - `defs: Option<BTreeMap<String, JsonSchema>>` with serde `rename = "$defs"`.
+    - `definitions: Option<BTreeMap<String, JsonSchema>>` for legacy drafts.
+  - Both maps use `BTreeMap` for **deterministic iteration order**.
+  - Strict parsing uses a parallel helper `DenyUnknownFieldsJsonSchema` with
+    `defs: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>` and
+    `definitions: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>`. The
+    `deny_unknown_fields_helper_to_schema` function recurses into both maps and converts helpers into `JsonSchema`, so strict mode accepts `$defs` / `definitions` and rejects unknown keys everywhere.
+  - Round-trip tests assert that schemas with `$defs` / `definitions` serialize and parse back to equal `JsonSchema` values, including empty maps vs absence.
+- **Role in validation:** `$defs` and `definitions` are **containers only**. They have no direct validation semantics; they are only read when resolving `$ref`. The validator never iterates over all defs on its own.
+- **Role in codegen (forward):**
+  - Struct collection iterates over the root’s `$defs` and `definitions` maps in **BTreeMap order** and emits **one struct per definition key** when the subschema is object-like.
+  - When a property (or item / combinator branch) schema is a `$ref` to one of these definitions, we:
+    - Resolve to the target subschema via the shared resolver.
+    - Use the **definition key** as the struct name for that target.
+    - Reuse the same Rust type wherever that definition is referenced.
+  - The integration scenario `defs_ref` covers CLI codegen, compilation, and runtime deserialization for a schema that uses `$defs` plus `$ref`.
+- **Role in reverse codegen:**
+  - Today, `ToJsonSchema` for primitives and container types does **not** emit `$defs`; all emitted schemas leave `defs` and `definitions` as `None`.
+  - The derive macro for structs and enums builds a flat schema per Rust type. A future change will introduce a graph-style builder that places shared/recursive Rust types under `$defs` and emits `$ref` at use sites, as described in the `$defs` section of the implementation plan.
+
+**Spec version quirks:**
+
+- **Draft-04, 06, 07:** Use `definitions` at the root (and subschemas) as the reusable-subschemas container. We parse and store it in `JsonSchema::definitions` and resolve fragments of the form `#/definitions/Name`.
+- **Draft 2019-09, 2020-12:** Use `$defs` instead. We parse and store it in `JsonSchema::defs` and resolve `#/$defs/Name`.
+- **Interoperability:** We do **not** normalize `definitions` to `$defs` or vice versa at parse time. Both maps are preserved for round-trip and draft compatibility. Resolution chooses the container purely from the fragment path (first segment `$defs` vs `definitions`), independent of `$schema` or `SpecVersion`.
 
 ---
 

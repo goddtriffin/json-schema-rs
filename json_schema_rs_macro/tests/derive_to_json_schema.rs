@@ -44,7 +44,6 @@ enum SingleVariant {
 fn derive_root_json_schema() {
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -55,24 +54,7 @@ fn derive_root_json_schema() {
         additional_properties: Some(AdditionalProperties::Forbid),
         required: Some(vec!["id".to_string()]),
         title: Some("Root".to_string()),
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     };
     let actual: JsonSchema = Root::json_schema();
     assert_eq!(expected, actual);
@@ -82,7 +64,6 @@ fn derive_root_json_schema() {
 fn derive_address_json_schema() {
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -92,25 +73,7 @@ fn derive_address_json_schema() {
         },
         additional_properties: Some(AdditionalProperties::Forbid),
         required: Some(vec!["city".to_string(), "street".to_string()]),
-        title: None,
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     };
     let actual: JsonSchema = Address::json_schema();
     assert_eq!(expected, actual);
@@ -242,7 +205,6 @@ fn derive_field_minimum_maximum_integer() {
     byte_schema.maximum = Some(255.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -251,25 +213,7 @@ fn derive_field_minimum_maximum_integer() {
         },
         additional_properties: Some(AdditionalProperties::Forbid),
         required: Some(vec!["byte".to_string()]),
-        title: None,
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     };
     let actual: JsonSchema = WithIntegerMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -289,7 +233,6 @@ fn derive_field_minimum_maximum_float() {
     score_schema.maximum = Some(100.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -298,25 +241,7 @@ fn derive_field_minimum_maximum_float() {
         },
         additional_properties: Some(AdditionalProperties::Forbid),
         required: Some(vec!["score".to_string()]),
-        title: None,
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     };
     let actual: JsonSchema = WithFloatMinMax::json_schema();
     assert_eq!(expected, actual);
@@ -351,7 +276,6 @@ fn derive_field_only_minimum() {
     value_schema.minimum = Some(10.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -360,25 +284,7 @@ fn derive_field_only_minimum() {
         },
         additional_properties: Some(AdditionalProperties::Forbid),
         required: Some(vec!["value".to_string()]),
-        title: None,
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     };
     let actual: JsonSchema = WithOnlyMinimum::json_schema();
     assert_eq!(expected, actual);
@@ -397,7 +303,6 @@ fn derive_field_only_maximum() {
     value_schema.maximum = Some(90.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        id: None,
         type_: Some("object".to_string()),
         properties: {
             let mut m = BTreeMap::new();
@@ -406,25 +311,7 @@ fn derive_field_only_maximum() {
         },
         additional_properties: Some(AdditionalProperties::Forbid),
         required: Some(vec!["value".to_string()]),
-        title: None,
-        description: None,
-        comment: None,
-        enum_values: None,
-        const_value: None,
-        items: None,
-        unique_items: None,
-        min_items: None,
-        max_items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-        pattern: None,
-        format: None,
-        default_value: None,
-        all_of: None,
-        any_of: None,
-        one_of: None,
+        ..Default::default()
     };
     let actual: JsonSchema = WithOnlyMaximum::json_schema();
     assert_eq!(expected, actual);

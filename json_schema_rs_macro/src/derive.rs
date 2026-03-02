@@ -8,6 +8,43 @@ use syn::{
     Result as SynResult, Token, Type, Variant,
 };
 
+fn def_key_for_type(ty: &Type) -> Option<String> {
+    let Type::Path(tp) = ty else {
+        return None;
+    };
+    let seg = tp.path.segments.last()?;
+    if !matches!(seg.arguments, syn::PathArguments::None) {
+        return None;
+    }
+    let name: String = seg.ident.to_string();
+    let is_builtin: bool = matches!(
+        name.as_str(),
+        "String"
+            | "bool"
+            | "i8"
+            | "u8"
+            | "i16"
+            | "u16"
+            | "i32"
+            | "u32"
+            | "i64"
+            | "u64"
+            | "f32"
+            | "f64"
+            | "isize"
+            | "usize"
+            | "Option"
+            | "Vec"
+            | "HashSet"
+            | "BTreeMap"
+            | "BTreeSet"
+    );
+    if is_builtin {
+        return None;
+    }
+    Some(name)
+}
+
 /// Parser for doc attribute value: `= "string"` or just `"string"`.
 fn parse_doc_value(input: syn::parse::ParseStream) -> SynResult<String> {
     if input.peek(Token![=]) {
@@ -507,6 +544,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
 
     let mut property_inserts: Vec<TokenStream2> = Vec::new();
     let mut required_keys: Vec<String> = Vec::new();
+    let mut defs_inserts: Vec<TokenStream2> = Vec::new();
 
     for field in fields {
         let key: String = field_property_key(field)?;
@@ -588,22 +626,56 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         } else {
             quote! { None }
         };
-        property_inserts.push(quote! {
-            {
-                let base = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
-                let mut schema = base.clone();
-                schema.description = #field_desc_expr.or(schema.description);
-                schema.minimum = #min_expr.or(schema.minimum);
-                schema.maximum = #max_expr.or(schema.maximum);
-                schema.min_items = #min_items_expr.or(schema.min_items);
-                schema.max_items = #max_items_expr.or(schema.max_items);
-                schema.min_length = #min_length_expr.or(schema.min_length);
-                schema.max_length = #max_length_expr.or(schema.max_length);
-                schema.pattern = #pattern_expr.or(schema.pattern);
-                #set_default_value
-                properties.insert(#key_lit.to_string(), schema);
-            }
-        });
+
+        let has_overrides: bool = field_desc.is_some()
+            || field_min.is_some()
+            || field_max.is_some()
+            || field_min_items.is_some()
+            || field_max_items.is_some()
+            || field_min_length.is_some()
+            || field_max_length.is_some()
+            || field_pattern_val.is_some()
+            || field_default_expr.is_some();
+
+        if let Some(def_key) = def_key_for_type(schema_ty)
+            && !has_overrides
+        {
+            let def_key_lit: LitStr = LitStr::new(&def_key, span);
+            let ref_str: String = format!("#/$defs/{def_key}");
+            let ref_lit: LitStr = LitStr::new(&ref_str, span);
+
+            defs_inserts.push(quote! {
+                defs.entry(#def_key_lit.to_string()).or_insert_with(|| {
+                    <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema()
+                });
+            });
+            property_inserts.push(quote! {
+                {
+                    let schema = ::json_schema_rs::JsonSchema {
+                        ref_: Some(#ref_lit.to_string()),
+                        ..::json_schema_rs::JsonSchema::default()
+                    };
+                    properties.insert(#key_lit.to_string(), schema);
+                }
+            });
+        } else {
+            property_inserts.push(quote! {
+                {
+                    let base = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
+                    let mut schema = base.clone();
+                    schema.description = #field_desc_expr.or(schema.description);
+                    schema.minimum = #min_expr.or(schema.minimum);
+                    schema.maximum = #max_expr.or(schema.maximum);
+                    schema.min_items = #min_items_expr.or(schema.min_items);
+                    schema.max_items = #max_items_expr.or(schema.max_items);
+                    schema.min_length = #min_length_expr.or(schema.min_length);
+                    schema.max_length = #max_length_expr.or(schema.max_length);
+                    schema.pattern = #pattern_expr.or(schema.pattern);
+                    #set_default_value
+                    properties.insert(#key_lit.to_string(), schema);
+                }
+            });
+        }
     }
 
     let required_expr = if required_keys.is_empty() {
@@ -623,11 +695,17 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         impl ::json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> ::json_schema_rs::JsonSchema {
                 let mut properties = ::std::collections::BTreeMap::new();
+                let mut defs = ::std::collections::BTreeMap::new();
+                #(#defs_inserts)*
                 #(#property_inserts)*
+                let defs = if defs.is_empty() { None } else { Some(defs) };
                 ::json_schema_rs::JsonSchema {
                     schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
                     id: #id_expr,
+                    ref_: None,
                     type_: Some("object".to_string()),
+                    defs,
+                    definitions: None,
                     properties,
                     additional_properties: Some(::json_schema_rs::json_schema::json_schema::AdditionalProperties::Forbid),
                     required: #required_expr,
@@ -738,7 +816,10 @@ fn expand_enum_to_json_schema(
                 ::json_schema_rs::JsonSchema {
                     schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
                     id: #id_expr,
+                    ref_: None,
                     type_: Some("string".to_string()),
+                    defs: None,
+                    definitions: None,
                     properties: ::std::collections::BTreeMap::new(),
                     additional_properties: None,
                     required: None,

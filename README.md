@@ -96,7 +96,10 @@ pub struct Root {
 Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()`
 returns a `JsonSchema`). Serialize to JSON with `String::try_from(&schema)` or
 `Vec::<u8>::try_from(&schema)`. See [design.md](design.md) for reverse codegen
-details.
+details. The library supports **in-document `$ref`** resolving against root
+`$defs` / `definitions` containers (fragments `#`, `#/$defs/Name`,
+`#/definitions/Name`) for both validation and Rust codegen; remote refs and
+anchors are out of scope for this implementation.
 
 ## Using the library
 
