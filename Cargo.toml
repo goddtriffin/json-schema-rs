@@ -3,7 +3,7 @@ members = ["json_schema_rs", "json_schema_rs_macro"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.4"
+version = "0.0.5"
 edition = "2024"
 rust-version = "1.93"
 authors = ["Todd Everett Griffin <tgriffin115@gmail.com>"]
