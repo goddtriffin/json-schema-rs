@@ -27,3 +27,65 @@ For each of these TODO items, check what every other competitor library does, ch
   This would enable all code gen models to play well with uniqueItems by default.
 - maybe our generated Rust models which store a regex pattern could store the regex pattern not as
   a string, but as a pre-compiled regress regex struct/object/model.
+
+- [Codegen bug] Shared module path when output is in submodule: CLI emits `pub use crate::shared::X`
+  but when -o points to a subdir (e.g. src/generated/), `crate::shared` does not exist; compiler
+  suggests `generated::shared`.
+  MVE:
+    Input: Two minimal schemas that dedupe (e.g. {"type":"object","properties":{"id":{"type":"string"}}}
+    in a.json and b.json). Run: jsonschemars generate rust -o /path/to/crate/src/generated dir/
+    Current: generated/schema_a.rs contains `pub use crate::shared::Root;` → E0432 unresolved import
+    Expected: `pub use super::shared::Root;` (or crate configurable path)
+  Fix: Add CLI flag for output module path; when output dir is nested, emit `super::shared` or
+  `crate::MOD::shared` instead of `crate::shared`.
+
+- [Codegen bug] Orphaned doc comment for unsupported type (e.g. boolean): When a property has
+  type "boolean", codegen skips the field but still emits the description as `///`; Rust parses
+  it as orphaned (nothing to document) → E0585.
+  MVE:
+    Input: {"type":"object","properties":{"flag":{"type":"boolean","description":"Is it enabled?"}}}
+    Current: pub struct Root { } /// Is it enabled? }  → doc comment after last field, E0585
+    Expected: pub struct Root { pub flag: Option<bool> } with doc above field, or omit doc when
+    skipping unsupported type
+  Fix: Add boolean support (emit bool/Option<bool>); or when skipping unsupported types, use
+  `//` instead of `///` or omit the description.
+
+- [Codegen bug] Unsupported type boolean: type "boolean" falls back to serde_json::Value for
+  array items; for object properties the field is omitted entirely, causing orphaned doc.
+  MVE:
+    Input: {"type":"object","properties":{"enabled":{"type":"boolean"}}}
+    Current: struct has no field for enabled (or wrong type)
+    Expected: pub enabled: Option<bool> (or required bool if in required array)
+  Fix: Add type "boolean" support in schema model, validator, rust_type_for_item_schema; emit
+  bool / Option<bool>.
+
+- [Codegen bug] Duplicate type names in shared buffer: Multiple schemas produce the same
+  sanitized struct/enum name (e.g. TheOperationalStatusSchema) with different definitions;
+  both get emitted to shared.rs → E0428 redefined, E0119 conflicting trait impls.
+  MVE:
+    Input: Schema A: enum with values ["A","B"] titled "Status"; Schema B: enum ["A","C"] same
+    title. Both in batch with dedupe.
+    Current: shared.rs has two `pub enum Status { ... }` blocks → duplicate definition
+    Expected: Disambiguate (e.g. Status0, Status1) or merge when identical
+  Fix: When dedupe key differs (e.g. enum values), emit disambiguated names (numeric suffix)
+  or fail with clear message.
+
+- [Codegen bug] Recursive struct without Box: Object schema with a property that references
+  the same (or eventually same) struct type produces infinite-size type → E0072.
+  MVE:
+    Input: {"type":"object","properties":{"child":{"$ref":"#/$defs/Node"},"$defs":{"Node":{"type":"object","properties":{"child":{"$ref":"#/$defs/Node"}}}}}
+    or similar self-ref. Simplified: {"type":"object","properties":{"parent":{"$ref":"#"}}
+    Current: pub struct Node { pub child: Node }  → recursive type has infinite size
+    Expected: pub struct Node { pub child: Option<Box<Node>> }
+  Fix: Detect direct/transitive self-reference in codegen; wrap recursive edge in Box.
+
+- [Codegen bug] Cannot find type (missing definitions): Some structs/enums are referenced
+  in generated code but not emitted (e.g. schema-specific types from $defs, oneOf branches,
+  or enums from certain contexts).
+  MVE:
+    Input: Schema with $defs.TypeA, property using $ref to TypeA, and another $defs.TypeB
+    used only in oneOf. One of them not collected.
+    Current: struct references TheTypeASchema but it is not in scope
+    Expected: All referenced types emitted in same file or shared; proper ordering
+  Fix: Ensure struct/enum collection traverses all reachable refs (oneOf, anyOf, $defs);
+  emit types before first use.
