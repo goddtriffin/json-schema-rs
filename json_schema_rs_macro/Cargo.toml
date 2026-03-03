@@ -23,7 +23,7 @@ uuid = ["dep:uuid", "json-schema-rs/uuid"]
 workspace = true
 
 [dependencies]
-json-schema-rs = { path = "../json_schema_rs" }
+json-schema-rs.workspace = true
 proc-macro2 = "1"
 quote = "1"
 serde_json.workspace = true

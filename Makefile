@@ -40,9 +40,11 @@ vendor_specs: ## download and vendor all JSON Schema specs from json-schema.org 
 	./specs/download.sh
 
 .PHONY: publish_dry_run
-publish_dry_run: ## dry run of publishing libraries to crates.io
+publish_dry_run: ## dry run of publishing workspace crates to crates.io (order: main first, macro second)
 	cargo publish --package json-schema-rs --dry-run
-	cargo package --list
+	cargo package --package json-schema-rs --list
+	cargo publish --package json-schema-rs-macro --dry-run
+	cargo package --package json-schema-rs-macro --list
 
 .PHONY: research_clone
 research_clone: ## clone or update competitor repos into research/repos/<lang>/<name>/ (includes BelfordZ crate); REFRESH=1 to force re-download BelfordZ
