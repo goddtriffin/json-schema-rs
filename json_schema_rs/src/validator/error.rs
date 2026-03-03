@@ -62,6 +62,13 @@ pub enum ValidationError {
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
+    /// Schema had `type: "boolean"` but the instance was not a boolean.
+    ExpectedBoolean {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// JSON type of the instance (for user-facing context).
+        got: String,
+    },
     /// Schema had `uniqueItems: true` but the array contained duplicate elements.
     DuplicateArrayItems {
         /// JSON Pointer to the array instance that failed.
@@ -209,6 +216,7 @@ impl ValidationError {
             | ValidationError::ExpectedInteger { instance_path, .. }
             | ValidationError::ExpectedNumber { instance_path, .. }
             | ValidationError::ExpectedArray { instance_path, .. }
+            | ValidationError::ExpectedBoolean { instance_path, .. }
             | ValidationError::DuplicateArrayItems { instance_path, .. }
             | ValidationError::TooFewItems { instance_path, .. }
             | ValidationError::TooManyItems { instance_path, .. }
@@ -257,6 +265,9 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::ExpectedArray { got, .. } => {
                 write!(f, "{location}: expected array, got {got}")
+            }
+            ValidationError::ExpectedBoolean { got, .. } => {
+                write!(f, "{location}: expected boolean, got {got}")
             }
             ValidationError::DuplicateArrayItems {
                 duplicate_value, ..

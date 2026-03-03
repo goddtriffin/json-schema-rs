@@ -406,6 +406,14 @@ fn validate_with_root(
                     }
                 }
             }
+            Some("boolean") => {
+                if !instance.is_boolean() {
+                    errors.push(ValidationError::ExpectedBoolean {
+                        instance_path: instance_path.clone(),
+                        got: json_type_name(instance).to_string(),
+                    });
+                }
+            }
             None | Some(_) => {
                 // Type absent or not enforced: validate required/properties when instance is object
                 if let Some(obj) = instance.as_object() {
@@ -1713,6 +1721,45 @@ mod tests {
         let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
             instance_path: JsonPointer::root(),
             got: "boolean".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_boolean_valid_true() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("boolean".to_string()),
+            ..Default::default()
+        };
+        let instance = json!(true);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_type_boolean_valid_false() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("boolean".to_string()),
+            ..Default::default()
+        };
+        let instance = json!(false);
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn wrong_type_string_instead_of_boolean() {
+        let schema: JsonSchema = JsonSchema {
+            type_: Some("boolean".to_string()),
+            ..Default::default()
+        };
+        let instance = json!("hello");
+        let actual: ValidationResult = validate(&schema, &instance);
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedBoolean {
+            instance_path: JsonPointer::root(),
+            got: "string".to_string(),
         }]);
         assert_eq!(expected, actual);
     }

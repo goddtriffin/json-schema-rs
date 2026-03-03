@@ -5,7 +5,7 @@ This document is the **design and architecture knowledge bank** for the json-sch
 - **One section per feature/keyword** (or sub-sections for related keywords). Research uses **only** the local specs under `specs/` (draft-00 through 2020-12)—download them with `make vendor_specs`; they are gitignored and not in the repo. No reliance on the web.
 - Related features are grouped (e.g. string constraints under Strings, number constraints under Numbers). Each section can have **Spec version quirks** sub-sections for differences between drafts; we implement per the latest supported spec and may expose version-based config where behavior differs.
 
-Implemented keywords: type (object, string, integer, number, array), properties, required, title, enum, items, additionalProperties. Other keywords are documented in the sections below. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
+Implemented keywords: type (object, string, integer, number, boolean, array), properties, required, title, enum, items, additionalProperties. Other keywords are documented in the sections below. Unknown schema keywords and property types that do not map to generated code are ignored and do not cause an error.
 
 ---
 
@@ -25,7 +25,7 @@ We have three separate pipelines: Schema→Rust, Rust→Schema, and the validato
 
 The validator takes the same **JsonSchema** type used by codegen and a JSON instance (`serde_json::Value`) and returns `Result<(), Vec<ValidationError>>` (type alias **ValidationResult**). It collects **all** validation errors (no fail-fast) and returns them at the end. Inputs: `&JsonSchema`, `&Value`. Output: `Ok(())` when valid, `Err(errors)` when invalid.
 
-**Supported keywords:** `$schema`, `$id`, `$ref` (fragment-only: `#`, `#/$defs/Name`, `#/definitions/Name`), `$defs` / `definitions` (container only), `type` (object, string, integer, number), `required`, `properties` (recursive), `additionalProperties` (boolean or schema), `enum`, `const`, `allOf`, `anyOf`, `oneOf`, `pattern`, numeric and length bounds, and selected `format`s. The validator and codegen reuse the same `JsonSchema` struct; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same schema model would be used.
+**Supported keywords:** `$schema`, `$id`, `$ref` (fragment-only: `#`, `#/$defs/Name`, `#/definitions/Name`), `$defs` / `definitions` (container only), `type` (object, string, integer, number, boolean), `required`, `properties` (recursive), `additionalProperties` (boolean or schema), `enum`, `const`, `allOf`, `anyOf`, `oneOf`, `pattern`, numeric and length bounds, and selected `format`s. The validator and codegen reuse the same `JsonSchema` struct; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same schema model would be used.
 
 **Validation errors:** Each `ValidationError` variant includes instance context (actual value, count, length, or "got" type) and the schema constraint where applicable. Display messages are one line per error and actionable (e.g. `/: value "pending" not in enum (allowed: "open", "closed")`; `/: array has 2 item(s), minimum is 3`; `/: value 15 is above maximum 10`). Messages are never truncated; full allowed sets, values, and lengths are shown.
 
@@ -110,6 +110,8 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Single optional number (float) | Y | Y | Y | Y | Y |
 | Integer with min+max (narrow type, e.g. u8) | Y | Y | Y | Y | Y |
 | Number with min+max (f32 when in range) | Y | Y | Y | Y | Y |
+| Single required boolean | Y | Y | Y | Y | Y |
+| Single optional boolean | Y | Y | Y | Y | Y |
 | Dedupe (two identical schemas) | Y | — | Y | Y | — |
 | Model name source (property-key) | Y | — | Y | Y | — |
 | Root not object / empty object error | Y | Y | — | — | — |
@@ -397,7 +399,7 @@ TODO.
 
 The JSON Schema `type` keyword constrains the instance to one or more primitive types. In the spec it can be a **string** (single type) or an **array of type strings** (instance valid if it matches any listed type). Primitive type names are consistent across drafts: `array`, `boolean`, `integer`, `null`, `number`, `object`, `string`.
 
-**Our implementation:** We accept both a single type string and an array of type strings at parse time; we store and use only the **first** type. `object`, `string`, `integer`, and `number` drive codegen (integer emits `i64` / `Option<i64>`; number emits `f64` / `Option<f64>`; no numeric constraints yet); other types are ignored for codegen but can be used for validation. We do not support draft-03 style array elements that are schema objects (we only interpret type-name strings). See schema model and parsing/constructors in `json_schema_rs/src/json_schema/json_schema.rs`, Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`, and validator in `json_schema_rs/src/validator/mod.rs`. For type `"string"` specifically, see **7. Strings** below.
+**Our implementation:** We accept both a single type string and an array of type strings at parse time; we store and use only the **first** type. `object`, `string`, `integer`, `number`, and `boolean` drive codegen (integer emits `i64` / `Option<i64>`; number emits `f64` / `Option<f64>`; boolean emits `bool` / `Option<bool>`; no numeric constraints yet); other types are ignored for codegen but can be used for validation. We do not support draft-03 style array elements that are schema objects (we only interpret type-name strings). See schema model and parsing/constructors in `json_schema_rs/src/json_schema/json_schema.rs`, Rust codegen in `json_schema_rs/src/code_gen/rust_backend.rs`, and validator in `json_schema_rs/src/validator/mod.rs`. For type `"string"` specifically, see **7. Strings** below. For type `"boolean"`, see **type: "boolean"** in **8. Numbers** below.
 
 **Limitation (type array):** When the schema has `"type": ["object", "null"]` (or any array of types), we treat it as the first type only. Validation requires the instance to match that single type; we do not implement "instance valid if it matches any type in the array" (e.g. `null` would fail for `["object", "null"]`). This can be implemented in the future if needed.
 
@@ -630,6 +632,14 @@ When a schema has `"type": "number"` (or `"type": ["number", ...]` with number f
 **Our implementation:** We parse both a single type string `"number"` and an array whose first element is `"number"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("number")`, we require the instance to be a JSON number (`instance.as_number().is_some()`); non-numbers (string, null, object, array, boolean) produce `ValidationError::ExpectedNumber`. When the instance is numeric, we apply `minimum` and `maximum` if present (see **minimum** / **maximum**). Codegen: properties with `type: "number"` emit Rust `f32` or `f64` (or Option) chosen from `minimum` and `maximum` when both present and valid, else `f64` (see **minimum** / **maximum**). Reverse codegen: Rust types `f32` and `f64` emit `"type": "number"` with `minimum` and `maximum` set to the type's range. See schema model `is_number()` in `json_schema_rs/src/json_schema/json_schema.rs`, validator in `json_schema_rs/src/validator/mod.rs`, Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`, and reverse codegen in `json_schema_rs/src/reverse_code_gen/mod.rs`.
 
 **Spec version quirks:** None for the **meaning** of type `"number"` across drafts. The only draft differences are in the **form** of the `type` keyword (string vs array), documented under **4. Type and value constraints → type**.
+
+### type: "boolean"
+
+When a schema has `"type": "boolean"` (or `"type": ["boolean", ...]` with boolean first), the instance must be a JSON boolean (`true` or `false`). This meaning is **identical across all JSON Schema drafts** (draft-00 through 2020-12).
+
+**Our implementation:** We parse both a single type string `"boolean"` and an array whose first element is `"boolean"` (we store the first type only; see **4. type**). Validation: when `type_ == Some("boolean")`, we require the instance to be a JSON boolean (`instance.is_boolean()`); non-booleans produce `ValidationError::ExpectedBoolean`. Codegen: properties with `type: "boolean"` emit Rust `bool` or `Option<bool>` (required vs optional). Array items with `type: "boolean"` emit `Vec<bool>` or `HashSet<bool>` when `uniqueItems: true`. Reverse codegen: `ToJsonSchema for bool` already emits `"type": "boolean"`. See schema model `is_boolean()` in `json_schema_rs/src/json_schema/json_schema.rs`, validator in `json_schema_rs/src/validator/mod.rs`, and Rust backend in `json_schema_rs/src/code_gen/rust_backend.rs`.
+
+**Spec version quirks:** None for the **meaning** of type `"boolean"` across drafts. The only draft differences are in the **form** of the `type` keyword (string vs array), documented under **4. Type and value constraints → type**.
 
 ### minimum
 

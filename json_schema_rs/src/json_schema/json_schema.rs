@@ -549,6 +549,12 @@ impl JsonSchema {
         self.type_.as_deref() == Some("number")
     }
 
+    /// Returns true if this schema is type "boolean".
+    #[must_use]
+    pub(crate) fn is_boolean(&self) -> bool {
+        self.type_.as_deref() == Some("boolean")
+    }
+
     /// Returns true if this schema is type "array".
     #[must_use]
     pub(crate) fn is_array(&self) -> bool {
