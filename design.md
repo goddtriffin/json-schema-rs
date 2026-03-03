@@ -121,6 +121,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Enum with variant collision (e.g. "a" and "A") | Y | — | Y | Y | — |
 | Enum dedupe (same enum in two properties) | Y | — | Y | Y | — |
 | Enum with duplicate values in schema | Y | Y | Y | Y | — |
+| Enum with non-Rust-compliant values (e.g. "/8633", "todd.griffin") | Y | Y | Y | Y | — |
 | Non-string enum → String fallback | Y | — | — | — | — |
 | Const string property (single-value enum) | Y | Y | Y | Y | Y |
 | Reverse codegen (every struct ToJsonSchema + attributes) | Y | Y | Y | Y | Y |
@@ -157,6 +158,8 @@ All functions that produce valid Rust identifiers (struct names, field names, mo
 - **`sanitize_field_name(key)`** — Field identifiers (snake_case). Replaces `-` with `_`; invalid chars → `_`. Empty → `"empty"`; leading digit → `field_{s}`; single `_` → `"empty"`. Rust strict/reserved keywords (e.g. `type`, `self`) get trailing `_` (e.g. `type_`). Codegen emits `#[serde(rename = "...")]` when field name differs from JSON key. Non-ASCII → `_`.
 - **`sanitize_module_name(s)`** — Module names. Replaces `-`, `.`, space with `_`; keeps `[a-zA-Z0-9_]`. Empty → `"schema"`; leading digit → `schema_{s}`; reserved `crate`/`self`/`super` → `{s}_mod`. Non-ASCII → `_`.
 - **`sanitize_path_component(component)`** — File stem or dir name for output paths. Replaces `-` and non-`[a-zA-Z0-9_]` with `_`. Empty → `"schema"`; leading digit → `_{s}`. Non-ASCII → `_`.
+- **`enum_variant_name_from_value(s)`** — Enum variant names (UpperCamelCase). Normalizes input first: invalid identifier chars (`/`, `.`, etc.) → `_`, trim; then `to_pascal_case`. Leading digit → `E{suffix}`; keyword `Self` → `ESelf`; empty → `EUnnamed`. Result is always valid Rust.
+- **`enum_variant_names_with_collision_resolution(values)`** — When multiple values map to the same variant base (e.g. `"Accept"` and `"accept"` both → `Accept`), appends numeric suffix without underscore (`Accept0`, `Accept1`) to preserve UpperCamelCase per [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/naming.html).
 - **`sanitize_output_relative(relative)`**, **`module_name_from_path(path)`** — Build on the above.
 
 **Rules summary:**

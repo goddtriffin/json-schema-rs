@@ -99,20 +99,50 @@ pub fn to_pascal_case(name: &str) -> String {
     }
 }
 
+/// Normalize an enum value string for variant naming: replace characters invalid in Rust
+/// identifiers with `_`, collapse consecutive underscores, trim. Word separators `_`, `-`, space
+/// are preserved for `to_pascal_case`. Result is fed to `to_pascal_case`.
+#[must_use]
+fn normalize_enum_value_for_variant(s: &str) -> String {
+    let s = replace_non_ascii(s);
+    let mut out = String::new();
+    let mut prev_was_underscore = false;
+    for c in s.chars() {
+        let keep_as_is = c.is_ascii_alphanumeric() || c == '-' || c == ' ';
+        let as_underscore = c == '_' || !keep_as_is;
+        if as_underscore {
+            if !prev_was_underscore {
+                out.push('_');
+                prev_was_underscore = true;
+            }
+        } else {
+            out.push(c);
+            prev_was_underscore = false;
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
 /// Maps a single enum value string to a valid Rust enum variant name (`PascalCase`).
-/// Invalid identifiers (leading digit, keyword `Self`, or non-alphanumeric/underscore) get an `E` prefix.
+/// Invalid identifier chars (e.g. `/`, `.`) are normalized to word boundaries before conversion.
+/// Leading digit, keyword `Self`, or empty after normalization get an `E` prefix.
 ///
 /// # Panics
 ///
 /// Never: `pascal` is only used after a non-empty check.
 #[must_use]
 pub fn enum_variant_name_from_value(s: &str) -> String {
-    let pascal = to_pascal_case(s);
-    if pascal.is_empty() {
+    let normalized = normalize_enum_value_for_variant(s);
+    if normalized.is_empty() {
         return "EUnnamed".to_string();
     }
-    // Original starts with digit: to_pascal_case produces N-prefixed form; use E + rest so all invalid use E.
-    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+    let pascal = to_pascal_case(&normalized);
+    // Normalized starts with digit: to_pascal_case produces N-prefixed form; use E + rest.
+    if normalized
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_digit())
+    {
         let suffix: &str = pascal.strip_prefix('N').unwrap_or(&pascal);
         return format!("E{suffix}");
     }
@@ -133,7 +163,7 @@ pub fn enum_variant_name_from_value(s: &str) -> String {
 }
 
 /// Given a deduplicated, sorted list of enum value strings, returns a list of (value, `variant_name`) with collision resolution.
-/// When multiple values map to the same variant name (e.g. "a" and "A" both → "A"), appends _0, _1, _2 to all in that collision set.
+/// When multiple values map to the same variant name (e.g. "a" and "A" both → "A"), appends 0, 1, 2 to preserve `UpperCamelCase` (e.g. A0, A1).
 ///
 /// # Panics
 ///
@@ -157,7 +187,7 @@ pub fn enum_variant_names_with_collision_resolution(values: &[String]) -> Vec<(S
                 (value, base)
             } else {
                 let idx = group.iter().position(|v| v == &value).expect("index");
-                (value, format!("{base}_{idx}"))
+                (value, format!("{base}{idx}"))
             }
         })
         .collect()
@@ -400,6 +430,27 @@ mod tests {
     }
 
     #[test]
+    fn enum_variant_name_from_value_slash_leading_digit_normalized_to_e_prefix() {
+        let expected = "E8633";
+        let actual = enum_variant_name_from_value("/8633");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_name_from_value_dot_becomes_word_boundary() {
+        let expected = "ToddGriffin";
+        let actual = enum_variant_name_from_value("todd.griffin");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_variant_name_from_value_hyphen_preserved_for_pascal() {
+        let expected = "FooBar";
+        let actual = enum_variant_name_from_value("foo-bar");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn enum_variant_names_with_collision_resolution_single() {
         let values: Vec<String> = vec!["open".to_string()];
         let expected: Vec<(String, String)> = vec![("open".to_string(), "Open".to_string())];
@@ -411,8 +462,8 @@ mod tests {
     fn enum_variant_names_with_collision_resolution_collision() {
         let values: Vec<String> = vec!["a".to_string(), "A".to_string()];
         let expected: Vec<(String, String)> = vec![
-            ("a".to_string(), "A_0".to_string()),
-            ("A".to_string(), "A_1".to_string()),
+            ("a".to_string(), "A0".to_string()),
+            ("A".to_string(), "A1".to_string()),
         ];
         let actual = enum_variant_names_with_collision_resolution(&values);
         assert_eq!(expected, actual);
