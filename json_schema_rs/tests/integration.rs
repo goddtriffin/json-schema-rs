@@ -70,11 +70,11 @@ fn integration_schema_with_default_parses_and_generates() {
 
 use serde::{Deserialize, Serialize};
 
-fn default_Root_name() -> Option<String> { Some("foo".to_string()) }
+fn default_root_name() -> Option<String> { Some("foo".to_string()) }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default = "default_Root_name")]
+    #[serde(default = "default_root_name")]
     pub name: Option<String>,
 }
 

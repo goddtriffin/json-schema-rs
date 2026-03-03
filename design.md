@@ -153,9 +153,9 @@ All functions that produce valid Rust identifiers (struct names, field names, mo
 
 **Functions and roles:**
 
-- **`to_pascal_case(name)`** — Converts to PascalCase for type names. Splits on `_`, `-`, space; capitalizes each word. Empty → `"Unnamed"`; leading digit → `N{out}`. Non-ASCII → `_`.
+- **`to_pascal_case(name)`** — Converts to PascalCase for type names. Uses heck's `ToPascalCase`; our wrapper handles empty → `"Unnamed"` and leading digit → `N{out}`. Non-ASCII → `_` before conversion.
 - **`sanitize_struct_name(s)`** — Type/struct/enum names. Uses `to_pascal_case`; then if result is Rust keyword `Self`, appends `_` → `Self_`. Leading digit already prefixed in `to_pascal_case`.
-- **`sanitize_field_name(key)`** — Field identifiers (snake_case). Replaces `-` with `_`; invalid chars → `_`. Empty → `"empty"`; leading digit → `field_{s}`; single `_` → `"empty"`. Rust strict/reserved keywords (e.g. `type`, `self`) get trailing `_` (e.g. `type_`). Codegen emits `#[serde(rename = "...")]` when field name differs from JSON key. Non-ASCII → `_`.
+- **`sanitize_field_name(key)`** — Field identifiers (snake_case). Replaces `-` with `_`; invalid chars → `_`; converts camelCase/PascalCase to snake_case via heck's `ToSnakeCase`. Empty → `"empty"`; leading digit → `field_{s}`; single `_` → `"empty"`. Rust strict/reserved keywords (e.g. `type`, `self`) get trailing `_` (e.g. `type_`). Codegen emits `#[serde(rename = "...")]` when field name differs from JSON key. Non-ASCII → `_`.
 - **`sanitize_module_name(s)`** — Module names. Replaces `-`, `.`, space with `_`; keeps `[a-zA-Z0-9_]`. Empty → `"schema"`; leading digit → `schema_{s}`; reserved `crate`/`self`/`super` → `{s}_mod`. Non-ASCII → `_`.
 - **`sanitize_path_component(component)`** — File stem or dir name for output paths. Replaces `-` and non-`[a-zA-Z0-9_]` with `_`. Empty → `"schema"`; leading digit → `_{s}`. Non-ASCII → `_`.
 - **`enum_variant_name_from_value(s)`** — Enum variant names (UpperCamelCase). Normalizes input first: invalid identifier chars (`/`, `.`, etc.) → `_`, trim; then `to_pascal_case`. Leading digit → `E{suffix}`; keyword `Self` → `ESelf`; empty → `EUnnamed`. Result is always valid Rust.
@@ -171,9 +171,11 @@ All functions that produce valid Rust identifiers (struct names, field names, mo
 | Invalid/non-ASCII | `_` (in PascalCase input) | `_` | `_` filtered | `_` |
 | Rust keyword | `Self` → `Self_` | keyword → `{kw}_` | `crate`/`self`/`super` → `{s}_mod` | — |
 
-**Stability guarantee:** Sanitizer output is deterministic and intended to be stable across versions. Any change will be documented and rare (e.g. security or spec compliance). Unit tests lock golden input→output pairs (e.g. `"type"` → field `type_`, struct `Type`; `"self"` → struct `Self_`).
+**Stability guarantee:** Sanitizer output is deterministic and intended to be stable across versions. Any change will be documented and rare (e.g. security or spec compliance). Unit tests lock golden input→output pairs (e.g. `"type"` → field `type_`, struct `Type`; `"self"` → struct `Self_`). The switch to heck for snake_case (field names, default function names) was an intentional fix for idiomatic Rust; regenerated code will have different (correct) identifiers.
 
-**Competitor comparison:** Typify uses heck + custom sanitize; enum variant uniqueness via replacing non-identifier chars with `"X"`; rust-collisions fixture for keywords. schemafy uses Inflector for Pascal/snake; Rust keywords and invalid identifiers escaped with trailing underscore and serde rename. We use a single module, explicit keyword set (strict + reserved from the Rust Reference), and trailing `_` for type (`Self`) and field keywords so generated code is always valid without raw identifiers.
+**Default function naming:** When a property has a custom default value (schema default ≠ Rust type default), codegen emits a module-level function and `#[serde(default = "fn")]`. Function names use snake_case for both struct and field (e.g. `default_valerie_hunter_todd_griffin` for struct `ValerieHunter` and field `toddGriffin`), per [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/naming.html).
+
+**Competitor comparison:** Typify uses heck + custom sanitize; enum variant uniqueness via replacing non-identifier chars with `"X"`; rust-collisions fixture for keywords. schemafy uses Inflector for Pascal/snake; Rust keywords and invalid identifiers escaped with trailing underscore and serde rename. We use heck (like Typify) for PascalCase and snake_case, a single module, explicit keyword set (strict + reserved from the Rust Reference), and trailing `_` for type (`Self`) and field keywords so generated code is always valid without raw identifiers.
 
 **Duplicate struct names:** When two schemas (or title vs property key) produce the same sanitized struct name, codegen currently keeps the first occurrence and skips the second (“first wins”). Future work may add disambiguation (e.g. numeric suffix) or explicit failure.
 

@@ -28,6 +28,7 @@ uuid = ["dep:uuid"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+heck = "0.5"
 regress = "0.10"
 serde.workspace = true
 serde_json.workspace = true

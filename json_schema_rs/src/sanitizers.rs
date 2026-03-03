@@ -5,6 +5,7 @@
 //! Non-ASCII characters are replaced with `_`. Rust strict and reserved keywords
 //! are escaped with a trailing `_` so output is always valid.
 
+use heck::{ToPascalCase, ToSnakeCase};
 use std::path::{Path, PathBuf};
 
 /// Replace any non-ASCII character with `_`. Used at the start of sanitizers so
@@ -33,8 +34,8 @@ fn is_rust_keyword_field(s: &str) -> bool {
     RUST_KEYWORDS_FIELD.contains(&s)
 }
 
-/// Sanitize a JSON property key to a Rust field identifier (`snake_case`; replace `-` with `_`).
-/// Does not change case; only replaces invalid characters. Result is safe for use as a field name.
+/// Sanitize a JSON property key to a Rust field identifier (`snake_case`).
+/// Replaces `-` with `_`; invalid chars → `_`; converts camelCase/PascalCase to `snake_case` via heck.
 /// Empty input becomes `"empty"`; leading digit becomes `field_{s}`; single `_` becomes `"empty"`;
 /// Rust keywords get a trailing `_`. Non-ASCII is replaced with `_`.
 #[must_use]
@@ -66,6 +67,7 @@ pub fn sanitize_field_name(key: &str) -> String {
     if s == "_" {
         return "empty".to_string();
     }
+    let s: String = s.to_snake_case();
     if is_rust_keyword_field(&s) {
         return format!("{s}_");
     }
@@ -73,29 +75,22 @@ pub fn sanitize_field_name(key: &str) -> String {
 }
 
 /// Convert a name to `PascalCase` for struct or enum names (e.g. "address" -> "Address").
-/// Splits on `_`, `-`, and space; capitalizes each word. Empty becomes `"Unnamed"`;
-/// leading digit becomes `N{out}`. Non-ASCII is replaced with `_` before conversion.
+/// Uses heck's `ToPascalCase`; our wrapper handles empty → "Unnamed" and leading digit → "N{out}".
+/// Non-ASCII is replaced with `_` before conversion.
 #[must_use]
 pub fn to_pascal_case(name: &str) -> String {
     let name = replace_non_ascii(name);
-    let mut out = String::new();
-    let mut capitalize_next = true;
-    for c in name.chars() {
-        if c == '_' || c == '-' || c == ' ' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            out.extend(c.to_uppercase());
-            capitalize_next = false;
-        } else {
-            out.push(c);
-        }
+    if name.is_empty() {
+        return "Unnamed".to_string();
     }
-    if out.is_empty() {
-        "Unnamed".to_string()
-    } else if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("N{out}")
+    let pascal: String = name.to_pascal_case();
+    if pascal.is_empty() {
+        return "Unnamed".to_string();
+    }
+    if pascal.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("N{pascal}")
     } else {
-        out
+        pascal
     }
 }
 
@@ -314,6 +309,20 @@ mod tests {
     fn sanitize_field_name_unchanged_valid() {
         let expected = "first_name";
         let actual = sanitize_field_name("first_name");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn sanitize_field_name_camel_case_to_snake_case() {
+        let expected = "todd_griffin";
+        let actual = sanitize_field_name("toddGriffin");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn sanitize_field_name_http_response_to_snake_case() {
+        let expected = "http_response";
+        let actual = sanitize_field_name("HTTPResponse");
         assert_eq!(expected, actual);
     }
 
