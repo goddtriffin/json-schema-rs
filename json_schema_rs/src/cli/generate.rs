@@ -1,6 +1,9 @@
 //! `jsonschemars generate` subcommand: generate Rust from JSON Schema files.
 
-use super::utils::{collect_schema_entries, read_schema_from_path, write_mod_rs_files};
+use super::utils::{
+    collect_schema_entries, read_schema_from_path, shared_import_prefix_for_output_relative,
+    write_mod_rs_files,
+};
 use json_schema_rs::{
     CodeGenSettings, DedupeMode, JsonSchema, JsonSchemaSettings, ModelNameSource, generate_rust,
 };
@@ -88,9 +91,11 @@ pub(crate) fn run_generate(
         output
             .per_schema
             .iter()
-            .map(|bytes| {
+            .zip(output_relatives.iter())
+            .map(|(bytes, output_relative)| {
+                let prefix = shared_import_prefix_for_output_relative(output_relative.as_path());
                 let s = String::from_utf8_lossy(bytes);
-                let replaced = s.replace("pub use crate::", "pub use crate::shared::");
+                let replaced = s.replace("pub use crate::", &format!("pub use {prefix}shared::"));
                 replaced.into_bytes()
             })
             .collect()

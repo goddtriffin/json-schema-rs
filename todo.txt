@@ -28,17 +28,6 @@ For each of these TODO items, check what every other competitor library does, ch
 - maybe our generated Rust models which store a regex pattern could store the regex pattern not as
   a string, but as a pre-compiled regress regex struct/object/model.
 
-- [Codegen bug] Shared module path when output is in submodule: CLI emits `pub use crate::shared::X`
-  but when -o points to a subdir (e.g. src/generated/), `crate::shared` does not exist; compiler
-  suggests `generated::shared`.
-  MVE:
-    Input: Two minimal schemas that dedupe (e.g. {"type":"object","properties":{"id":{"type":"string"}}}
-    in a.json and b.json). Run: jsonschemars generate rust -o /path/to/crate/src/generated dir/
-    Current: generated/schema_a.rs contains `pub use crate::shared::Root;` → E0432 unresolved import
-    Expected: `pub use super::shared::Root;` (or crate configurable path)
-  Fix: Add CLI flag for output module path; when output dir is nested, emit `super::shared` or
-  `crate::MOD::shared` instead of `crate::shared`.
-
 - [Codegen bug] Duplicate type names in shared buffer: Multiple schemas produce the same
   sanitized struct/enum name (e.g. TheOperationalStatusSchema) with different definitions;
   both get emitted to shared.rs → E0428 redefined, E0119 conflicting trait impls.

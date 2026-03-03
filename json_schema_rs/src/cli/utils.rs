@@ -112,6 +112,16 @@ pub(crate) fn collect_schema_entries(inputs: &[String]) -> Result<Vec<(PathBuf, 
     Ok(entries)
 }
 
+/// Returns the path prefix for shared-import statements in per-schema files.
+/// Depth = number of path components in `output_relative.parent()` (0 for root, 1 for sub/x.rs).
+/// Prefix = `super::` repeated (depth + 1) times so `super::shared::` or `super::super::shared::` etc.
+pub(crate) fn shared_import_prefix_for_output_relative(output_relative: &Path) -> String {
+    let depth = output_relative
+        .parent()
+        .map_or(0, |p| p.components().count());
+    (0..=depth).map(|_| "super::").collect()
+}
+
 /// Builds a map: directory path (relative to `output_dir`) -> set of module names (direct children).
 /// Root is ""; subdirs are e.g. `sub_dir`. Uses iterative logic (no recursion).
 pub(crate) fn mod_rs_content_by_dir(
@@ -184,6 +194,30 @@ pub(crate) fn write_mod_rs_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_import_prefix_root_file_is_super() {
+        let output_relative = PathBuf::from("a.rs");
+        let actual = shared_import_prefix_for_output_relative(&output_relative);
+        let expected = "super::";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn shared_import_prefix_one_subdir_is_super_super() {
+        let output_relative = PathBuf::from("sub/c.rs");
+        let actual = shared_import_prefix_for_output_relative(&output_relative);
+        let expected = "super::super::";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn shared_import_prefix_two_subdirs_is_three_supers() {
+        let output_relative = PathBuf::from("a/b/c.rs");
+        let actual = shared_import_prefix_for_output_relative(&output_relative);
+        let expected = "super::super::super::";
+        assert_eq!(expected, actual);
+    }
 
     #[test]
     fn mod_rs_content_by_dir_single_root_file() {
