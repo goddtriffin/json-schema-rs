@@ -3,7 +3,7 @@ members = ["json_schema_rs", "json_schema_rs_macro"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 rust-version = "1.93"
 authors = ["Todd Everett Griffin <tgriffin115@gmail.com>"]
@@ -35,7 +35,7 @@ pedantic = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
 
 [workspace.dependencies]
-json-schema-rs = { version = "0.0.5", path = "json_schema_rs" }
+json-schema-rs = { version = "0.0.6", path = "json_schema_rs" }
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
