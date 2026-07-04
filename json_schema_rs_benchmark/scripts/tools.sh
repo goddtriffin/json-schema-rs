@@ -72,18 +72,19 @@ _has() { command -v "$1" >/dev/null 2>&1; }
 
 # --- required-tool enforcement ---------------------------------------------------------
 
-# required_external_tools: echo the external commands the harness REQUIRES. Every competitor
-# we benchmark plus Hyperfine (wall-time) must be installed; a partial run would silently
-# omit competitors and misrepresent the results. Our own bins (jsonschemars, boon_validate)
-# are built by the driver and so are not listed here.
+# required_external_tools: echo the external competitor CLIs the harness REQUIRES. Every
+# competitor we benchmark must be installed; a partial run would silently omit competitors and
+# misrepresent the comparison, so the driver aborts if any is missing (see check_required_tools).
+# Our own bins (jsonschemars, boon_validate) are built by the driver — and boon is one of them —
+# so neither is listed here. Wall-time and peak RSS come from /usr/bin/time, so no separate
+# timing tool (e.g. Hyperfine) is required.
 required_external_tools() {
-    printf '%s\n' "hyperfine cargo-typify jsonschema-cli"
+    printf '%s\n' "cargo-typify jsonschema-cli"
 }
 
 # _install_hint <cmd>: how to install a required tool.
 _install_hint() {
     case "$1" in
-        hyperfine)      echo "cargo install hyperfine" ;;
         cargo-typify)   echo "cargo install cargo-typify" ;;
         jsonschema-cli) echo "cargo install jsonschema-cli" ;;
         *)              echo "(unknown install method)" ;;
