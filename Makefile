@@ -24,11 +24,11 @@ lint: ## lints the codebase
 	cargo fmt
 
 .PHONY: test
-test: ## runs tests
+test: ## runs tests (all features, so feature-gated code like uuid is always exercised)
 	cargo fmt --check
 	cargo check
-	cargo clippy --tests
-	cargo test
+	cargo clippy --tests --all-features
+	cargo test --all-features
 
 .PHONY: fix
 fix: ## fixes the codebase
