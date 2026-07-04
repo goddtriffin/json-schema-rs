@@ -1,0 +1,9 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "spec": {
+    "replicas": "three",
+    "selector": { "matchLabels": { "app": "x" } },
+    "template": { "spec": { "containers": [ { "name": "a", "image": "b" } ] } }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/small/config.json",
+  "title": "AppConfig",
+  "description": "Minimal application configuration file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "debug": {
+      "type": "boolean"
+    },
+    "logLevel": {
+      "type": "string",
+      "enum": ["trace", "debug", "info", "warn", "error"]
+    }
+  }
+}

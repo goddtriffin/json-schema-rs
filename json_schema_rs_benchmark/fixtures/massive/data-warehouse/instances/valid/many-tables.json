@@ -1,0 +1,1807 @@
+{
+  "warehouseName": "analytics-dw",
+  "version": "3.2.1",
+  "environment": "prod",
+  "tables": [
+    {
+      "name": "table_0000",
+      "schema": "public",
+      "description": "Auto table 0",
+      "rowEstimate": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_0_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0001",
+      "schema": "public",
+      "description": "Auto table 1",
+      "rowEstimate": 1000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_1_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0002",
+      "schema": "public",
+      "description": "Auto table 2",
+      "rowEstimate": 2000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_2_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0003",
+      "schema": "public",
+      "description": "Auto table 3",
+      "rowEstimate": 3000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_3_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0004",
+      "schema": "public",
+      "description": "Auto table 4",
+      "rowEstimate": 4000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_4_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0005",
+      "schema": "public",
+      "description": "Auto table 5",
+      "rowEstimate": 5000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_5_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0006",
+      "schema": "public",
+      "description": "Auto table 6",
+      "rowEstimate": 6000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_6_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0007",
+      "schema": "public",
+      "description": "Auto table 7",
+      "rowEstimate": 7000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_7_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0008",
+      "schema": "public",
+      "description": "Auto table 8",
+      "rowEstimate": 8000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_8_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0009",
+      "schema": "public",
+      "description": "Auto table 9",
+      "rowEstimate": 9000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_9_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0010",
+      "schema": "public",
+      "description": "Auto table 10",
+      "rowEstimate": 10000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_10_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0011",
+      "schema": "public",
+      "description": "Auto table 11",
+      "rowEstimate": 11000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_11_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0012",
+      "schema": "public",
+      "description": "Auto table 12",
+      "rowEstimate": 12000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_12_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0013",
+      "schema": "public",
+      "description": "Auto table 13",
+      "rowEstimate": 13000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_13_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0014",
+      "schema": "public",
+      "description": "Auto table 14",
+      "rowEstimate": 14000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_14_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0015",
+      "schema": "public",
+      "description": "Auto table 15",
+      "rowEstimate": 15000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_15_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0016",
+      "schema": "public",
+      "description": "Auto table 16",
+      "rowEstimate": 16000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_16_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0017",
+      "schema": "public",
+      "description": "Auto table 17",
+      "rowEstimate": 17000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_17_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0018",
+      "schema": "public",
+      "description": "Auto table 18",
+      "rowEstimate": 18000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_18_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0019",
+      "schema": "public",
+      "description": "Auto table 19",
+      "rowEstimate": 19000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_19_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0020",
+      "schema": "public",
+      "description": "Auto table 20",
+      "rowEstimate": 20000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_20_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0021",
+      "schema": "public",
+      "description": "Auto table 21",
+      "rowEstimate": 21000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_21_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0022",
+      "schema": "public",
+      "description": "Auto table 22",
+      "rowEstimate": 22000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_22_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0023",
+      "schema": "public",
+      "description": "Auto table 23",
+      "rowEstimate": 23000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_23_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0024",
+      "schema": "public",
+      "description": "Auto table 24",
+      "rowEstimate": 24000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_24_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0025",
+      "schema": "public",
+      "description": "Auto table 25",
+      "rowEstimate": 25000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_25_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0026",
+      "schema": "public",
+      "description": "Auto table 26",
+      "rowEstimate": 26000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_26_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0027",
+      "schema": "public",
+      "description": "Auto table 27",
+      "rowEstimate": 27000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_27_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0028",
+      "schema": "public",
+      "description": "Auto table 28",
+      "rowEstimate": 28000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_28_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0029",
+      "schema": "public",
+      "description": "Auto table 29",
+      "rowEstimate": 29000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_29_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0030",
+      "schema": "public",
+      "description": "Auto table 30",
+      "rowEstimate": 30000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_30_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0031",
+      "schema": "public",
+      "description": "Auto table 31",
+      "rowEstimate": 31000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_31_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0032",
+      "schema": "public",
+      "description": "Auto table 32",
+      "rowEstimate": 32000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_32_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0033",
+      "schema": "public",
+      "description": "Auto table 33",
+      "rowEstimate": 33000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_33_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0034",
+      "schema": "public",
+      "description": "Auto table 34",
+      "rowEstimate": 34000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_34_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0035",
+      "schema": "public",
+      "description": "Auto table 35",
+      "rowEstimate": 35000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_35_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0036",
+      "schema": "public",
+      "description": "Auto table 36",
+      "rowEstimate": 36000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_36_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0037",
+      "schema": "public",
+      "description": "Auto table 37",
+      "rowEstimate": 37000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_37_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0038",
+      "schema": "public",
+      "description": "Auto table 38",
+      "rowEstimate": 38000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_38_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    },
+    {
+      "name": "table_0039",
+      "schema": "public",
+      "description": "Auto table 39",
+      "rowEstimate": 39000,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "maxLength": 255,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_39_id",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree"
+        }
+      ],
+      "foreignKeys": [],
+      "tags": [
+        "core",
+        "generated"
+      ],
+      "owner": "team_1"
+    }
+  ]
+}
