@@ -13,12 +13,12 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
-# Aggregator: reads criterion + Hyperfine + /usr/bin/time output and emits results.{json,md}.
+# Aggregator: reads criterion + /usr/bin/time output and emits results.{json,md}.
 [[bin]]
 name = "aggregate"
 path = "src/bin/aggregate.rs"
 
-# Thin CLI wrapper around the `boon` validator so Hyperfine can time it like any other tool.
+# Thin CLI wrapper around the `boon` validator so the harness can time it like any other tool.
 [[bin]]
 name = "boon_validate"
 path = "src/bin/boon_validate.rs"

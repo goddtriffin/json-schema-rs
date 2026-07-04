@@ -35,7 +35,8 @@ Outputs, committed for PR review:
 
 Two axes, on shared language-agnostic fixtures at small / medium / large / massive sizes:
 
-- **Codegen** (schema → code): our lib vs [typify] (`cargo typify`) and [schemafy] (CLI).
+- **Codegen** (schema → code): our lib vs [typify] (`cargo typify`). ([schemafy] is a
+  proc-macro with no CLI, so it cannot be wired as a codegen competitor.)
 - **Validation** (schema + instance → result): our lib vs [jsonschema-cli] and [boon].
 
 Per-metric categories (lower is better for all):
