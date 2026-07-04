@@ -449,7 +449,7 @@ fn maybe_prepend_hash_set_use(mut buf: Vec<u8>) -> Vec<u8> {
     buf
 }
 
-/// If the buffer contains "`Uuid`", insert `use uuid::Uuid;` after the HashSet use line (if present) or after the serde use line.
+/// If the buffer contains "`Uuid`", insert `use uuid::Uuid;` after the `HashSet` use line (if present) or after the serde use line.
 #[cfg(feature = "uuid")]
 fn maybe_prepend_uuid_use(mut buf: Vec<u8>) -> Vec<u8> {
     if !buf.windows(4).any(|w| w == b"Uuid") {
