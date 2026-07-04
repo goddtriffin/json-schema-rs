@@ -14,6 +14,17 @@ per-category winner. This crate is a workspace member and is **not published**
 make benchmark          # from the repo root (research_benchmark is a backwards-compat alias)
 ```
 
+The competitor CLIs must be installed first, or the run aborts up front with install hints
+(a partial run would silently omit a competitor and misrepresent the comparison):
+
+```sh
+cargo install cargo-typify    # codegen competitor (typify)
+cargo install jsonschema-cli  # validation competitor (Stranger6667/jsonschema)
+```
+
+Our own `jsonschemars` CLI and the `boon` wrapper are built by the driver, so they need no
+separate install.
+
 Outputs, committed for PR review:
 
 - `results.json` — machine-readable aggregated results.
@@ -31,16 +42,17 @@ Per-metric categories (lower is better for all):
 
 | Category | Source | Scope |
 |---|---|---|
-| codegen wall-time | Hyperfine (CLI) | all codegen tools |
+| codegen wall-time | `/usr/bin/time` (CLI) | all codegen tools |
 | schema-compile time | criterion (in-process) | our lib only |
-| validate (valid) | Hyperfine (CLI) + criterion | all validation tools / our lib |
-| validate (invalid) | Hyperfine (CLI) | all validation tools (error-path) |
+| validate (valid) | `/usr/bin/time` (CLI) + criterion | all validation tools / our lib |
+| validate (invalid) | `/usr/bin/time` (CLI) | all validation tools (error-path) |
 | peak memory | `/usr/bin/time` peak RSS | all tools |
 
-Wall-time comes from [Hyperfine]; our own in-process hot paths use [criterion] (with
-optional [dhat] heap profiling under the `dhat-heap` feature) so we can split
-schema-compile from per-instance validate and gate our own regressions. Peak memory is
-captured uniformly across every tool with `/usr/bin/time` (macOS `-l` / Linux `-v`).
+Wall-time and peak memory both come from `/usr/bin/time` (macOS `-l` / Linux `-v`), which
+reports `real` time and peak RSS in one shot for every tool uniformly. Our own in-process
+hot paths additionally use [criterion] (with optional [dhat] heap profiling under the
+`dhat-heap` feature) so we can split schema-compile from per-instance validate and gate our
+own regressions.
 
 ## Rules baked into the harness
 
@@ -59,7 +71,7 @@ captured uniformly across every tool with `/usr/bin/time` (macOS `-l` / Linux `-
 json_schema_rs_benchmark/
   src/lib.rs              # shared results model + winner logic
   src/bin/aggregate.rs    # raw captures -> results.{json,md}
-  src/bin/boon_validate.rs# thin boon CLI wrapper (so Hyperfine can time boon)
+  src/bin/boon_validate.rs# thin boon CLI wrapper (so the harness can time boon end-to-end)
   benches/hot_paths.rs    # criterion micro-benchmarks of our hot paths
   scripts/run_benchmark.sh# driver invoked by `make benchmark`
   scripts/tools.sh        # per-competitor CLI invocation definitions
@@ -71,6 +83,5 @@ json_schema_rs_benchmark/
 [schemafy]: https://github.com/Marwes/schemafy
 [jsonschema-cli]: https://github.com/Stranger6667/jsonschema
 [boon]: https://github.com/santhosh-tekuri/boon
-[Hyperfine]: https://github.com/sharkdp/hyperfine
 [criterion]: https://github.com/bheisler/criterion.rs
 [dhat]: https://github.com/nnethercote/dhat-rs

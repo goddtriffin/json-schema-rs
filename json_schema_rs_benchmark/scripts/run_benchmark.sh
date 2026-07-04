@@ -10,13 +10,15 @@
 #   4. Aggregate all raw captures into committed results.json + results.md.
 #
 # Measurement: every CLI run is wrapped in `/usr/bin/time` (macOS `-l` / Linux `-v`), which
-# yields BOTH wall-time (`real`) and peak resident set size in one shot — so the harness
-# works without Hyperfine installed. When Hyperfine IS present it is used for more rigorous
-# wall-time; otherwise the min of `${BENCH_REPEATS}` timed runs is used. Precise in-process,
-# startup-free numbers for our own lib come from criterion (step 2).
+# yields BOTH wall-time (`real`) and peak resident set size in one shot; the min of
+# `${BENCH_REPEATS}` timed runs is taken as the wall-time. Precise in-process, startup-free
+# numbers for our own lib come from criterion (step 2).
 #
-# The harness degrades gracefully: any tool not installed is skipped (see scripts/tools.sh),
-# and any fixture a tool cannot handle is recorded as a compat failure — never a hard error.
+# Required tools: every competitor CLI the harness benchmarks (see required_external_tools in
+# scripts/tools.sh) must be installed. The driver aborts up front with install hints if any is
+# missing, rather than silently omitting a competitor and misrepresenting the comparison.
+# Fixture-level incompatibility is different: a tool that cannot handle a specific schema is
+# recorded as a compat failure, never a hard error.
 #
 # Env knobs:
 #   BENCH_REPEATS           timed repeats per CLI measurement (default 5)
@@ -72,6 +74,16 @@ TOOLS_SH="${SCRIPT_DIR}/tools.sh"
 if [[ -f "${TOOLS_SH}" ]]; then
   # shellcheck source=/dev/null
   source "${TOOLS_SH}"
+
+  # Every competitor must be installed, or the run would silently omit tools and misrepresent
+  # the comparison. Abort with install hints rather than produce a partial, misleading result.
+  echo "==> checking required competitor tools"
+  if ! check_required_tools; then
+    echo "!! required competitor tools are missing (see above); aborting." >&2
+    echo "   install the tools listed above, or edit required_external_tools in" >&2
+    echo "   scripts/tools.sh if you intend to benchmark a subset." >&2
+    exit 1
+  fi
 else
   echo "!! scripts/tools.sh not found; skipping cross-tool measurements" >&2
 fi
