@@ -73,6 +73,22 @@ Follow these steps for **every** new JSON Schema feature and for **every** updat
 - [ ] Default settings = Draft 2020-12
 - [ ] All tools: codegen (all frontends) + validator; tests; scenario × frontend matrix
 
+## Working style
+
+These apply to **every** change, not only JSON Schema features.
+
+### Prefer `make` targets over hand-written commands
+
+Always drive repo workflows through their **Makefile target** rather than a manually crafted command, wherever a target exists: `make test` (not a bare `cargo test`), `make lint`, `make benchmark`, `make vendor_specs`, `make vendor_test_suite`, and so on. The targets encode the correct flags and stay correct as the project evolves — for example, `make test` runs with `--all-features` so feature-gated code (like the `uuid` feature) is always compiled and exercised, whereas a raw `cargo test` silently skips optional features and drifts from what reviewers and CI run. Reach for a raw `cargo`/shell command only when no target covers the task (e.g. a one-off `cargo test <name>` while iterating on a single test); when a raw workflow recurs, add or extend a `make` target instead.
+
+### Orchestrate with subagents
+
+Default to **fanning work out to subagents** and keeping the main agent as an **orchestrator**. This serves two goals: it keeps large reads, searches, and iterative compile/test loops out of the main context (saving context budget), and it **parallelizes** independent implementation work. Decompose a change into independent units (e.g. distinct tools, files, or scenarios), dispatch each to a subagent with a precise, self-contained brief, and have the orchestrator integrate and verify the results. Give each subagent a **narrow, non-overlapping** scope so they never edit the same files concurrently. Implement directly (no fan-out) only for small, tightly-coupled changes where coordination overhead would exceed the benefit.
+
+### Verify at the end of a round — never mid-flight
+
+Run `make test` **and** `make benchmark` to confirm correctness and catch regressions, and run them at the **end of an implementation round**, once the code is actually ready for linting and testing. **Do not** run `make test`/`make lint`/`make benchmark` in the *middle* of development — and especially not while subagents are still working. Mid-round verification at best slows the round down, and at worst breaks a subagent's in-flight work because that code was not yet ready to compile, lint, or test. The orchestrator runs the full verification pass **once**, after all subagents have returned and their work is integrated. (A subagent may run a **narrow, targeted** check on its own isolated piece before returning; the *full* `make test` / `make benchmark` sweep is the orchestrator's job at the end.)
+
 ## Contribution Guidelines
 
 ### Git
@@ -94,7 +110,7 @@ Follow these steps for **every** new JSON Schema feature and for **every** updat
 
 - **Durable wording only:** Never use temporal or minimal phrasing in docs or comments. Do not say "first pass," "in this pass," "keywords supported in this pass," "not yet implemented," "not yet feature complete," or "in this release." Document what is implemented and what is ignored; avoid framing by release or phase.
 - **Rust conventions and style:** We care greatly that our code adheres to **idiomatic Rust**—standard types, traits, patterns, and the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/). We often review competitor libraries implemented in other languages; our library is written in Rust and **must** follow Rust conventions, coding style, and best practices (e.g. use `Result` for fallible operations, prefer enums over stringly-typed errors). Do not mirror non-Rust idioms from competitors when they conflict with Rust conventions. This applies to production code and tests.
-- Run `make lint test` before completing any changes.
+- Run `make lint test` (and `make benchmark`) to verify — at the **end of an implementation round**, never mid-development. See [Verify at the end of a round](#working-style).
 - Use `#[expect]` not `#[allow]` for Clippy overrides.
 - Never fail silently; log errors internally (customer-facing message can differ).
 - Follow existing patterns: custom Error enum, BTreeMap for ordering, explicit type annotations on all variables.
