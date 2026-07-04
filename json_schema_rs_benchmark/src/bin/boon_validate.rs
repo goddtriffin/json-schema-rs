@@ -1,5 +1,5 @@
-//! Thin CLI wrapper around the `boon` validator so Hyperfine can time it uniformly with the
-//! other tools. Mirrors `jsonschemars validate`: takes a schema file and a payload file,
+//! Thin CLI wrapper around the `boon` validator so the harness can time it end-to-end,
+//! uniformly with the other tools. Mirrors `jsonschemars validate`: takes a schema file and a payload file,
 //! compiles the schema, validates the payload, and exits 0 on valid / non-zero on invalid.
 //!
 //! OWNER: competitor-wiring leaf.

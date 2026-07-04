@@ -1,9 +1,9 @@
 //! Shared data model for the json-schema-rs benchmark harness.
 //!
 //! The harness compares our library against competitor tools on the same fixtures across
-//! two axes (codegen and validation). Wall-time comes from Hyperfine, our in-process hot
-//! paths from criterion, and peak memory from `/usr/bin/time`. The aggregator parses those
-//! raw outputs into the [`BenchmarkResults`] model defined here, computes a winner per
+//! two axes (codegen and validation). Cross-tool wall-time and peak memory both come from
+//! `/usr/bin/time`, while our in-process hot paths come from criterion. The aggregator parses
+//! those raw outputs into the [`BenchmarkResults`] model defined here, computes a winner per
 //! metric category, and renders both machine-readable JSON and a human-readable table.
 //!
 //! For every metric we currently capture, **lower is better** (times and peak memory), so

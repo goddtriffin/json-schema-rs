@@ -1,7 +1,7 @@
 //! In-process criterion micro-benchmarks of OUR library's hot paths.
 //!
-//! These measure `json-schema-rs` only (competitors are timed end-to-end as CLIs via
-//! Hyperfine). Splitting schema-compile from per-instance validate is only meaningful
+//! These measure `json-schema-rs` only (competitors are timed end-to-end as CLIs under
+//! `/usr/bin/time`). Splitting schema-compile from per-instance validate is only meaningful
 //! in-process, which is exactly why these live here and feed our own regression gating.
 //!
 //! Four categories, each run across a couple of representative schema complexities:
