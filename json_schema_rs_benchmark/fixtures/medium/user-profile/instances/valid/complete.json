@@ -1,0 +1,22 @@
+{
+  "id": 42,
+  "username": "todd_g",
+  "email": "todd@example.com",
+  "displayName": "Todd Griffin",
+  "age": 33,
+  "active": true,
+  "roles": ["admin", "editor"],
+  "addresses": [
+    {
+      "street": "123 Main St",
+      "city": "Springfield",
+      "postalCode": "01101",
+      "country": "US"
+    }
+  ],
+  "preferences": {
+    "theme": "dark",
+    "notifications": true,
+    "itemsPerPage": 50
+  }
+}

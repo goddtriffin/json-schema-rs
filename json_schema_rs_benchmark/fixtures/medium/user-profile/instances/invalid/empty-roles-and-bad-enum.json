@@ -1,0 +1,9 @@
+{
+  "id": 7,
+  "username": "jane",
+  "email": "jane@example.com",
+  "roles": [],
+  "preferences": {
+    "theme": "neon"
+  }
+}

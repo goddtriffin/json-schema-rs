@@ -1,0 +1,436 @@
+{
+  "measurements": [
+    {
+      "tool": "boon",
+      "fixture": "large/api-catalog",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "large/api-catalog",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "large/api-catalog",
+      "category": "peak_memory_bytes",
+      "value": 5734400.0
+    },
+    {
+      "tool": "boon",
+      "fixture": "large/circleci",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "large/circleci",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "large/circleci",
+      "category": "peak_memory_bytes",
+      "value": 8847360.0
+    },
+    {
+      "tool": "boon",
+      "fixture": "massive/data-warehouse",
+      "category": "validate_valid_time_secs",
+      "value": 0.09
+    },
+    {
+      "tool": "boon",
+      "fixture": "massive/data-warehouse",
+      "category": "validate_invalid_time_secs",
+      "value": 0.09
+    },
+    {
+      "tool": "boon",
+      "fixture": "massive/data-warehouse",
+      "category": "peak_memory_bytes",
+      "value": 24543232.0
+    },
+    {
+      "tool": "boon",
+      "fixture": "massive/k8s-deployment",
+      "category": "validate_valid_time_secs",
+      "value": 0.02
+    },
+    {
+      "tool": "boon",
+      "fixture": "massive/k8s-deployment",
+      "category": "validate_invalid_time_secs",
+      "value": 0.02
+    },
+    {
+      "tool": "boon",
+      "fixture": "massive/k8s-deployment",
+      "category": "peak_memory_bytes",
+      "value": 11911168.0
+    },
+    {
+      "tool": "boon",
+      "fixture": "medium/package-json",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "medium/package-json",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "medium/package-json",
+      "category": "peak_memory_bytes",
+      "value": 6209536.0
+    },
+    {
+      "tool": "boon",
+      "fixture": "medium/user-profile",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "medium/user-profile",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "medium/user-profile",
+      "category": "peak_memory_bytes",
+      "value": 5521408.0
+    },
+    {
+      "tool": "boon",
+      "fixture": "small/config",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "small/config",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "small/config",
+      "category": "peak_memory_bytes",
+      "value": 5537792.0
+    },
+    {
+      "tool": "boon",
+      "fixture": "small/prettierrc",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "small/prettierrc",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "boon",
+      "fixture": "small/prettierrc",
+      "category": "peak_memory_bytes",
+      "value": 5652480.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/nested",
+      "category": "codegen_wall_time_secs",
+      "value": 0.00007505060342555993
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/nested",
+      "category": "schema_compile_time_secs",
+      "value": 4.422489978296949e-6
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/nested",
+      "category": "validate_valid_time_secs",
+      "value": 6.503678056951424e-6
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/nested",
+      "category": "validate_invalid_time_secs",
+      "value": 5.804610452402776e-6
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/small",
+      "category": "codegen_wall_time_secs",
+      "value": 0.000016599204581836187
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/small",
+      "category": "schema_compile_time_secs",
+      "value": 1.1499191484753983e-6
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/small",
+      "category": "validate_valid_time_secs",
+      "value": 6.921928238988769e-7
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "criterion/small",
+      "category": "validate_invalid_time_secs",
+      "value": 8.359564058054156e-7
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/api-catalog",
+      "category": "codegen_wall_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/api-catalog",
+      "category": "validate_valid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/api-catalog",
+      "category": "validate_invalid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/api-catalog",
+      "category": "peak_memory_bytes",
+      "value": 4603904.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "category": "codegen_wall_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "category": "validate_valid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "category": "validate_invalid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "category": "peak_memory_bytes",
+      "value": 12746752.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/data-warehouse",
+      "category": "codegen_wall_time_secs",
+      "value": 0.03
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/data-warehouse",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/data-warehouse",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/data-warehouse",
+      "category": "peak_memory_bytes",
+      "value": 38338560.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/k8s-deployment",
+      "category": "codegen_wall_time_secs",
+      "value": 0.06
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/k8s-deployment",
+      "category": "validate_valid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/k8s-deployment",
+      "category": "validate_invalid_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/k8s-deployment",
+      "category": "peak_memory_bytes",
+      "value": 100335616.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/package-json",
+      "category": "validate_valid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/package-json",
+      "category": "validate_invalid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/package-json",
+      "category": "peak_memory_bytes",
+      "value": 3440640.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/user-profile",
+      "category": "codegen_wall_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/user-profile",
+      "category": "validate_valid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/user-profile",
+      "category": "validate_invalid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/user-profile",
+      "category": "peak_memory_bytes",
+      "value": 3604480.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/config",
+      "category": "codegen_wall_time_secs",
+      "value": 0.01
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/config",
+      "category": "validate_valid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/config",
+      "category": "validate_invalid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/config",
+      "category": "peak_memory_bytes",
+      "value": 3096576.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/prettierrc",
+      "category": "validate_valid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/prettierrc",
+      "category": "validate_invalid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/prettierrc",
+      "category": "peak_memory_bytes",
+      "value": 2949120.0
+    }
+  ],
+  "compat": [
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/api-catalog",
+      "status": {
+        "status": "pass"
+      }
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "status": {
+        "status": "pass"
+      }
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/data-warehouse",
+      "status": {
+        "status": "pass"
+      }
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/k8s-deployment",
+      "status": {
+        "status": "pass"
+      }
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/package-json",
+      "status": {
+        "status": "fail",
+        "detail": "codegen exited 1"
+      }
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "medium/user-profile",
+      "status": {
+        "status": "pass"
+      }
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/config",
+      "status": {
+        "status": "pass"
+      }
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "small/prettierrc",
+      "status": {
+        "status": "fail",
+        "detail": "codegen exited 1"
+      }
+    }
+  ]
+}

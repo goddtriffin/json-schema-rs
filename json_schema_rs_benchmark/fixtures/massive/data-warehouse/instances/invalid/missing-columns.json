@@ -1,0 +1,10 @@
+{
+  "warehouseName": "dw",
+  "version": "1.0.0",
+  "tables": [
+    {
+      "name": "orders",
+      "schema": "public"
+    }
+  ]
+}

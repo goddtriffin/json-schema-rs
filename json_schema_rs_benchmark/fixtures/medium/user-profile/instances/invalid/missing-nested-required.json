@@ -1,0 +1,12 @@
+{
+  "id": 9,
+  "username": "bob",
+  "email": "bob@example.com",
+  "roles": ["guest"],
+  "addresses": [
+    {
+      "street": "5 Oak Ave",
+      "postalCode": "12345"
+    }
+  ]
+}

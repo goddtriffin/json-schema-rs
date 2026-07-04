@@ -50,10 +50,12 @@ publish_dry_run: ## dry run of publishing workspace crates to crates.io (order: 
 research_clone: ## clone or update competitor repos into research/repos/<lang>/<name>/ (includes BelfordZ crate); REFRESH=1 to force re-download BelfordZ
 	@./research/scripts/clone-competitors.sh
 
+.PHONY: benchmark
+benchmark: ## run the full benchmark harness (our lib + competitors) and refresh committed results
+	@./json_schema_rs_benchmark/scripts/run_benchmark.sh
+
 .PHONY: research_benchmark
-research_benchmark: ## (stub) run benchmarks against research/benchmark/fixtures; not yet implemented
-	@echo "Not implemented. Add fixture schemas to research/benchmark/fixtures/ and runner scripts, then use e.g. Hyperfine to measure each tool."
-	@exit 1
+research_benchmark: benchmark ## alias for `benchmark` (kept for backwards compatibility)
 
 .PHONY: research_harvest_tests
 research_harvest_tests: ## (stub) harvest test schemas from competitor repos; not yet implemented

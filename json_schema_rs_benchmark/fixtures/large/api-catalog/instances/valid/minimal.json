@@ -1,0 +1,17 @@
+{
+  "catalogVersion": "0.1.0",
+  "generatedAt": "2026-01-01T00:00:00Z",
+  "services": [
+    {
+      "name": "gateway",
+      "language": "typescript",
+      "tier": "frontend",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/"
+        }
+      ]
+    }
+  ]
+}
