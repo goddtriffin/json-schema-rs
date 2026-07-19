@@ -1,0 +1,145 @@
+[
+  {
+    "id": "small/config",
+    "size": "small",
+    "schema": "small/config/schema.json",
+    "valid_instances": [
+      "small/config/instances/valid/full.json",
+      "small/config/instances/valid/minimal.json"
+    ],
+    "invalid_instances": [
+      "small/config/instances/invalid/bad-port-and-enum.json",
+      "small/config/instances/invalid/missing-required.json",
+      "small/config/instances/invalid/wrong-type.json"
+    ],
+    "apples_to_apples": true,
+    "source": "hand-authored",
+    "license": "n/a",
+    "notes": "Minimal app config. Parses, validates, and codegens cleanly with our lib and mainstream tools."
+  },
+  {
+    "id": "small/prettierrc",
+    "size": "small",
+    "schema": "small/prettierrc/schema.json",
+    "valid_instances": [
+      "small/prettierrc/instances/valid/full-options.json",
+      "small/prettierrc/instances/valid/partial.json"
+    ],
+    "invalid_instances": [
+      "small/prettierrc/instances/invalid/bad-enum.json",
+      "small/prettierrc/instances/invalid/wrong-type-semi.json",
+      "small/prettierrc/instances/invalid/wrong-type-tabwidth.json"
+    ],
+    "apples_to_apples": false,
+    "source": "https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/prettierrc.json",
+    "license": "Apache-2.0 (SchemaStore)",
+    "notes": "Real-world Prettier config schema. Our lib PARSES and VALIDATES it correctly, but codegen fails (allOf-of-$ref not treated as object-like). Kept out of apples set; still useful for validation benchmarking."
+  },
+  {
+    "id": "medium/user-profile",
+    "size": "medium",
+    "schema": "medium/user-profile/schema.json",
+    "valid_instances": [
+      "medium/user-profile/instances/valid/complete.json",
+      "medium/user-profile/instances/valid/minimal.json"
+    ],
+    "invalid_instances": [
+      "medium/user-profile/instances/invalid/duplicate-roles-and-bad-username.json",
+      "medium/user-profile/instances/invalid/empty-roles-and-bad-enum.json",
+      "medium/user-profile/instances/invalid/missing-nested-required.json"
+    ],
+    "apples_to_apples": true,
+    "source": "hand-authored",
+    "license": "n/a",
+    "notes": "Nested objects, arrays, enums, $defs/$ref, uniqueItems, min/max bounds. Full pipeline (parse/validate/codegen) passes."
+  },
+  {
+    "id": "medium/package-json",
+    "size": "medium",
+    "schema": "medium/package-json/schema.json",
+    "valid_instances": [
+      "medium/package-json/instances/valid/library.json",
+      "medium/package-json/instances/valid/minimal.json"
+    ],
+    "invalid_instances": [
+      "medium/package-json/instances/invalid/name-wrong-type.json",
+      "medium/package-json/instances/invalid/scripts-wrong-type.json"
+    ],
+    "apples_to_apples": false,
+    "source": "https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/package.json",
+    "license": "Apache-2.0 (SchemaStore)",
+    "notes": "Real-world npm package.json schema. Our lib PARSES and VALIDATES correctly. Codegen fails because the schema uses an EXTERNAL $ref (\"ava.json\") that cannot resolve from a standalone file (expected limitation, not necessarily a bug). Kept out of apples set."
+  },
+  {
+    "id": "large/api-catalog",
+    "size": "large",
+    "schema": "large/api-catalog/schema.json",
+    "valid_instances": [
+      "large/api-catalog/instances/valid/minimal.json",
+      "large/api-catalog/instances/valid/two-services.json"
+    ],
+    "invalid_instances": [
+      "large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json",
+      "large/api-catalog/instances/invalid/missing-required-and-additional.json",
+      "large/api-catalog/instances/invalid/out-of-bounds-resources.json"
+    ],
+    "apples_to_apples": true,
+    "source": "hand-authored",
+    "license": "n/a",
+    "notes": "Service catalog: many $defs, nested arrays of objects, enums, pattern, numeric/string bounds, uniqueItems. Full pipeline passes."
+  },
+  {
+    "id": "large/circleci",
+    "size": "large",
+    "schema": "large/circleci/schema.json",
+    "valid_instances": [
+      "large/circleci/instances/valid/build-workflow.json",
+      "large/circleci/instances/valid/test-job.json"
+    ],
+    "invalid_instances": [
+      "large/circleci/instances/invalid/bad-version.json",
+      "large/circleci/instances/invalid/missing-version.json",
+      "large/circleci/instances/invalid/workflows-wrong-type.json"
+    ],
+    "apples_to_apples": true,
+    "source": "https://raw.githubusercontent.com/CircleCI-Public/circleci-yaml-language-server/main/schema.json",
+    "license": "MIT (CircleCI-Public/circleci-yaml-language-server)",
+    "notes": "Real-world CircleCI config schema (~190KB). Our lib parses, validates, AND codegens it (exit 0), so it qualifies as apples-to-apples across tools."
+  },
+  {
+    "id": "massive/data-warehouse",
+    "size": "massive",
+    "schema": "massive/data-warehouse/schema.json",
+    "valid_instances": [
+      "massive/data-warehouse/instances/valid/many-tables.json",
+      "massive/data-warehouse/instances/valid/minimal.json"
+    ],
+    "invalid_instances": [
+      "massive/data-warehouse/instances/invalid/bad-column-type.json",
+      "massive/data-warehouse/instances/invalid/bad-version-and-schema.json",
+      "massive/data-warehouse/instances/invalid/missing-columns.json"
+    ],
+    "apples_to_apples": true,
+    "source": "hand-authored (deterministically generated)",
+    "license": "n/a",
+    "notes": "~528KB. 220 table definitions via anyOf, columns/indexes/foreignKeys $defs, enums, bounds. Genuinely large; full pipeline (parse/validate/codegen) passes."
+  },
+  {
+    "id": "massive/k8s-deployment",
+    "size": "massive",
+    "schema": "massive/k8s-deployment/schema.json",
+    "valid_instances": [
+      "massive/k8s-deployment/instances/valid/minimal.json",
+      "massive/k8s-deployment/instances/valid/nginx-deployment.json"
+    ],
+    "invalid_instances": [
+      "massive/k8s-deployment/instances/invalid/additional-property.json",
+      "massive/k8s-deployment/instances/invalid/bad-replicas-type.json",
+      "massive/k8s-deployment/instances/invalid/wrong-kind.json"
+    ],
+    "apples_to_apples": true,
+    "source": "https://raw.githubusercontent.com/instrumenta/kubernetes-json-schema/master/v1.18.0-standalone-strict/deployment.json",
+    "license": "Apache-2.0 (kubernetes-json-schema, standalone-strict bundle)",
+    "notes": "~482KB real-world Kubernetes Deployment schema with inlined definitions and a constrained root (type object, additionalProperties false, kind enum). Parses, validates, AND codegens with our lib. Uses union types (e.g. [\"string\",\"null\"]) which our lib handles."
+  }
+]

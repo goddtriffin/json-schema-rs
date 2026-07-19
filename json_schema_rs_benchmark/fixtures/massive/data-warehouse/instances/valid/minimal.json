@@ -1,0 +1,17 @@
+{
+  "warehouseName": "small-dw",
+  "version": "1.0.0",
+  "tables": [
+    {
+      "name": "users",
+      "schema": "public",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64",
+          "primaryKey": true
+        }
+      ]
+    }
+  ]
+}

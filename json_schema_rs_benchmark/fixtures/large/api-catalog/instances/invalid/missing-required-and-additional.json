@@ -1,0 +1,17 @@
+{
+  "catalogVersion": "1.0.0",
+  "services": [
+    {
+      "name": "orders",
+      "language": "java",
+      "tier": "backend",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/orders"
+        }
+      ],
+      "unexpectedField": true
+    }
+  ]
+}
