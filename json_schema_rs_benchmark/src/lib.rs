@@ -212,6 +212,14 @@ impl BenchmarkResults {
 
         // Champions: the tool that wins the most cells outright in each category.
         out.push_str("## Category winners\n\n");
+        out.push_str(
+            "> Winners count outright per-cell wins only. Time categories also include our \
+             in-process criterion cells (our library only), and many cross-tool CLI cells \
+             round to `0.000` under `/usr/bin/time`'s ~10 ms resolution (counted as ties, \
+             not wins), so a time-category winner can reflect criterion-only cells rather \
+             than head-to-head speed. Peak memory is measured head-to-head across tools. \
+             See issue #21.\n\n",
+        );
         out.push_str("| Category | Winner |\n|---|---|\n");
         for (category, champion) in self.category_champions() {
             let winner: &str = champion.as_deref().unwrap_or("(no data)");
@@ -589,6 +597,8 @@ mod tests {
 
 ## Category winners
 
+> Winners count outright per-cell wins only. Time categories also include our in-process criterion cells (our library only), and many cross-tool CLI cells round to `0.000` under `/usr/bin/time`'s ~10 ms resolution (counted as ties, not wins), so a time-category winner can reflect criterion-only cells rather than head-to-head speed. Peak memory is measured head-to-head across tools. See issue #21.
+
 | Category | Winner |
 |---|---|
 | codegen wall-time | jsonschemars |
@@ -631,6 +641,8 @@ mod tests {
 # Benchmark results
 
 ## Category winners
+
+> Winners count outright per-cell wins only. Time categories also include our in-process criterion cells (our library only), and many cross-tool CLI cells round to `0.000` under `/usr/bin/time`'s ~10 ms resolution (counted as ties, not wins), so a time-category winner can reflect criterion-only cells rather than head-to-head speed. Peak memory is measured head-to-head across tools. See issue #21.
 
 | Category | Winner |
 |---|---|

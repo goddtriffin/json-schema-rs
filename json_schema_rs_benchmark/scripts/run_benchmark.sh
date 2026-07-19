@@ -157,15 +157,28 @@ if declare -F codegen_tools >/dev/null && [[ -d "${FIXTURES_DIR}" ]]; then
     # ---- validation axis ----
     valid_payload="$(first_json "${fdir}/instances/valid")"
     invalid_payload="$(first_json "${fdir}/instances/invalid")"
+    # Only record a validation timing when the tool returns the CORRECT verdict: a valid
+    # payload must be accepted (rc 0) and an invalid payload must be rejected (rc != 0). A
+    # wrong verdict means the tool errored or mis-validated (e.g. it cannot handle the
+    # schema), so its time would be a misleadingly-fast failure rather than a real
+    # validation — skip it (and warn) instead of polluting the results.
     for tool in $(validation_tools); do
       if [[ -n "${valid_payload}" ]]; then
         measure_run run_validate "${tool}" "${schema}" "${valid_payload}"
-        emit_measure "${tool}" "${fid}" "validate_valid_time_secs" "${MEASURE_WALL}"
-        emit_measure "${tool}" "${fid}" "peak_memory_bytes" "${MEASURE_RSS}"
+        if [[ "${MEASURE_RC}" == "0" ]]; then
+          emit_measure "${tool}" "${fid}" "validate_valid_time_secs" "${MEASURE_WALL}"
+          emit_measure "${tool}" "${fid}" "peak_memory_bytes" "${MEASURE_RSS}"
+        else
+          echo "!! ${tool} rejected the valid payload for ${fid} (rc ${MEASURE_RC}); skipping its validate timing" >&2
+        fi
       fi
       if [[ -n "${invalid_payload}" ]]; then
         measure_run run_validate "${tool}" "${schema}" "${invalid_payload}"
-        emit_measure "${tool}" "${fid}" "validate_invalid_time_secs" "${MEASURE_WALL}"
+        if [[ "${MEASURE_RC}" != "0" ]]; then
+          emit_measure "${tool}" "${fid}" "validate_invalid_time_secs" "${MEASURE_WALL}"
+        else
+          echo "!! ${tool} accepted the invalid payload for ${fid} (rc 0); skipping its validate timing" >&2
+        fi
       fi
     done
   done < <(find "${FIXTURES_DIR}" -type f -name 'schema.json' 2>/dev/null | sort)
