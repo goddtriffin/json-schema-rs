@@ -1,0 +1,13 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": { "name": "empty" },
+  "spec": {
+    "selector": { "matchLabels": { "app": "x" } },
+    "template": {
+      "spec": {
+        "containers": [ { "name": "app", "image": "busybox" } ]
+      }
+    }
+  }
+}

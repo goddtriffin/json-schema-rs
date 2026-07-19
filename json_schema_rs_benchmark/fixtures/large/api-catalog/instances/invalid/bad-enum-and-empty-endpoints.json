@@ -1,0 +1,12 @@
+{
+  "catalogVersion": "1.0.0",
+  "generatedAt": "2026-01-01T00:00:00Z",
+  "services": [
+    {
+      "name": "reporting",
+      "language": "cobol",
+      "tier": "backend",
+      "endpoints": []
+    }
+  ]
+}

@@ -3,6 +3,8 @@
 .vscode/
 target/
 bin/
+# ...but not Rust `src/bin/` source dirs, which are real crate sources
+!json_schema_rs_benchmark/src/bin/
 research/repos/
 research/json-schema-test-suite/
 

@@ -1,0 +1,16 @@
+{
+  "warehouseName": "dw",
+  "version": "v1",
+  "tables": [
+    {
+      "name": "orders",
+      "schema": "weird",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int64"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "catalogVersion": "2.7.0",
+  "generatedAt": "2026-07-03T12:00:00Z",
+  "owner": {
+    "name": "Platform Team",
+    "email": "platform@example.com",
+    "team": "core"
+  },
+  "environments": ["dev", "staging", "prod"],
+  "services": [
+    {
+      "name": "auth-service",
+      "description": "Handles authentication and token issuance.",
+      "language": "rust",
+      "tier": "backend",
+      "public": true,
+      "owner": {
+        "name": "Auth Team",
+        "email": "auth@example.com"
+      },
+      "resources": {
+        "cpuMillicores": 500,
+        "memoryMib": 512,
+        "replicas": 3
+      },
+      "healthCheck": {
+        "path": "/healthz",
+        "intervalSeconds": 10,
+        "timeoutSeconds": 2
+      },
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/login",
+          "summary": "Exchange credentials for a token",
+          "auth": "none",
+          "rateLimitPerMinute": 600
+        },
+        {
+          "method": "GET",
+          "path": "/me",
+          "auth": "oauth2"
+        }
+      ],
+      "dependencies": [
+        {
+          "name": "user-db",
+          "kind": "database",
+          "critical": true
+        }
+      ],
+      "observability": {
+        "metricsEnabled": true,
+        "tracingEnabled": true,
+        "logLevel": "info",
+        "dashboards": ["https://grafana.example.com/d/auth"]
+      },
+      "tags": ["security", "public-api"]
+    },
+    {
+      "name": "billing-service",
+      "language": "go",
+      "tier": "data",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/invoices",
+          "auth": "apiKey"
+        }
+      ]
+    }
+  ]
+}

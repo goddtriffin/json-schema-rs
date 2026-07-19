@@ -1,0 +1,6 @@
+{
+  "id": 3,
+  "username": "no spaces!",
+  "email": "x@y.z",
+  "roles": ["admin", "admin"]
+}

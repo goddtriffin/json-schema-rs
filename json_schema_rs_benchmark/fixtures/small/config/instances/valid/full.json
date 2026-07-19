@@ -1,0 +1,7 @@
+{
+  "name": "my-service",
+  "version": "1.4.2",
+  "port": 8080,
+  "debug": true,
+  "logLevel": "info"
+}

@@ -1,0 +1,21 @@
+{
+  "catalogVersion": "1.0.0",
+  "generatedAt": "2026-01-01T00:00:00Z",
+  "services": [
+    {
+      "name": "cache-service",
+      "language": "rust",
+      "tier": "infra",
+      "resources": {
+        "cpuMillicores": 5,
+        "memoryMib": 512
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/stats"
+        }
+      ]
+    }
+  ]
+}
