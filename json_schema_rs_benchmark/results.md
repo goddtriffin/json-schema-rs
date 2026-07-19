@@ -2,6 +2,8 @@
 
 ## Category winners
 
+> Winners count outright per-cell wins only. Time categories also include our in-process criterion cells (our library only), and many cross-tool CLI cells round to `0.000` under `/usr/bin/time`'s ~10 ms resolution (counted as ties, not wins), so a time-category winner can reflect criterion-only cells rather than head-to-head speed. Peak memory is measured head-to-head across tools. See issue #21.
+
 | Category | Winner |
 |---|---|
 | codegen wall-time | jsonschemars |
@@ -16,33 +18,33 @@
 
 | Fixture | jsonschemars | typify |
 |---|---|---|
-| criterion/nested | **41.415** | — |
-| criterion/small | **9.037** | — |
-| large/api-catalog | **0.000** | 50000.000 |
-| large/circleci | **0.000** | — |
-| massive/data-warehouse | **10000.000** | 890000.000 |
-| massive/k8s-deployment | **30000.000** | 40000.000 |
-| medium/user-profile | **0.000** | 40000.000 |
-| small/config | **0.000** | 40000.000 |
+| criterion/nested | **44.090** | — |
+| criterion/small | **9.714** | — |
+| large/api-catalog | **0.000** | 80000.000 |
+| large/circleci | **10000.000** | — |
+| massive/data-warehouse | **20000.000** | 970000.000 |
+| massive/k8s-deployment | **30000.000** | 70000.000 |
+| medium/user-profile | **0.000** | 60000.000 |
+| small/config | **0.000** | 60000.000 |
 
 ### schema-compile time (microseconds; lower is better)
 
 | Fixture | jsonschemars |
 |---|---|
-| criterion/nested | **2.373** |
-| criterion/small | **0.608** |
+| criterion/nested | **2.581** |
+| criterion/small | **0.660** |
 
 ### validate (valid) (microseconds; lower is better)
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| criterion/nested | — | — | **3.524** |
-| criterion/small | — | — | **0.368** |
+| criterion/nested | — | — | **3.944** |
+| criterion/small | — | — | **0.410** |
 | large/api-catalog | **0.000** | **0.000** | **0.000** |
-| large/circleci | **0.000** | **0.000** | **0.000** |
-| massive/data-warehouse | 50000.000 | 10000.000 | **0.000** |
-| massive/k8s-deployment | 10000.000 | 380000.000 | **0.000** |
-| medium/package-json | **0.000** | 2040000.000 | **0.000** |
+| large/circleci | 10000.000 | 10000.000 | **0.000** |
+| massive/data-warehouse | 50000.000 | 20000.000 | **0.000** |
+| massive/k8s-deployment | 10000.000 | 230000.000 | **0.000** |
+| medium/package-json | — | 1950000.000 | **0.000** |
 | medium/user-profile | **0.000** | **0.000** | **0.000** |
 | small/config | **0.000** | **0.000** | **0.000** |
 | small/prettierrc | **0.000** | **0.000** | **0.000** |
@@ -51,13 +53,13 @@
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| criterion/nested | — | — | **3.182** |
-| criterion/small | — | — | **0.456** |
+| criterion/nested | — | — | **3.497** |
+| criterion/small | — | — | **0.500** |
 | large/api-catalog | **0.000** | **0.000** | **0.000** |
-| large/circleci | **0.000** | **0.000** | **0.000** |
+| large/circleci | 10000.000 | 10000.000 | **0.000** |
 | massive/data-warehouse | 50000.000 | 10000.000 | **0.000** |
-| massive/k8s-deployment | 10000.000 | 360000.000 | **0.000** |
-| medium/package-json | **0.000** | 2080000.000 | **0.000** |
+| massive/k8s-deployment | 10000.000 | 220000.000 | **0.000** |
+| medium/package-json | **0.000** | 1920000.000 | **0.000** |
 | medium/user-profile | **0.000** | **0.000** | **0.000** |
 | small/config | **0.000** | **0.000** | **0.000** |
 | small/prettierrc | **0.000** | **0.000** | **0.000** |
@@ -66,14 +68,14 @@
 
 | Fixture | boon | jsonschema-cli | jsonschemars | typify |
 |---|---|---|---|---|
-| large/api-catalog | 5718016 | 11141120 | **4603904** | 34930688 |
-| large/circleci | **8798208** | 13139968 | 12779520 | — |
-| massive/data-warehouse | 22659072 | **21020672** | 38322176 | 240041984 |
-| massive/k8s-deployment | **11911168** | 20824064 | 100040704 | 31064064 |
-| medium/package-json | 6193152 | 33701888 | **3440640** | — |
-| medium/user-profile | 5521408 | 10928128 | **3604480** | 33357824 |
-| small/config | 5537792 | 10928128 | **3080192** | 32292864 |
-| small/prettierrc | 5652480 | 9273344 | **2949120** | — |
+| large/api-catalog | 5701632 | 11157504 | **4685824** | 35045376 |
+| large/circleci | **9043968** | 13287424 | 12894208 | — |
+| massive/data-warehouse | 22593536 | **21102592** | 38322176 | 240697344 |
+| massive/k8s-deployment | **11894784** | 20660224 | 100171776 | 31309824 |
+| medium/package-json | — | 33816576 | **3440640** | — |
+| medium/user-profile | 5554176 | 10960896 | **3588096** | 33374208 |
+| small/config | 5488640 | 10928128 | **3047424** | 32489472 |
+| small/prettierrc | 5636096 | 9322496 | **2916352** | — |
 
 ## Codegen compatibility
 

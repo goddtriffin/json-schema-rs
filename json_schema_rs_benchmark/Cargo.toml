@@ -35,7 +35,7 @@ workspace = true
 json-schema-rs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = "4"
 boon = "0.6"
 
 [dev-dependencies]
