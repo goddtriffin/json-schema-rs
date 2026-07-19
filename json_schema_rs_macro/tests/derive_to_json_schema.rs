@@ -828,6 +828,33 @@ fn derive_uuid_field_json_schema() {
     );
 }
 
+#[cfg(feature = "uuid")]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithUuidVec {
+    ids: Vec<uuid::Uuid>,
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn derive_uuid_vec_field_json_schema() {
+    let expected: JsonSchema = JsonSchema {
+        type_: Some("array".to_string()),
+        items: Some(Box::new(JsonSchema {
+            type_: Some("string".to_string()),
+            format: Some("uuid".to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let actual: JsonSchema = WithUuidVec::json_schema()
+        .properties
+        .get("ids")
+        .expect("ids property")
+        .clone();
+    assert_eq!(expected, actual);
+}
+
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
 struct WithDeprecatedField {

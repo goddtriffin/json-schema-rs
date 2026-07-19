@@ -8,6 +8,19 @@ use syn::{
     Result as SynResult, Token, Type, Variant,
 };
 
+/// `Uuid` is a string+format scalar leaf (`{ "type": "string", "format": "uuid" }`), not a
+/// composite type worth a `$defs` entry. Inline it via its `ToJsonSchema` impl instead of
+/// emitting a `$ref`. Only treated as a leaf when the macro crate's `uuid` feature is on.
+#[cfg(feature = "uuid")]
+fn is_uuid_scalar_leaf(name: &str) -> bool {
+    name == "Uuid"
+}
+
+#[cfg(not(feature = "uuid"))]
+fn is_uuid_scalar_leaf(_name: &str) -> bool {
+    false
+}
+
 fn def_key_for_type(ty: &Type) -> Option<String> {
     let Type::Path(tp) = ty else {
         return None;
@@ -17,6 +30,11 @@ fn def_key_for_type(ty: &Type) -> Option<String> {
         return None;
     }
     let name: String = seg.ident.to_string();
+    // Route `Uuid` through the inline path (return None) rather than $ref'ing a def; it is a
+    // scalar leaf whose `ToJsonSchema` impl already yields `{ type: string, format: uuid }`.
+    if is_uuid_scalar_leaf(&name) {
+        return None;
+    }
     let is_builtin: bool = matches!(
         name.as_str(),
         "String"

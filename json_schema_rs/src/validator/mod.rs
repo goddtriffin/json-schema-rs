@@ -277,15 +277,14 @@ fn validate_with_root(
                     }
                 }
                 #[cfg(feature = "uuid")]
-                if schema.format.as_deref() == Some("uuid") {
-                    if let Some(s) = instance.as_str() {
-                        if uuid::Uuid::parse_str(s).is_err() {
-                            errors.push(ValidationError::InvalidUuidFormat {
-                                instance_path: instance_path.clone(),
-                                value: s.to_string(),
-                            });
-                        }
-                    }
+                if schema.format.as_deref() == Some("uuid")
+                    && let Some(s) = instance.as_str()
+                    && uuid::Uuid::parse_str(s).is_err()
+                {
+                    errors.push(ValidationError::InvalidUuidFormat {
+                        instance_path: instance_path.clone(),
+                        value: s.to_string(),
+                    });
                 }
             }
             Some("integer") => {

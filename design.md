@@ -295,7 +295,7 @@ The JSON Schema `$defs` keyword (draft 2019-09, 2020-12) is a container for reus
 - **Role in reverse codegen:**
   - The derive macro for structs emits `$defs` and `$ref` for nested custom types (including inside `Vec`, `Option`, `HashSet`, `Box`). Shared types (two or more fields with the same type) produce one entry in `$defs` and `$ref` at each use site. Recursive types are detected at macro expansion time; the struct is placed in `$defs` and the recursive edge emits only `$ref` to avoid infinite expansion.
   - The derive emits a single root-level `$defs` map; nested struct defs are flattened via `merge_nested_defs_into_root` so schemas with multiple levels of nesting (e.g. Root → Outer → Inner) have `$defs: { Outer, Inner }` at root with no nested `$defs` inside subschemas.
-  - Primitives and container types (`String`, `Vec<T>`, etc.) do not add to `$defs`; they are inlined. Structs and enums with `#[derive(ToJsonSchema)]` that are referenced from other structs appear in `$defs`.
+  - Primitives and container types (`String`, `Vec<T>`, etc.) do not add to `$defs`; they are inlined — as is `uuid::Uuid` (a string+format scalar leaf) when the macro crate's `uuid` feature is enabled. Structs and enums with `#[derive(ToJsonSchema)]` that are referenced from other structs appear in `$defs`.
 
 **Spec version quirks:**
 
@@ -752,7 +752,11 @@ the feature:
   `Vec<Uuid>` etc.
 - **Reverse codegen:** `uuid::Uuid` implements `ToJsonSchema`, returning
   `{"type":"string","format":"uuid"}`. `Option<Uuid>`, `Vec<Uuid>`, and `HashSet<Uuid>` are
-  supported through the existing generic impls.
+  supported through the existing generic impls. The `#[derive(ToJsonSchema)]` macro treats a
+  `Uuid` field as an **inlined scalar leaf** — the property schema is
+  `{"type":"string","format":"uuid"}` directly (for `Vec<Uuid>`, an array whose `items` is that
+  leaf), like the built-in primitives, rather than a `$ref` into `$defs`. This is gated on the
+  macro crate's `uuid` feature and keys off the field type's last path segment being `Uuid`.
 - **Macro:** the `json_schema_to_rust!` proc-macro and `#[derive(ToJsonSchema)]` both respect the
   `uuid` feature in the macro crate; enable with
   `json-schema-rs-macro = { features = ["uuid"] }`.
