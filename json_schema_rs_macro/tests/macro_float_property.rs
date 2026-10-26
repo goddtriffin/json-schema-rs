@@ -7,14 +7,12 @@ json_schema_to_rust!(
 );
 
 #[test]
-#[expect(clippy::float_cmp)]
 fn expanded_code_compiles_and_root_exists() {
     let root = schema_0::Root { value: 2.5 };
     assert_eq!(root.value, 2.5);
 }
 
 #[test]
-#[expect(clippy::float_cmp)]
 fn float_property_deserializes() {
     let json = r#"{"value":2.5}"#;
     let root: schema_0::Root = serde_json::from_str(json).unwrap();
