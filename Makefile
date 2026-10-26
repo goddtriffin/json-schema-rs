@@ -54,6 +54,10 @@ research_clone: ## clone or update competitor repos into research/repos/<lang>/<
 benchmark: ## run the full benchmark harness (our lib + competitors) and refresh committed results
 	@./json_schema_rs_benchmark/scripts/run_benchmark.sh
 
+.PHONY: differential
+differential: ## run the Bowtie differential-testing harness (our validator vs competitors on the official suite) and refresh committed results; needs bowtie + Docker + make vendor_test_suite
+	@./json_schema_rs_differential/scripts/run_differential.sh
+
 .PHONY: research_benchmark
 research_benchmark: benchmark ## alias for `benchmark` (kept for backwards compatibility)
 

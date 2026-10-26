@@ -1,0 +1,19 @@
+# Build context for json_schema_rs_differential/Dockerfile (context = repository root).
+# Allowlist: only what Cargo needs to load the workspace and build the harness. Every workspace
+# member must be present for Cargo to load the workspace, even though only the differential
+# crate is built.
+*
+!Cargo.toml
+!Cargo.lock
+!json_schema_rs/
+!json_schema_rs_macro/
+!json_schema_rs_benchmark/
+!json_schema_rs_differential/
+
+# Large or generated content inside the allowed members
+**/target/
+json_schema_rs_benchmark/fixtures/
+json_schema_rs_benchmark/results.*
+json_schema_rs_differential/reports/
+json_schema_rs_differential/results.*
+json_schema_rs_differential/Dockerfile*
