@@ -7,7 +7,6 @@ json_schema_to_rust!(
 );
 
 #[test]
-#[expect(clippy::float_cmp)]
 fn expanded_code_compiles_and_root_exists() {
     let root = schema_0::Root { value: 50.5 };
     let expected: f32 = 50.5;
@@ -16,7 +15,6 @@ fn expanded_code_compiles_and_root_exists() {
 }
 
 #[test]
-#[expect(clippy::float_cmp)]
 fn f32_property_deserializes() {
     let json = r#"{"value":50.5}"#;
     let root: schema_0::Root = serde_json::from_str(json).unwrap();
