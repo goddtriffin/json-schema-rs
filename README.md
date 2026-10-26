@@ -271,6 +271,13 @@ Please submit an issue or bug request if the library needs updating.
   `make test_json_schema_suite` to run the suite. The test is ignored by default
   and only runs when invoked explicitly; it hard-fails if the suite directory is
   missing.
+- **Differential testing against other validators:** `make differential` runs our
+  validator alongside other JSON Schema implementations (Rust, JS, Python, Java, .NET,
+  C++, Go) on the official test suite via [Bowtie](https://github.com/bowtie-json-schema/bowtie)
+  and refreshes the committed
+  [results](json_schema_rs_differential/results.md). See
+  [json_schema_rs_differential/README.md](json_schema_rs_differential/README.md) for
+  prerequisites.
 - **Implementation and philosophy:** If you're curious how something was
   implemented or the philosophy behind our approach, see [design.md](design.md).
 

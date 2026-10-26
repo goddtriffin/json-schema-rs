@@ -79,7 +79,11 @@ These apply to **every** change, not only JSON Schema features.
 
 ### Prefer `make` targets over hand-written commands
 
-Always drive repo workflows through their **Makefile target** rather than a manually crafted command, wherever a target exists: `make test` (not a bare `cargo test`), `make lint`, `make benchmark`, `make vendor_specs`, `make vendor_test_suite`, and so on. The targets encode the correct flags and stay correct as the project evolves — for example, `make test` runs with `--all-features` so feature-gated code (like the `uuid` feature) is always compiled and exercised, whereas a raw `cargo test` silently skips optional features and drifts from what reviewers and CI run. Reach for a raw `cargo`/shell command only when no target covers the task (e.g. a one-off `cargo test <name>` while iterating on a single test); when a raw workflow recurs, add or extend a `make` target instead.
+Always drive repo workflows through their **Makefile target** rather than a manually crafted command, wherever a target exists: `make test` (not a bare `cargo test`), `make lint`, `make benchmark`, `make differential`, `make vendor_specs`, `make vendor_test_suite`, and so on. The targets encode the correct flags and stay correct as the project evolves — for example, `make test` runs with `--all-features` so feature-gated code (like the `uuid` feature) is always compiled and exercised, whereas a raw `cargo test` silently skips optional features and drifts from what reviewers and CI run. Reach for a raw `cargo`/shell command only when no target covers the task (e.g. a one-off `cargo test <name>` while iterating on a single test); when a raw workflow recurs, add or extend a `make` target instead.
+
+### Check validator changes against other implementations
+
+When a change affects **validator behavior** (new or changed keyword support, verdict fixes), run `make differential` at the end of the round as well and commit the refreshed `json_schema_rs_differential/results.{json,md}`. It runs our validator next to other implementations through Bowtie, so the diff shows changes in coverage (unsupported keywords), correctness, and disagreements with the majority. See `json_schema_rs_differential/README.md` for prerequisites (bowtie, Docker, `make vendor_test_suite`).
 
 ### Orchestrate with subagents
 

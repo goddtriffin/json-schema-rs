@@ -1,0 +1,37 @@
+[package]
+name = "json-schema-rs-differential"
+description = "Differential-testing harness comparing json-schema-rs against competitor JSON Schema validators (via Bowtie). Not published."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Bowtie harness: speaks Bowtie's line-delimited JSON protocol over stdio and validates with our
+# library. Packaged into a container image (see Dockerfile) so Bowtie can run it alongside
+# competitor implementations.
+[[bin]]
+name = "bowtie_harness"
+path = "src/bin/bowtie_harness.rs"
+
+# Report builder: reads Bowtie reports + benchmark fixtures, runs the in-process error-message
+# comparator, and writes results.{json,md}.
+[[bin]]
+name = "differential_report"
+path = "src/bin/differential_report.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+json-schema-rs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+boon = "0.6"
+jsonschema = { version = "0.60", default-features = false }
