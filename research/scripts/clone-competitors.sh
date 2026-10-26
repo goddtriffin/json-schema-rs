@@ -110,8 +110,7 @@ git_clone_or_pull "ruby" "voxpupuli-json-schema" "https://github.com/voxpupuli/j
 
 # Dart
 git_clone_or_pull "dart" "Workiva-json_schema" "https://github.com/Workiva/json_schema"
-# Omitted: prompts for username/password auth (repo may be private or restricted).
-# git_clone_or_pull "dart" "joaopedrosouza-json_schema_to_freezed" "https://github.com/joaopedrosouza/json_schema_to_freezed"
+git_clone_or_pull "dart" "jpedrosouza-json_schema_to_freezed" "https://github.com/jpedrosouza/json_schema_to_freezed"
 
 # Swift
 git_clone_or_pull "swift" "kylef-JSONSchema.swift" "https://github.com/kylef/JSONSchema.swift"
