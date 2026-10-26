@@ -18,33 +18,33 @@
 
 | Fixture | jsonschemars | typify |
 |---|---|---|
-| criterion/nested | **44.090** | — |
-| criterion/small | **9.714** | — |
-| large/api-catalog | **0.000** | 80000.000 |
-| large/circleci | **10000.000** | — |
-| massive/data-warehouse | **20000.000** | 970000.000 |
-| massive/k8s-deployment | **30000.000** | 70000.000 |
-| medium/user-profile | **0.000** | 60000.000 |
-| small/config | **0.000** | 60000.000 |
+| criterion/nested | **39.888** | — |
+| criterion/small | **8.818** | — |
+| large/api-catalog | **0.000** | 120000.000 |
+| large/circleci | **0.000** | — |
+| massive/data-warehouse | **10000.000** | 950000.000 |
+| massive/k8s-deployment | **30000.000** | 110000.000 |
+| medium/user-profile | **0.000** | 120000.000 |
+| small/config | **0.000** | 110000.000 |
 
 ### schema-compile time (microseconds; lower is better)
 
 | Fixture | jsonschemars |
 |---|---|
-| criterion/nested | **2.581** |
-| criterion/small | **0.660** |
+| criterion/nested | **2.438** |
+| criterion/small | **0.611** |
 
 ### validate (valid) (microseconds; lower is better)
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| criterion/nested | — | — | **3.944** |
-| criterion/small | — | — | **0.410** |
+| criterion/nested | — | — | **3.470** |
+| criterion/small | — | — | **0.376** |
 | large/api-catalog | **0.000** | **0.000** | **0.000** |
-| large/circleci | 10000.000 | 10000.000 | **0.000** |
-| massive/data-warehouse | 50000.000 | 20000.000 | **0.000** |
+| large/circleci | 10000.000 | **0.000** | **0.000** |
+| massive/data-warehouse | 50000.000 | 10000.000 | **0.000** |
 | massive/k8s-deployment | 10000.000 | 230000.000 | **0.000** |
-| medium/package-json | — | 1950000.000 | **0.000** |
+| medium/package-json | — | 1290000.000 | **0.000** |
 | medium/user-profile | **0.000** | **0.000** | **0.000** |
 | small/config | **0.000** | **0.000** | **0.000** |
 | small/prettierrc | **0.000** | **0.000** | **0.000** |
@@ -53,13 +53,13 @@
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| criterion/nested | — | — | **3.497** |
-| criterion/small | — | — | **0.500** |
+| criterion/nested | — | — | **3.064** |
+| criterion/small | — | — | **0.432** |
 | large/api-catalog | **0.000** | **0.000** | **0.000** |
-| large/circleci | 10000.000 | 10000.000 | **0.000** |
+| large/circleci | 10000.000 | **0.000** | **0.000** |
 | massive/data-warehouse | 50000.000 | 10000.000 | **0.000** |
 | massive/k8s-deployment | 10000.000 | 220000.000 | **0.000** |
-| medium/package-json | **0.000** | 1920000.000 | **0.000** |
+| medium/package-json | **0.000** | 1290000.000 | **0.000** |
 | medium/user-profile | **0.000** | **0.000** | **0.000** |
 | small/config | **0.000** | **0.000** | **0.000** |
 | small/prettierrc | **0.000** | **0.000** | **0.000** |
@@ -68,14 +68,14 @@
 
 | Fixture | boon | jsonschema-cli | jsonschemars | typify |
 |---|---|---|---|---|
-| large/api-catalog | 5701632 | 11157504 | **4685824** | 35045376 |
-| large/circleci | **9043968** | 13287424 | 12894208 | — |
-| massive/data-warehouse | 22593536 | **21102592** | 38322176 | 240697344 |
-| massive/k8s-deployment | **11894784** | 20660224 | 100171776 | 31309824 |
-| medium/package-json | — | 33816576 | **3440640** | — |
-| medium/user-profile | 5554176 | 10960896 | **3588096** | 33374208 |
-| small/config | 5488640 | 10928128 | **3047424** | 32489472 |
-| small/prettierrc | 5636096 | 9322496 | **2916352** | — |
+| large/api-catalog | 6111232 | 10813440 | **5144576** | 37175296 |
+| large/circleci | **9568256** | 13008896 | 13320192 | — |
+| massive/data-warehouse | 25018368 | **20791296** | 38748160 | 236306432 |
+| massive/k8s-deployment | **12304384** | 21102592 | 100646912 | 33341440 |
+| medium/package-json | — | 34258944 | **3817472** | — |
+| medium/user-profile | 6062080 | 10649600 | **3981312** | 35553280 |
+| small/config | 5898240 | 10633216 | **3489792** | 34586624 |
+| small/prettierrc | 6029312 | 9076736 | **3276800** | — |
 
 ## Codegen compatibility
 

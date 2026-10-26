@@ -16,7 +16,7 @@
       "tool": "boon",
       "fixture": "large/api-catalog",
       "category": "peak_memory_bytes",
-      "value": 5701632.0
+      "value": 6111232.0
     },
     {
       "tool": "boon",
@@ -34,7 +34,7 @@
       "tool": "boon",
       "fixture": "large/circleci",
       "category": "peak_memory_bytes",
-      "value": 9043968.0
+      "value": 9568256.0
     },
     {
       "tool": "boon",
@@ -52,7 +52,7 @@
       "tool": "boon",
       "fixture": "massive/data-warehouse",
       "category": "peak_memory_bytes",
-      "value": 22593536.0
+      "value": 25018368.0
     },
     {
       "tool": "boon",
@@ -70,7 +70,7 @@
       "tool": "boon",
       "fixture": "massive/k8s-deployment",
       "category": "peak_memory_bytes",
-      "value": 11894784.0
+      "value": 12304384.0
     },
     {
       "tool": "boon",
@@ -94,7 +94,7 @@
       "tool": "boon",
       "fixture": "medium/user-profile",
       "category": "peak_memory_bytes",
-      "value": 5554176.0
+      "value": 6062080.0
     },
     {
       "tool": "boon",
@@ -112,7 +112,7 @@
       "tool": "boon",
       "fixture": "small/config",
       "category": "peak_memory_bytes",
-      "value": 5488640.0
+      "value": 5898240.0
     },
     {
       "tool": "boon",
@@ -130,7 +130,7 @@
       "tool": "boon",
       "fixture": "small/prettierrc",
       "category": "peak_memory_bytes",
-      "value": 5636096.0
+      "value": 6029312.0
     },
     {
       "tool": "jsonschema-cli",
@@ -148,31 +148,31 @@
       "tool": "jsonschema-cli",
       "fixture": "large/api-catalog",
       "category": "peak_memory_bytes",
-      "value": 11157504.0
+      "value": 10813440.0
     },
     {
       "tool": "jsonschema-cli",
       "fixture": "large/circleci",
       "category": "validate_valid_time_secs",
-      "value": 0.01
+      "value": 0.0
     },
     {
       "tool": "jsonschema-cli",
       "fixture": "large/circleci",
       "category": "validate_invalid_time_secs",
-      "value": 0.01
+      "value": 0.0
     },
     {
       "tool": "jsonschema-cli",
       "fixture": "large/circleci",
       "category": "peak_memory_bytes",
-      "value": 13287424.0
+      "value": 13008896.0
     },
     {
       "tool": "jsonschema-cli",
       "fixture": "massive/data-warehouse",
       "category": "validate_valid_time_secs",
-      "value": 0.02
+      "value": 0.01
     },
     {
       "tool": "jsonschema-cli",
@@ -184,7 +184,7 @@
       "tool": "jsonschema-cli",
       "fixture": "massive/data-warehouse",
       "category": "peak_memory_bytes",
-      "value": 21102592.0
+      "value": 20791296.0
     },
     {
       "tool": "jsonschema-cli",
@@ -202,25 +202,25 @@
       "tool": "jsonschema-cli",
       "fixture": "massive/k8s-deployment",
       "category": "peak_memory_bytes",
-      "value": 20660224.0
+      "value": 21102592.0
     },
     {
       "tool": "jsonschema-cli",
       "fixture": "medium/package-json",
       "category": "validate_valid_time_secs",
-      "value": 1.95
+      "value": 1.29
     },
     {
       "tool": "jsonschema-cli",
       "fixture": "medium/package-json",
       "category": "validate_invalid_time_secs",
-      "value": 1.92
+      "value": 1.29
     },
     {
       "tool": "jsonschema-cli",
       "fixture": "medium/package-json",
       "category": "peak_memory_bytes",
-      "value": 33816576.0
+      "value": 34258944.0
     },
     {
       "tool": "jsonschema-cli",
@@ -238,7 +238,7 @@
       "tool": "jsonschema-cli",
       "fixture": "medium/user-profile",
       "category": "peak_memory_bytes",
-      "value": 10960896.0
+      "value": 10649600.0
     },
     {
       "tool": "jsonschema-cli",
@@ -256,7 +256,7 @@
       "tool": "jsonschema-cli",
       "fixture": "small/config",
       "category": "peak_memory_bytes",
-      "value": 10928128.0
+      "value": 10633216.0
     },
     {
       "tool": "jsonschema-cli",
@@ -274,55 +274,55 @@
       "tool": "jsonschema-cli",
       "fixture": "small/prettierrc",
       "category": "peak_memory_bytes",
-      "value": 9322496.0
+      "value": 9076736.0
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/nested",
       "category": "codegen_wall_time_secs",
-      "value": 0.00004408963356881214
+      "value": 0.000039887867541152265
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/nested",
       "category": "schema_compile_time_secs",
-      "value": 2.5811699078710694e-6
+      "value": 2.437853780572365e-6
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/nested",
       "category": "validate_valid_time_secs",
-      "value": 3.944168907380301e-6
+      "value": 3.469600381583712e-6
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/nested",
       "category": "validate_invalid_time_secs",
-      "value": 3.496937230893434e-6
+      "value": 3.0636443064876964e-6
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/small",
       "category": "codegen_wall_time_secs",
-      "value": 9.713729354354357e-6
+      "value": 8.817781766333181e-6
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/small",
       "category": "schema_compile_time_secs",
-      "value": 6.601427651241883e-7
+      "value": 6.113900131442029e-7
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/small",
       "category": "validate_valid_time_secs",
-      "value": 4.0968934641973735e-7
+      "value": 3.758174953509095e-7
     },
     {
       "tool": "jsonschemars",
       "fixture": "criterion/small",
       "category": "validate_invalid_time_secs",
-      "value": 5.003163915275748e-7
+      "value": 4.3183619504333124e-7
     },
     {
       "tool": "jsonschemars",
@@ -346,40 +346,40 @@
       "tool": "jsonschemars",
       "fixture": "large/api-catalog",
       "category": "peak_memory_bytes",
-      "value": 4685824.0
+      "value": 5144576.0
     },
     {
       "tool": "jsonschemars",
       "fixture": "large/circleci",
+      "category": "codegen_wall_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "category": "validate_valid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "category": "validate_invalid_time_secs",
+      "value": 0.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "large/circleci",
+      "category": "peak_memory_bytes",
+      "value": 13320192.0
+    },
+    {
+      "tool": "jsonschemars",
+      "fixture": "massive/data-warehouse",
       "category": "codegen_wall_time_secs",
       "value": 0.01
     },
     {
       "tool": "jsonschemars",
-      "fixture": "large/circleci",
-      "category": "validate_valid_time_secs",
-      "value": 0.0
-    },
-    {
-      "tool": "jsonschemars",
-      "fixture": "large/circleci",
-      "category": "validate_invalid_time_secs",
-      "value": 0.0
-    },
-    {
-      "tool": "jsonschemars",
-      "fixture": "large/circleci",
-      "category": "peak_memory_bytes",
-      "value": 12894208.0
-    },
-    {
-      "tool": "jsonschemars",
-      "fixture": "massive/data-warehouse",
-      "category": "codegen_wall_time_secs",
-      "value": 0.02
-    },
-    {
-      "tool": "jsonschemars",
       "fixture": "massive/data-warehouse",
       "category": "validate_valid_time_secs",
       "value": 0.0
@@ -394,7 +394,7 @@
       "tool": "jsonschemars",
       "fixture": "massive/data-warehouse",
       "category": "peak_memory_bytes",
-      "value": 38322176.0
+      "value": 38748160.0
     },
     {
       "tool": "jsonschemars",
@@ -418,7 +418,7 @@
       "tool": "jsonschemars",
       "fixture": "massive/k8s-deployment",
       "category": "peak_memory_bytes",
-      "value": 100171776.0
+      "value": 100646912.0
     },
     {
       "tool": "jsonschemars",
@@ -436,7 +436,7 @@
       "tool": "jsonschemars",
       "fixture": "medium/package-json",
       "category": "peak_memory_bytes",
-      "value": 3440640.0
+      "value": 3817472.0
     },
     {
       "tool": "jsonschemars",
@@ -460,7 +460,7 @@
       "tool": "jsonschemars",
       "fixture": "medium/user-profile",
       "category": "peak_memory_bytes",
-      "value": 3588096.0
+      "value": 3981312.0
     },
     {
       "tool": "jsonschemars",
@@ -484,7 +484,7 @@
       "tool": "jsonschemars",
       "fixture": "small/config",
       "category": "peak_memory_bytes",
-      "value": 3047424.0
+      "value": 3489792.0
     },
     {
       "tool": "jsonschemars",
@@ -502,67 +502,67 @@
       "tool": "jsonschemars",
       "fixture": "small/prettierrc",
       "category": "peak_memory_bytes",
-      "value": 2916352.0
+      "value": 3276800.0
     },
     {
       "tool": "typify",
       "fixture": "large/api-catalog",
       "category": "codegen_wall_time_secs",
-      "value": 0.08
+      "value": 0.12
     },
     {
       "tool": "typify",
       "fixture": "large/api-catalog",
       "category": "peak_memory_bytes",
-      "value": 35045376.0
+      "value": 37175296.0
     },
     {
       "tool": "typify",
       "fixture": "massive/data-warehouse",
       "category": "codegen_wall_time_secs",
-      "value": 0.97
+      "value": 0.95
     },
     {
       "tool": "typify",
       "fixture": "massive/data-warehouse",
       "category": "peak_memory_bytes",
-      "value": 240697344.0
+      "value": 236306432.0
     },
     {
       "tool": "typify",
       "fixture": "massive/k8s-deployment",
       "category": "codegen_wall_time_secs",
-      "value": 0.07
+      "value": 0.11
     },
     {
       "tool": "typify",
       "fixture": "massive/k8s-deployment",
       "category": "peak_memory_bytes",
-      "value": 31309824.0
+      "value": 33341440.0
     },
     {
       "tool": "typify",
       "fixture": "medium/user-profile",
       "category": "codegen_wall_time_secs",
-      "value": 0.06
+      "value": 0.12
     },
     {
       "tool": "typify",
       "fixture": "medium/user-profile",
       "category": "peak_memory_bytes",
-      "value": 33374208.0
+      "value": 35553280.0
     },
     {
       "tool": "typify",
       "fixture": "small/config",
       "category": "codegen_wall_time_secs",
-      "value": 0.06
+      "value": 0.11
     },
     {
       "tool": "typify",
       "fixture": "small/config",
       "category": "peak_memory_bytes",
-      "value": 32489472.0
+      "value": 34586624.0
     }
   ],
   "compat": [
