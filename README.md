@@ -264,13 +264,21 @@ TODO
 Please submit an issue or bug request if the library needs updating.
 
 - **Commands:** `make lint`, `make test`, `make fix`
-- **Official JSON Schema Test Suite:** To run the library against the full
-  [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite),
-  run `make vendor_test_suite` once to clone it into
-  `research/json-schema-test-suite/` (gitignored), then
-  `make test_json_schema_suite` to run the suite. The test is ignored by default
-  and only runs when invoked explicitly; it hard-fails if the suite directory is
-  missing.
+- **Official JSON Schema Test Suite:** `make test` runs every test of the
+  [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+  (drafts 4, 6, 7, 2019-09, 2020-12, including `optional/`) as its own test case.
+  Run `make vendor_test_suite` once to clone the suite at its pinned commit into
+  `research/json-schema-test-suite/` (gitignored); the test hard-fails if it is missing.
+  Known failures are listed in
+  [`json_schema_rs/tests/suite_xfail.json`](json_schema_rs/tests/suite_xfail.json); the
+  run fails on any unexpected failure **and** any unexpected pass. When a fix makes suite
+  tests pass, remove their entries (or run `make update_suite_xfail`) and commit the
+  manifest. `make test_json_schema_suite` runs only the suite.
+- **Known bugs as tests:** every open bug issue has a test named `issue_<N>_...` in
+  `json_schema_rs/tests/known_failures.rs` or `json_schema_rs_macro/tests/known_failures.rs`.
+  It asserts the correct behaviour and passes while the bug is present; when the bug is
+  fixed it fails, and the fix unwraps it into a normal test. See
+  [design.md](design.md#known-failures).
 - **Differential testing against other validators:** `make differential` runs our
   validator alongside other JSON Schema implementations (Rust, JS, Python, Java, .NET,
   C++, Go) on the official test suite via [Bowtie](https://github.com/bowtie-json-schema/bowtie)
