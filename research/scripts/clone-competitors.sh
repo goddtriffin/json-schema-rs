@@ -1,22 +1,36 @@
 #!/usr/bin/env sh
 # Clone or update competitor repos into research/repos/<lang>/<name>/.
 # Run from repository root. Idempotent: safe to run repeatedly.
+# Every competitor tracks its latest upstream version; nothing is pinned. A failure on one
+# competitor does not stop the rest; failures are listed at the end and the script exits 1.
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# Git competitors: clone or pull (lang, dir, url)
+FAILURES=""
+
+# Git competitors: clone, or hard-reset an existing clone to the latest commit of the remote's
+# default branch (lang, dir, url). Clones are read-only research copies, so local state is discarded.
 git_clone_or_pull() {
 	lang="$1"
 	dir="$2"
 	url="$3"
 	LANG_REPOS="$REPO_ROOT/research/repos/$lang"
 	mkdir -p "$LANG_REPOS"
+	echo "==> $lang/$dir"
 	if [ -d "$LANG_REPOS/$dir/.git" ]; then
-		(cd "$LANG_REPOS/$dir" && git pull)
+		if ! (cd "$LANG_REPOS/$dir" &&
+			git remote set-url origin "$url" &&
+			git fetch --prune origin &&
+			git remote set-head origin --auto &&
+			git reset --hard origin/HEAD); then
+			FAILURES="$FAILURES $lang/$dir"
+		fi
 	else
-		git clone "$url" "$LANG_REPOS/$dir"
+		if ! git clone "$url" "$LANG_REPOS/$dir"; then
+			FAILURES="$FAILURES $lang/$dir"
+		fi
 	fi
 }
 
@@ -24,31 +38,45 @@ git_clone_or_pull() {
 git_clone_or_pull "rust" "Stranger6667-jsonschema-rs" "https://github.com/Stranger6667/jsonschema-rs"
 git_clone_or_pull "rust" "Marwes-schemafy" "https://github.com/Marwes/schemafy"
 git_clone_or_pull "rust" "oxidecomputer-typify" "https://github.com/oxidecomputer/typify"
+git_clone_or_pull "rust" "GREsau-schemars" "https://github.com/GREsau/schemars"
+git_clone_or_pull "rust" "santhosh-tekuri-boon" "https://github.com/santhosh-tekuri/boon"
 
-# BelfordZ json_schema: crates.io tarball (no Git repo)
-# Set REFRESH=1 to force re-download (script removes existing dir automatically).
+# BelfordZ json_schema: crates.io tarball (no Git repo). Always resolves the latest stable
+# version from the crates.io API and re-downloads when the local copy is a different version.
+# Set REFRESH=1 to force re-download.
 RUST_REPOS="$REPO_ROOT/research/repos/rust"
-JSON_SCHEMA_CRATE_VERSION="1.8.0"
 BELFORDZ_DIR="$RUST_REPOS/BelfordZ-json-schema"
 BELFORDZ_CARGO="$BELFORDZ_DIR/Cargo.toml"
+CRATES_UA="json-schema-rs-research (https://github.com/goddtriffin/json-schema-rs)"
 
-if [ -n "${REFRESH-}" ]; then
-	rm -rf "$BELFORDZ_DIR"
-fi
+echo "==> rust/BelfordZ-json-schema"
+JSON_SCHEMA_CRATE_VERSION="$(curl -sfL -A "$CRATES_UA" "https://crates.io/api/v1/crates/json_schema" |
+	sed -n 's/.*"max_stable_version":"\([^"]*\)".*/\1/p')"
 
-if [ -f "$BELFORDZ_CARGO" ] && grep -q 'name = "json_schema"' "$BELFORDZ_CARGO" && grep -q "version = \"$JSON_SCHEMA_CRATE_VERSION\"" "$BELFORDZ_CARGO"; then
-	: # already present and correct, skip
+if [ -z "$JSON_SCHEMA_CRATE_VERSION" ]; then
+	FAILURES="$FAILURES rust/BelfordZ-json-schema"
 else
-	CRATE_URL="https://crates.io/api/v1/crates/json_schema/$JSON_SCHEMA_CRATE_VERSION/download"
-	TARBALL="$RUST_REPOS/json_schema-$JSON_SCHEMA_CRATE_VERSION.tar.gz"
-	EXTRACTED="$RUST_REPOS/json_schema-$JSON_SCHEMA_CRATE_VERSION"
+	if [ -n "${REFRESH-}" ]; then
+		rm -rf "$BELFORDZ_DIR"
+	fi
 
-	curl -sL "$CRATE_URL" -o "$TARBALL"
-	tar -xzf "$TARBALL" -C "$RUST_REPOS"
-	rm -rf "$BELFORDZ_DIR"
-	mkdir -p "$BELFORDZ_DIR"
-	( cd "$EXTRACTED" && tar cf - . ) | ( cd "$BELFORDZ_DIR" && tar xf - )
-	rm -rf "$EXTRACTED" "$TARBALL"
+	if [ -f "$BELFORDZ_CARGO" ] && grep -q 'name = "json_schema"' "$BELFORDZ_CARGO" && grep -q "^version = \"$JSON_SCHEMA_CRATE_VERSION\"" "$BELFORDZ_CARGO"; then
+		echo "already at json_schema $JSON_SCHEMA_CRATE_VERSION"
+	else
+		CRATE_URL="https://crates.io/api/v1/crates/json_schema/$JSON_SCHEMA_CRATE_VERSION/download"
+		TARBALL="$RUST_REPOS/json_schema-$JSON_SCHEMA_CRATE_VERSION.tar.gz"
+		EXTRACTED="$RUST_REPOS/json_schema-$JSON_SCHEMA_CRATE_VERSION"
+
+		if curl -sfL -A "$CRATES_UA" "$CRATE_URL" -o "$TARBALL" && tar -xzf "$TARBALL" -C "$RUST_REPOS"; then
+			rm -rf "$BELFORDZ_DIR"
+			mkdir -p "$BELFORDZ_DIR"
+			( cd "$EXTRACTED" && tar cf - . ) | ( cd "$BELFORDZ_DIR" && tar xf - )
+			echo "downloaded json_schema $JSON_SCHEMA_CRATE_VERSION"
+		else
+			FAILURES="$FAILURES rust/BelfordZ-json-schema"
+		fi
+		rm -rf "$EXTRACTED" "$TARBALL"
+	fi
 fi
 
 # Python
@@ -115,3 +143,8 @@ git_clone_or_pull "dart" "jpedrosouza-json_schema_to_freezed" "https://github.co
 # Swift
 git_clone_or_pull "swift" "kylef-JSONSchema.swift" "https://github.com/kylef/JSONSchema.swift"
 git_clone_or_pull "swift" "ajevans99-swift-json-schema" "https://github.com/ajevans99/swift-json-schema"
+
+if [ -n "$FAILURES" ]; then
+	echo "error: failed to clone or update:$FAILURES" >&2
+	exit 1
+fi

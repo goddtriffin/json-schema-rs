@@ -47,7 +47,7 @@ publish_dry_run: ## dry run of publishing workspace crates to crates.io (order: 
 	cargo package --package json-schema-rs-macro --list
 
 .PHONY: research_clone
-research_clone: ## clone or update competitor repos into research/repos/<lang>/<name>/ (includes BelfordZ crate); REFRESH=1 to force re-download BelfordZ
+research_clone: ## clone or update competitor repos into research/repos/<lang>/<name>/ at their latest upstream version (includes BelfordZ crate, latest from crates.io); REFRESH=1 to force re-download BelfordZ
 	@./research/scripts/clone-competitors.sh
 
 .PHONY: benchmark

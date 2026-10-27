@@ -34,7 +34,10 @@ see [design.md](design.md).
 - Run `make lint test` before completing any change. Also run `cargo test --features uuid`
   when touching uuid-gated code.
 - Use `#[expect(...)]`, never `#[allow(...)]` (workspace forbids `allow_attributes`).
-- No literal recursion — use an explicit stack/queue so deep inputs cannot overflow.
+- No *unbounded* recursion. Graph algorithms and tree walks (reference crawling, cycle detection,
+  dedup, emission order, `Drop`, rendering) use an explicit stack/queue so deep inputs cannot
+  overflow. The one exception is the validator's evaluator, which recurses with a depth limit that
+  returns a typed error before the native stack can overflow (see design.md).
 
 ## Version control
 
