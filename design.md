@@ -31,7 +31,25 @@ The validator takes the same **JsonSchema** type used by codegen and a JSON inst
 
 ### Official JSON Schema Test Suite
 
-We run the [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) via an integration test that validates against all test data in the suite. The suite lives at **`research/json-schema-test-suite/`** (gitignored). Cloning is a **manual prerequisite**: run `make vendor_test_suite` to clone or update it. The test **hard-fails** if the suite directory is missing, with a message to run that command. The test is **ignored** by default and runs only when explicitly executed (e.g. `make test_json_schema_suite` or `cargo test --test json_schema_test_suite -- --ignored`); once we pass 100%, it can be re-enabled in the standard test run. Tests that rely on **remotes** or **`$ref`** resolution (e.g. `refRemote.json`) fail until we support `$ref`. The integration test uses **strict schema parsing** (`JsonSchemaSettings::disallow_unknown_fields(true)`), so any case whose schema contains a keyword we do not support fails at parse time rather than being validated with a truncated schema; this yields a more accurate picture of implementation coverage.
+We run the [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) as a **gating test** in `make test` (`json_schema_rs/tests/json_schema_test_suite.rs`, a `libtest-mimic` harness with `harness = false`). Design:
+
+- **Scope.** Drafts 4, 6, 7, 2019-09 and 2020-12, required and `optional/` (including `optional/format/`). Each draft directory is parsed with that draft's `SpecVersion` in the settings, so draft-specific behaviour takes effect in the gate as soon as the library implements it.
+- **One reported test per suite test**, named `<draft>/<file> :: <group> :: <test>`, so a failure names the case (`cargo test --test json_schema_test_suite -- <filter>` runs a subset). Every draft/file/group/test key in the scope is unique; a dedicated case fails if a suite update ever breaks that.
+- **Strict parsing** (`disallow_unknown_fields(true)`): a schema with a keyword we do not support fails at parse time ("schema not supported") instead of being validated with a truncated schema, so the gate measures coverage honestly. A panic in the parser or validator fails that case, not the run.
+- **Known-failure manifest.** `json_schema_rs/tests/suite_xfail.json` (draft → file → group → test descriptions, sorted) lists every case that fails today. The run fails on any **unexpected failure** (a case not in the manifest fails), any **unexpected pass** (a listed case now passes), and any **stale entry** (the manifest names a case that is not in the suite). The manifest can therefore only change deliberately: a fix removes entries, and a reviewer sees the diff. `make update_suite_xfail` rewrites it from the current results (`JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`); review that diff before committing, since it also records new failures. Cases marked `[xfail]` in the test output are expected failures.
+- **Pinned suite.** `make vendor_test_suite` clones the suite at the commit pinned in `research/scripts/clone-json-schema-test-suite.sh` (`SUITE_REV`), because the manifest is keyed to that revision. Moving to a newer suite is a deliberate change: bump `SUITE_REV`, run `make vendor_test_suite update_suite_xfail`, review the manifest diff, and refresh `make differential`.
+- **Missing suite is a hard failure** with a message to run `make vendor_test_suite`.
+- **Remotes.** Cases that need remote documents (`refRemote.json`, the suite's `remotes/` folder) are known failures until remote `$ref` resolution exists.
+
+### Known failures
+
+Every open bug issue has at least one regression test named `issue_<N>_...` that asserts the **correct** behaviour, so the refactor is measured by those tests flipping, and nothing that passes today can silently break. Validator, parser and codegen bugs live in `json_schema_rs/tests/known_failures.rs`; derive bugs in `json_schema_rs_macro/tests/known_failures.rs` (each file carries the same small helpers, since they are separate crates). Bugs the official suite also covers (#28, #29, #31–#34) have both a dedicated test and manifest entries.
+
+- `known_failure(issue, body)` runs the body under `catch_unwind`: the test passes while the body panics and fails with "#N now behaves correctly" as soon as it completes, the same "unexpected pass" rule as the suite manifest.
+- `known_failure_in_child_process(issue, name, body)` is for bugs that abort the process (stack overflow: #4, #36) or never terminate (codegen hang: #35). The test re-runs itself as a child process filtered to `name` (selected by `JSON_SCHEMA_RS_KNOWN_FAILURE_CHILD`), with a 10 s timeout. A crash, a non-zero exit, or a timeout is "still failing"; a clean exit that printed the pass marker is an unexpected pass; a clean exit without the marker (a wrong `name`) fails the test rather than counting as "still failing". Two harness tests pin both of those outcomes.
+- Repro shapes are chosen so a hang holds memory flat (the #35 self-reference through an array of `#` allocates gigabytes while hanging, so it is left to #9's golden tests).
+- **When a fix lands:** unwrap the issue's tests into plain `#[test]`s, tighten them to full golden values where the issue asks for it (codegen tests assert only that generation succeeds or which structs are emitted, because the emitter's exact output is #9's to define; #4 checks termination only), and remove the issue's entries from `suite_xfail.json`.
+- **New bugs:** add an `issue_<N>_...` test with the wrapper when filing, unless it is fixed in the same change.
 
 ### Benchmark harness
 
@@ -55,7 +73,7 @@ Correctness relative to the ecosystem is measured by the **`json_schema_rs_diffe
 - **Error messages are compared in-process.** Bowtie's protocol carries only valid/invalid flags, so `differential_report` links our library, the `jsonschema` crate and `boon` and records each one's full messages side by side for a deterministic curated set (the first invalid test we support per draft 2020-12 suite file, plus every invalid fixture instance).
 - **Results are committed; raw reports are not.** Raw Bowtie JSONL (and logs) go to the gitignored `json_schema_rs_differential/reports/`; `results.json` and `results.md` are committed and byte-deterministic for the same inputs.
 - **Prerequisites.** `bowtie` (`uv tool install bowtie-json-schema`), a running container engine (Docker), and `make vendor_test_suite`. The driver checks all three up front.
-- **Relation to the in-repo suite test.** `json_schema_rs/tests/json_schema_test_suite.rs` stays: it is Docker-free and cargo-native, so it is the fast local regression gate. The differential harness is the cross-implementation view.
+- **Relation to the in-repo suite test.** `json_schema_rs/tests/json_schema_test_suite.rs` is the Docker-free, cargo-native regression gate in `make test`, with its known-failure manifest; the differential harness is the cross-implementation view. Both run on the same pinned suite commit.
 
 ### Our top values
 
