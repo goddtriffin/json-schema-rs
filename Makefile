@@ -67,9 +67,13 @@ research_harvest_tests: ## (stub) harvest test schemas from competitor repos; no
 	@exit 1
 
 .PHONY: vendor_test_suite
-vendor_test_suite: ## clone or update JSON Schema Test Suite into research/json-schema-test-suite/
+vendor_test_suite: ## clone the JSON Schema Test Suite at its pinned commit into research/json-schema-test-suite/
 	@./research/scripts/clone-json-schema-test-suite.sh
 
 .PHONY: test_json_schema_suite
-test_json_schema_suite: ## run the official JSON Schema Test Suite (ignored test); run make vendor_test_suite first
-	cargo test --test json_schema_test_suite json_schema_test_suite -- --ignored
+test_json_schema_suite: ## run only the official JSON Schema Test Suite gate (also part of make test); run make vendor_test_suite first
+	cargo test --all-features --test json_schema_test_suite
+
+.PHONY: update_suite_xfail
+update_suite_xfail: ## rewrite json_schema_rs/tests/suite_xfail.json to list exactly the suite tests that fail today
+	JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1 cargo test --all-features --test json_schema_test_suite

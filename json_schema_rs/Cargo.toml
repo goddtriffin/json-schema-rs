@@ -35,4 +35,9 @@ serde_json.workspace = true
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
+libtest-mimic = "0.8"
 tempfile = "3"
+
+[[test]]
+name = "json_schema_test_suite"
+harness = false
