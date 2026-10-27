@@ -20,6 +20,8 @@ Copy-paste this structure when writing a competitor research report. Fill every 
 - **Clone path**: `research/repos/<lang>/<name>/`
 - **Language**:
 - **License**:
+- **Analyzed version**: [Short commit hash and commit date of the clone's `HEAD` (`git -C <clone> log -1 --format='%h %cs'`), or the crate/package version for non-Git sources.]
+- **Report date**: [Date the report was written or last refreshed.]
 
 ## Summary
 
@@ -49,9 +51,33 @@ Copy-paste this structure when writing a competitor research report. Fill every 
 
 [Key modules/classes, data structures, how $ref is resolved. Include Mermaid diagram(s) where they clarify ref resolution or expansion flow.]
 
+## Algorithms and data structures
+
+[Mechanism-level explanation, with file/function anchors, of how the library actually works. Cover each subsection that applies; write "Not applicable" (with a reason) for those that do not. For each: the data structure(s) used, the algorithm/control flow, complexity or cost where evident, and the design trade-off.]
+
+### Schema representation
+
+[In-memory form of a parsed schema: typed struct vs raw JSON value vs arena/graph; how keywords, unknown keywords, and boolean schemas are stored; ownership/borrowing/lifetimes.]
+
+### Reference resolution and registry
+
+[How `$id`/`$ref`/`$anchor`/`$dynamicRef` (and legacy `id`/`$recursiveRef`) are resolved: registry/map structure, base-URI tracking, lazy vs eager resolution, remote fetching, and cycle detection/handling.]
+
+### Compiled / intermediate form
+
+[What the schema is lowered into before validation or emission (tree of validator objects, closures, arena + indices, bytecode/instruction list, generated source, type graph/IR). Describe the node types and how they link.]
+
+### Core algorithm
+
+[Validator: the evaluation loop — dispatch per keyword, short-circuiting, `is_valid` vs full-error paths, annotation tracking for `unevaluated*`. Codegen: type inference/selection, composition handling (`allOf` merge, `oneOf`/`anyOf` → unions/enums), naming and dedup, emission order. Reverse codegen: type → schema walk.]
+
+### Error and output model
+
+[Error/diagnostic data structure, instance/schema path tracking, output formats, how errors are collected and propagated.]
+
 ## Low-level details
 
-[Only where necessary for important features; link to keyword table or medium-level section.]
+[Notable implementation specifics not covered above: edge-case handling, numeric representation (big ints, decimals, float precision in `multipleOf`), string length counting (code points vs bytes vs UTF-16), recursion depth limits, untrusted-input hardening.]
 
 ## Output and integration
 
@@ -73,7 +99,22 @@ Copy-paste this structure when writing a competitor research report. Fill every 
 
 ## Performance
 
-[Any built-in benchmarks, how they measure (wall time, instructions), where to find them. Note entry points useful for future benchmarking (e.g. CLI command, API call) so the library can be run against shared fixtures.]
+[Analyze from code only — never run benchmarks or build the competitor; measured comparisons belong to our harness (`make benchmark`).]
+
+### Performance techniques
+
+[For each that applies, explain the technique, where it lives (file/function), and what it buys. Write "None found" when the code has none.]
+
+- **Compile vs interpret**: [Is work moved ahead of time (schema compilation, code generation, specialization per keyword)? What is computed once vs per validation?]
+- **Memory layout and allocation**: [Arena/flat vectors vs pointer trees, small-vector/inline storage, interning, borrowing vs cloning, avoiding per-instance allocations, lazy error/path construction.]
+- **Caching and memoization**: [Compiled-schema caches, resolved-ref caches, regex caches, format-check caches; keys and invalidation.]
+- **Fast paths and short-circuiting**: [Boolean-only validation path, early exit, keyword ordering, type-check-first, specialized validators for common shapes, discriminator shortcuts.]
+- **Regex handling**: [Engine(s) used, ECMA-262 compatibility/translation, compile-once caching, protection against catastrophic backtracking (ReDoS).]
+- **Concurrency**: [Thread safety of compiled schemas, parallel validation/generation, shared vs per-thread state.]
+
+### Benchmarks in repo
+
+[Built-in benchmarks (location, what they measure, fixtures), plus entry points useful for running the library against shared fixtures in our harness (e.g. CLI command, API call).]
 
 ## Determinism and idempotency
 
