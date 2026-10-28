@@ -1,99 +1,102 @@
 #!/usr/bin/env bash
 #
-# tools.sh — per-competitor CLI invocation definitions for the benchmark harness.
+# tools.sh — per-tool CLI invocation definitions for the benchmark harness's CLI tier.
 #
-# OWNER: competitor-wiring leaf. This file is `source`d by scripts/run_benchmark.sh; it does
-# not run standalone and intentionally has no `set -e` / top-level side effects. The driver
-# exports `REPO_ROOT` (repo root) before sourcing us; our own release binaries live at
-# "$REPO_ROOT/target/release/{jsonschemars,boon_validate}".
+# This file is a library: scripts/run_benchmark.sh `source`s it. It does not run standalone and
+# has no `set -e` or top-level side effects. The sourcing script must set `REPO_ROOT` (repo root);
+# our own release binaries live at "$REPO_ROOT/target/release/{jsonschemars,boon_validate}".
+# Must stay compatible with bash 3.2 (the macOS system bash).
 #
-# ---------------------------------------------------------------------------------------
-# CONTRACT (the driver depends on these EXACT function names / argument orders):
-#
-#   codegen_tools
-#       -> echo space-separated ids of AVAILABLE codegen tools
-#          (subset of: jsonschemars typify schemafy)
-#   validation_tools
-#       -> echo space-separated ids of AVAILABLE validation tools
-#          (subset of: jsonschemars jsonschema-cli boon)
-#   run_codegen  <tool> <schema_file> <out_dir>
-#       -> generate Rust for <schema_file> into <out_dir>; return 0 ok / non-zero on failure
-#   run_validate <tool> <schema_file> <payload_file>
-#       -> validate <payload_file> against <schema_file>; return 0 valid / non-zero invalid
-#   tool_display_name <id>
-#       -> echo a human-friendly label for <id> (echoes the id itself if unknown)
-#
-# Availability detection MUST be silent and MUST NOT error: an uninstalled tool is simply
-# omitted from codegen_tools / validation_tools (never a hard failure).
+# The harness has two tiers:
+#   - In-process tier: every tool linked as a Rust library and timed by criterion, with peak heap
+#     from a counting allocator (benches/cross_tool.rs, src/bin/heap_profile.rs). Not defined here.
+#   - CLI tier: every tool's command-line front end timed end to end (process startup, file I/O,
+#     parsing, compile, generate/validate, exit) by hyperfine. THIS file defines how each tool's
+#     CLI is invoked.
 #
 # ---------------------------------------------------------------------------------------
-# COMPETITOR CLI SYNTAXES (researched 2026-07-03; sources inline):
+# API (run_benchmark.sh depends on these names and argument orders):
 #
-#   typify  (cargo-typify, https://github.com/oxidecomputer/typify
-#            + cargo-typify/README.md):
-#       cargo typify <schema.json> --output <out.rs>
-#     - Input schema is a POSITIONAL argument.
-#     - `--output`/`-o` overrides the default output path (default = input path with the
-#       extension replaced by `.rs`); `-` means stdout.
-#     - Detected as the `cargo-typify` binary on PATH (cargo subcommand form: `cargo typify`).
+#   required_external_tools          -> external binaries that must be on PATH (one per line)
+#   _install_hint <cmd>              -> install command for a required tool
+#   check_required_tools             -> 0 if all present; else prints each missing one, returns 1
+#   tool_version <cmd>               -> version number of an external tool (e.g. 1.20.0)
+#   codegen_tools                    -> space-separated codegen tool ids
+#   validation_tools                 -> space-separated validation tool ids
+#   codegen_cmd  <tool> <schema> <out_dir>   -> ECHO the codegen command line
+#   validate_cmd <tool> <schema> <payload>   -> ECHO the validation command line
+#   run_cmd <command_line>           -> execute a command line produced by the two functions above
+#   run_cmd_offline <command_line>   -> same, with network access denied where supported
+#   offline_supported                -> true when run_cmd_offline can deny network access
+#   tool_display_name <id>           -> human-friendly label (echoes the id if unknown)
 #
-#   schemafy (https://github.com/Marwes/schemafy):
-#     - NO command-line interface. schemafy is a proc-macro / library crate only
-#       (`schemafy!` macro + build-time codegen); there is no standalone binary to invoke.
-#     - Therefore it CANNOT be wired as a CLI codegen tool here and is never reported by
-#       codegen_tools. `run_codegen schemafy ...` returns non-zero (unsupported) so the
-#       driver records it as a compat failure rather than crashing. Left in the id set for
-#       forward-compat if a wrapper binary is ever added.
+# Command lines are single strings of shell-quoted words (`printf %q`) with no shell syntax, so
+# they can be handed to `hyperfine -N` (which splits words itself and runs the program with no
+# intermediate shell) and also run verbatim via `run_cmd` for the correctness probe.
 #
-#   jsonschema-cli (https://github.com/Stranger6667/jsonschema, crate `jsonschema-cli`,
-#                   binary name `jsonschema-cli`):
-#       jsonschema-cli validate <schema.json> -i <instance.json>
-#     - Schema is a POSITIONAL argument; instance via `-i`/`--instance` (repeatable).
-#     - Exit 0 = all instances valid; exit 1 = invalid or error.
-#     - Detected via `command -v jsonschema-cli`.
+# Exit-code convention for validation: 0 = instance valid; non-zero = invalid (or error).
 #
-#   boon (our wrapper): "$REPO_ROOT/target/release/boon_validate" -s <schema> -p <payload>
-#     - Always available once the benchmark crate is built (it is one of our own bins).
+# ---------------------------------------------------------------------------------------
+# TOOL CLI SYNTAXES
 #
-#   jsonschemars (our own CLI, "$REPO_ROOT/target/release/jsonschemars"):
+#   jsonschemars (our CLI, "$REPO_ROOT/target/release/jsonschemars"):
 #       codegen:  jsonschemars generate rust -o <out_dir> <schema>
 #       validate: jsonschemars validate -s <schema> -p <payload>
-#     - Always available once the crate is built (built from this repo).
+#
+#   typify (https://github.com/oxidecomputer/typify, `cargo install cargo-typify`):
+#       cargo-typify typify <schema> --output <out_dir>/<base>.rs
+#     The `cargo-typify` binary is invoked DIRECTLY. Going through `cargo typify` would add the
+#     cargo wrapper's own startup to every measurement. When run directly, cargo subcommands take
+#     their subcommand name as the first argument, hence the repeated `typify`.
+#
+#   jsonschema-cli (https://github.com/Stranger6667/jsonschema, `cargo install jsonschema-cli`):
+#       jsonschema-cli validate <schema> -i <payload>
+#
+#   boon (our thin wrapper bin over the boon crate, "$REPO_ROOT/target/release/boon_validate";
+#         boon ships no CLI of its own):
+#       boon_validate -s <schema> -p <payload>
+#
+# schemafy is not on the CLI tier: it is a proc-macro/library crate with no command-line tool.
 # ---------------------------------------------------------------------------------------
 
 # --- helpers ---------------------------------------------------------------------------
 
-# _jsonschemars_bin / _boon_bin: absolute paths to our own release binaries.
 _jsonschemars_bin() { printf '%s/target/release/jsonschemars' "${REPO_ROOT:?REPO_ROOT not set}"; }
 _boon_bin() { printf '%s/target/release/boon_validate' "${REPO_ROOT:?REPO_ROOT not set}"; }
 
 # _has <cmd>: true if <cmd> is on PATH (silent).
 _has() { command -v "$1" >/dev/null 2>&1; }
 
-# --- required-tool enforcement ---------------------------------------------------------
+# _quote_argv <word>...: echo the words as one shell-quoted command line.
+_quote_argv() {
+    local out="" word
+    for word in "$@"; do
+        out="${out:+${out} }$(printf '%q' "${word}")"
+    done
+    printf '%s\n' "${out}"
+}
 
-# required_external_tools: echo the external competitor CLIs the harness REQUIRES. Every
-# competitor we benchmark must be installed; a partial run would silently omit competitors and
-# misrepresent the comparison, so the driver aborts if any is missing (see check_required_tools).
-# Our own bins (jsonschemars, boon_validate) are built by the driver — and boon is one of them —
-# so neither is listed here. Wall-time and peak RSS come from /usr/bin/time, so no separate
-# timing tool (e.g. Hyperfine) is required.
+# --- required tools --------------------------------------------------------------------
+
+# required_external_tools: every external binary the harness needs. A missing competitor would
+# silently drop out of the comparison and misrepresent it, so the driver aborts instead. Our own
+# bins (jsonschemars, boon_validate) are built by the driver and are not listed.
 required_external_tools() {
-    printf '%s\n' "cargo-typify jsonschema-cli"
+    printf '%s\n' hyperfine cargo-typify jsonschema-cli
 }
 
 # _install_hint <cmd>: how to install a required tool.
 _install_hint() {
     case "$1" in
+        hyperfine)      echo "cargo install hyperfine" ;;
         cargo-typify)   echo "cargo install cargo-typify" ;;
         jsonschema-cli) echo "cargo install jsonschema-cli" ;;
         *)              echo "(unknown install method)" ;;
     esac
 }
 
-# check_required_tools: returns 0 if every required external tool is present; otherwise
-# prints each missing tool with its install command and returns 1. The driver treats a
-# non-zero return as a hard failure (no partial benchmarks).
+# check_required_tools: 0 if every required tool is on PATH; otherwise prints each missing tool
+# with its install command and returns 1.
 check_required_tools() {
     local missing=0 tool
     for tool in $(required_external_tools); do
@@ -105,96 +108,108 @@ check_required_tools() {
     return "${missing}"
 }
 
-# --- availability ----------------------------------------------------------------------
-
-# codegen_tools: echo available codegen tool ids.
-# jsonschemars is always available (our own bin). typify requires cargo-typify on PATH.
-# schemafy has no CLI and is therefore never reported.
-codegen_tools() {
-    local tools="jsonschemars"
-    if _has cargo-typify; then
-        tools="${tools} typify"
-    fi
-    printf '%s\n' "${tools}"
+# tool_version <cmd>: echo the first dotted version number the tool reports (or "unknown").
+tool_version() {
+    local raw
+    case "$1" in
+        # As a cargo subcommand binary, cargo-typify expects its subcommand name first.
+        cargo-typify) raw="$(cargo-typify typify --version 2>&1 || true)" ;;
+        *)            raw="$("$1" --version 2>&1 || true)" ;;
+    esac
+    printf '%s\n' "${raw}" | awk '
+        { for (i = 1; i <= NF; i++) if ($i ~ /^v?[0-9]+\.[0-9]+/) { sub(/^v/, "", $i); print $i; found = 1; exit } }
+        END { if (!found) print "unknown" }'
 }
 
-# validation_tools: echo available validation tool ids.
-# jsonschemars and boon are always available (our own bins). jsonschema-cli requires the
-# `jsonschema` binary on PATH.
-validation_tools() {
-    local tools="jsonschemars boon"
-    if _has jsonschema-cli; then
-        tools="${tools} jsonschema-cli"
-    fi
-    printf '%s\n' "${tools}"
-}
+# --- tool sets -------------------------------------------------------------------------
 
-# --- codegen ---------------------------------------------------------------------------
+codegen_tools() { printf '%s\n' "jsonschemars typify"; }
+validation_tools() { printf '%s\n' "jsonschemars jsonschema-cli boon"; }
 
-# run_codegen <tool> <schema_file> <out_dir> -> 0 on success, non-zero on failure.
-run_codegen() {
-    local tool="$1" schema="$2" out_dir="$3"
+# --- command lines ---------------------------------------------------------------------
 
+# codegen_cmd <tool> <schema> <out_dir>: echo the command line generating Rust for <schema> into
+# <out_dir> (which must already exist). Returns 2 for an unknown tool.
+codegen_cmd() {
+    local tool="$1" schema="$2" out_dir="$3" base
     case "${tool}" in
         jsonschemars)
-            mkdir -p "${out_dir}" || return 1
-            "$(_jsonschemars_bin)" generate rust -o "${out_dir}" "${schema}"
+            _quote_argv "$(_jsonschemars_bin)" generate rust -o "${out_dir}" "${schema}"
             ;;
         typify)
-            _has cargo-typify || return 1
-            mkdir -p "${out_dir}" || return 1
-            # typify emits a single .rs file; name it after the schema's basename.
-            local base
             base="$(basename "${schema}")"
             base="${base%.*}"
-            cargo typify "${schema}" --output "${out_dir}/${base}.rs"
-            ;;
-        schemafy)
-            # No CLI available; report unsupported so the driver logs a compat failure.
-            echo "run_codegen: schemafy has no CLI (proc-macro only); skipping" >&2
-            return 1
+            _quote_argv cargo-typify typify "${schema}" --output "${out_dir}/${base}.rs"
             ;;
         *)
-            echo "run_codegen: unknown codegen tool '${tool}'" >&2
+            echo "codegen_cmd: unknown codegen tool '${tool}'" >&2
             return 2
             ;;
     esac
 }
 
-# --- validation ------------------------------------------------------------------------
-
-# run_validate <tool> <schema_file> <payload_file> -> 0 valid, non-zero invalid/error.
-run_validate() {
+# validate_cmd <tool> <schema> <payload>: echo the command line validating <payload> against
+# <schema> (exit 0 = valid). Returns 2 for an unknown tool.
+validate_cmd() {
     local tool="$1" schema="$2" payload="$3"
-
     case "${tool}" in
-        jsonschemars)
-            "$(_jsonschemars_bin)" validate -s "${schema}" -p "${payload}"
-            ;;
-        boon)
-            "$(_boon_bin)" -s "${schema}" -p "${payload}"
-            ;;
-        jsonschema-cli)
-            _has jsonschema-cli || return 1
-            jsonschema-cli validate "${schema}" -i "${payload}"
-            ;;
+        jsonschemars)   _quote_argv "$(_jsonschemars_bin)" validate -s "${schema}" -p "${payload}" ;;
+        jsonschema-cli) _quote_argv jsonschema-cli validate "${schema}" -i "${payload}" ;;
+        boon)           _quote_argv "$(_boon_bin)" -s "${schema}" -p "${payload}" ;;
         *)
-            echo "run_validate: unknown validation tool '${tool}'" >&2
+            echo "validate_cmd: unknown validation tool '${tool}'" >&2
             return 2
             ;;
+    esac
+}
+
+# run_cmd <command_line>: execute a command line from codegen_cmd / validate_cmd and return its
+# exit status. Safe to eval: every word was quoted with `printf %q` and it contains no shell
+# syntax.
+run_cmd() {
+    eval "$1"
+}
+
+# Sandbox profile denying all network access (macOS sandbox-exec).
+_NO_NETWORK_PROFILE='(version 1)(allow default)(deny network*)'
+
+# _offline_wrapper: echo which working mechanism can deny network access to a command
+# (`sandbox-exec` or `unshare`), or nothing. Each candidate is tried on `true`, because a wrapper
+# can be installed yet unusable (e.g. `unshare` without user namespaces).
+_offline_wrapper() {
+    if _has sandbox-exec && sandbox-exec -p "${_NO_NETWORK_PROFILE}" true 2>/dev/null; then
+        echo sandbox-exec
+    elif _has unshare && unshare -rn true 2>/dev/null; then
+        echo unshare
+    fi
+}
+
+# offline_supported: true when this machine can run a command with network access denied.
+offline_supported() {
+    [[ -n "$(_offline_wrapper)" ]]
+}
+
+# run_cmd_offline <command_line>: like run_cmd, but with network access denied when the machine
+# supports it (see offline_supported), so a tool that needs the network fails instead of
+# downloading. Used for the correctness probe only: the sandbox wrapper costs several
+# milliseconds per process, so timed runs are not wrapped.
+run_cmd_offline() {
+    case "${BENCH_OFFLINE_WRAPPER-$(_offline_wrapper)}" in
+        sandbox-exec) eval "sandbox-exec -p $(printf '%q' "${_NO_NETWORK_PROFILE}") $1" ;;
+        unshare)      eval "unshare -rn $1" ;;
+        *)            eval "$1" ;;
     esac
 }
 
 # --- display names ---------------------------------------------------------------------
 
-# tool_display_name <id> -> nice label (echoes id if unknown).
 tool_display_name() {
     case "$1" in
-        jsonschemars) echo "json-schema-rs" ;;
-        typify) echo "typify (cargo typify)" ;;
-        schemafy) echo "schemafy" ;;
-        boon) echo "boon" ;;
-        jsonschema-cli) echo "jsonschema-cli (Stranger6667)" ;;
-        *) echo "$1" ;;
+        jsonschemars)   echo "json-schema-rs" ;;
+        typify)         echo "typify" ;;
+        jsonschema-cli) echo "jsonschema (Stranger6667)" ;;
+        jsonschema)     echo "jsonschema (Stranger6667)" ;;
+        boon)           echo "boon" ;;
+        *)              echo "$1" ;;
     esac
 }
