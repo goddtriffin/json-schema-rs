@@ -661,7 +661,12 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             ..::json_schema_rs::JsonSchema::default()
         }
     };
-    Ok(named_type_impl(&name, &generator_ident, &body))
+    Ok(named_type_impl(
+        &name,
+        id.as_deref(),
+        &generator_ident,
+        &body,
+    ))
 }
 
 /// Emits the `ToJsonSchema` impl for a named type (derived struct or enum) whose schema body
@@ -672,12 +677,53 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
 /// with a fresh generator and adds `$schema`. The type's identity in the generator is its full
 /// path (`module_path!()` expands where the type is defined), so same-name types from
 /// different modules get separate `$defs` entries.
+///
+/// A type with `id` is its own schema resource, built through the generator's resource
+/// methods so it carries the `$defs` its refs need and refers to itself as `#`.
 fn named_type_impl(
     name: &Ident,
+    id: Option<&str>,
     generator_ident: &TokenStream2,
     body: &TokenStream2,
 ) -> TokenStream2 {
     let name_lit: LitStr = LitStr::new(&name.to_string(), name.span());
+    let (root_call, subschema_call): (TokenStream2, TokenStream2) = if let Some(id) = id {
+        let id_lit: LitStr = LitStr::new(id, name.span());
+        (
+            quote! {
+                .into_resource_root_schema(
+                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    #id_lit,
+                    Self::__json_schema_rs_body,
+                )
+            },
+            quote! {
+                generator.resource_subschema(
+                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    #name_lit,
+                    #id_lit,
+                    Self::__json_schema_rs_body,
+                )
+            },
+        )
+    } else {
+        (
+            quote! {
+                .into_named_root_schema(
+                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    #name_lit,
+                    Self::__json_schema_rs_body,
+                )
+            },
+            quote! {
+                generator.named_subschema(
+                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    #name_lit,
+                    Self::__json_schema_rs_body,
+                )
+            },
+        )
+    };
     quote! {
         impl #name {
             #[doc(hidden)]
@@ -691,11 +737,7 @@ fn named_type_impl(
         impl ::json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> ::json_schema_rs::JsonSchema {
                 let mut schema: ::json_schema_rs::JsonSchema = ::json_schema_rs::SchemaGenerator::new()
-                    .into_named_root_schema(
-                        <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
-                        #name_lit,
-                        Self::__json_schema_rs_body,
-                    );
+                    #root_call;
                 schema.schema = Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string());
                 schema
             }
@@ -703,11 +745,7 @@ fn named_type_impl(
             fn json_schema_with(
                 generator: &mut ::json_schema_rs::SchemaGenerator,
             ) -> ::json_schema_rs::JsonSchema {
-                generator.named_subschema(
-                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
-                    #name_lit,
-                    Self::__json_schema_rs_body,
-                )
+                #subschema_call
             }
 
             fn schema_id() -> &'static str {
@@ -798,5 +836,10 @@ fn expand_enum_to_json_schema(
             ..::json_schema_rs::JsonSchema::default()
         }
     };
-    Ok(named_type_impl(name, &quote! { _generator }, &body))
+    Ok(named_type_impl(
+        name,
+        id.as_deref(),
+        &quote! { _generator },
+        &body,
+    ))
 }
