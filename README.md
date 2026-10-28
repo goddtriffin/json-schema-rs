@@ -153,7 +153,8 @@ struct per shape, emitted in a shared buffer). Use
 this off, or `DedupeMode::Functional` to compare only functional fields (see
 [design.md](design.md)). Use
 `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject
-schema definitions with unknown keys. Use
+schema definitions with keys their draft does not define (the error names the key
+and a JSON Pointer to the schema object that has it). Use
 `CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()`
 to prefer property keys over `title` for struct names. CLI:
 `--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or
