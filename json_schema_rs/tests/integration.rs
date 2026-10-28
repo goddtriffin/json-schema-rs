@@ -2696,13 +2696,14 @@ fn write_workspace_scenario_member(
                 (output.per_schema[0].clone(), vec![], main_rs)
             }
             "round_trip" => {
-                // All six round-trip checks in one binary (same assertions as the six round_trip_* scenarios).
+                // All seven round-trip checks in one binary (same assertions as the round_trip_* scenarios).
                 let schema_basic = r#"{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id"],"title":"Root"}"#;
                 let schema_integer = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"}},"required":["id"],"title":"Root"}"#;
                 let schema_number = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"},"value":{"type":"number"}},"required":["id"],"title":"Root"}"#;
                 let schema_int_min_max = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"],"title":"Root"}"#;
                 let schema_number_min_max = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"],"title":"Root"}"#;
                 let schema_string_min_max = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}},"required":["name"]}"#;
+                let schema_description = r#"{"type":"object","description":"Root type\nSecond line","properties":{"name":{"type":"string","description":"User name"}},"required":["name"]}"#;
                 let schemas: Vec<JsonSchema> = [
                     schema_basic,
                     schema_integer,
@@ -2710,12 +2711,13 @@ fn write_workspace_scenario_member(
                     schema_int_min_max,
                     schema_number_min_max,
                     schema_string_min_max,
+                    schema_description,
                 ]
                 .iter()
                 .map(|s| JsonSchema::try_from(*s).expect("parse"))
                 .collect();
                 let output = generate_rust(&schemas, default_code_gen).expect("generate");
-                let lib_rs: Vec<u8> = "pub mod basic;\npub mod integer;\npub mod number;\npub mod integer_min_max;\npub mod number_min_max;\npub mod string_min_max;\n".into();
+                let lib_rs: Vec<u8> = "pub mod basic;\npub mod integer;\npub mod number;\npub mod integer_min_max;\npub mod number_min_max;\npub mod string_min_max;\npub mod description;\n".into();
                 let extra: Vec<(PathBuf, Vec<u8>)> = vec![
                     (PathBuf::from("basic.rs"), output.per_schema[0].clone()),
                     (PathBuf::from("integer.rs"), output.per_schema[1].clone()),
@@ -2731,6 +2733,10 @@ fn write_workspace_scenario_member(
                     (
                         PathBuf::from("string_min_max.rs"),
                         output.per_schema[5].clone(),
+                    ),
+                    (
+                        PathBuf::from("description.rs"),
+                        output.per_schema[6].clone(),
                     ),
                 ];
                 let main_rs = r#"
@@ -2772,6 +2778,17 @@ fn main() {
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, reparsed, "round-trip string min max");
+    // round_trip_description: description -> `///` docs -> derive -> description
+    let schema = compile_test::description::Root::json_schema();
+    let expected: (Option<String>, Option<String>) = (
+        Some("Root type\nSecond line".to_string()),
+        Some("User name".to_string()),
+    );
+    let actual: (Option<String>, Option<String>) = (
+        schema.description.clone(),
+        schema.properties.get("name").and_then(|p| p.description.clone()),
+    );
+    assert_eq!(expected, actual, "round-trip description");
 }
 "#;
                 (lib_rs, extra, main_rs)
