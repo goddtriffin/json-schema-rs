@@ -8,13 +8,36 @@ use syn::{
     Result as SynResult, Token, Type, Variant,
 };
 
-/// Parser for doc attribute value: `= "string"` or just `"string"`.
-fn parse_doc_value(input: syn::parse::ParseStream) -> SynResult<String> {
-    if input.peek(Token![=]) {
-        input.parse::<Token![=]>()?;
+/// Collects the values of `#[doc = ...]` attributes (what `///` desugars to), in order.
+///
+/// A value is a string literal or, as rustc allows, a macro that expands to one
+/// (`include_str!`, `concat!`); both are kept as expressions and evaluated in the generated
+/// code, so no doc line is dropped. List-form attributes (`#[doc(hidden)]`) carry no text and
+/// are skipped.
+fn doc_exprs(attrs: &[Attribute]) -> Vec<&Expr> {
+    attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .filter_map(|attr| match &attr.meta {
+            Meta::NameValue(nv) => Some(&nv.value),
+            Meta::Path(_) | Meta::List(_) => None,
+        })
+        .collect()
+}
+
+/// Builds an `Option<String>` expression from doc values: each value trimmed, joined with `\n`,
+/// leading/trailing blank lines removed; `None` when no doc text remains.
+fn doc_description_expr(exprs: &[&Expr]) -> TokenStream2 {
+    if exprs.is_empty() {
+        return quote! { None };
     }
-    let lit: LitStr = input.parse()?;
-    Ok(lit.value())
+    quote! {
+        {
+            let lines: ::std::vec::Vec<&str> = [#(#exprs),*].iter().map(|line: &&str| line.trim()).collect();
+            let joined: ::std::string::String = lines.join("\n").trim().to_string();
+            if joined.is_empty() { None } else { Some(joined) }
+        }
+    }
 }
 
 /// Extracts `title = "..."` from `#[json_schema(...)]` container attribute.
@@ -71,44 +94,33 @@ fn container_id(attrs: &[Attribute]) -> SynResult<Option<String>> {
     Ok(None)
 }
 
-/// Extracts `description = "..."` from `#[json_schema(...)]` container attribute, or from `///` doc comments (joined with newline). Attribute takes precedence.
-fn container_description(attrs: &[Attribute]) -> SynResult<Option<String>> {
-    let mut from_attr: Option<String> = None;
-    let mut doc_lines: Vec<String> = Vec::new();
+/// Builds the container's `Option<String>` description expression: `description = "..."` from
+/// the `#[json_schema(...)]` attribute if present, else the `///` doc comments (see
+/// [`doc_description_expr`]). The attribute takes precedence.
+fn container_description(attrs: &[Attribute]) -> SynResult<TokenStream2> {
     for attr in attrs {
-        if attr.path().is_ident("json_schema") {
-            let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
-            let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
-            for meta in metas {
-                let Meta::NameValue(nv) = meta else {
-                    continue;
-                };
-                if !nv.path.is_ident("description") {
-                    continue;
-                }
-                let syn::Expr::Lit(expr_lit) = nv.value else {
-                    continue;
-                };
-                let syn::Lit::Str(s) = expr_lit.lit else {
-                    continue;
-                };
-                from_attr = Some(s.value());
-                break;
+        if !attr.path().is_ident("json_schema") {
+            continue;
+        }
+        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+        let metas: Punctuated<Meta, Token![,]> = attr.parse_args_with(parser)?;
+        for meta in metas {
+            let Meta::NameValue(nv) = meta else {
+                continue;
+            };
+            if !nv.path.is_ident("description") {
+                continue;
             }
-        } else if attr.path().is_ident("doc")
-            && let Ok(s) = attr.parse_args_with(parse_doc_value)
-        {
-            doc_lines.push(s.trim().to_string());
+            let syn::Expr::Lit(expr_lit) = nv.value else {
+                continue;
+            };
+            let syn::Lit::Str(s) = expr_lit.lit else {
+                continue;
+            };
+            return Ok(quote! { Some(#s.to_string()) });
         }
     }
-    if let Some(s) = from_attr {
-        return Ok(Some(s));
-    }
-    if doc_lines.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(doc_lines.join("\n")))
-    }
+    Ok(doc_description_expr(&doc_exprs(attrs)))
 }
 
 /// Extracts `comment = "..."` from `#[json_schema(...)]` container attribute.
@@ -136,25 +148,6 @@ fn container_comment(attrs: &[Attribute]) -> SynResult<Option<String>> {
         }
     }
     Ok(None)
-}
-
-/// Extracts description from a field's `///` doc comments (joined with newline).
-#[expect(clippy::unnecessary_wraps)]
-fn field_description(field: &Field) -> SynResult<Option<String>> {
-    let mut doc_lines: Vec<String> = Vec::new();
-    for attr in &field.attrs {
-        if !attr.path().is_ident("doc") {
-            continue;
-        }
-        if let Ok(s) = attr.parse_args_with(parse_doc_value) {
-            doc_lines.push(s.trim().to_string());
-        }
-    }
-    if doc_lines.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(doc_lines.join("\n")))
-    }
 }
 
 /// Extracts a numeric value (integer or float literal) from `#[json_schema(key = N)]` on a field.
@@ -511,14 +504,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         })
         .unwrap_or(quote! { None });
 
-    let description: Option<String> = container_description(&input.attrs)?;
-    let description_expr = description
-        .as_ref()
-        .map(|d| {
-            let lit = LitStr::new(d, proc_macro2::Span::call_site());
-            quote! { Some(#lit.to_string()) }
-        })
-        .unwrap_or(quote! { None });
+    let description_expr: TokenStream2 = container_description(&input.attrs)?;
 
     let comment: Option<String> = container_comment(&input.attrs)?;
     let comment_expr = comment
@@ -554,14 +540,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         if !is_opt {
             required_keys.push(key);
         }
-        let field_desc: Option<String> = field_description(field)?;
-        let field_desc_expr = field_desc
-            .as_ref()
-            .map(|d| {
-                let lit = LitStr::new(d, span);
-                quote! { Some(#lit.to_string()) }
-            })
-            .unwrap_or(quote! { None });
+        let field_desc_expr: TokenStream2 = doc_description_expr(&doc_exprs(&field.attrs));
         let field_min: Option<f64> = field_minimum(field)?;
         let field_max: Option<f64> = field_maximum(field)?;
         let field_min_items: Option<u64> = field_min_items(field)?;
@@ -753,14 +732,7 @@ fn expand_enum_to_json_schema(
         })
         .unwrap_or(quote! { None });
 
-    let description: Option<String> = container_description(attrs)?;
-    let description_expr = description
-        .as_ref()
-        .map(|d| {
-            let lit = LitStr::new(d, proc_macro2::Span::call_site());
-            quote! { Some(#lit.to_string()) }
-        })
-        .unwrap_or(quote! { None });
+    let description_expr: TokenStream2 = container_description(attrs)?;
 
     let comment: Option<String> = container_comment(attrs)?;
     let comment_expr = comment
