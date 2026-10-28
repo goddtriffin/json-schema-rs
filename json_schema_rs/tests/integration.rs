@@ -1,8 +1,7 @@
 //! Integration test: public API for schema parsing and code generation, and CLI binary.
 
 use json_schema_rs::{
-    CodeGenSettings, DedupeMode, JsonSchema, JsonSchemaSettings, ModelNameSource, SpecVersion,
-    generate_rust, resolved_spec_version,
+    CodeGenSettings, DedupeMode, JsonSchema, ModelNameSource, SpecVersion, generate_rust,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -83,16 +82,15 @@ pub struct Root {
 }
 
 #[test]
-fn integration_schema_keyword_parse_round_trip_and_resolved_spec_version() {
+fn integration_schema_keyword_parse_round_trip_and_dialect() {
     let schema_json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"name":{"type":"string"}}}"#;
-    let settings: JsonSchemaSettings = JsonSchemaSettings::default();
     let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse");
     let expected_uri: Option<String> =
         Some("https://json-schema.org/draft/2020-12/schema".to_string());
     assert_eq!(expected_uri, schema.schema);
 
     let expected_version: SpecVersion = SpecVersion::Draft202012;
-    let actual_version: SpecVersion = resolved_spec_version(&schema, &settings);
+    let actual_version: SpecVersion = schema.dialect().spec_version;
     assert_eq!(expected_version, actual_version);
 
     let serialized: String = (&schema).try_into().expect("serialize");
@@ -3099,4 +3097,160 @@ members = [{members}]
         let package_name: String = format!("compile_test_{name}");
         assert_cargo_run_package(workspace_root.path(), &package_name, name);
     }
+}
+
+// --- CLI: dialect settings (`--jss-spec-version`, `--jss-format-mode`, `--jss-unknown-schema-uri`) ---
+
+/// Runs `jsonschemars validate` on `schema_json` with `payload_json` on stdin and `extra_args`;
+/// returns the schema file's path, whether it exited successfully, and its stderr.
+fn run_cli_validate(
+    schema_json: &str,
+    payload_json: &str,
+    extra_args: &[&str],
+) -> (String, (bool, String)) {
+    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
+    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
+    schema_file.flush().expect("flush schema");
+    let schema_path: String = schema_file.path().to_str().unwrap().to_string();
+    let mut args: Vec<&str> = vec!["validate", "-s", schema_path.as_str()];
+    args.extend_from_slice(extra_args);
+    let mut child = Command::new(jsonschemars_bin())
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn jsonschemars");
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload_json.as_bytes())
+        .expect("write payload");
+    let output = child.wait_with_output().expect("wait jsonschemars");
+    let stderr: String = String::from_utf8(output.stderr).expect("utf8 stderr");
+    (schema_path, (output.status.success(), stderr))
+}
+
+#[test]
+fn cli_validate_unknown_schema_uri_warns_and_falls_back() {
+    let (path, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#,
+        r#""ok""#,
+        &[],
+    );
+    let expected: (bool, String) = (
+        true,
+        format!(
+            "warning: {path}: unknown $schema \"https://example.com/custom-meta\"; using JSON Schema Draft 2020-12 rules\n"
+        ),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_unknown_schema_uri_rejected_with_flag() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#,
+        r#""ok""#,
+        &["--jss-unknown-schema-uri", "reject"],
+    );
+    let expected: (bool, String) = (
+        false,
+        "error: unknown $schema \"https://example.com/custom-meta\"\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_pre_draft4_schema_warns() {
+    let (path, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"$schema":"http://json-schema.org/draft-03/schema#","type":"string"}"#,
+        r#""ok""#,
+        &[],
+    );
+    let expected: (bool, String) = (
+        true,
+        format!(
+            "warning: {path}: Draft03 has no rule set of its own; using JSON Schema Draft 4 rules\n"
+        ),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_unknown_schema_uri_warns() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(
+        &schema_path,
+        r#"{"$schema":"https://example.com/custom-meta","type":"object","properties":{"a":{"type":"string"}}}"#,
+    )
+    .expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    let expected: (bool, String) = (
+        true,
+        format!(
+            "warning: {}: unknown $schema \"https://example.com/custom-meta\"; using JSON Schema Draft 2020-12 rules\n",
+            schema_path
+                .canonicalize()
+                .expect("canonical path")
+                .display()
+        ),
+    );
+    let actual: (bool, String) = (
+        output.status.success(),
+        String::from_utf8(output.stderr).expect("utf8 stderr"),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn cli_validate_uuid_format_is_annotation_by_default_in_2020_12() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"type":"string","format":"uuid"}"#,
+        r#""not-a-uuid""#,
+        &[],
+    );
+    let expected: (bool, String) = (true, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn cli_validate_format_mode_assertion_flag_checks_uuid() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"type":"string","format":"uuid"}"#,
+        r#""not-a-uuid""#,
+        &["--jss-format-mode", "assertion"],
+    );
+    let expected: (bool, String) = (
+        false,
+        "root: string \"not-a-uuid\" is not a valid UUID\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn cli_validate_spec_version_flag_pins_draft() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"uuid"}"#,
+        r#""not-a-uuid""#,
+        &["--jss-spec-version", "draft-07"],
+    );
+    let expected: (bool, String) = (
+        false,
+        "root: string \"not-a-uuid\" is not a valid UUID\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
 }

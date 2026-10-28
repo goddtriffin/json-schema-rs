@@ -16,8 +16,10 @@ pub use code_gen::{
 };
 pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::{
-    JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,
-    JsonSchemaSettingsBuilder, SpecVersion, resolved_spec_version,
+    Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchema,
+    JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings, JsonSchemaSettingsBuilder,
+    Keyword, RefSiblings, ResolvedDialect, SpecVersion, SubschemaPosition, UnknownSchemaUri,
+    Vocabulary, resolve_dialect,
 };
 pub use reverse_code_gen::{SchemaGenerator, ToJsonSchema};
 pub use validator::{OrderedF64, ValidationError, ValidationResult, validate};

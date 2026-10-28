@@ -59,29 +59,29 @@
         "ours": {
           "tally": {
             "total": 615,
-            "passed": 331,
-            "failed": 56,
-            "skipped": 228,
+            "passed": 336,
+            "failed": 57,
+            "skipped": 222,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 331,
+            "numerator": 336,
             "denominator": 615,
-            "percent": "53.82%"
+            "percent": "54.63%"
           },
           "coverage": {
-            "numerator": 387,
+            "numerator": 393,
             "denominator": 615,
-            "percent": "62.93%"
+            "percent": "63.90%"
           },
           "correctness": {
-            "numerator": 331,
-            "denominator": 387,
-            "percent": "85.53%"
+            "numerator": 336,
+            "denominator": 393,
+            "percent": "85.50%"
           },
-          "disagreements_with_majority": 56,
-          "wrong_vs_expected": 56
+          "disagreements_with_majority": 57,
+          "wrong_vs_expected": 57
         }
       },
       {
@@ -299,16 +299,16 @@
       "localhost/json-schema-rs": {
         "tally": {
           "total": 4890,
-          "passed": 2142,
-          "failed": 311,
-          "skipped": 2437,
+          "passed": 2147,
+          "failed": 312,
+          "skipped": 2431,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 2142,
+          "numerator": 2147,
           "denominator": 4890,
-          "percent": "43.80%"
+          "percent": "43.91%"
         }
       },
       "python-jsonschema": {
@@ -436,16 +436,16 @@
       "localhost/json-schema-rs": {
         "tally": {
           "total": 2666,
-          "passed": 1392,
-          "failed": 1008,
-          "skipped": 266,
+          "passed": 1394,
+          "failed": 1009,
+          "skipped": 263,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1392,
+          "numerator": 1394,
           "denominator": 2666,
-          "percent": "52.21%"
+          "percent": "52.29%"
         }
       },
       "python-jsonschema": {
@@ -719,16 +719,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 615,
-              "passed": 331,
-              "failed": 56,
-              "skipped": 228,
+              "passed": 336,
+              "failed": 57,
+              "skipped": 222,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 331,
+              "numerator": 336,
               "denominator": 615,
-              "percent": "53.82%"
+              "percent": "54.63%"
             }
           },
           "python-jsonschema": {
@@ -780,29 +780,29 @@
         "ours": {
           "tally": {
             "total": 615,
-            "passed": 331,
-            "failed": 56,
-            "skipped": 228,
+            "passed": 336,
+            "failed": 57,
+            "skipped": 222,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 331,
+            "numerator": 336,
             "denominator": 615,
-            "percent": "53.82%"
+            "percent": "54.63%"
           },
           "coverage": {
-            "numerator": 387,
+            "numerator": 393,
             "denominator": 615,
-            "percent": "62.93%"
+            "percent": "63.90%"
           },
           "correctness": {
-            "numerator": 331,
-            "denominator": 387,
-            "percent": "85.53%"
+            "numerator": 336,
+            "denominator": 393,
+            "percent": "85.50%"
           },
-          "disagreements_with_majority": 56,
-          "wrong_vs_expected": 56
+          "disagreements_with_majority": 57,
+          "wrong_vs_expected": 57
         }
       },
       "optional": {
@@ -871,16 +871,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 272,
-              "passed": 145,
-              "failed": 99,
-              "skipped": 28,
+              "passed": 147,
+              "failed": 100,
+              "skipped": 25,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 145,
+              "numerator": 147,
               "denominator": 272,
-              "percent": "53.31%"
+              "percent": "54.04%"
             }
           },
           "python-jsonschema": {
@@ -932,29 +932,29 @@
         "ours": {
           "tally": {
             "total": 272,
-            "passed": 145,
-            "failed": 99,
-            "skipped": 28,
+            "passed": 147,
+            "failed": 100,
+            "skipped": 25,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 145,
+            "numerator": 147,
             "denominator": 272,
-            "percent": "53.31%"
+            "percent": "54.04%"
           },
           "coverage": {
-            "numerator": 244,
+            "numerator": 247,
             "denominator": 272,
-            "percent": "89.71%"
+            "percent": "90.81%"
           },
           "correctness": {
-            "numerator": 145,
-            "denominator": 244,
-            "percent": "59.43%"
+            "numerator": 147,
+            "denominator": 247,
+            "percent": "59.51%"
           },
-          "disagreements_with_majority": 90,
-          "wrong_vs_expected": 99
+          "disagreements_with_majority": 91,
+          "wrong_vs_expected": 100
         }
       },
       "findings": {
@@ -1450,6 +1450,23 @@
               },
               {
                 "test_description": "recursive mismatch",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft4",
+            "file": "refRemote.json",
+            "optional": false,
+            "case_description": "base URI change",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "base URI change ref invalid",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -2480,6 +2497,23 @@
                 "majority": false,
                 "agreeing": 4,
                 "voters": 6
+              }
+            ]
+          },
+          {
+            "group": "draft4",
+            "file": "optional/id.json",
+            "optional": true,
+            "case_description": "id inside an enum is not a real identifier",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "match $ref to id",
+                "expected": true,
+                "ours": false,
+                "majority": true,
+                "agreeing": 6,
+                "voters": 7
               }
             ]
           },
@@ -11015,12 +11049,12 @@
     },
     {
       "reason": "keyword \"not\"",
-      "tests": 201,
-      "cases": 52,
+      "tests": 203,
+      "cases": 53,
       "by_group": {
         "draft2019-09": 46,
         "draft2020-12": 47,
-        "draft4": 20,
+        "draft4": 22,
         "draft6": 45,
         "draft7": 43
       }
@@ -11263,14 +11297,6 @@
       }
     },
     {
-      "reason": "keyword \"id\"",
-      "tests": 26,
-      "cases": 12,
-      "by_group": {
-        "draft4": 26
-      }
-    },
-    {
       "reason": "schema: invalid JSON Schema: invalid type: floating point `2.0`, expected u64",
       "tests": 24,
       "cases": 12,
@@ -11336,6 +11362,18 @@
       }
     },
     {
+      "reason": "$ref: UnsupportedRef { ref_str: \"node\" }",
+      "tests": 10,
+      "cases": 5,
+      "by_group": {
+        "draft2019-09": 2,
+        "draft2020-12": 2,
+        "draft4": 2,
+        "draft6": 2,
+        "draft7": 2
+      }
+    },
+    {
       "reason": "keyword \"contentMediaType\"",
       "tests": 9,
       "cases": 3,
@@ -11358,17 +11396,6 @@
     },
     {
       "reason": "$ref: UnsupportedRef { ref_str: \"nested/foo-ref-string.json\" }",
-      "tests": 8,
-      "cases": 4,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"node\" }",
       "tests": 8,
       "cases": 4,
       "by_group": {
@@ -11449,7 +11476,57 @@
       }
     },
     {
+      "reason": "$ref: UnsupportedFragment { ref_str: \"#/definitions/baz/definitions/bar\" }",
+      "tests": 6,
+      "cases": 3,
+      "by_group": {
+        "draft4": 2,
+        "draft6": 2,
+        "draft7": 2
+      }
+    },
+    {
+      "reason": "$ref: UnsupportedFragment { ref_str: \"#foo\" }",
+      "tests": 6,
+      "cases": 3,
+      "by_group": {
+        "draft4": 2,
+        "draft6": 2,
+        "draft7": 2
+      }
+    },
+    {
+      "reason": "$ref: UnsupportedRef { ref_str: \"folderInteger.json\" }",
+      "tests": 6,
+      "cases": 3,
+      "by_group": {
+        "draft4": 2,
+        "draft6": 2,
+        "draft7": 2
+      }
+    },
+    {
+      "reason": "$ref: UnsupportedRef { ref_str: \"foo.json\" }",
+      "tests": 6,
+      "cases": 3,
+      "by_group": {
+        "draft4": 2,
+        "draft6": 2,
+        "draft7": 2
+      }
+    },
+    {
       "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/integer.json\" }",
+      "tests": 6,
+      "cases": 3,
+      "by_group": {
+        "draft4": 2,
+        "draft6": 2,
+        "draft7": 2
+      }
+    },
+    {
+      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/nested.json#foo\" }",
       "tests": 6,
       "cases": 3,
       "by_group": {
@@ -11503,30 +11580,12 @@
       }
     },
     {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#/definitions/baz/definitions/bar\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
       "reason": "$ref: UnsupportedFragment { ref_str: \"#/examples/0\" }",
       "tests": 4,
       "cases": 2,
       "by_group": {
         "draft2019-09": 2,
         "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#foo\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 2,
-        "draft7": 2
       }
     },
     {
@@ -11545,24 +11604,6 @@
       "by_group": {
         "draft2019-09": 2,
         "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"folderInteger.json\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"foo.json\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 2,
-        "draft7": 2
       }
     },
     {
@@ -11587,15 +11628,6 @@
       "cases": 2,
       "by_group": {
         "draft7": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/nested.json#foo\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 2,
-        "draft7": 2
       }
     },
     {
@@ -11710,6 +11742,14 @@
       "by_group": {
         "draft2019-09": 2,
         "draft2020-12": 2
+      }
+    },
+    {
+      "reason": "$ref: UnsupportedRef { ref_str: \"draft4/name.json#/definitions/orNull\" }",
+      "tests": 3,
+      "cases": 1,
+      "by_group": {
+        "draft4": 3
       }
     },
     {
@@ -13295,7 +13335,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
+              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -13339,7 +13379,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
+              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -13383,7 +13423,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
+              "message": "failing loading \"https://json.schemastore.org/semantic-release.json\": invalid file url: https://json.schemastore.org/semantic-release.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -13427,7 +13467,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
+              "message": "failing loading \"https://json.schemastore.org/semantic-release.json\": invalid file url: https://json.schemastore.org/semantic-release.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"

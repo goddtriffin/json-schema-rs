@@ -25,7 +25,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Draft | Tests | Compliance | Coverage | Correctness | Failed | Skipped (unsupported) | Errored | Disagree with majority | Wrong vs expected |
 |---|---|---|---|---|---|---|---|---|---|
-| draft4 | 615 | 53.82% | 62.93% | 85.53% | 56 | 228 | 0 | 56 | 56 |
+| draft4 | 615 | 54.63% | 63.90% | 85.50% | 57 | 222 | 0 | 57 | 57 |
 | draft6 | 834 | 48.56% | 56.12% | 86.54% | 63 | 366 | 0 | 63 | 63 |
 | draft7 | 922 | 49.13% | 55.97% | 87.79% | 63 | 406 | 0 | 63 | 63 |
 | draft2019-09 | 1242 | 37.68% | 42.91% | 87.80% | 65 | 709 | 0 | 65 | 65 |
@@ -35,7 +35,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 43.80% | 2142 | 311 | 2437 | 0 | 4890 |
+| `localhost/json-schema-rs` (ours) | 43.91% | 2147 | 312 | 2431 | 0 | 4890 |
 | `cpp-blaze` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
 | `dotnet-jsonschema-net` | 100.00% | 4275 | 0 | 0 | 0 | 4275 |
 | `go-jsonschema` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
@@ -50,7 +50,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 52.21% | 1392 | 1008 | 266 | 0 | 2666 |
+| `localhost/json-schema-rs` (ours) | 52.29% | 1394 | 1009 | 263 | 0 | 2666 |
 | `dotnet-jsonschema-net` | 60.11% | 1439 | 917 | 0 | 38 | 2394 |
 | `go-jsonschema` | 74.08% | 1975 | 661 | 0 | 30 | 2666 |
 | `java-networknt-json-schema-validator` | 77.72% | 2072 | 584 | 0 | 10 | 2666 |
@@ -81,7 +81,7 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 | Reason | Tests | Cases | By group |
 |---|---|---|---|
 | keyword "patternProperties" | 308 | 73 | draft2019-09: 65, draft2020-12: 65, draft4: 56, draft6: 61, draft7: 61 |
-| keyword "not" | 201 | 52 | draft2019-09: 46, draft2020-12: 47, draft4: 20, draft6: 45, draft7: 43 |
+| keyword "not" | 203 | 53 | draft2019-09: 46, draft2020-12: 47, draft4: 22, draft6: 45, draft7: 43 |
 | schema: invalid JSON Schema: invalid type: boolean `true`, expected struct DenyUnknownFieldsJsonSchema | 184 | 64 | draft2019-09: 67, draft2020-12: 69, draft6: 23, draft7: 25 |
 | keyword "dependencies" | 173 | 33 | draft2019-09: 36, draft2020-12: 36, draft4: 29, draft6: 36, draft7: 36 |
 | keyword "contains" | 163 | 50 | draft2019-09: 57, draft2020-12: 66, draft6: 19, draft7: 21 |
@@ -105,17 +105,16 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 | keyword "unevaluatedItems" | 32 | 13 | draft2019-09: 15, draft2020-12: 17 |
 | keyword "exclusiveMaximum" | 27 | 11 | draft2019-09: 5, draft2020-12: 5, draft4: 7, draft6: 5, draft7: 5 |
 | keyword "exclusiveMinimum" | 27 | 11 | draft2019-09: 5, draft2020-12: 5, draft4: 7, draft6: 5, draft7: 5 |
-| keyword "id" | 26 | 12 | draft4: 26 |
 | schema: invalid JSON Schema: invalid type: floating point `2.0`, expected u64 | 24 | 12 | draft2019-09: 6, draft2020-12: 6, draft6: 6, draft7: 6 |
 | schema: invalid JSON Schema: invalid type: boolean `true`, expected a string | 22 | 9 | draft2019-09: 16, draft6: 3, draft7: 3 |
 | $ref: UnsupportedRef { ref_str: "schema-refs-absolute-uris-defs2.json" } | 12 | 4 | draft2019-09: 3, draft2020-12: 3, draft6: 3, draft7: 3 |
 | $ref: UnsupportedRef { ref_str: "schema-relative-uri-defs2.json" } | 12 | 4 | draft2019-09: 3, draft2020-12: 3, draft6: 3, draft7: 3 |
 | keyword "then" | 12 | 6 | draft2019-09: 4, draft2020-12: 4, draft7: 4 |
 | $ref: UnsupportedFragment { ref_str: "#/properties/foo" } | 10 | 5 | draft2019-09: 2, draft2020-12: 2, draft4: 2, draft6: 2, draft7: 2 |
+| $ref: UnsupportedRef { ref_str: "node" } | 10 | 5 | draft2019-09: 2, draft2020-12: 2, draft4: 2, draft6: 2, draft7: 2 |
 | keyword "contentMediaType" | 9 | 3 | draft2019-09: 3, draft2020-12: 3, draft7: 3 |
 | $ref: UnsupportedRef { ref_str: "/absref/foobar.json" } | 8 | 4 | draft2019-09: 2, draft2020-12: 2, draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "nested/foo-ref-string.json" } | 8 | 4 | draft2019-09: 2, draft2020-12: 2, draft6: 2, draft7: 2 |
-| $ref: UnsupportedRef { ref_str: "node" } | 8 | 4 | draft2019-09: 2, draft2020-12: 2, draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "urn:uuid:deadbeef-1234-ffff-ffff-4321feebdaed" } | 8 | 4 | draft2019-09: 2, draft2020-12: 2, draft6: 2, draft7: 2 |
 | keyword "unknown-keyword" | 8 | 4 | draft2019-09: 4, draft2020-12: 4 |
 | keyword "unknown/keyword" | 8 | 4 | draft2019-09: 4, draft2020-12: 4 |
@@ -123,23 +122,23 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 | $ref: DefinitionNotFound { ref_str: "#/definitions/foo%22bar", name: "foo%22bar" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
 | $ref: DefinitionNotFound { ref_str: "#/definitions/percent%25field", name: "percent%25field" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
 | $ref: UnsupportedFragment { ref_str: "#/definitions//definitions/" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
+| $ref: UnsupportedFragment { ref_str: "#/definitions/baz/definitions/bar" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
+| $ref: UnsupportedFragment { ref_str: "#foo" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
+| $ref: UnsupportedRef { ref_str: "folderInteger.json" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
+| $ref: UnsupportedRef { ref_str: "foo.json" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "http://localhost:1234/integer.json" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
+| $ref: UnsupportedRef { ref_str: "http://localhost:1234/nested.json#foo" } | 6 | 3 | draft4: 2, draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "name-defs.json#/$defs/orNull" } | 6 | 2 | draft2019-09: 3, draft2020-12: 3 |
 | keyword "$dynamicRef" | 6 | 3 | draft2020-12: 6 |
 | $ref: DefNotFound { ref_str: "#/$defs/foo%22bar", name: "foo%22bar" } | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
 | $ref: DefNotFound { ref_str: "#/$defs/percent%25field", name: "percent%25field" } | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
 | $ref: UnsupportedFragment { ref_str: "#/$defs//$defs/" } | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
-| $ref: UnsupportedFragment { ref_str: "#/definitions/baz/definitions/bar" } | 4 | 2 | draft6: 2, draft7: 2 |
 | $ref: UnsupportedFragment { ref_str: "#/examples/0" } | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
-| $ref: UnsupportedFragment { ref_str: "#foo" } | 4 | 2 | draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "baseUriChangeFolder/" } | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
 | $ref: UnsupportedRef { ref_str: "baseUriChangeFolderInSubschema/#/$defs/bar" } | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
-| $ref: UnsupportedRef { ref_str: "folderInteger.json" } | 4 | 2 | draft6: 2, draft7: 2 |
-| $ref: UnsupportedRef { ref_str: "foo.json" } | 4 | 2 | draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "http://json-schema.org/draft-04/schema#" } | 4 | 2 | draft4: 4 |
 | $ref: UnsupportedRef { ref_str: "http://json-schema.org/draft-06/schema#" } | 4 | 2 | draft6: 4 |
 | $ref: UnsupportedRef { ref_str: "http://json-schema.org/draft-07/schema#" } | 4 | 2 | draft7: 4 |
-| $ref: UnsupportedRef { ref_str: "http://localhost:1234/nested.json#foo" } | 4 | 2 | draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "https://example.com/schema-with-anchor#foo" } | 4 | 2 | draft6: 2, draft7: 2 |
 | $ref: UnsupportedRef { ref_str: "https://json-schema.org/draft/2019-09/schema" } | 4 | 2 | draft2019-09: 4 |
 | $ref: UnsupportedRef { ref_str: "https://json-schema.org/draft/2020-12/schema" } | 4 | 2 | draft2020-12: 4 |
@@ -153,6 +152,7 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 | keyword "$recursiveRef" | 4 | 1 | draft2019-09: 4 |
 | keyword "maxContains" | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
 | keyword "minContains" | 4 | 2 | draft2019-09: 2, draft2020-12: 2 |
+| $ref: UnsupportedRef { ref_str: "draft4/name.json#/definitions/orNull" } | 3 | 1 | draft4: 3 |
 | $ref: UnsupportedRef { ref_str: "draft6/name.json#/definitions/orNull" } | 3 | 1 | draft6: 3 |
 | $ref: UnsupportedRef { ref_str: "draft7/name.json#/definitions/orNull" } | 3 | 1 | draft7: 3 |
 | $ref: UnsupportedRef { ref_str: "draft6/ref-and-definitions.json" } | 2 | 1 | draft6: 2 |
@@ -200,7 +200,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 53.82% | 331 | 56 | 228 | 0 | 615 |
+| `localhost/json-schema-rs` (ours) | 54.63% | 336 | 57 | 222 | 0 | 615 |
 | `cpp-blaze` | 100.00% | 615 | 0 | 0 | 0 | 615 |
 | `go-jsonschema` | 100.00% | 615 | 0 | 0 | 0 | 615 |
 | `java-networknt-json-schema-validator` | 100.00% | 615 | 0 | 0 | 0 | 615 |
@@ -214,7 +214,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 53.31% | 145 | 99 | 28 | 0 | 272 |
+| `localhost/json-schema-rs` (ours) | 54.04% | 147 | 100 | 25 | 0 | 272 |
 | `go-jsonschema` | 90.81% | 247 | 21 | 0 | 4 | 272 |
 | `java-networknt-json-schema-validator` | 96.69% | 263 | 9 | 0 | 0 | 272 |
 | `js-ajv` | 36.03% | 98 | 2 | 0 | 172 | 272 |
@@ -223,9 +223,9 @@ Optional suite:
 | `rust-boon` | 98.90% | 269 | 3 | 0 | 0 | 272 |
 | `rust-jsonschema` | 99.26% | 270 | 2 | 0 | 0 | 272 |
 
-**Disagreements with the competitor majority: 146**
+**Disagreements with the competitor majority: 148**
 
-<details><summary>Disagreements with the competitor majority (146)</summary>
+<details><summary>Disagreements with the competitor majority (148)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
@@ -258,6 +258,7 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `oneOf.json` | nested oneOf, to check validation semantics | anything non-null is invalid (invalid) | 8/8 | likely our bug |
 | `pattern.json` | pattern validation | a non-matching pattern is invalid (invalid) | 8/8 | likely our bug |
 | `ref.json` | root pointer ref | mismatch (invalid); recursive mismatch (invalid) | 8/8 | likely our bug |
+| `refRemote.json` | base URI change | base URI change ref invalid (invalid) | 8/8 | likely our bug |
 | `type.json` | null type matches only the null object | an integer is not null (invalid); a float is not null (invalid); zero is not null (invalid); a string is not null (invalid); an empty string is not null (invalid); an object is not null (invalid); an array is not null (invalid); true is not null (invalid); false is not null (invalid) | 8/8 | likely our bug |
 | `type.json` | multiple types can be specified in an array | a string is valid (valid) | 8/8 | likely our bug |
 | `type.json` | type: array or object | object is valid (valid) | 8/8 | likely our bug |
@@ -275,6 +276,7 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `optional/format/ipv4.json` | validation of IP addresses | an IP address with too many components (invalid); an IP address with out-of-range values (invalid); an IP address without 4 components (invalid); an IP address as an integer (invalid); an IP address as an integer (decimal) (invalid); invalid leading zeroes, as they are treated as octals (invalid); invalid non-ASCII '২' (a Bengali 2) (invalid); netmask is not a part of ipv4 address (invalid) | 4/6 | likely our bug |
 | `optional/format/ipv6.json` | validation of IPv6 addresses | an IPv6 address with out-of-range values (invalid); trailing 5 hex symbols is invalid (invalid); an IPv6 address with too many components (invalid); an IPv6 address containing illegal characters (invalid); missing leading octet is invalid (invalid); missing trailing octet is invalid (invalid); missing leading octet with omitted octets later (invalid); two sets of double colons is invalid (invalid); mixed format with ipv4 section with octet out of range (invalid); mixed format with ipv4 section with a hex octet (invalid); triple colons is invalid (invalid); insufficient octets without double colons (invalid); no colons is invalid (invalid); ipv4 is not ipv6 (invalid); ipv4 segment must have 4 octets (invalid); leading whitespace is invalid (invalid); trailing whitespace is invalid (invalid); netmask is not a part of ipv6 address (invalid); zone id is not a part of ipv6 address (invalid); a long invalid ipv6, below length limit, first (invalid); a long invalid ipv6, below length limit, second (invalid); invalid non-ASCII '৪' (a Bengali 4) (invalid); invalid non-ASCII '৪' (a Bengali 4) in the IPv4 portion (invalid) | 4/6 | likely our bug |
 | `optional/format/uri.json` | validation of URIs | an invalid protocol-relative URI Reference (invalid); an invalid relative URI Reference (invalid); an invalid URI (invalid); an invalid URI though valid URI reference (invalid); an invalid URI with spaces (invalid); an invalid URI with spaces and missing scheme (invalid); an invalid URI with comma in scheme (invalid); invalid userinfo (invalid) | 4/6 | likely our bug |
+| `optional/id.json` | id inside an enum is not a real identifier | match $ref to id (valid) | 6/7 | likely our bug |
 | `optional/non-bmp-regex.json` | Proper UTF-16 surrogate pair handling: pattern | doesn't match one (invalid); doesn't match two (invalid); doesn't match one ASCII (invalid); doesn't match two ASCII (invalid) | 7/7 | likely our bug |
 | `optional/zeroTerminatedFloats.json` | some languages do not distinguish between different types of numeric value | a float is not an integer even without fractional part (invalid) | 4/7 | competitors differ from expected |
 
