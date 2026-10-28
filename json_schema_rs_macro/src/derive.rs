@@ -8,102 +8,6 @@ use syn::{
     Result as SynResult, Token, Type, Variant,
 };
 
-/// `Uuid` is a string+format scalar leaf (`{ "type": "string", "format": "uuid" }`), not a
-/// composite type worth a `$defs` entry. Inline it via its `ToJsonSchema` impl instead of
-/// emitting a `$ref`. Only treated as a leaf when the macro crate's `uuid` feature is on.
-#[cfg(feature = "uuid")]
-fn is_uuid_scalar_leaf(name: &str) -> bool {
-    name == "Uuid"
-}
-
-#[cfg(not(feature = "uuid"))]
-fn is_uuid_scalar_leaf(_name: &str) -> bool {
-    false
-}
-
-fn def_key_for_type(ty: &Type) -> Option<String> {
-    let Type::Path(tp) = ty else {
-        return None;
-    };
-    let seg = tp.path.segments.last()?;
-    if !matches!(seg.arguments, syn::PathArguments::None) {
-        return None;
-    }
-    let name: String = seg.ident.to_string();
-    // Route `Uuid` through the inline path (return None) rather than $ref'ing a def; it is a
-    // scalar leaf whose `ToJsonSchema` impl already yields `{ type: string, format: uuid }`.
-    if is_uuid_scalar_leaf(&name) {
-        return None;
-    }
-    let is_builtin: bool = matches!(
-        name.as_str(),
-        "String"
-            | "bool"
-            | "i8"
-            | "u8"
-            | "i16"
-            | "u16"
-            | "i32"
-            | "u32"
-            | "i64"
-            | "u64"
-            | "f32"
-            | "f64"
-            | "isize"
-            | "usize"
-            | "Option"
-            | "Vec"
-            | "HashSet"
-            | "BTreeMap"
-            | "BTreeSet"
-            | "Box"
-    );
-    if is_builtin {
-        return None;
-    }
-    Some(name)
-}
-
-/// Inner type of `Vec<T>`, `Option<T>`, `HashSet<T>`, or `Box<T>`.
-fn inner_type_for_container(ty: &Type) -> Option<&Type> {
-    let Type::Path(type_path) = ty else {
-        return None;
-    };
-    let seg = type_path.path.segments.last()?;
-    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-        return None;
-    };
-    let first = args.args.first()?;
-    let syn::GenericArgument::Type(t) = first else {
-        return None;
-    };
-    let name: &str = &seg.ident.to_string();
-    let is_container: bool = matches!(name, "Vec" | "Option" | "HashSet" | "Box");
-    if is_container { Some(t) } else { None }
-}
-
-/// Def key for a field type, peeling Vec/Option/HashSet/Box. Returns (`def_key`, `is_array_like`, `is_recursive`).
-/// `is_array_like`: true for `Vec<T>` and `HashSet<T>` (need `items: { $ref }`).
-fn def_key_for_field_type(ty: &Type, current_struct: &Ident) -> Option<(String, bool, bool)> {
-    let current_name: &str = &current_struct.to_string();
-    let effective_ty: &Type = inner_type_for_container(ty).unwrap_or(ty);
-    // Peel Option if nested (e.g. Option<Vec<Address>>).
-    let effective_ty: &Type = inner_type_for_container(effective_ty).unwrap_or(effective_ty);
-    let def_key: String = def_key_for_type(effective_ty)?;
-    let is_array_like: bool = {
-        let Type::Path(tp) = ty else {
-            return Some((def_key.clone(), false, def_key == current_name));
-        };
-        let seg = tp.path.segments.last();
-        seg.is_some_and(|s| {
-            let n: &str = &s.ident.to_string();
-            n == "Vec" || n == "HashSet"
-        })
-    };
-    let is_recursive: bool = def_key == current_name;
-    Some((def_key, is_array_like, is_recursive))
-}
-
 /// Parser for doc attribute value: `= "string"` or just `"string"`.
 fn parse_doc_value(input: syn::parse::ParseStream) -> SynResult<String> {
     if input.peek(Token![=]) {
@@ -636,8 +540,6 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
 
     let mut property_inserts: Vec<TokenStream2> = Vec::new();
     let mut required_keys: Vec<String> = Vec::new();
-    let mut defs_inserts: Vec<TokenStream2> = Vec::new();
-    let mut has_recursive_field: bool = false;
 
     for field in fields {
         let key: String = field_property_key(field)?;
@@ -727,144 +629,22 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             quote! { None }
         };
 
-        let has_overrides: bool = field_desc.is_some()
-            || field_min.is_some()
-            || field_max.is_some()
-            || field_min_items.is_some()
-            || field_max_items.is_some()
-            || field_min_length.is_some()
-            || field_max_length.is_some()
-            || field_pattern_val.is_some()
-            || field_deprecated_val.is_some()
-            || field_default_expr.is_some();
-
-        let field_def_info: Option<(String, bool, bool)> = def_key_for_field_type(schema_ty, &name);
-
-        if let Some((def_key, is_array_like, is_recursive)) = field_def_info
-            && !has_overrides
-        {
-            let def_key_lit: LitStr = LitStr::new(&def_key, span);
-            let ref_str: String = format!("#/$defs/{def_key}");
-            let ref_lit: LitStr = LitStr::new(&ref_str, span);
-            let effective_schema_ty: &Type =
-                inner_type_for_container(schema_ty).unwrap_or(schema_ty);
-
-            if is_recursive {
-                has_recursive_field = true;
-                if is_array_like {
-                    let is_hash_set: bool = if let Type::Path(tp) = schema_ty {
-                        tp.path
-                            .segments
-                            .last()
-                            .is_some_and(|s| s.ident == "HashSet")
-                    } else {
-                        false
-                    };
-                    let unique_items_expr: TokenStream2 = if is_hash_set {
-                        quote! { unique_items: Some(true), }
-                    } else {
-                        quote! {}
-                    };
-                    property_inserts.push(quote! {
-                        {
-                            let schema = ::json_schema_rs::JsonSchema {
-                                type_: Some("array".to_string()),
-                                items: Some(::std::boxed::Box::new(
-                                    ::json_schema_rs::JsonSchema {
-                                        ref_: Some(#ref_lit.to_string()),
-                                        ..::json_schema_rs::JsonSchema::default()
-                                    }
-                                )),
-                                #unique_items_expr
-                                deprecated: #deprecated_expr,
-                                ..::json_schema_rs::JsonSchema::default()
-                            };
-                            properties.insert(#key_lit.to_string(), schema);
-                        }
-                    });
-                } else {
-                    property_inserts.push(quote! {
-                        {
-                            let schema = ::json_schema_rs::JsonSchema {
-                                ref_: Some(#ref_lit.to_string()),
-                                deprecated: #deprecated_expr,
-                                ..::json_schema_rs::JsonSchema::default()
-                            };
-                            properties.insert(#key_lit.to_string(), schema);
-                        }
-                    });
-                }
-            } else {
-                defs_inserts.push(quote! {
-                    if !defs.contains_key(&#def_key_lit.to_string()) {
-                        let raw = <#effective_schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
-                        let flat = ::json_schema_rs::reverse_code_gen::merge_nested_defs_into_root(raw, &mut defs);
-                        defs.insert(#def_key_lit.to_string(), flat);
-                    }
-                });
-                if is_array_like {
-                    let is_hash_set: bool = if let Type::Path(tp) = schema_ty {
-                        tp.path
-                            .segments
-                            .last()
-                            .is_some_and(|s| s.ident == "HashSet")
-                    } else {
-                        false
-                    };
-                    let unique_items_expr: TokenStream2 = if is_hash_set {
-                        quote! { unique_items: Some(true), }
-                    } else {
-                        quote! {}
-                    };
-                    property_inserts.push(quote! {
-                        {
-                            let schema = ::json_schema_rs::JsonSchema {
-                                type_: Some("array".to_string()),
-                                items: Some(::std::boxed::Box::new(
-                                    ::json_schema_rs::JsonSchema {
-                                        ref_: Some(#ref_lit.to_string()),
-                                        ..::json_schema_rs::JsonSchema::default()
-                                    }
-                                )),
-                                #unique_items_expr
-                                deprecated: #deprecated_expr,
-                                ..::json_schema_rs::JsonSchema::default()
-                            };
-                            properties.insert(#key_lit.to_string(), schema);
-                        }
-                    });
-                } else {
-                    property_inserts.push(quote! {
-                        {
-                            let schema = ::json_schema_rs::JsonSchema {
-                                ref_: Some(#ref_lit.to_string()),
-                                deprecated: #deprecated_expr,
-                                ..::json_schema_rs::JsonSchema::default()
-                            };
-                            properties.insert(#key_lit.to_string(), schema);
-                        }
-                    });
-                }
+        property_inserts.push(quote! {
+            {
+                let mut schema = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator);
+                schema.description = #field_desc_expr.or(schema.description);
+                schema.minimum = #min_expr.or(schema.minimum);
+                schema.maximum = #max_expr.or(schema.maximum);
+                schema.min_items = #min_items_expr.or(schema.min_items);
+                schema.max_items = #max_items_expr.or(schema.max_items);
+                schema.min_length = #min_length_expr.or(schema.min_length);
+                schema.max_length = #max_length_expr.or(schema.max_length);
+                schema.pattern = #pattern_expr.or(schema.pattern);
+                schema.deprecated = #deprecated_expr.or(schema.deprecated);
+                #set_default_value
+                properties.insert(#key_lit.to_string(), schema);
             }
-        } else {
-            property_inserts.push(quote! {
-                {
-                    let base = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema();
-                    let mut schema = base.clone();
-                    schema.description = #field_desc_expr.or(schema.description);
-                    schema.minimum = #min_expr.or(schema.minimum);
-                    schema.maximum = #max_expr.or(schema.maximum);
-                    schema.min_items = #min_items_expr.or(schema.min_items);
-                    schema.max_items = #max_items_expr.or(schema.max_items);
-                    schema.min_length = #min_length_expr.or(schema.min_length);
-                    schema.max_length = #max_length_expr.or(schema.max_length);
-                    schema.pattern = #pattern_expr.or(schema.pattern);
-                    schema.deprecated = #deprecated_expr.or(schema.deprecated);
-                    #set_default_value
-                    properties.insert(#key_lit.to_string(), schema);
-                }
-            });
-        }
+        });
     }
 
     let required_expr = if required_keys.is_empty() {
@@ -880,50 +660,68 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         quote! { Some(vec![#(#keys),*]) }
     };
 
-    let struct_name_str: String = name.to_string();
-    let recursive_def_insert: TokenStream2 = if has_recursive_field {
-        let name_lit: LitStr = LitStr::new(&struct_name_str, name.span());
-        quote! {
-            {
-                let struct_schema = ::json_schema_rs::JsonSchema {
-                    type_: Some("object".to_string()),
-                    properties: properties.clone(),
-                    additional_properties: Some(::json_schema_rs::json_schema::json_schema::AdditionalProperties::Forbid),
-                    required: #required_expr,
-                    ..::json_schema_rs::JsonSchema::default()
-                };
-                defs.insert(#name_lit.to_string(), struct_schema);
+    // A struct with no fields never touches the generator or mutates `properties`.
+    let (generator_ident, properties_mut): (TokenStream2, TokenStream2) =
+        if property_inserts.is_empty() {
+            (quote! { _generator }, quote! {})
+        } else {
+            (quote! { generator }, quote! { mut })
+        };
+    let body: TokenStream2 = quote! {
+        let #properties_mut properties = ::std::collections::BTreeMap::new();
+        #(#property_inserts)*
+        ::json_schema_rs::JsonSchema {
+            id: #id_expr,
+            type_: Some("object".to_string()),
+            properties,
+            additional_properties: Some(::json_schema_rs::json_schema::json_schema::AdditionalProperties::Forbid),
+            required: #required_expr,
+            title: #title_expr,
+            description: #description_expr,
+            comment: #comment_expr,
+            ..::json_schema_rs::JsonSchema::default()
+        }
+    };
+    Ok(named_type_impl(&name, &generator_ident, &body))
+}
+
+/// Emits the `ToJsonSchema` impl for a named type (derived struct or enum) whose schema body
+/// is `body`, an expression that may use the generator bound to `generator_ident`.
+///
+/// The body lives in a hidden inherent fn so it is written once: `json_schema_with` registers
+/// it in the generator's `$defs` and returns a `$ref`; `json_schema` builds it as the root
+/// with a fresh generator and adds `$schema`.
+fn named_type_impl(
+    name: &Ident,
+    generator_ident: &TokenStream2,
+    body: &TokenStream2,
+) -> TokenStream2 {
+    let name_lit: LitStr = LitStr::new(&name.to_string(), name.span());
+    quote! {
+        impl #name {
+            #[doc(hidden)]
+            fn __json_schema_rs_body(
+                #generator_ident: &mut ::json_schema_rs::SchemaGenerator,
+            ) -> ::json_schema_rs::JsonSchema {
+                #body
             }
         }
-    } else {
-        quote! {}
-    };
 
-    Ok(quote! {
         impl ::json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> ::json_schema_rs::JsonSchema {
-                let mut properties = ::std::collections::BTreeMap::new();
-                let mut defs = ::std::collections::BTreeMap::new();
-                #(#defs_inserts)*
-                #(#property_inserts)*
-                #recursive_def_insert
-                let defs = if defs.is_empty() { None } else { Some(defs) };
-                ::json_schema_rs::JsonSchema {
-                    schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
-                    id: #id_expr,
-                    type_: Some("object".to_string()),
-                    defs,
-                    properties,
-                    additional_properties: Some(::json_schema_rs::json_schema::json_schema::AdditionalProperties::Forbid),
-                    required: #required_expr,
-                    title: #title_expr,
-                    description: #description_expr,
-                    comment: #comment_expr,
-                    ..Default::default()
-                }
+                let mut schema: ::json_schema_rs::JsonSchema = ::json_schema_rs::SchemaGenerator::new()
+                    .into_named_root_schema(#name_lit, Self::__json_schema_rs_body);
+                schema.schema = Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string());
+                schema
+            }
+
+            fn json_schema_with(
+                generator: &mut ::json_schema_rs::SchemaGenerator,
+            ) -> ::json_schema_rs::JsonSchema {
+                generator.named_subschema(#name_lit, Self::__json_schema_rs_body)
             }
         }
-    })
+    }
 }
 
 /// Expand `ToJsonSchema` for a unit enum: emit schema with type "string" and `enum_values`.
@@ -1002,21 +800,17 @@ fn expand_enum_to_json_schema(
         )
     };
 
-    Ok(quote! {
-        impl ::json_schema_rs::ToJsonSchema for #name {
-            fn json_schema() -> ::json_schema_rs::JsonSchema {
-                ::json_schema_rs::JsonSchema {
-                    schema: Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string()),
-                    id: #id_expr,
-                    type_: Some("string".to_string()),
-                    title: #title_expr,
-                    description: #description_expr,
-                    comment: #comment_expr,
-                    enum_values: #enum_values_expr,
-                    const_value: #const_value_expr,
-                    ..Default::default()
-                }
-            }
+    let body: TokenStream2 = quote! {
+        ::json_schema_rs::JsonSchema {
+            id: #id_expr,
+            type_: Some("string".to_string()),
+            title: #title_expr,
+            description: #description_expr,
+            comment: #comment_expr,
+            enum_values: #enum_values_expr,
+            const_value: #const_value_expr,
+            ..::json_schema_rs::JsonSchema::default()
         }
-    })
+    };
+    Ok(named_type_impl(name, &quote! { _generator }, &body))
 }
