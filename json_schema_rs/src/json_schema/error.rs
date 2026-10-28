@@ -1,5 +1,6 @@
 //! Errors when parsing JSON Schema.
 
+use crate::json_pointer::JsonPointer;
 use std::fmt;
 
 /// Result type for JSON Schema parsing operations.
@@ -10,12 +11,13 @@ pub type JsonSchemaParseResult<T> = Result<T, JsonSchemaParseError>;
 pub enum JsonSchemaParseError {
     /// JSON or serde error (invalid JSON, wrong types, etc.).
     Serde(serde_json::Error),
-    /// An unknown key was present and strict ingestion was enabled.
+    /// Strict ingestion was enabled and a schema object has a key that the document's draft
+    /// does not define as a keyword.
     UnknownField {
-        /// The unknown key name.
+        /// The unknown key.
         key: String,
-        /// JSON Pointer or path to the schema object that contained the key.
-        path: String,
+        /// JSON Pointer to the schema object that has the key (the root is the empty pointer).
+        path: JsonPointer,
     },
     /// I/O error when reading from a reader or file.
     Io(std::io::Error),
@@ -32,7 +34,11 @@ impl fmt::Display for JsonSchemaParseError {
         match self {
             JsonSchemaParseError::Serde(e) => write!(f, "invalid JSON Schema: {e}"),
             JsonSchemaParseError::UnknownField { key, path } => {
-                write!(f, "unknown schema key \"{key}\" at {path}")
+                write!(
+                    f,
+                    "unknown keyword \"{key}\" at {}",
+                    path.display_root_or_path()
+                )
             }
             JsonSchemaParseError::Io(e) => write!(f, "io error: {e}"),
             JsonSchemaParseError::UnknownSchemaUri { uri } => {
