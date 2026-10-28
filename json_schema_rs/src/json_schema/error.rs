@@ -19,6 +19,12 @@ pub enum JsonSchemaParseError {
     },
     /// I/O error when reading from a reader or file.
     Io(std::io::Error),
+    /// `$schema` is not a recognised metaschema URI and
+    /// [`UnknownSchemaUri::Reject`](super::settings::UnknownSchemaUri::Reject) is set.
+    UnknownSchemaUri {
+        /// The unrecognised `$schema` value.
+        uri: String,
+    },
 }
 
 impl fmt::Display for JsonSchemaParseError {
@@ -29,6 +35,9 @@ impl fmt::Display for JsonSchemaParseError {
                 write!(f, "unknown schema key \"{key}\" at {path}")
             }
             JsonSchemaParseError::Io(e) => write!(f, "io error: {e}"),
+            JsonSchemaParseError::UnknownSchemaUri { uri } => {
+                write!(f, "unknown $schema \"{uri}\"")
+            }
         }
     }
 }
@@ -37,7 +46,8 @@ impl std::error::Error for JsonSchemaParseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             JsonSchemaParseError::Serde(e) => Some(e),
-            JsonSchemaParseError::UnknownField { .. } => None,
+            JsonSchemaParseError::UnknownField { .. }
+            | JsonSchemaParseError::UnknownSchemaUri { .. } => None,
             JsonSchemaParseError::Io(e) => Some(e),
         }
     }

@@ -6,9 +6,9 @@ mod error;
 pub use error::{OrderedF64, ValidationError, ValidationResult};
 
 use crate::json_pointer::JsonPointer;
-use crate::json_schema::JsonSchema;
 use crate::json_schema::json_schema::AdditionalProperties;
 use crate::json_schema::ref_resolver;
+use crate::json_schema::{Dialect, JsonSchema};
 use serde_json::Value;
 
 /// Returns the JSON type name of the value for use in "got" error messages.
@@ -51,12 +51,14 @@ fn value_to_display_string(v: &Value) -> String {
 /// assert!(result.is_ok());
 /// ```
 pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
-    validate_with_root(schema, schema, instance)
+    validate_with_root(schema, schema.dialect(), schema, instance)
 }
 
+/// Validates `instance` against `schema`, a subschema of `root`, under the root's `dialect`.
 #[expect(clippy::too_many_lines)]
 fn validate_with_root(
     root: &JsonSchema,
+    dialect: Dialect,
     schema: &JsonSchema,
     instance: &Value,
 ) -> ValidationResult {
@@ -116,7 +118,7 @@ fn validate_with_root(
                 let mut at_least_one_passed: bool = false;
                 for subschema in any_of {
                     let sub_result: ValidationResult =
-                        validate_with_root(root, subschema, instance);
+                        validate_with_root(root, dialect, subschema, instance);
                     if sub_result.is_ok() {
                         at_least_one_passed = true;
                         break;
@@ -141,7 +143,7 @@ fn validate_with_root(
                 let mut pass_count: usize = 0;
                 for subschema in one_of {
                     let sub_result: ValidationResult =
-                        validate_with_root(root, subschema, instance);
+                        validate_with_root(root, dialect, subschema, instance);
                     if sub_result.is_ok() {
                         pass_count += 1;
                     }
@@ -277,7 +279,8 @@ fn validate_with_root(
                     }
                 }
                 #[cfg(feature = "uuid")]
-                if schema.format.as_deref() == Some("uuid")
+                if dialect.format_mode == crate::json_schema::FormatMode::Assertion
+                    && schema.format.as_deref() == Some("uuid")
                     && let Some(s) = instance.as_str()
                     && uuid::Uuid::parse_str(s).is_err()
                 {
@@ -4686,17 +4689,117 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    // --- `format` follows the dialect: asserted in drafts 4/6/7, annotation in 2019-09/2020-12 ---
+
     #[cfg(feature = "uuid")]
-    #[test]
-    fn validate_uuid_format_invalid_string() {
-        let schema: JsonSchema =
-            serde_json::from_str(r#"{"type":"string","format":"uuid"}"#).unwrap();
-        let instance = json!("not-a-uuid");
-        let expected: ValidationResult = Err(vec![ValidationError::InvalidUuidFormat {
+    fn validate_not_a_uuid(
+        schema_json: &str,
+        settings: &crate::JsonSchemaSettings,
+    ) -> ValidationResult {
+        let schema: JsonSchema = JsonSchema::new_from_str(schema_json, settings).expect("parse");
+        validate(&schema, &json!("not-a-uuid"))
+    }
+
+    #[cfg(feature = "uuid")]
+    fn invalid_uuid_errors() -> ValidationResult {
+        Err(vec![ValidationError::InvalidUuidFormat {
             instance_path: JsonPointer::root(),
             value: "not-a-uuid".to_string(),
+        }])
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_is_annotation_by_default_in_2020_12() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_not_a_uuid(
+            r#"{"type":"string","format":"uuid"}"#,
+            &crate::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_is_annotation_by_default_in_2019_09() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_not_a_uuid(
+            r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"string","format":"uuid"}"#,
+            &crate::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_asserted_by_default_in_draft7() {
+        let expected: ValidationResult = invalid_uuid_errors();
+        let actual: ValidationResult = validate_not_a_uuid(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"string","format":"uuid"}"#,
+            &crate::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_asserted_by_default_in_draft4() {
+        let expected: ValidationResult = invalid_uuid_errors();
+        let actual: ValidationResult = validate_not_a_uuid(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"string","format":"uuid"}"#,
+            &crate::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_asserted_in_2020_12_with_assertion_override() {
+        let settings: crate::JsonSchemaSettings = crate::JsonSchemaSettings::builder()
+            .format_mode(crate::FormatMode::Assertion)
+            .build();
+        let expected: ValidationResult = invalid_uuid_errors();
+        let actual: ValidationResult =
+            validate_not_a_uuid(r#"{"type":"string","format":"uuid"}"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_is_annotation_in_draft7_with_annotation_override() {
+        let settings: crate::JsonSchemaSettings = crate::JsonSchemaSettings::builder()
+            .format_mode(crate::FormatMode::Annotation)
+            .build();
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_not_a_uuid(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"string","format":"uuid"}"#,
+            &settings,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_asserted_when_spec_version_pinned_to_draft7() {
+        let expected: ValidationResult = invalid_uuid_errors();
+        let actual: ValidationResult = validate_not_a_uuid(
+            r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"uuid"}"#,
+            &crate::SpecVersion::Draft07.default_schema_settings(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn validate_uuid_format_asserted_inside_any_of_in_draft7() {
+        let expected: ValidationResult = Err(vec![ValidationError::NoSubschemaMatched {
+            instance_path: JsonPointer::root(),
+            subschema_count: 1,
         }]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_not_a_uuid(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","anyOf":[{"type":"string","format":"uuid"}]}"#,
+            &crate::JsonSchemaSettings::default(),
+        );
         assert_eq!(expected, actual);
     }
 }

@@ -8,12 +8,9 @@ use std::path::PathBuf;
 pub(crate) fn run_validate(
     schema_path: &PathBuf,
     payload_path: Option<PathBuf>,
-    jss_disallow_unknown_fields: bool,
+    schema_settings: &JsonSchemaSettings,
 ) -> Result<(), String> {
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-        .disallow_unknown_fields(jss_disallow_unknown_fields)
-        .build();
-    let schema = read_schema_from_path(schema_path, &schema_settings)?;
+    let schema = read_schema_from_path(schema_path, schema_settings)?;
     let instance: serde_json::Value = match payload_path {
         Some(p) => read_payload_from_path(&p)?,
         None => read_payload_from_reader(io::stdin())?,

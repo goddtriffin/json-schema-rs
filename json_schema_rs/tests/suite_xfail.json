@@ -4373,9 +4373,7 @@
     },
     "optional/id.json": {
       "id inside an enum is not a real identifier": [
-        "exact match to enum, and type matches",
-        "match $ref to id",
-        "no match on enum or $ref to id"
+        "match $ref to id"
       ]
     },
     "optional/non-bmp-regex.json": {
@@ -4440,19 +4438,15 @@
     },
     "ref.json": {
       "$ref prevents a sibling id from changing the base uri": [
-        "$ref resolves to /definitions/base_foo, data does not validate",
         "$ref resolves to /definitions/base_foo, data validates"
       ],
       "Location-independent identifier": [
-        "match",
-        "mismatch"
+        "match"
       ],
       "Location-independent identifier with base URI change in subschema": [
-        "match",
-        "mismatch"
+        "match"
       ],
       "Recursive references between schemas": [
-        "invalid tree",
         "valid tree"
       ],
       "empty tokens in $ref json-pointer": [
@@ -4462,14 +4456,6 @@
         "percent valid"
       ],
       "id must be resolved against nearest parent, not just immediate parent": [
-        "non-number is invalid",
-        "number is valid"
-      ],
-      "id with file URI still resolves pointers - *nix": [
-        "non-number is invalid",
-        "number is valid"
-      ],
-      "id with file URI still resolves pointers - windows": [
         "non-number is invalid",
         "number is valid"
       ],
@@ -4496,16 +4482,13 @@
         "integer is valid"
       ],
       "base URI change": [
-        "base URI change ref invalid",
-        "base URI change ref valid"
+        "base URI change ref invalid"
       ],
       "base URI change - change folder": [
-        "number is valid",
-        "string is invalid"
+        "number is valid"
       ],
       "base URI change - change folder in subschema": [
-        "number is valid",
-        "string is invalid"
+        "number is valid"
       ],
       "fragment within remote ref": [
         "remote fragment valid"
@@ -4518,7 +4501,6 @@
       ],
       "root ref in remote ref": [
         "null is valid",
-        "object is invalid",
         "string is valid"
       ]
     },

@@ -6,8 +6,9 @@
 A Rust library for JSON Schema tooling: **Schema→Rust** codegen (generate Rust
 types from a JSON Schema), **Rust→Schema** reverse codegen, and a **validator**.
 The repo provides the `json-schema-rs` library and the `jsonschemars` CLI. We
-target **JSON Schema Draft 2020-12**; default settings (e.g.
-`JsonSchemaSettings::default()`) are tuned for that spec. A script downloads
+target **JSON Schema Draft 2020-12** and follow each document's `$schema` for
+drafts 4, 6, 7, 2019-09 and 2020-12 (Draft 2020-12 when `$schema` is absent);
+`JsonSchemaSettings` can pin a draft or override one behaviour. A script downloads
 specs for every published draft (draft-00 through 2020-12); run
 `make vendor_specs` to fetch them locally—specs are not stored in the repo.
 Supported keywords include **type** (object, string, integer, number, boolean), **properties**, **required**, **const** (draft-06+;
@@ -29,10 +30,11 @@ enforces via regress; codegen emits `#[json_schema(pattern = "...")]`;
 reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen emits `#[serde(default)]` or `#[serde(default = "fn")]` so missing keys get the schema default; reverse codegen via `#[json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
 codegen from `///` doc comments on structs, enums and fields, or `#[json_schema(description = "...")]`),
 **examples** (draft-06+; meta-data only; stored and round-tripped; codegen emits examples in doc comments for structs and enums; not used for validation; Full dedupe includes in key, Functional excludes), **deprecated** (draft 2019-09+; meta-data only; codegen emits `#[deprecated]` on the corresponding field or struct; reverse codegen via `#[json_schema(deprecated = true)]`), **$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[json_schema(comment = "...")]`), and **$schema**
-(stored and round-tripped; used to infer spec version when not set explicitly;
+(stored and round-tripped; selects the draft's rules when no spec version is set;
 reverse codegen emits Draft 2020-12 URI by default; default is Draft 2020-12
-when absent or unrecognized), and
-**$id** (unique identifier; stored and round-tripped; we support only `$id`, not draft-04`id`; Full dedupe includes`
+when absent; an unrecognized URI falls back to Draft 2020-12 with a warning, or is
+rejected with `UnknownSchemaUri::Reject`), and
+**$id** (unique identifier; stored and round-tripped; a draft-4 document's `id` is read as `$id`; Full dedupe includes`
 $id` in the key, Functional does not; reverse codegen via `#[json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
 so round-trip preserves it), **allOf** (validator: instance must validate
 against every subschema; codegen: branches merged on-the-fly into one Rust
@@ -153,6 +155,20 @@ schema definitions with unknown keys. Use
 to prefer property keys over `title` for struct names. CLI:
 `--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or
 `property-key`, `--cgs-dedupe-mode disabled|functional|full`.
+
+**Drafts.** Behaviour that differs between drafts follows the document's draft by
+default, so nothing needs configuring. `JsonSchemaSettings::builder()` can
+`.spec_version(SpecVersion::Draft07)` (ignore `$schema`),
+`.format_mode(FormatMode::Assertion)` (check `format` whatever the draft: drafts 4,
+6 and 7 check it by default, 2019-09 and 2020-12 only record it), and
+`.unknown_schema_uri(UnknownSchemaUri::Reject)` (refuse an unrecognized
+`$schema` instead of falling back to 2020-12 with a warning).
+`JsonSchema::dialect()` returns a parsed schema's effective rules and
+`resolve_dialect(&schema, &settings)` returns them with any warnings. The library
+logs warnings at `debug` level through the `log` crate; the CLI prints them to
+stderr. CLI: `--jss-spec-version draft-04|draft-06|draft-07|2019-09|2020-12`
+(and `draft-00` to `draft-05`), `--jss-format-mode annotation|assertion`,
+`--jss-unknown-schema-uri fallback|reject`.
 
 ## Using the macro (compile-time codegen)
 

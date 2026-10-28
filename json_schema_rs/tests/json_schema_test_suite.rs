@@ -13,7 +13,9 @@
 //! the run hard-fails when it is missing. `make update_suite_xfail` rewrites the manifest from
 //! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`).
 
-use json_schema_rs::{JsonSchema, JsonSchemaSettings, SpecVersion, ValidationError, validate};
+use json_schema_rs::{
+    FormatMode, JsonSchema, JsonSchemaSettings, SpecVersion, ValidationError, validate,
+};
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -166,15 +168,26 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
             .disallow_unknown_fields(true)
             .spec_version(spec_version)
             .build();
+        // The suite's `optional/format/` tests are written for implementations that assert
+        // `format`, which 2019-09 and 2020-12 do not by default.
+        let format_settings: JsonSchemaSettings = JsonSchemaSettings {
+            format_mode: Some(FormatMode::Assertion),
+            ..settings.clone()
+        };
         for file_path in &files {
             let file: String = relative_file_name(&draft_dir, file_path);
+            let settings: &JsonSchemaSettings = if file.starts_with("optional/format/") {
+                &format_settings
+            } else {
+                &settings
+            };
             let contents: String = std::fs::read_to_string(file_path)
                 .map_err(|e| format!("failed to read {}: {e}", file_path.display()))?;
             let groups: Vec<SuiteGroup> = serde_json::from_str(&contents)
                 .map_err(|e| format!("failed to parse {}: {e}", file_path.display()))?;
             for group in groups {
                 let parsed = catch_unwind(AssertUnwindSafe(|| {
-                    JsonSchema::new_from_serde_value(&group.schema, &settings)
+                    JsonSchema::new_from_serde_value(&group.schema, settings)
                 }));
                 let schema: Result<JsonSchema, String> = match parsed {
                     Ok(Ok(schema)) => Ok(schema),

@@ -33,7 +33,7 @@ The validator takes the same **JsonSchema** type used by codegen and a JSON inst
 
 We run the [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) as a **gating test** in `make test` (`json_schema_rs/tests/json_schema_test_suite.rs`, a `libtest-mimic` harness with `harness = false`). Design:
 
-- **Scope.** Drafts 4, 6, 7, 2019-09 and 2020-12, required and `optional/` (including `optional/format/`). Each draft directory is parsed with that draft's `SpecVersion` in the settings, so draft-specific behaviour takes effect in the gate as soon as the library implements it.
+- **Scope.** Drafts 4, 6, 7, 2019-09 and 2020-12, required and `optional/` (including `optional/format/`). Each draft directory is parsed with that draft's `SpecVersion` pinned in the settings, so draft-specific behaviour takes effect in the gate as soon as the library implements it. Files under `optional/format/` are parsed with `FormatMode::Assertion`, because those tests are written for implementations that assert `format`.
 - **One reported test per suite test**, named `<draft>/<file> :: <group> :: <test>`, so a failure names the case (`cargo test --test json_schema_test_suite -- <filter>` runs a subset). Every draft/file/group/test key in the scope is unique; a dedicated case fails if a suite update ever breaks that.
 - **Strict parsing** (`disallow_unknown_fields(true)`): a schema with a keyword we do not support fails at parse time ("schema not supported") instead of being validated with a truncated schema, so the gate measures coverage honestly. A panic in the parser or validator fails that case, not the run.
 - **Known-failure manifest.** `json_schema_rs/tests/suite_xfail.json` (draft → file → group → test descriptions, sorted) lists every case that fails today. The run fails on any **unexpected failure** (a case not in the manifest fails), any **unexpected pass** (a listed case now passes), and any **stale entry** (the manifest names a case that is not in the suite). The manifest can therefore only change deliberately: a fix removes entries, and a reviewer sees the diff. `make update_suite_xfail` rewrites it from the current results (`JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`); review that diff before committing, since it also records new failures. Cases marked `[xfail]` in the test output are expected failures.
@@ -106,7 +106,7 @@ We represent the in-memory schema as a **struct** (`JsonSchema`) with optional f
 
 ### Settings and spec version
 
-**JsonSchemaSettings** control how JSON Schema definitions are ingested (parsed). Use `JsonSchemaSettings::default()` for default settings (equivalent to `JsonSchemaSettings::builder().build()`), or `JsonSchemaSettings::builder()` to construct custom settings; options include `disallow_unknown_fields` (when `true`, reject schema objects that contain keys other than `type`, `properties`, `required`, `title`). **SpecVersion** is an enum with one variant per vendored spec (Draft00 through Draft202012); `default_schema_settings()` returns a `JsonSchemaSettings` tuned for that spec. Schema is parsed via **TryFrom** for default settings (e.g. `JsonSchema::try_from(json_str)`, `path.try_into()`), or constructor-style **`JsonSchema::new_from_str`**, **`JsonSchema::new_from_slice`**, **`JsonSchema::new_from_serde_value`**, **`JsonSchema::new_from_reader`**, **`JsonSchema::new_from_path`** (all take `&JsonSchemaSettings`) for custom settings. I/O errors from reader/path are reported as **JsonSchemaParseError::Io**. The CLI and macro build settings from flags or builders and pass them through. **CodeGenSettings** are language-agnostic codegen options (e.g. `model_name_source`). Use `CodeGenSettings::builder()`. The **CodeGenBackend** trait (in `code_gen/mod.rs`) takes `&CodeGenSettings` in `generate`. The Rust backend and `generate_rust` live in `code_gen/rust_backend.rs`; settings live in `code_gen/settings.rs`. CLI prefixes: `jss-` (JSON Schema Settings), `cgs-` (codegen settings); future Rust-specific: `cgs-rs-`.
+**JsonSchemaSettings** control how JSON Schema definitions are ingested (parsed). Use `JsonSchemaSettings::default()` for default settings (equivalent to `JsonSchemaSettings::builder().build()`), or `JsonSchemaSettings::builder()` to construct custom settings; options include `disallow_unknown_fields` (when `true`, reject schema objects that contain keys we do not model), `spec_version`, `format_mode` and `unknown_schema_uri` (see *Dialects*). **SpecVersion** is an enum with one variant per vendored spec (Draft00 through Draft202012); `default_schema_settings()` returns settings that pin that version. Schema is parsed via **TryFrom** for default settings (e.g. `JsonSchema::try_from(json_str)`, `path.try_into()`), or constructor-style **`JsonSchema::new_from_str`**, **`JsonSchema::new_from_slice`**, **`JsonSchema::new_from_serde_value`**, **`JsonSchema::new_from_reader`**, **`JsonSchema::new_from_path`** (all take `&JsonSchemaSettings`) for custom settings. I/O errors from reader/path are reported as **JsonSchemaParseError::Io**. The CLI and macro build settings from flags or builders and pass them through. **CodeGenSettings** are language-agnostic codegen options (e.g. `model_name_source`). Use `CodeGenSettings::builder()`. The **CodeGenBackend** trait (in `code_gen/mod.rs`) takes `&CodeGenSettings` in `generate`. The Rust backend and `generate_rust` live in `code_gen/rust_backend.rs`; settings live in `code_gen/settings.rs`. CLI prefixes: `jss-` (JSON Schema Settings), `cgs-` (codegen settings); future Rust-specific: `cgs-rs-`.
 
 ### Codegen backends
 
@@ -246,19 +246,42 @@ All functions that produce valid Rust identifiers (struct names, field names, mo
 
 ---
 
+### Dialects
+
+Behaviour that differs between drafts lives in one place: a **`Dialect`** (`json_schema/dialect.rs`), the effective rule set for a schema document. Draft-dependent code reads the dialect; it never branches on `SpecVersion`.
+
+- **Per-draft table.** `Dialect::for_spec_version(v)` gives each draft's defaults. Each draft's keyword table is built from the previous draft's (removals, then additions that may replace an entry), sorted by name. It lists every keyword the draft's metaschema defines (draft 4 adds `$ref`, which JSON Reference defines) and where its value holds subschemas (`SubschemaPosition`: `Single`, `Array`, `Map`, `SingleOrArray`). The table is the single answer to "is this keyword known in this draft" (strict parsing moves onto it in #7) and "where are the subschemas" (used by the draft-4 `id` normalisation walk). 2019-09 and 2020-12 also carry their metaschema's `$vocabulary` list.
+
+| | Draft 4 | Draft 6 | Draft 7 | 2019-09 | 2020-12 |
+|---|---|---|---|---|---|
+| id keyword | `id` | `$id` | `$id` | `$id` | `$id` |
+| `ref_siblings` | `Ignored` | `Ignored` | `Ignored` | `Evaluated` | `Evaluated` |
+| `integer_semantics` | `Lexical` (`1.0` is not an integer) | `Numeric` | `Numeric` | `Numeric` | `Numeric` |
+| `format_mode` | `Assertion` | `Assertion` | `Assertion` | `Annotation` | `Annotation` |
+| `exclusive_bounds` | `BooleanModifier` | `Numeric` | `Numeric` | `Numeric` | `Numeric` |
+| vocabularies | — | — | — | metaschema's six (format `false`) | metaschema's seven (all `true`) |
+
+  Drafts 00–03 have no table of their own and use draft 4's rules with a `DialectWarning::UnsupportedDraft`; draft 5 is draft 4 (editorial changes only).
+- **Who reads each flag.** `format_mode` gates every format check in the validator (today `uuid`, behind the `uuid` feature). `integer_semantics` is read by the integer check in #5; draft 4's lexical rule is today's behaviour for every draft. `ref_siblings` is read by the compiled validator in #8 (#28). `exclusive_bounds` is read when `exclusiveMinimum`/`exclusiveMaximum` enter the model (#5/#6), whose draft-4 boolean form is normalised at parse time like `id`. The id keyword drives draft-4 `id` normalisation now and `$id` resolution in #38.
+- **Resolution order** (`resolve_dialect(&schema, &settings)`): `JsonSchemaSettings::spec_version` when set; otherwise the root's `$schema` when it is a recognised metaschema URI (`SpecVersion::from_schema_uri`); otherwise **Draft 2020-12**. The settings' per-flag overrides are then applied to that draft's defaults. Only `format_mode` has an override today; each later flag gets its override in the issue that adds its consumer, so there is never a setting that does nothing. Settings whose values are modes are enums (`FormatMode`), not booleans. The draft is chosen per document root; per embedded resource (a subschema with its own `$schema`) once #38's registry exists.
+- **Unknown `$schema`.** Permissive by default (`UnknownSchemaUri::Fallback`): the schema uses Draft 2020-12 and the result carries a `DialectWarning::UnknownSchemaUri`. `UnknownSchemaUri::Reject` turns that into `JsonSchemaParseError::UnknownSchemaUri`. A pinned `spec_version` ignores `$schema`, so it never warns or errors. Loading a custom metaschema to read its `$vocabulary` (and refusing an unknown required vocabulary with `UnsupportedVocabulary`, which the spec requires) needs user-supplied documents, which is #38's registry; until then a custom metaschema URI is "unknown".
+- **Where the dialect lives.** Parsing resolves the dialect once. `JsonSchema::dialect` (field) holds it only when the settings chose something other than what `$schema` alone selects (a pinned version or an override); `None` means "follow `$schema`". `JsonSchema::dialect()` (method) returns the effective dialect either way, so `JsonSchema::try_from(text)` followed by `validate` follows the document's draft with nothing to configure, and a hand-built `JsonSchema` follows its `$schema` too. The field is not serialized and is `None` on every subschema.
+- **Warnings and logging.** Warnings are typed data (`ResolvedDialect::warnings`, from `resolve_dialect`), and the library also logs each at `debug` level through the `log` facade, as library code should. The CLI prints them to stderr (`warning: <path>: ...`) and exposes the settings as `--jss-spec-version`, `--jss-format-mode`, `--jss-unknown-schema-uri`.
+- **Draft-4 normalisation at parse time.** When the dialect's id keyword is `id`, a string `id` in every schema object becomes `$id` before the model is built, so downstream code sees one shape. The walk is iterative and visits only schema positions from the keyword table, so a property named `id` is untouched; an object that already has `$id` keeps both keys as written. Lenient parsing goes straight from text to the model and re-parses through a `serde_json::Value` only for a draft-4 document whose text can contain an `id` key (a literal `"id"` or any `\u` escape); strict parsing always goes through a `Value`, because the dialect must be known before unknown keys are rejected.
+
 ## 1. Core / identification
 
 ### $schema
 
-**Our implementation:** We parse, store, and serialize `$schema` (round-trip). It is stored as `schema: Option<String>` on [`JsonSchema`] (serde `rename = "$schema"`). The validator accepts and preserves it; it does not change validation outcome. Codegen does not use it to alter generated Rust. **Draft inference:** When [`JsonSchemaSettings::spec_version`] is `None` (default), the effective spec version is inferred from the root schema's `$schema` via [`SpecVersion::from_schema_uri`]; if `$schema` is absent or the URI is unrecognized, we use **Draft 2020-12**. Use `resolved_spec_version(schema, settings)` to obtain the effective version. **Reverse codegen:** The `ToJsonSchema` derive emits a default `$schema` of `https://json-schema.org/draft/2020-12/schema` on the root schema so emitted documents are self-describing. **SpecVersion API:** [`SpecVersion::schema_uri()`] returns the canonical meta-schema URI for each variant; [`SpecVersion::from_schema_uri(s)`] parses a `$schema` URI string and returns the corresponding variant (or `None` for unknown/empty). Legacy draft-04 URI `http://json-schema.org/schema#` is accepted and maps to Draft04.
+**Our implementation:** We parse, store, and serialize `$schema` (round-trip). It is stored as `schema: Option<String>` on [`JsonSchema`] (serde `rename = "$schema"`). The root's `$schema` selects the document's [`Dialect`] (see *Dialects*): when [`JsonSchemaSettings::spec_version`] is `None` (default), the draft comes from `$schema` via [`SpecVersion::from_schema_uri`]; absent means **Draft 2020-12**; an unrecognised URI falls back to Draft 2020-12 with a warning, or is rejected under `UnknownSchemaUri::Reject`. `resolve_dialect(schema, settings)` returns the effective dialect with its warnings; `JsonSchema::dialect()` returns a parsed schema's. A `$schema` inside a subschema does not switch dialect yet (#38). Codegen does not use it to alter generated Rust. **Reverse codegen:** The `ToJsonSchema` derive emits a default `$schema` of `https://json-schema.org/draft/2020-12/schema` on the root schema so emitted documents are self-describing. **SpecVersion API:** [`SpecVersion::schema_uri()`] returns the canonical meta-schema URI for each variant; [`SpecVersion::from_schema_uri(s)`] parses a `$schema` URI string and returns the corresponding variant (or `None` for unknown/empty). Legacy draft-04 URI `http://json-schema.org/schema#` is accepted and maps to Draft04.
 
 **Spec version quirks:** Draft 4 deprecated `http://json-schema.org/schema#` ("latest version"); specific version URIs are required for clarity. All drafts define `$schema` as an optional string (URI). It declares the dialect/meta-schema; it is not a validation keyword on instance data. Older drafts (00–02) used hyper-schema URIs in meta-schema files; draft-03 onward use `schema#` or (2019-09, 2020-12) `https://json-schema.org/draft/YYYY-MM/schema`.
 
 ### $id
 
-**Our implementation:** We parse, store, and serialize `$id` (round-trip). It is stored as `id: Option<String>` on [`JsonSchema`] (serde `rename = "$id"`). We support **only `$id`**; we do **not** support draft-04 `id` (no parsing or emission of the un-prefixed keyword). The validator accepts and preserves it; it does not change validation outcome. Codegen does not use it for struct naming. **Dedupe:** **Full** dedupe mode includes `id` in the dedupe key (two otherwise-identical schemas with different `$id` produce two structs). **Functional** dedupe mode does **not** include `id` in the key (same shape with different `$id` yields one shared struct). Reverse codegen: `#[json_schema(id = "...")]` on a struct or enum sets the emitted schema's `$id` and makes the type its own schema resource (own `$defs`, `#` for self-reference, embedded once; see *Rust struct → JSON Schema*, *Schema resources*). When we implement `$ref` resolution in a future change, `$id` will be used as the base URI; no `$ref` behavior in this implementation.
+**Our implementation:** We parse, store, and serialize `$id` (round-trip). It is stored as `id: Option<String>` on [`JsonSchema`] (serde `rename = "$id"`). In a draft-4 document, `id` is normalised to `$id` at parse time (see *Dialects*); we always emit `$id`. The validator accepts and preserves it; it does not change validation outcome. Codegen does not use it for struct naming. **Dedupe:** **Full** dedupe mode includes `id` in the dedupe key (two otherwise-identical schemas with different `$id` produce two structs). **Functional** dedupe mode does **not** include `id` in the key (same shape with different `$id` yields one shared struct). Reverse codegen: `#[json_schema(id = "...")]` on a struct or enum sets the emitted schema's `$id` and makes the type its own schema resource (own `$defs`, `#` for self-reference, embedded once; see *Rust struct → JSON Schema*, *Schema resources*). When we implement `$ref` resolution in a future change, `$id` will be used as the base URI; no `$ref` behavior in this implementation.
 
-**Spec version quirks:** In the JSON Schema specification, draft-04 and earlier use the keyword `id` (no dollar sign); draft 6 and later use `$id`. We support only `$id`; draft-04 `id` is not accepted or emitted. Documents written to draft-04 that need an identifier must use a tool or post-process to emit `id` if required.
+**Spec version quirks:** In the JSON Schema specification, draft-04 and earlier use the keyword `id` (no dollar sign); draft 6 and later use `$id`. A draft-4 document's `id` is read into the model's `$id`; in draft 6 and later `id` is an unknown keyword (ignored when lenient, rejected when strict). Serialization always writes `$id`, so a draft-4 document round-trips with `$id`.
 
 ### $anchor
 
@@ -280,7 +303,7 @@ TODO.
 
 ### $vocabulary
 
-TODO.
+Not yet a schema-model field. Each 2019-09 / 2020-12 [`Dialect`] carries its metaschema's `$vocabulary` list (`Dialect::vocabularies`). Reading `$vocabulary` from a custom metaschema named by `$schema`, and refusing a metaschema that requires a vocabulary we do not know (`UnsupportedVocabulary`), needs the document registry (#38).
 
 **Spec version quirks:** (placeholder or blank)
 
@@ -326,6 +349,7 @@ The JSON Schema `$ref` keyword references another schema by URI. Full resolution
 
 **Spec version quirks:**
 
+- **Siblings:** drafts 4, 6 and 7 ignore keywords next to `$ref`; 2019-09 and 2020-12 evaluate them. The dialect records this (`ref_siblings`); the validator ignores siblings in every draft until the compiled validator (#8) reads the flag (#28).
 - **Draft-04, 06, 07:** `$ref` typically targets `#/definitions/...`. Our implementation accepts both `#/definitions/Name` and `#` for these drafts but does not enforce the dialect; the fragment path drives the container choice.
 - **Draft 2019-09, 2020-12:** `$ref` typically targets `#/$defs/...`. We accept `#/$defs/Name` and `#`. Again, the fragment path (not `$schema`) controls which container we use.
 - **Remote refs and anchors:** We do **not** resolve remote URIs, `$id`-relative refs, or anchors today. Any `$ref` that does not start with `'#'` is rejected with `RefResolutionError::UnsupportedRef`, which surfaces as `ValidationError::InvalidRef` or `CodeGenError::RefResolution`.
@@ -472,6 +496,7 @@ The JSON Schema `type` keyword constrains the instance to one or more primitive 
 
 - **Draft-00, 01, 02:** The `type` keyword may be a string or an array. In the meta-schema, array items may be a type string or a schema object (`$ref`). We accept type-name strings only; we do not support schema objects in the type array.
 - **Draft-03:** The `type` keyword may be a string or an array. When it is an array, elements may be **type strings or schema objects** (nested schemas). We do not support schema objects in the type array; we only accept type-name strings.
+- **`integer`:** draft 4 defines it lexically ("a JSON number without a fraction or exponent part"), draft 6 and later by value ("any number with a zero fractional part"). The dialect records this (`integer_semantics`); today every draft uses the lexical check, and #5 makes the value rule apply from draft 6 (#29).
 - **Draft-04 and later:** The type array is restricted to **type strings only** (no schema objects). Array must have at least one element; elements must be unique. Same primitive type names in all drafts (simpleTypes: array, boolean, integer, null, number, object, string). Draft-05 has no schema.json in our vendor (PDFs only); type behavior matches draft-04/06 for our purposes.
 
 ### const
@@ -726,13 +751,13 @@ The value of `maximum` MUST be a number, representing an inclusive upper limit f
 
 TODO (number/integer).
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** draft 4: a boolean that makes `minimum` exclusive; draft 6 and later: a number that is itself the exclusive bound. The dialect records this (`exclusive_bounds`); when the keyword enters the model, the draft-4 form is normalised at parse time to the numeric one.
 
 ### exclusiveMaximum
 
 TODO (number/integer).
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** as `exclusiveMinimum`, with `maximum`.
 
 ### multipleOf
 
@@ -800,15 +825,20 @@ TODO.
 
 The `format` annotation is stored on `JsonSchema` as `Option<String>`. Currently only `"uuid"` is
 acted upon; other values are preserved through parse/serialize round-trips but have no effect on
-validation or codegen.
+validation or codegen. **Assertion vs annotation** follows the dialect's `format_mode`: drafts 4, 6
+and 7 check `format` by default (their specs say an implementation SHOULD, with an option to turn
+it off); 2019-09 and 2020-12 only record it (2020-12: assertion "MUST be disabled by default").
+`JsonSchemaSettings::builder().format_mode(..)` overrides either way. In annotation mode the
+validator runs no format check; codegen's type mapping (`uuid` → `Uuid`) does not depend on it.
 
 **UUID feature (`uuid` feature flag)**
 
 Enable with `json-schema-rs = { features = ["uuid"] }` (or `["dep:uuid"]` internally). Activating
 the feature:
 
-- **Validation:** string instances whose schema has `format: "uuid"` are validated with
-  `uuid::Uuid::parse_str`. An `InvalidUuidFormat` error is emitted for strings that do not conform
+- **Validation:** when the dialect asserts formats, string instances whose schema has
+  `format: "uuid"` are validated with `uuid::Uuid::parse_str` (the check is applied in every
+  asserting draft, although `uuid` is defined from 2019-09). An `InvalidUuidFormat` error is emitted for strings that do not conform
   to the UUID format.
 - **Codegen:** string properties with `format: "uuid"` emit `uuid::Uuid` (required) or
   `Option<uuid::Uuid>` (optional) instead of `String`/`Option<String>`. A `use uuid::Uuid;`
@@ -826,6 +856,7 @@ the feature:
   `uuid` feature in the macro crate; enable with
   `json-schema-rs-macro = { features = ["uuid"] }`.
 
-**Spec version quirks:** JSON Schema draft-07 onwards lists `format` as a vocabulary keyword; its
-validation behaviour is opt-in (annotation only by default). This library treats `"uuid"` as a
-validation-enforcing keyword when the `uuid` feature is enabled.
+**Spec version quirks:** drafts 4, 6 and 7: assertion by default. 2019-09: the format vocabulary is
+declared `false` in the metaschema, so annotation by default. 2020-12: the default metaschema uses
+`format-annotation`; assertion only on opt-in or with the `format-assertion` vocabulary (a custom
+metaschema, #38).
