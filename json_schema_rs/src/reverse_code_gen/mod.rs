@@ -70,25 +70,54 @@ struct InlinedSchema {
     inlined: JsonSchema,
 }
 
+/// The `$defs` of one schema resource: the document root, or a derived type with `$id` whose
+/// body is being built. A `#/$defs/...` `$ref` inside a resource resolves against that
+/// resource (2020-12 core §9.2.1), so each resource carries the definitions its refs name.
+#[derive(Debug, Default)]
+struct Scope {
+    definitions: Vec<Definition>,
+    type_definitions: BTreeMap<String, usize>,
+    pending: BTreeSet<usize>,
+    referenced_while_pending: BTreeSet<usize>,
+    inlined: Vec<InlinedSchema>,
+    /// [`ToJsonSchema::schema_id`] of the `$id` type this scope is the root of, if any.
+    resource: Option<String>,
+}
+
+/// A derived type with `$id`, embedded once in the document root `$defs`.
+#[derive(Debug)]
+struct Resource {
+    id: String,
+    /// Index of its entry in the document scope; `None` while its body is being built and for
+    /// the document root itself.
+    definition: Option<usize>,
+}
+
 /// Generator context for one root schema: owns the `$defs` entries and the set of named types
 /// whose body is being built.
 ///
 /// Entries are keyed by identity ([`ToJsonSchema::schema_id`] for named types), not by name.
 /// A named type found in the pending set returns its `$ref` immediately, so a cycle of any
 /// length between derived types terminates. Descent depth is bounded by the number of
-/// distinct named types (each is built at most once per generator) plus the nesting of
-/// container types written in the source.
+/// distinct named types (each is built at most once per scope) times the number of distinct
+/// `$id` types (each is built at most once per generator), plus the nesting of container types
+/// written in the source.
+///
+/// A derived type with `$id` is its own schema resource ([`SchemaGenerator::resource_subschema`]):
+/// its body is built in a child scope whose `$defs` it carries, and it is embedded once, in the
+/// document root `$defs`. Inside a resource, a reference to the resource itself is `#` and a
+/// reference to another resource is that resource's `$id`.
 ///
 /// `$ref`s returned while building are provisional: [`SchemaGenerator::into_root_schema`]
 /// assigns the final `$defs` keys (the bare name when unique, otherwise a numeric suffix on
 /// every entry sharing it, ordered by identity) and rewrites them.
 #[derive(Debug, Default)]
 pub struct SchemaGenerator {
-    definitions: Vec<Definition>,
-    type_definitions: BTreeMap<String, usize>,
-    pending: BTreeSet<usize>,
-    referenced_while_pending: BTreeSet<usize>,
-    inlined: Vec<InlinedSchema>,
+    document: Scope,
+    /// Scopes of the `$id` types being built, innermost last.
+    resource_scopes: Vec<Scope>,
+    /// Every `$id` type seen so far, by [`ToJsonSchema::schema_id`].
+    resources: BTreeMap<String, Resource>,
 }
 
 impl SchemaGenerator {
@@ -99,7 +128,7 @@ impl SchemaGenerator {
     }
 
     /// Returns a `$ref` to the named type `schema_id` (preferred `$defs` key `name`), building
-    /// its body with `build` the first time `schema_id` is requested.
+    /// its body with `build` the first time `schema_id` is requested in the current resource.
     ///
     /// When `schema_id` is already being built (a recursive reference), the `$ref` is returned
     /// without calling `build`.
@@ -109,22 +138,76 @@ impl SchemaGenerator {
         name: &str,
         build: impl FnOnce(&mut Self) -> JsonSchema,
     ) -> JsonSchema {
-        let index: usize = if let Some(&index) = self.type_definitions.get(schema_id) {
-            if self.pending.contains(&index) {
-                self.referenced_while_pending.insert(index);
+        let scope: &mut Scope = self.current_scope();
+        let index: usize = if let Some(&index) = scope.type_definitions.get(schema_id) {
+            if scope.pending.contains(&index) {
+                scope.referenced_while_pending.insert(index);
             }
             index
         } else {
-            let index: usize = self.push_type_definition(schema_id, name);
-            self.pending.insert(index);
+            let index: usize = scope.push_type_definition(schema_id, name);
+            scope.pending.insert(index);
             let body: JsonSchema = build(self);
-            self.pending.remove(&index);
-            self.definitions[index].body = Some(body);
+            let scope: &mut Scope = self.current_scope();
+            scope.pending.remove(&index);
+            scope.definitions[index].body = Some(body);
             index
         };
-        JsonSchema {
-            ref_: Some(provisional_ref(index)),
-            ..Default::default()
+        ref_schema(provisional_ref(index))
+    }
+
+    /// Returns a `$ref` to the named type `schema_id` with `$id` `id` (preferred `$defs` key
+    /// `name`), building its body with `build` in its own scope the first time `schema_id` is
+    /// requested.
+    ///
+    /// The body carries the `$defs` of the named types it refers to, and is embedded once, in
+    /// the document root `$defs`. From the document root the `$ref` is `#/$defs/<name>`; from
+    /// inside the resource itself it is `#`; from inside another resource it is `id`, which
+    /// resolves to the embedded resource when `id` is an absolute URI.
+    pub fn resource_subschema(
+        &mut self,
+        schema_id: &str,
+        name: &str,
+        id: &str,
+        build: impl FnOnce(&mut Self) -> JsonSchema,
+    ) -> JsonSchema {
+        if self.current_scope().resource.as_deref() == Some(schema_id) {
+            return ref_schema("#".to_string());
+        }
+        let in_document: bool = self.resource_scopes.is_empty();
+        if let Some(resource) = self.resources.get(schema_id) {
+            return match (in_document, resource.definition) {
+                (true, Some(index)) => ref_schema(provisional_ref(index)),
+                _ => ref_schema(resource.id.clone()),
+            };
+        }
+
+        self.resources.insert(
+            schema_id.to_string(),
+            Resource {
+                id: id.to_string(),
+                definition: None,
+            },
+        );
+        self.resource_scopes.push(Scope {
+            resource: Some(schema_id.to_string()),
+            ..Scope::default()
+        });
+        let body: JsonSchema = build(self);
+        let Some(scope) = self.resource_scopes.pop() else {
+            unreachable!("`build` returns with the scope stack it was given");
+        };
+        let body: JsonSchema = scope.into_root_schema(body);
+
+        let index: usize = self.document.push_type_definition(schema_id, name);
+        self.document.definitions[index].body = Some(body);
+        if let Some(resource) = self.resources.get_mut(schema_id) {
+            resource.definition = Some(index);
+        }
+        if in_document {
+            ref_schema(provisional_ref(index))
+        } else {
+            ref_schema(id.to_string())
         }
     }
 
@@ -140,16 +223,39 @@ impl SchemaGenerator {
         name: &str,
         build: impl FnOnce(&mut Self) -> JsonSchema,
     ) -> JsonSchema {
-        let index: usize = match self.type_definitions.get(schema_id) {
+        let index: usize = match self.document.type_definitions.get(schema_id) {
             Some(&index) => index,
-            None => self.push_type_definition(schema_id, name),
+            None => self.document.push_type_definition(schema_id, name),
         };
-        self.pending.insert(index);
+        self.document.pending.insert(index);
         let body: JsonSchema = build(&mut self);
-        self.pending.remove(&index);
-        if self.referenced_while_pending.contains(&index) {
-            self.definitions[index].body = Some(body.clone());
+        self.document.pending.remove(&index);
+        if self.document.referenced_while_pending.contains(&index) {
+            self.document.definitions[index].body = Some(body.clone());
         }
+        self.into_root_schema(body)
+    }
+
+    /// Builds the root schema for the named type `schema_id` with `$id` `id` from `build`.
+    ///
+    /// The document root is the resource, so a nested reference back to it is `#` (or `id`
+    /// from inside another resource) and it never appears in its own `$defs`.
+    #[must_use]
+    pub fn into_resource_root_schema(
+        mut self,
+        schema_id: &str,
+        id: &str,
+        build: impl FnOnce(&mut Self) -> JsonSchema,
+    ) -> JsonSchema {
+        self.document.resource = Some(schema_id.to_string());
+        self.resources.insert(
+            schema_id.to_string(),
+            Resource {
+                id: id.to_string(),
+                definition: None,
+            },
+        );
+        let body: JsonSchema = build(&mut self);
         self.into_root_schema(body)
     }
 
@@ -161,7 +267,46 @@ impl SchemaGenerator {
     /// suffixed names that are already taken. A hoisted entry whose name and body equal
     /// another entry's is merged into it first.
     #[must_use]
-    pub fn into_root_schema(self, mut body: JsonSchema) -> JsonSchema {
+    pub fn into_root_schema(self, body: JsonSchema) -> JsonSchema {
+        self.document.into_root_schema(body)
+    }
+
+    /// Embeds a standalone schema as a subschema: its `$defs` (at any depth) become entries of
+    /// the current resource's `$defs`, its `$ref`s to them are rewritten, and its `$schema` is
+    /// dropped (`$schema` must not appear in a subschema that is not a resource root).
+    ///
+    /// A `$ref` is matched to a hoisted entry by its JSON Pointer (`#/$defs/Outer/$defs/Inner`).
+    /// A `#/$defs/Inner` with no top-level `Inner` resolves to the one nested `Inner` when
+    /// exactly one exists. Inlining an equal standalone schema again reuses its entries.
+    ///
+    /// A schema with `$id` is its own resource and is embedded whole, `$schema` and `$defs`
+    /// included. So is a `$defs` entry with `$id`, and no `$ref` inside a resource is rewritten,
+    /// since it resolves against that resource.
+    pub fn inline_subschema(&mut self, schema: JsonSchema) -> JsonSchema {
+        self.current_scope().inline_subschema(schema)
+    }
+
+    fn current_scope(&mut self) -> &mut Scope {
+        self.resource_scopes
+            .last_mut()
+            .unwrap_or(&mut self.document)
+    }
+}
+
+impl Scope {
+    fn push_type_definition(&mut self, schema_id: &str, name: &str) -> usize {
+        let index: usize = self.definitions.len();
+        self.definitions.push(Definition {
+            identity: DefinitionIdentity::Type(schema_id.to_string()),
+            name: name.to_string(),
+            body: None,
+        });
+        self.type_definitions.insert(schema_id.to_string(), index);
+        index
+    }
+
+    /// See [`SchemaGenerator::into_root_schema`].
+    fn into_root_schema(self, mut body: JsonSchema) -> JsonSchema {
         let mut definitions: Vec<Definition> = self.definitions;
         let mut canonical: Vec<usize> = (0..definitions.len()).collect();
         merge_equal_hoisted_definitions(&mut definitions, &mut canonical, &mut body);
@@ -189,18 +334,15 @@ impl SchemaGenerator {
         body
     }
 
-    /// Embeds a standalone schema as a subschema: its `$defs` (at any depth) become entries of
-    /// the generator's root `$defs`, its `$ref`s to them are rewritten, and its `$schema` is
-    /// dropped unless it declares its own `$id` (`$schema` must not appear in a subschema that
-    /// is not a resource root).
-    ///
-    /// A `$ref` is matched to a hoisted entry by its JSON Pointer (`#/$defs/Outer/$defs/Inner`).
-    /// A `#/$defs/Inner` with no top-level `Inner` resolves to the one nested `Inner` when
-    /// exactly one exists. Inlining an equal standalone schema again reuses its entries.
-    pub fn inline_subschema(&mut self, schema: JsonSchema) -> JsonSchema {
+    /// See [`SchemaGenerator::inline_subschema`].
+    fn inline_subschema(&mut self, mut schema: JsonSchema) -> JsonSchema {
+        if schema.id.is_some() {
+            return schema;
+        }
         let has_defs: bool = schema.defs.as_ref().is_some_and(|defs| !defs.is_empty());
         if !has_defs {
-            return drop_schema_keyword_unless_resource_root(schema);
+            schema.schema = None;
+            return schema;
         }
         if let Some(previous) = self
             .inlined
@@ -250,30 +392,19 @@ impl SchemaGenerator {
                 .max_by_key(|(pointer, _)| pointer.len())
                 .map(|(pointer, target)| format!("{target}{}", &reference[pointer.len()..]))
         };
-        rewrite_refs(&mut flat, &resolve);
+        rewrite_refs_outside_resources(&mut flat, &resolve);
         for (definition, index) in hoisted.into_iter().zip(indices) {
             let mut body: JsonSchema = definition.body;
-            rewrite_refs(&mut body, &resolve);
+            rewrite_refs_outside_resources(&mut body, &resolve);
             self.definitions[index].body = Some(body);
         }
 
-        let inlined: JsonSchema = drop_schema_keyword_unless_resource_root(flat);
+        flat.schema = None;
         self.inlined.push(InlinedSchema {
             standalone,
-            inlined: inlined.clone(),
+            inlined: flat.clone(),
         });
-        inlined
-    }
-
-    fn push_type_definition(&mut self, schema_id: &str, name: &str) -> usize {
-        let index: usize = self.definitions.len();
-        self.definitions.push(Definition {
-            identity: DefinitionIdentity::Type(schema_id.to_string()),
-            name: name.to_string(),
-            body: None,
-        });
-        self.type_definitions.insert(schema_id.to_string(), index);
-        index
+        flat
     }
 }
 
@@ -305,17 +436,37 @@ fn escape_pointer_token(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
 
-fn drop_schema_keyword_unless_resource_root(mut schema: JsonSchema) -> JsonSchema {
-    if schema.id.is_none() {
-        schema.schema = None;
+fn ref_schema(reference: String) -> JsonSchema {
+    JsonSchema {
+        ref_: Some(reference),
+        ..Default::default()
     }
-    schema
 }
 
 /// Replaces every `$ref` in `schema` (at any depth) for which `resolve` returns a new value.
 fn rewrite_refs(schema: &mut JsonSchema, resolve: &impl Fn(&str) -> Option<String>) {
     let mut stack: Vec<&mut JsonSchema> = vec![schema];
     while let Some(current) = stack.pop() {
+        if let Some(reference) = current.ref_.as_deref()
+            && let Some(resolved) = resolve(reference)
+        {
+            current.ref_ = Some(resolved);
+        }
+        stack.extend(current.subschemas_mut());
+    }
+}
+
+/// Like [`rewrite_refs`], but leaves every subschema with `$id` (and everything inside it)
+/// untouched: its `$ref`s resolve against that resource, not the schema being rewritten.
+fn rewrite_refs_outside_resources(
+    schema: &mut JsonSchema,
+    resolve: &impl Fn(&str) -> Option<String>,
+) {
+    let mut stack: Vec<&mut JsonSchema> = vec![schema];
+    while let Some(current) = stack.pop() {
+        if current.id.is_some() {
+            continue;
+        }
         if let Some(reference) = current.ref_.as_deref()
             && let Some(resolved) = resolve(reference)
         {
@@ -334,8 +485,9 @@ struct HoistedDefinition {
     body: JsonSchema,
 }
 
-/// Removes the `$defs` of `schema` and, transitively, of every `$defs` entry. Returns the
-/// schema without them and the entries ordered by pointer.
+/// Removes the `$defs` of `schema` and, transitively, of every `$defs` entry that is not a
+/// resource (has no `$id`; a resource keeps its own `$defs`). Returns the schema without them
+/// and the entries ordered by pointer.
 fn flatten_defs(schema: JsonSchema) -> (JsonSchema, Vec<HoistedDefinition>) {
     let mut root: JsonSchema = schema;
     let mut hoisted: Vec<HoistedDefinition> = Vec::new();
@@ -346,7 +498,9 @@ fn flatten_defs(schema: JsonSchema) -> (JsonSchema, Vec<HoistedDefinition>) {
     while let Some((parent, defs)) = stack.pop() {
         for (key, mut body) in defs {
             let pointer: String = format!("{parent}/$defs/{}", escape_pointer_token(&key));
-            if let Some(nested) = body.defs.take() {
+            if body.id.is_none()
+                && let Some(nested) = body.defs.take()
+            {
                 stack.push((pointer.clone(), nested));
             }
             hoisted.push(HoistedDefinition { pointer, key, body });
@@ -1143,6 +1297,252 @@ mod tests {
         };
         let expected: JsonSchema = standalone.clone();
         let actual: JsonSchema = SchemaGenerator::new().inline_subschema(standalone);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_embeds_a_resource_with_defs_whole() {
+        let standalone: JsonSchema = JsonSchema {
+            schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+            id: Some("https://example.com/hand".to_string()),
+            defs: Some(defs(&[("Str", string_schema())])),
+            ..object_schema(&[("x", ref_to("Str"))])
+        };
+        let expected: JsonSchema = standalone.clone();
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let actual: JsonSchema = generator.into_root_schema(inlined);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_a_resource_inside_the_standalone_schema_untouched() {
+        let resource: JsonSchema = JsonSchema {
+            id: Some("https://example.com/resource".to_string()),
+            defs: Some(defs(&[("S", string_schema())])),
+            ..ref_to("S")
+        };
+        let resource_def: JsonSchema = JsonSchema {
+            id: Some("https://example.com/resource-def".to_string()),
+            defs: Some(defs(&[("S", string_schema())])),
+            ..ref_to("S")
+        };
+        let standalone: JsonSchema = JsonSchema {
+            defs: Some(defs(&[
+                ("S", integer_schema()),
+                ("R", resource_def.clone()),
+            ])),
+            ..object_schema(&[
+                ("n", ref_to("S")),
+                ("def", ref_to("R")),
+                ("resource", resource.clone()),
+            ])
+        };
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let named: JsonSchema = generator.named_subschema("a::S", "S", |_| string_schema());
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let actual: JsonSchema =
+            generator.into_root_schema(object_schema(&[("named", named), ("inlined", inlined)]));
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(defs(&[
+                ("S0", string_schema()),
+                ("S1", integer_schema()),
+                ("R", resource_def),
+            ])),
+            ..object_schema(&[
+                ("named", ref_to("S0")),
+                (
+                    "inlined",
+                    object_schema(&[
+                        ("n", ref_to("S1")),
+                        ("def", ref_to("R")),
+                        ("resource", resource),
+                    ]),
+                ),
+            ])
+        };
+        assert_eq!(expected, actual);
+    }
+
+    fn resource_ref(id: &str) -> JsonSchema {
+        JsonSchema {
+            ref_: Some(id.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn array_of(items: JsonSchema) -> JsonSchema {
+        JsonSchema {
+            items: Some(Box::new(items)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resource_subschema_refers_to_itself_as_hash() {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let reference: JsonSchema = generator.resource_subschema(
+            "a::Node",
+            "Node",
+            "https://example.com/node",
+            |generator: &mut SchemaGenerator| {
+                array_of(generator.resource_subschema(
+                    "a::Node",
+                    "Node",
+                    "https://example.com/node",
+                    |_| panic!("a pending resource must not be rebuilt"),
+                ))
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(defs(&[("Node", array_of(resource_ref("#")))])),
+            ..ref_to("Node")
+        };
+        let actual: JsonSchema = generator.into_root_schema(reference);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschema_keeps_named_dependencies_in_its_own_defs() {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let reference: JsonSchema = generator.resource_subschema(
+            "a::Resource",
+            "Resource",
+            "https://example.com/resource",
+            |generator: &mut SchemaGenerator| {
+                array_of(generator.named_subschema("a::Leaf", "Leaf", |_| string_schema()))
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(defs(&[(
+                "Resource",
+                JsonSchema {
+                    defs: Some(defs(&[("Leaf", string_schema())])),
+                    ..array_of(ref_to("Leaf"))
+                },
+            )])),
+            ..ref_to("Resource")
+        };
+        let actual: JsonSchema = generator.into_root_schema(reference);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschema_inside_a_resource_is_embedded_at_the_root_and_referred_to_by_id() {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let reference: JsonSchema = generator.resource_subschema(
+            "a::A",
+            "A",
+            "https://example.com/a",
+            |generator: &mut SchemaGenerator| {
+                array_of(
+                    generator.resource_subschema("a::B", "B", "https://example.com/b", |_| {
+                        string_schema()
+                    }),
+                )
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(defs(&[
+                ("A", array_of(resource_ref("https://example.com/b"))),
+                ("B", string_schema()),
+            ])),
+            ..ref_to("A")
+        };
+        let actual: JsonSchema = generator.into_root_schema(reference);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschema_refers_to_a_pending_outer_resource_by_its_id() {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let reference: JsonSchema = generator.resource_subschema(
+            "a::A",
+            "A",
+            "https://example.com/a",
+            |generator: &mut SchemaGenerator| {
+                array_of(generator.resource_subschema(
+                    "a::B",
+                    "B",
+                    "https://example.com/b",
+                    |generator: &mut SchemaGenerator| {
+                        array_of(generator.resource_subschema(
+                            "a::A",
+                            "A",
+                            "https://example.com/a",
+                            |_| panic!("a pending resource must not be rebuilt"),
+                        ))
+                    },
+                ))
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(defs(&[
+                ("A", array_of(resource_ref("https://example.com/b"))),
+                ("B", array_of(resource_ref("https://example.com/a"))),
+            ])),
+            ..ref_to("A")
+        };
+        let actual: JsonSchema = generator.into_root_schema(reference);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschema_built_inside_a_resource_is_referred_to_from_the_document_by_its_defs_entry()
+     {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let via: JsonSchema = generator.resource_subschema(
+            "a::A",
+            "A",
+            "https://example.com/a",
+            |generator: &mut SchemaGenerator| {
+                array_of(
+                    generator.resource_subschema("a::B", "B", "https://example.com/b", |_| {
+                        string_schema()
+                    }),
+                )
+            },
+        );
+        let direct: JsonSchema =
+            generator.resource_subschema("a::B", "B", "https://example.com/b", |_| {
+                panic!("a built resource must not be rebuilt")
+            });
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(defs(&[
+                ("A", array_of(resource_ref("https://example.com/b"))),
+                ("B", string_schema()),
+            ])),
+            ..object_schema(&[("via", ref_to("A")), ("direct", ref_to("B"))])
+        };
+        let actual: JsonSchema =
+            generator.into_root_schema(object_schema(&[("via", via), ("direct", direct)]));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_resource_root_schema_refers_to_itself_as_hash_and_stays_out_of_defs() {
+        let actual: JsonSchema = SchemaGenerator::new().into_resource_root_schema(
+            "a::Root",
+            "https://example.com/root",
+            |generator: &mut SchemaGenerator| {
+                array_of(generator.named_subschema(
+                    "a::Child",
+                    "Child",
+                    |generator: &mut SchemaGenerator| {
+                        array_of(generator.resource_subschema(
+                            "a::Root",
+                            "Root",
+                            "https://example.com/root",
+                            |_| panic!("the pending root must not be rebuilt"),
+                        ))
+                    },
+                ))
+            },
+        );
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(defs(&[("Child", array_of(resource_ref("#")))])),
+            ..array_of(ref_to("Child"))
+        };
         assert_eq!(expected, actual);
     }
 
