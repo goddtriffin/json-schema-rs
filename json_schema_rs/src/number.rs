@@ -124,7 +124,8 @@ fn float_to_i128(whole: f64) -> Option<i128> {
 /// Two integers use `%`. Otherwise both numbers are read as the decimal they were written as:
 /// an `f64` is the shortest decimal that round-trips to it (`0.1` is `1 · 10^-1`, not the binary
 /// value nearest it), which is what the schema author wrote. See [`decimal_is_multiple`].
-/// Only `0` is a multiple of `0`; the sign of either number does not matter.
+/// Parsing rejects a `multipleOf` of zero or below (every draft requires it to be strictly
+/// positive); for a hand-built model, only `0` is a multiple of `0` and signs do not matter.
 #[must_use]
 pub(crate) fn is_multiple_of(value: &Number, divisor: &Number) -> bool {
     match (Num::from(value), Num::from(divisor)) {

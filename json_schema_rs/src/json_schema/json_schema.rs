@@ -105,6 +105,23 @@ where
     Value::deserialize(deserializer).map(Some)
 }
 
+/// Deserializes `multipleOf`, which every draft requires to be strictly greater than 0 (draft 4
+/// validation §5.1.1.1; draft 6+ "MUST be a number, strictly greater than 0"). Zero or a negative
+/// value makes the schema invalid, so it is a parse error, like `"minLength": -1`.
+fn deserialize_multiple_of<'de, D>(deserializer: D) -> Result<Option<serde_json::Number>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let n: serde_json::Number = serde_json::Number::deserialize(deserializer)?;
+    if n.as_f64().is_some_and(|f| f > 0.0) {
+        Ok(Some(n))
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "multipleOf must be strictly greater than 0, got {n}"
+        )))
+    }
+}
+
 /// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
 /// First type in the array is used; codegen uses `object` and `string`.
 fn deserialize_type_optional<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -198,7 +215,11 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) exclusive_minimum: Option<serde_json::Number>,
     #[serde(default, rename = "exclusiveMaximum")]
     pub(crate) exclusive_maximum: Option<serde_json::Number>,
-    #[serde(default, rename = "multipleOf")]
+    #[serde(
+        default,
+        rename = "multipleOf",
+        deserialize_with = "deserialize_multiple_of"
+    )]
     pub(crate) multiple_of: Option<serde_json::Number>,
     #[serde(default, rename = "minLength")]
     pub(crate) min_length: Option<u64>,
@@ -397,7 +418,8 @@ pub struct JsonSchema {
     pub exclusive_maximum: Option<serde_json::Number>,
 
     /// A numeric instance must be an integer multiple of this value (decided exactly; see
-    /// design.md, *multipleOf*). Used for validation.
+    /// design.md, *multipleOf*). Parsing rejects zero and negative values, which every draft
+    /// forbids. Used for validation.
     #[serde(rename = "multipleOf", skip_serializing_if = "Option::is_none")]
     pub multiple_of: Option<serde_json::Number>,
 
@@ -503,7 +525,11 @@ impl<'de> Deserialize<'de> for JsonSchema {
             exclusive_minimum: Option<serde_json::Number>,
             #[serde(default, rename = "exclusiveMaximum")]
             exclusive_maximum: Option<serde_json::Number>,
-            #[serde(default, rename = "multipleOf")]
+            #[serde(
+                default,
+                rename = "multipleOf",
+                deserialize_with = "deserialize_multiple_of"
+            )]
             multiple_of: Option<serde_json::Number>,
             #[serde(default, rename = "minLength")]
             min_length: Option<u64>,
@@ -2687,6 +2713,56 @@ mod tests {
             .build();
         let expected: &str = r#"{"const":null}"#;
         let actual: String = reserialize(r#"{"const":null}"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_of_zero_is_rejected() {
+        let expected: String =
+            "multipleOf must be strictly greater than 0, got 0 at line 1 column 16".to_string();
+        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":0}"#) {
+            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_of_negative_is_rejected() {
+        let expected: String =
+            "multipleOf must be strictly greater than 0, got -1.5 at line 1 column 19".to_string();
+        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":-1.5}"#) {
+            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_of_zero_is_rejected_when_strict() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: String = "multipleOf must be strictly greater than 0, got 0".to_string();
+        let actual: String = match JsonSchema::new_from_str(r#"{"multipleOf":0}"#, &settings) {
+            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_of_zero_is_rejected_in_draft4() {
+        let actual: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","multipleOf":0}"#,
+        );
+        assert!(matches!(actual, Err(JsonSchemaParseError::Serde(_))));
+    }
+
+    #[test]
+    fn multiple_of_small_positive_is_accepted() {
+        let expected: &str = r#"{"multipleOf":1e-8}"#;
+        let actual: String = reserialize(r#"{"multipleOf":1e-8}"#, &JsonSchemaSettings::default());
         assert_eq!(expected, actual);
     }
 

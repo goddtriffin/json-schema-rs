@@ -11544,7 +11544,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/jscpd.json\": invalid file url: https://json.schemastore.org/jscpd.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -11588,7 +11588,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/jscpd.json\": invalid file url: https://json.schemastore.org/jscpd.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
