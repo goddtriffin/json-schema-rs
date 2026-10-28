@@ -1429,3 +1429,204 @@ fn derive_user_type_named_uuid_gets_defs_entry_beside_inlined_library_uuid() {
     let actual: JsonSchema = WithUserUuid::json_schema();
     assert_eq!(expected, actual);
 }
+
+/// Struct doc.
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DocContainer {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DocField {
+    /// Field doc.
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DocNamedTypeField {
+    /// Where they live.
+    address: Address,
+}
+
+/// First line.
+///   Indented second line.
+///
+/// Second paragraph.
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DocMultiLine {
+    x: String,
+}
+
+/// From doc.
+#[derive(ToJsonSchema)]
+#[json_schema(description = "From attribute")]
+#[expect(dead_code)]
+struct DocAndAttrDescription {
+    x: String,
+}
+
+/// Enum doc.
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+enum DocEnum {
+    A,
+    B,
+}
+
+#[doc = concat!("Con", "cat.")]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DocConcat {
+    #[doc = include_str!("fixtures/doc.txt")]
+    x: String,
+}
+
+///
+#[derive(ToJsonSchema)]
+#[expect(dead_code, clippy::empty_docs)]
+struct DocEmpty {
+    ///
+    x: String,
+}
+
+#[doc(hidden)]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DocHiddenOnly {
+    x: String,
+}
+
+#[test]
+fn derive_container_doc_comment_becomes_description() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        description: Some("Struct doc.".to_string()),
+        ..one_property_body("x", String::json_schema())
+    };
+    let actual: JsonSchema = DocContainer::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_field_doc_comment_becomes_property_description() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        ..one_property_body(
+            "x",
+            JsonSchema {
+                description: Some("Field doc.".to_string()),
+                ..String::json_schema()
+            },
+        )
+    };
+    let actual: JsonSchema = DocField::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_field_doc_comment_on_named_type_is_ref_sibling() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([(
+            "Address".to_string(),
+            JsonSchema {
+                type_: Some("object".to_string()),
+                properties: BTreeMap::from([
+                    ("city".to_string(), String::json_schema()),
+                    ("street".to_string(), String::json_schema()),
+                ]),
+                additional_properties: Some(AdditionalProperties::Forbid),
+                required: Some(vec!["city".to_string(), "street".to_string()]),
+                ..Default::default()
+            },
+        )])),
+        ..one_property_body(
+            "address",
+            JsonSchema {
+                description: Some("Where they live.".to_string()),
+                ..ref_to("Address")
+            },
+        )
+    };
+    let actual: JsonSchema = DocNamedTypeField::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_multi_line_doc_comment_lines_are_trimmed_and_joined() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        description: Some("First line.\nIndented second line.\n\nSecond paragraph.".to_string()),
+        ..one_property_body("x", String::json_schema())
+    };
+    let actual: JsonSchema = DocMultiLine::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_description_attribute_takes_precedence_over_doc_comment() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        description: Some("From attribute".to_string()),
+        ..one_property_body("x", String::json_schema())
+    };
+    let actual: JsonSchema = DocAndAttrDescription::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_enum_doc_comment_becomes_description() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        description: Some("Enum doc.".to_string()),
+        type_: Some("string".to_string()),
+        enum_values: Some(vec![
+            serde_json::Value::String("A".to_string()),
+            serde_json::Value::String("B".to_string()),
+        ]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = DocEnum::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_macro_doc_attributes_are_evaluated_into_description() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        description: Some("Concat.".to_string()),
+        ..one_property_body(
+            "x",
+            JsonSchema {
+                description: Some("Included doc.".to_string()),
+                ..String::json_schema()
+            },
+        )
+    };
+    let actual: JsonSchema = DocConcat::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_empty_doc_comment_yields_no_description() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        ..one_property_body("x", String::json_schema())
+    };
+    let actual: JsonSchema = DocEmpty::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_list_form_doc_attribute_yields_no_description() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        ..one_property_body("x", String::json_schema())
+    };
+    let actual: JsonSchema = DocHiddenOnly::json_schema();
+    assert_eq!(expected, actual);
+}
