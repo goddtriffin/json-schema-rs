@@ -59,29 +59,29 @@
         "ours": {
           "tally": {
             "total": 615,
-            "passed": 336,
-            "failed": 57,
-            "skipped": 222,
+            "passed": 387,
+            "failed": 36,
+            "skipped": 192,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 336,
+            "numerator": 387,
             "denominator": 615,
-            "percent": "54.63%"
+            "percent": "62.93%"
           },
           "coverage": {
-            "numerator": 393,
+            "numerator": 423,
             "denominator": 615,
-            "percent": "63.90%"
+            "percent": "68.78%"
           },
           "correctness": {
-            "numerator": 336,
-            "denominator": 393,
-            "percent": "85.50%"
+            "numerator": 387,
+            "denominator": 423,
+            "percent": "91.49%"
           },
-          "disagreements_with_majority": 57,
-          "wrong_vs_expected": 57
+          "disagreements_with_majority": 36,
+          "wrong_vs_expected": 36
         }
       },
       {
@@ -89,29 +89,29 @@
         "ours": {
           "tally": {
             "total": 834,
-            "passed": 405,
-            "failed": 63,
-            "skipped": 366,
+            "passed": 458,
+            "failed": 36,
+            "skipped": 340,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 405,
+            "numerator": 458,
             "denominator": 834,
-            "percent": "48.56%"
+            "percent": "54.92%"
           },
           "coverage": {
-            "numerator": 468,
+            "numerator": 494,
             "denominator": 834,
-            "percent": "56.12%"
+            "percent": "59.23%"
           },
           "correctness": {
-            "numerator": 405,
-            "denominator": 468,
-            "percent": "86.54%"
+            "numerator": 458,
+            "denominator": 494,
+            "percent": "92.71%"
           },
-          "disagreements_with_majority": 63,
-          "wrong_vs_expected": 63
+          "disagreements_with_majority": 36,
+          "wrong_vs_expected": 36
         }
       },
       {
@@ -119,29 +119,29 @@
         "ours": {
           "tally": {
             "total": 922,
-            "passed": 453,
-            "failed": 63,
-            "skipped": 406,
+            "passed": 506,
+            "failed": 36,
+            "skipped": 380,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 453,
+            "numerator": 506,
             "denominator": 922,
-            "percent": "49.13%"
+            "percent": "54.88%"
           },
           "coverage": {
-            "numerator": 516,
+            "numerator": 542,
             "denominator": 922,
-            "percent": "55.97%"
+            "percent": "58.79%"
           },
           "correctness": {
-            "numerator": 453,
-            "denominator": 516,
-            "percent": "87.79%"
+            "numerator": 506,
+            "denominator": 542,
+            "percent": "93.36%"
           },
-          "disagreements_with_majority": 63,
-          "wrong_vs_expected": 63
+          "disagreements_with_majority": 36,
+          "wrong_vs_expected": 36
         }
       },
       {
@@ -149,29 +149,29 @@
         "ours": {
           "tally": {
             "total": 1242,
-            "passed": 468,
-            "failed": 65,
-            "skipped": 709,
+            "passed": 521,
+            "failed": 38,
+            "skipped": 683,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 468,
+            "numerator": 521,
             "denominator": 1242,
-            "percent": "37.68%"
+            "percent": "41.95%"
           },
           "coverage": {
-            "numerator": 533,
+            "numerator": 559,
             "denominator": 1242,
-            "percent": "42.91%"
+            "percent": "45.01%"
           },
           "correctness": {
-            "numerator": 468,
-            "denominator": 533,
-            "percent": "87.80%"
+            "numerator": 521,
+            "denominator": 559,
+            "percent": "93.20%"
           },
-          "disagreements_with_majority": 65,
-          "wrong_vs_expected": 65
+          "disagreements_with_majority": 38,
+          "wrong_vs_expected": 38
         }
       },
       {
@@ -179,29 +179,29 @@
         "ours": {
           "tally": {
             "total": 1277,
-            "passed": 485,
-            "failed": 64,
-            "skipped": 728,
+            "passed": 538,
+            "failed": 37,
+            "skipped": 702,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 485,
+            "numerator": 538,
             "denominator": 1277,
-            "percent": "37.98%"
+            "percent": "42.13%"
           },
           "coverage": {
-            "numerator": 549,
+            "numerator": 575,
             "denominator": 1277,
-            "percent": "42.99%"
+            "percent": "45.03%"
           },
           "correctness": {
-            "numerator": 485,
-            "denominator": 549,
-            "percent": "88.34%"
+            "numerator": 538,
+            "denominator": 575,
+            "percent": "93.57%"
           },
-          "disagreements_with_majority": 64,
-          "wrong_vs_expected": 64
+          "disagreements_with_majority": 37,
+          "wrong_vs_expected": 37
         }
       }
     ],
@@ -299,16 +299,16 @@
       "localhost/json-schema-rs": {
         "tally": {
           "total": 4890,
-          "passed": 2147,
-          "failed": 312,
-          "skipped": 2431,
+          "passed": 2410,
+          "failed": 183,
+          "skipped": 2297,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 2147,
+          "numerator": 2410,
           "denominator": 4890,
-          "percent": "43.91%"
+          "percent": "49.28%"
         }
       },
       "python-jsonschema": {
@@ -436,16 +436,16 @@
       "localhost/json-schema-rs": {
         "tally": {
           "total": 2666,
-          "passed": 1394,
-          "failed": 1009,
-          "skipped": 263,
+          "passed": 1417,
+          "failed": 1001,
+          "skipped": 248,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1394,
+          "numerator": 1417,
           "denominator": 2666,
-          "percent": "52.29%"
+          "percent": "53.15%"
         }
       },
       "python-jsonschema": {
@@ -719,16 +719,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 615,
-              "passed": 336,
-              "failed": 57,
-              "skipped": 222,
+              "passed": 387,
+              "failed": 36,
+              "skipped": 192,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 336,
+              "numerator": 387,
               "denominator": 615,
-              "percent": "54.63%"
+              "percent": "62.93%"
             }
           },
           "python-jsonschema": {
@@ -780,29 +780,29 @@
         "ours": {
           "tally": {
             "total": 615,
-            "passed": 336,
-            "failed": 57,
-            "skipped": 222,
+            "passed": 387,
+            "failed": 36,
+            "skipped": 192,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 336,
+            "numerator": 387,
             "denominator": 615,
-            "percent": "54.63%"
+            "percent": "62.93%"
           },
           "coverage": {
-            "numerator": 393,
+            "numerator": 423,
             "denominator": 615,
-            "percent": "63.90%"
+            "percent": "68.78%"
           },
           "correctness": {
-            "numerator": 336,
-            "denominator": 393,
-            "percent": "85.50%"
+            "numerator": 387,
+            "denominator": 423,
+            "percent": "91.49%"
           },
-          "disagreements_with_majority": 57,
-          "wrong_vs_expected": 57
+          "disagreements_with_majority": 36,
+          "wrong_vs_expected": 36
         }
       },
       "optional": {
@@ -871,16 +871,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 272,
-              "passed": 147,
+              "passed": 150,
               "failed": 100,
-              "skipped": 25,
+              "skipped": 22,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 147,
+              "numerator": 150,
               "denominator": 272,
-              "percent": "54.04%"
+              "percent": "55.15%"
             }
           },
           "python-jsonschema": {
@@ -932,26 +932,26 @@
         "ours": {
           "tally": {
             "total": 272,
-            "passed": 147,
+            "passed": 150,
             "failed": 100,
-            "skipped": 25,
+            "skipped": 22,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 147,
+            "numerator": 150,
             "denominator": 272,
-            "percent": "54.04%"
+            "percent": "55.15%"
           },
           "coverage": {
-            "numerator": 247,
+            "numerator": 250,
             "denominator": 272,
-            "percent": "90.81%"
+            "percent": "91.91%"
           },
           "correctness": {
-            "numerator": 147,
-            "denominator": 247,
-            "percent": "59.51%"
+            "numerator": 150,
+            "denominator": 250,
+            "percent": "60.00%"
           },
           "disagreements_with_majority": 91,
           "wrong_vs_expected": 100
@@ -1031,23 +1031,6 @@
             "group": "draft4",
             "file": "allOf.json",
             "optional": false,
-            "case_description": "allOf simple types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "mismatch one",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "allOf.json",
-            "optional": false,
             "case_description": "nested allOf, to check validation semantics",
             "triage": "likely_our_bug",
             "tests": [
@@ -1063,13 +1046,29 @@
           },
           {
             "group": "draft4",
-            "file": "anyOf.json",
+            "file": "allOf.json",
             "optional": false,
-            "case_description": "anyOf",
+            "case_description": "allOf combined with anyOf, oneOf",
             "triage": "likely_our_bug",
             "tests": [
               {
-                "test_description": "neither anyOf valid",
+                "test_description": "allOf: false, anyOf: true, oneOf: false",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              },
+              {
+                "test_description": "allOf: false, anyOf: true, oneOf: true",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              },
+              {
+                "test_description": "allOf: true, anyOf: true, oneOf: false",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -1115,74 +1114,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 0 does not match false",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [0] does not match [false]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[0.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [1] does not match [true]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[1.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 8,
                 "voters": 8
               }
@@ -1241,40 +1172,6 @@
           },
           {
             "group": "draft4",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation with unsigned integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
             "file": "minItems.json",
             "optional": false,
             "case_description": "minItems validation",
@@ -1307,73 +1204,6 @@
               },
               {
                 "test_description": "one grapheme is not long enough",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation with signed integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "int below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "oneOf.json",
-            "optional": false,
-            "case_description": "oneOf",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "first oneOf valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "neither oneOf valid",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -1610,103 +1440,6 @@
                 "expected": true,
                 "ours": false,
                 "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "uniqueItems.json",
-            "optional": false,
-            "case_description": "uniqueItems validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "non-unique array of integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "non-unique array of more than two integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "numbers are unique if mathematically unequal",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "non-unique array of strings is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "non-unique array of objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "property order of array of objects is ignored",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "non-unique array of nested objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "non-unique array of arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "non-unique array of more than two arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "non-unique heterogeneous types are invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "objects are non-unique despite key order",
-                "expected": false,
-                "ours": true,
-                "majority": false,
                 "agreeing": 8,
                 "voters": 8
               }
@@ -2774,16 +2507,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 834,
-              "passed": 405,
-              "failed": 63,
-              "skipped": 366,
+              "passed": 458,
+              "failed": 36,
+              "skipped": 340,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 405,
+              "numerator": 458,
               "denominator": 834,
-              "percent": "48.56%"
+              "percent": "54.92%"
             }
           },
           "python-jsonschema": {
@@ -2835,29 +2568,29 @@
         "ours": {
           "tally": {
             "total": 834,
-            "passed": 405,
-            "failed": 63,
-            "skipped": 366,
+            "passed": 458,
+            "failed": 36,
+            "skipped": 340,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 405,
+            "numerator": 458,
             "denominator": 834,
-            "percent": "48.56%"
+            "percent": "54.92%"
           },
           "coverage": {
-            "numerator": 468,
+            "numerator": 494,
             "denominator": 834,
-            "percent": "56.12%"
+            "percent": "59.23%"
           },
           "correctness": {
-            "numerator": 405,
-            "denominator": 468,
-            "percent": "86.54%"
+            "numerator": 458,
+            "denominator": 494,
+            "percent": "92.71%"
           },
-          "disagreements_with_majority": 63,
-          "wrong_vs_expected": 63
+          "disagreements_with_majority": 36,
+          "wrong_vs_expected": 36
         }
       },
       "optional": {
@@ -2941,16 +2674,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 341,
-              "passed": 192,
-              "failed": 117,
-              "skipped": 32,
+              "passed": 197,
+              "failed": 115,
+              "skipped": 29,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 192,
+              "numerator": 197,
               "denominator": 341,
-              "percent": "56.30%"
+              "percent": "57.77%"
             }
           },
           "python-jsonschema": {
@@ -3002,29 +2735,29 @@
         "ours": {
           "tally": {
             "total": 341,
-            "passed": 192,
-            "failed": 117,
-            "skipped": 32,
+            "passed": 197,
+            "failed": 115,
+            "skipped": 29,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 192,
+            "numerator": 197,
             "denominator": 341,
-            "percent": "56.30%"
+            "percent": "57.77%"
           },
           "coverage": {
-            "numerator": 309,
+            "numerator": 312,
             "denominator": 341,
-            "percent": "90.62%"
+            "percent": "91.50%"
           },
           "correctness": {
-            "numerator": 192,
-            "denominator": 309,
-            "percent": "62.14%"
+            "numerator": 197,
+            "denominator": 312,
+            "percent": "63.14%"
           },
-          "disagreements_with_majority": 106,
-          "wrong_vs_expected": 117
+          "disagreements_with_majority": 104,
+          "wrong_vs_expected": 115
         }
       },
       "findings": {
@@ -3101,23 +2834,6 @@
             "group": "draft6",
             "file": "allOf.json",
             "optional": false,
-            "case_description": "allOf simple types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "mismatch one",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "allOf.json",
-            "optional": false,
             "case_description": "nested allOf, to check validation semantics",
             "triage": "likely_our_bug",
             "tests": [
@@ -3133,13 +2849,29 @@
           },
           {
             "group": "draft6",
-            "file": "anyOf.json",
+            "file": "allOf.json",
             "optional": false,
-            "case_description": "anyOf",
+            "case_description": "allOf combined with anyOf, oneOf",
             "triage": "likely_our_bug",
             "tests": [
               {
-                "test_description": "neither anyOf valid",
+                "test_description": "allOf: false, anyOf: true, oneOf: false",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: false, anyOf: true, oneOf: true",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: true, anyOf: true, oneOf: false",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -3185,159 +2917,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with null",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "not null is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 0 does not match other zero-like types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with -2.0 matches integer and float types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "integer -2 is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "float and integers are equal up to 64-bit representation limits",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 0 does not match false",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [0] does not match [false]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[0.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [1] does not match [true]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[1.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -3396,40 +2975,6 @@
           },
           {
             "group": "draft6",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation with unsigned integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
             "file": "minItems.json",
             "optional": false,
             "case_description": "minItems validation",
@@ -3462,73 +3007,6 @@
               },
               {
                 "test_description": "one grapheme is not long enough",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation with signed integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "int below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "oneOf.json",
-            "optional": false,
-            "case_description": "oneOf",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "first oneOf valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "neither oneOf valid",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -3625,23 +3103,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "type.json",
-            "optional": false,
-            "case_description": "integer type matches integers",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a float with zero fractional part is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -3784,128 +3245,6 @@
                 "majority": true,
                 "agreeing": 9,
                 "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "uniqueItems.json",
-            "optional": false,
-            "case_description": "uniqueItems validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "non-unique array of integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "numbers are unique if mathematically unequal",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of strings is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "property order of array of objects is ignored",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of nested objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique heterogeneous types are invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "objects are non-unique despite key order",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "optional/bignum.json",
-            "optional": true,
-            "case_description": "integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "a negative bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
               }
             ]
           },
@@ -5020,16 +4359,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 922,
-              "passed": 453,
-              "failed": 63,
-              "skipped": 406,
+              "passed": 506,
+              "failed": 36,
+              "skipped": 380,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 453,
+              "numerator": 506,
               "denominator": 922,
-              "percent": "49.13%"
+              "percent": "54.88%"
             }
           },
           "python-jsonschema": {
@@ -5081,29 +4420,29 @@
         "ours": {
           "tally": {
             "total": 922,
-            "passed": 453,
-            "failed": 63,
-            "skipped": 406,
+            "passed": 506,
+            "failed": 36,
+            "skipped": 380,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 453,
+            "numerator": 506,
             "denominator": 922,
-            "percent": "49.13%"
+            "percent": "54.88%"
           },
           "coverage": {
-            "numerator": 516,
+            "numerator": 542,
             "denominator": 922,
-            "percent": "55.97%"
+            "percent": "58.79%"
           },
           "correctness": {
-            "numerator": 453,
-            "denominator": 516,
-            "percent": "87.79%"
+            "numerator": 506,
+            "denominator": 542,
+            "percent": "93.36%"
           },
-          "disagreements_with_majority": 63,
-          "wrong_vs_expected": 63
+          "disagreements_with_majority": 36,
+          "wrong_vs_expected": 36
         }
       },
       "optional": {
@@ -5187,16 +4526,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 621,
-              "passed": 328,
-              "failed": 249,
-              "skipped": 44,
+              "passed": 333,
+              "failed": 247,
+              "skipped": 41,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 328,
+              "numerator": 333,
               "denominator": 621,
-              "percent": "52.82%"
+              "percent": "53.62%"
             }
           },
           "python-jsonschema": {
@@ -5248,29 +4587,29 @@
         "ours": {
           "tally": {
             "total": 621,
-            "passed": 328,
-            "failed": 249,
-            "skipped": 44,
+            "passed": 333,
+            "failed": 247,
+            "skipped": 41,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 328,
+            "numerator": 333,
             "denominator": 621,
-            "percent": "52.82%"
+            "percent": "53.62%"
           },
           "coverage": {
-            "numerator": 577,
+            "numerator": 580,
             "denominator": 621,
-            "percent": "92.91%"
+            "percent": "93.40%"
           },
           "correctness": {
-            "numerator": 328,
-            "denominator": 577,
-            "percent": "56.85%"
+            "numerator": 333,
+            "denominator": 580,
+            "percent": "57.41%"
           },
-          "disagreements_with_majority": 170,
-          "wrong_vs_expected": 249
+          "disagreements_with_majority": 168,
+          "wrong_vs_expected": 247
         }
       },
       "findings": {
@@ -5347,23 +4686,6 @@
             "group": "draft7",
             "file": "allOf.json",
             "optional": false,
-            "case_description": "allOf simple types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "mismatch one",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "allOf.json",
-            "optional": false,
             "case_description": "nested allOf, to check validation semantics",
             "triage": "likely_our_bug",
             "tests": [
@@ -5379,13 +4701,29 @@
           },
           {
             "group": "draft7",
-            "file": "anyOf.json",
+            "file": "allOf.json",
             "optional": false,
-            "case_description": "anyOf",
+            "case_description": "allOf combined with anyOf, oneOf",
             "triage": "likely_our_bug",
             "tests": [
               {
-                "test_description": "neither anyOf valid",
+                "test_description": "allOf: false, anyOf: true, oneOf: false",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: false, anyOf: true, oneOf: true",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: true, anyOf: true, oneOf: false",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -5431,159 +4769,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with null",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "not null is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 0 does not match other zero-like types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with -2.0 matches integer and float types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "integer -2 is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "float and integers are equal up to 64-bit representation limits",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 0 does not match false",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [0] does not match [false]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[0.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [1] does not match [true]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[1.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -5642,40 +4827,6 @@
           },
           {
             "group": "draft7",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation with unsigned integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
             "file": "minItems.json",
             "optional": false,
             "case_description": "minItems validation",
@@ -5708,73 +4859,6 @@
               },
               {
                 "test_description": "one grapheme is not long enough",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation with signed integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "int below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "oneOf.json",
-            "optional": false,
-            "case_description": "oneOf",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "first oneOf valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "neither oneOf valid",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -5871,23 +4955,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "type.json",
-            "optional": false,
-            "case_description": "integer type matches integers",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a float with zero fractional part is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -6030,128 +5097,6 @@
                 "majority": true,
                 "agreeing": 9,
                 "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "uniqueItems.json",
-            "optional": false,
-            "case_description": "uniqueItems validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "non-unique array of integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "numbers are unique if mathematically unequal",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of strings is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "property order of array of objects is ignored",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of nested objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique heterogeneous types are invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "objects are non-unique despite key order",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/bignum.json",
-            "optional": true,
-            "case_description": "integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "a negative bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
               }
             ]
           },
@@ -7853,16 +6798,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 1242,
-              "passed": 468,
-              "failed": 65,
-              "skipped": 709,
+              "passed": 521,
+              "failed": 38,
+              "skipped": 683,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 468,
+              "numerator": 521,
               "denominator": 1242,
-              "percent": "37.68%"
+              "percent": "41.95%"
             }
           },
           "python-jsonschema": {
@@ -7914,29 +6859,29 @@
         "ours": {
           "tally": {
             "total": 1242,
-            "passed": 468,
-            "failed": 65,
-            "skipped": 709,
+            "passed": 521,
+            "failed": 38,
+            "skipped": 683,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 468,
+            "numerator": 521,
             "denominator": 1242,
-            "percent": "37.68%"
+            "percent": "41.95%"
           },
           "coverage": {
-            "numerator": 533,
+            "numerator": 559,
             "denominator": 1242,
-            "percent": "42.91%"
+            "percent": "45.01%"
           },
           "correctness": {
-            "numerator": 468,
-            "denominator": 533,
-            "percent": "87.80%"
+            "numerator": 521,
+            "denominator": 559,
+            "percent": "93.20%"
           },
-          "disagreements_with_majority": 65,
-          "wrong_vs_expected": 65
+          "disagreements_with_majority": 38,
+          "wrong_vs_expected": 38
         }
       },
       "optional": {
@@ -8020,16 +6965,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 710,
-              "passed": 360,
-              "failed": 269,
-              "skipped": 81,
+              "passed": 365,
+              "failed": 267,
+              "skipped": 78,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 360,
+              "numerator": 365,
               "denominator": 710,
-              "percent": "50.70%"
+              "percent": "51.41%"
             }
           },
           "python-jsonschema": {
@@ -8081,29 +7026,29 @@
         "ours": {
           "tally": {
             "total": 710,
-            "passed": 360,
-            "failed": 269,
-            "skipped": 81,
+            "passed": 365,
+            "failed": 267,
+            "skipped": 78,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 360,
+            "numerator": 365,
             "denominator": 710,
-            "percent": "50.70%"
+            "percent": "51.41%"
           },
           "coverage": {
-            "numerator": 629,
+            "numerator": 632,
             "denominator": 710,
-            "percent": "88.59%"
+            "percent": "89.01%"
           },
           "correctness": {
-            "numerator": 360,
-            "denominator": 629,
-            "percent": "57.23%"
+            "numerator": 365,
+            "denominator": 632,
+            "percent": "57.75%"
           },
-          "disagreements_with_majority": 17,
-          "wrong_vs_expected": 269
+          "disagreements_with_majority": 15,
+          "wrong_vs_expected": 267
         }
       },
       "findings": {
@@ -8180,23 +7125,6 @@
             "group": "draft2019-09",
             "file": "allOf.json",
             "optional": false,
-            "case_description": "allOf simple types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "mismatch one",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "allOf.json",
-            "optional": false,
             "case_description": "nested allOf, to check validation semantics",
             "triage": "likely_our_bug",
             "tests": [
@@ -8212,13 +7140,29 @@
           },
           {
             "group": "draft2019-09",
-            "file": "anyOf.json",
+            "file": "allOf.json",
             "optional": false,
-            "case_description": "anyOf",
+            "case_description": "allOf combined with anyOf, oneOf",
             "triage": "likely_our_bug",
             "tests": [
               {
-                "test_description": "neither anyOf valid",
+                "test_description": "allOf: false, anyOf: true, oneOf: false",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: false, anyOf: true, oneOf: true",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: true, anyOf: true, oneOf: false",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -8264,159 +7208,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with null",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "not null is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 0 does not match other zero-like types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with -2.0 matches integer and float types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "integer -2 is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "float and integers are equal up to 64-bit representation limits",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 0 does not match false",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [0] does not match [false]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[0.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [1] does not match [true]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[1.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -8475,40 +7266,6 @@
           },
           {
             "group": "draft2019-09",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation with unsigned integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
             "file": "minItems.json",
             "optional": false,
             "case_description": "minItems validation",
@@ -8541,73 +7298,6 @@
               },
               {
                 "test_description": "one grapheme is not long enough",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation with signed integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "int below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "oneOf.json",
-            "optional": false,
-            "case_description": "oneOf",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "first oneOf valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "neither oneOf valid",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -8738,23 +7428,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "type.json",
-            "optional": false,
-            "case_description": "integer type matches integers",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a float with zero fractional part is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -8897,128 +7570,6 @@
                 "majority": true,
                 "agreeing": 9,
                 "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "uniqueItems.json",
-            "optional": false,
-            "case_description": "uniqueItems validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "non-unique array of integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "numbers are unique if mathematically unequal",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of strings is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "property order of array of objects is ignored",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of nested objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique heterogeneous types are invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "objects are non-unique despite key order",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/bignum.json",
-            "optional": true,
-            "case_description": "integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "a negative bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
               }
             ]
           },
@@ -9493,16 +8044,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 1277,
-              "passed": 485,
-              "failed": 64,
-              "skipped": 728,
+              "passed": 538,
+              "failed": 37,
+              "skipped": 702,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 485,
+              "numerator": 538,
               "denominator": 1277,
-              "percent": "37.98%"
+              "percent": "42.13%"
             }
           },
           "python-jsonschema": {
@@ -9554,29 +8105,29 @@
         "ours": {
           "tally": {
             "total": 1277,
-            "passed": 485,
-            "failed": 64,
-            "skipped": 728,
+            "passed": 538,
+            "failed": 37,
+            "skipped": 702,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 485,
+            "numerator": 538,
             "denominator": 1277,
-            "percent": "37.98%"
+            "percent": "42.13%"
           },
           "coverage": {
-            "numerator": 549,
+            "numerator": 575,
             "denominator": 1277,
-            "percent": "42.99%"
+            "percent": "45.03%"
           },
           "correctness": {
-            "numerator": 485,
-            "denominator": 549,
-            "percent": "88.34%"
+            "numerator": 538,
+            "denominator": 575,
+            "percent": "93.57%"
           },
-          "disagreements_with_majority": 64,
-          "wrong_vs_expected": 64
+          "disagreements_with_majority": 37,
+          "wrong_vs_expected": 37
         }
       },
       "optional": {
@@ -9660,16 +8211,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 722,
-              "passed": 367,
-              "failed": 274,
-              "skipped": 81,
+              "passed": 372,
+              "failed": 272,
+              "skipped": 78,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 367,
+              "numerator": 372,
               "denominator": 722,
-              "percent": "50.83%"
+              "percent": "51.52%"
             }
           },
           "python-jsonschema": {
@@ -9721,29 +8272,29 @@
         "ours": {
           "tally": {
             "total": 722,
-            "passed": 367,
-            "failed": 274,
-            "skipped": 81,
+            "passed": 372,
+            "failed": 272,
+            "skipped": 78,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 367,
+            "numerator": 372,
             "denominator": 722,
-            "percent": "50.83%"
+            "percent": "51.52%"
           },
           "coverage": {
-            "numerator": 641,
+            "numerator": 644,
             "denominator": 722,
-            "percent": "88.78%"
+            "percent": "89.20%"
           },
           "correctness": {
-            "numerator": 367,
-            "denominator": 641,
-            "percent": "57.25%"
+            "numerator": 372,
+            "denominator": 644,
+            "percent": "57.76%"
           },
-          "disagreements_with_majority": 17,
-          "wrong_vs_expected": 274
+          "disagreements_with_majority": 15,
+          "wrong_vs_expected": 272
         }
       },
       "findings": {
@@ -9820,23 +8371,6 @@
             "group": "draft2020-12",
             "file": "allOf.json",
             "optional": false,
-            "case_description": "allOf simple types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "mismatch one",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "allOf.json",
-            "optional": false,
             "case_description": "nested allOf, to check validation semantics",
             "triage": "likely_our_bug",
             "tests": [
@@ -9852,13 +8386,29 @@
           },
           {
             "group": "draft2020-12",
-            "file": "anyOf.json",
+            "file": "allOf.json",
             "optional": false,
-            "case_description": "anyOf",
+            "case_description": "allOf combined with anyOf, oneOf",
             "triage": "likely_our_bug",
             "tests": [
               {
-                "test_description": "neither anyOf valid",
+                "test_description": "allOf: false, anyOf: true, oneOf: false",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: false, anyOf: true, oneOf: true",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              },
+              {
+                "test_description": "allOf: true, anyOf: true, oneOf: false",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -9904,159 +8454,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with null",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "not null is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 0 does not match other zero-like types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "const with -2.0 matches integer and float types",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "integer -2 is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "const.json",
-            "optional": false,
-            "case_description": "float and integers are equal up to 64-bit representation limits",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 0 does not match false",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float zero is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [0] does not match [false]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[0.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with 1 does not match true",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float one is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "enum.json",
-            "optional": false,
-            "case_description": "enum with [1] does not match [true]",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "[1.0] is valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -10115,40 +8512,6 @@
           },
           {
             "group": "draft2020-12",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "maximum.json",
-            "optional": false,
-            "case_description": "maximum validation with unsigned integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "above the maximum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
             "file": "minItems.json",
             "optional": false,
             "case_description": "minItems validation",
@@ -10181,73 +8544,6 @@
               },
               {
                 "test_description": "one grapheme is not long enough",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "minimum.json",
-            "optional": false,
-            "case_description": "minimum validation with signed integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "float below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "int below the minimum is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "oneOf.json",
-            "optional": false,
-            "case_description": "oneOf",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "first oneOf valid",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "neither oneOf valid",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -10361,23 +8657,6 @@
                 "expected": false,
                 "ours": true,
                 "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "type.json",
-            "optional": false,
-            "case_description": "integer type matches integers",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a float with zero fractional part is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
                 "agreeing": 9,
                 "voters": 9
               }
@@ -10520,128 +8799,6 @@
                 "majority": true,
                 "agreeing": 9,
                 "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "uniqueItems.json",
-            "optional": false,
-            "case_description": "uniqueItems validation",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "non-unique array of integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two integers is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "numbers are unique if mathematically unequal",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of strings is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "property order of array of objects is ignored",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of nested objects is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique array of more than two arrays is invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "non-unique heterogeneous types are invalid",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              },
-              {
-                "test_description": "objects are non-unique despite key order",
-                "expected": false,
-                "ours": true,
-                "majority": false,
-                "agreeing": 9,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/bignum.json",
-            "optional": true,
-            "case_description": "integer",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "a bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
-              },
-              {
-                "test_description": "a negative bignum is an integer",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 8,
-                "voters": 8
               }
             ]
           },
@@ -11136,18 +9293,6 @@
       }
     },
     {
-      "reason": "keyword \"multipleOf\"",
-      "tests": 95,
-      "cases": 35,
-      "by_group": {
-        "draft2019-09": 19,
-        "draft2020-12": 19,
-        "draft4": 19,
-        "draft6": 19,
-        "draft7": 19
-      }
-    },
-    {
       "reason": "keyword \"else\"",
       "tests": 91,
       "cases": 32,
@@ -11270,30 +9415,6 @@
       "by_group": {
         "draft2019-09": 15,
         "draft2020-12": 17
-      }
-    },
-    {
-      "reason": "keyword \"exclusiveMaximum\"",
-      "tests": 27,
-      "cases": 11,
-      "by_group": {
-        "draft2019-09": 5,
-        "draft2020-12": 5,
-        "draft4": 7,
-        "draft6": 5,
-        "draft7": 5
-      }
-    },
-    {
-      "reason": "keyword \"exclusiveMinimum\"",
-      "tests": 27,
-      "cases": 11,
-      "by_group": {
-        "draft2019-09": 5,
-        "draft2020-12": 5,
-        "draft4": 7,
-        "draft6": 5,
-        "draft7": 5
       }
     },
     {
@@ -13335,7 +11456,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/jscpd.json\": invalid file url: https://json.schemastore.org/jscpd.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -13379,7 +11500,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/jscpd.json\": invalid file url: https://json.schemastore.org/jscpd.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -13423,7 +11544,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/semantic-release.json\": invalid file url: https://json.schemastore.org/semantic-release.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -13467,7 +11588,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/semantic-release.json\": invalid file url: https://json.schemastore.org/semantic-release.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -15120,38 +13241,21 @@
     },
     {
       "source": "suite draft2020-12/anyOf.json",
-      "title": "anyOf complex types / neither anyOf valid (complex)",
+      "title": "anyOf / neither anyOf valid",
       "schema_path": null,
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
-            "properties": {
-              "bar": {
-                "type": "integer"
-              }
-            },
-            "required": [
-              "bar"
-            ]
+            "type": "integer"
           },
           {
-            "properties": {
-              "foo": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "foo"
-            ]
+            "minimum": 2
           }
         ]
       },
       "instance_path": null,
-      "instance": {
-        "bar": "quux",
-        "foo": 2
-      },
+      "instance": 1.5,
       "outputs": [
         {
           "tool": "json-schema-rs",
@@ -15164,7 +13268,7 @@
           "tool": "jsonschema",
           "outcome": "invalid",
           "messages": [
-            "/: {\"bar\":\"quux\",\"foo\":2} is not valid under any of the schemas listed in the 'anyOf' keyword"
+            "/: 1.5 is not valid under any of the schemas listed in the 'anyOf' keyword"
           ]
         },
         {
@@ -15173,8 +13277,8 @@
           "messages": [
             "jsonschema validation failed with mem://differential/schema.json#",
             "- at '': anyOf failed",
-            "  - at '/bar': want integer, but got string",
-            "  - at '/foo': want string, but got number"
+            "  - at '': want integer, but got number",
+            "  - at '': must be >=2, but got 1.5"
           ]
         }
       ]
@@ -15374,6 +13478,76 @@
       ]
     },
     {
+      "source": "suite draft2020-12/exclusiveMaximum.json",
+      "title": "exclusiveMaximum validation / boundary point is invalid",
+      "schema_path": null,
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "exclusiveMaximum": 3.0
+      },
+      "instance_path": null,
+      "instance": 3.0,
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "root: value 3.0 is not below exclusiveMaximum 3.0"
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/: 3.0 is greater than or equal to the maximum of 3.0"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '': must be < 3.0 but got 3.0"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "suite draft2020-12/exclusiveMinimum.json",
+      "title": "exclusiveMinimum validation / boundary point is invalid",
+      "schema_path": null,
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "exclusiveMinimum": 1.1
+      },
+      "instance_path": null,
+      "instance": 1.1,
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "root: value 1.1 is not above exclusiveMinimum 1.1"
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/: 1.1 is less than or equal to the minimum of 1.1"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '': must be > 1.1 but got 1.1"
+          ]
+        }
+      ]
+    },
+    {
       "source": "suite draft2020-12/infinite-loop-detection.json",
       "title": "evaluating the same schema location against the same data location twice is not a sign of an infinite loop / failing case",
       "schema_path": null,
@@ -15503,6 +13677,111 @@
           "messages": [
             "jsonschema validation failed with mem://differential/schema.json#",
             "- at '/0/0/0/0': want number, but got string"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "suite draft2020-12/maximum.json",
+      "title": "maximum validation / above the maximum is invalid",
+      "schema_path": null,
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "maximum": 3.0
+      },
+      "instance_path": null,
+      "instance": 3.5,
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "root: value 3.5 is above maximum 3.0"
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/: 3.5 is greater than the maximum of 3.0"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '': must be <=3.0, but got 3.5"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "suite draft2020-12/minimum.json",
+      "title": "minimum validation / below the minimum is invalid",
+      "schema_path": null,
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "minimum": 1.1
+      },
+      "instance_path": null,
+      "instance": 0.6,
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "root: value 0.6 is below minimum 1.1"
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/: 0.6 is less than the minimum of 1.1"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '': must be >=1.1, but got 0.6"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "suite draft2020-12/multipleOf.json",
+      "title": "by int / int by int fail",
+      "schema_path": null,
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "multipleOf": 2
+      },
+      "instance_path": null,
+      "instance": 7,
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "root: value 7 is not a multiple of 2"
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/: 7 is not a multiple of 2"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '': 7 is not multipleOf 2"
           ]
         }
       ]
@@ -15746,6 +14025,44 @@
           "messages": [
             "jsonschema validation failed with mem://differential/schema.json#",
             "- at '': want integer, but got number"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "suite draft2020-12/uniqueItems.json",
+      "title": "uniqueItems validation / non-unique array of integers is invalid",
+      "schema_path": null,
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "uniqueItems": true
+      },
+      "instance_path": null,
+      "instance": [
+        1,
+        1
+      ],
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "root: array has duplicate items (value: 1)"
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/: [1,1] has non-unique elements"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '': items at 0 and 1 are equal"
           ]
         }
       ]
@@ -16153,7 +14470,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {
@@ -16188,7 +14505,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {
@@ -16371,7 +14688,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {
@@ -16405,7 +14722,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {
@@ -16440,7 +14757,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {
@@ -17274,7 +15591,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {
@@ -17327,7 +15644,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {
@@ -17365,7 +15682,7 @@
           "tool": "json-schema-rs",
           "outcome": "error",
           "messages": [
-            "schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
+            "schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`"
           ]
         },
         {

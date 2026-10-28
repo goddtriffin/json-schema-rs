@@ -1,6 +1,6 @@
 //! In-memory representation of JSON Schema for codegen.
 
-use super::dialect::{Dialect, ResolvedDialect, SubschemaPosition};
+use super::dialect::{Dialect, ExclusiveBounds, ResolvedDialect, SubschemaPosition};
 use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
 use super::settings::{JsonSchemaSettings, resolve_dialect, resolve_dialect_for_uri};
 use serde::de::DeserializeOwned;
@@ -96,6 +96,15 @@ impl<'de> Deserialize<'de> for AdditionalProperties {
     }
 }
 
+/// Deserializes a keyword whose presence matters even when its value is `null` (`"const": null`):
+/// a present key is always `Some`, so `null` becomes `Some(Value::Null)` rather than `None`.
+fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
 /// First type in the array is used; codegen uses `object` and `string`.
 fn deserialize_type_optional<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -171,7 +180,7 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     pub(crate) comment: Option<String>,
     #[serde(default, rename = "enum")]
     pub(crate) enum_values: Option<Vec<serde_json::Value>>,
-    #[serde(default, rename = "const")]
+    #[serde(default, rename = "const", deserialize_with = "deserialize_present")]
     pub(crate) const_value: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) items: Option<Box<DenyUnknownFieldsJsonSchema>>,
@@ -182,9 +191,15 @@ pub(crate) struct DenyUnknownFieldsJsonSchema {
     #[serde(default, rename = "maxItems")]
     pub(crate) max_items: Option<u64>,
     #[serde(default)]
-    pub(crate) minimum: Option<f64>,
+    pub(crate) minimum: Option<serde_json::Number>,
     #[serde(default)]
-    pub(crate) maximum: Option<f64>,
+    pub(crate) maximum: Option<serde_json::Number>,
+    #[serde(default, rename = "exclusiveMinimum")]
+    pub(crate) exclusive_minimum: Option<serde_json::Number>,
+    #[serde(default, rename = "exclusiveMaximum")]
+    pub(crate) exclusive_maximum: Option<serde_json::Number>,
+    #[serde(default, rename = "multipleOf")]
+    pub(crate) multiple_of: Option<serde_json::Number>,
     #[serde(default, rename = "minLength")]
     pub(crate) min_length: Option<u64>,
     #[serde(default, rename = "maxLength")]
@@ -264,6 +279,9 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         max_items: h.max_items,
         minimum: h.minimum,
         maximum: h.maximum,
+        exclusive_minimum: h.exclusive_minimum,
+        exclusive_maximum: h.exclusive_maximum,
+        multiple_of: h.multiple_of,
         min_length: h.min_length,
         max_length: h.max_length,
         pattern: h.pattern,
@@ -336,7 +354,7 @@ pub struct JsonSchema {
     #[serde(rename = "enum", skip_serializing_if = "skip_enum_values")]
     pub enum_values: Option<Vec<serde_json::Value>>,
 
-    /// Single allowed value for the instance (JSON Schema `const`, draft-06+). When present, instance must equal this value. Codegen uses only string const (single-variant enum).
+    /// Single allowed value for the instance (JSON Schema `const`, draft-06+). When present, instance must equal this value (numbers by value: `1` equals `1.0`). `"const": null` is `Some(Value::Null)`. Codegen uses only string const (single-variant enum).
     #[serde(rename = "const", skip_serializing_if = "Option::is_none")]
     pub const_value: Option<serde_json::Value>,
 
@@ -356,13 +374,32 @@ pub struct JsonSchema {
     #[serde(rename = "maxItems", skip_serializing_if = "Option::is_none")]
     pub max_items: Option<u64>,
 
-    /// Inclusive lower bound for numeric instances (integer or number). Used for validation and for codegen type selection.
+    /// Inclusive lower bound for numeric instances, held exactly as written (an integer stays an
+    /// integer). Used for validation and for codegen type selection.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub minimum: Option<f64>,
+    pub minimum: Option<serde_json::Number>,
 
-    /// Inclusive upper bound for numeric instances (integer or number). Used for validation and for codegen type selection.
+    /// Inclusive upper bound for numeric instances, held exactly as written. Used for validation
+    /// and for codegen type selection.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub maximum: Option<f64>,
+    pub maximum: Option<serde_json::Number>,
+
+    /// Exclusive lower bound for numeric instances (draft 6+ form). A draft-4 document's boolean
+    /// `exclusiveMinimum: true` is read at parse time as this bound with `minimum`'s value (see
+    /// [`ExclusiveBounds`](super::ExclusiveBounds)). Used for validation and codegen type
+    /// selection.
+    #[serde(rename = "exclusiveMinimum", skip_serializing_if = "Option::is_none")]
+    pub exclusive_minimum: Option<serde_json::Number>,
+
+    /// Exclusive upper bound for numeric instances; the counterpart of
+    /// [`exclusive_minimum`](Self::exclusive_minimum).
+    #[serde(rename = "exclusiveMaximum", skip_serializing_if = "Option::is_none")]
+    pub exclusive_maximum: Option<serde_json::Number>,
+
+    /// A numeric instance must be an integer multiple of this value (decided exactly; see
+    /// design.md, *multipleOf*). Used for validation.
+    #[serde(rename = "multipleOf", skip_serializing_if = "Option::is_none")]
+    pub multiple_of: Option<serde_json::Number>,
 
     /// Minimum string length in Unicode code points. String-only; used by validator and codegen.
     #[serde(rename = "minLength", skip_serializing_if = "Option::is_none")]
@@ -414,6 +451,7 @@ pub struct JsonSchema {
 }
 
 impl<'de> Deserialize<'de> for JsonSchema {
+    #[expect(clippy::too_many_lines)]
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -447,7 +485,7 @@ impl<'de> Deserialize<'de> for JsonSchema {
             comment: Option<String>,
             #[serde(default, rename = "enum")]
             enum_values: Option<Vec<serde_json::Value>>,
-            #[serde(default, rename = "const")]
+            #[serde(default, rename = "const", deserialize_with = "deserialize_present")]
             const_value: Option<serde_json::Value>,
             #[serde(default)]
             items: Option<Box<JsonSchema>>,
@@ -458,9 +496,15 @@ impl<'de> Deserialize<'de> for JsonSchema {
             #[serde(default, rename = "maxItems")]
             max_items: Option<u64>,
             #[serde(default)]
-            minimum: Option<f64>,
+            minimum: Option<serde_json::Number>,
             #[serde(default)]
-            maximum: Option<f64>,
+            maximum: Option<serde_json::Number>,
+            #[serde(default, rename = "exclusiveMinimum")]
+            exclusive_minimum: Option<serde_json::Number>,
+            #[serde(default, rename = "exclusiveMaximum")]
+            exclusive_maximum: Option<serde_json::Number>,
+            #[serde(default, rename = "multipleOf")]
+            multiple_of: Option<serde_json::Number>,
             #[serde(default, rename = "minLength")]
             min_length: Option<u64>,
             #[serde(default, rename = "maxLength")]
@@ -504,6 +548,9 @@ impl<'de> Deserialize<'de> for JsonSchema {
             max_items: h.max_items,
             minimum: h.minimum,
             maximum: h.maximum,
+            exclusive_minimum: h.exclusive_minimum,
+            exclusive_maximum: h.exclusive_maximum,
+            multiple_of: h.multiple_of,
             min_length: h.min_length,
             max_length: h.max_length,
             pattern: h.pattern,
@@ -535,18 +582,36 @@ impl RawSchema<'_> {
     }
 }
 
-/// Parses raw schema text. Lenient parsing goes straight to the model unless the document is
-/// draft 4 and may contain an `id` key; strict parsing, and that draft-4 case, go through a
-/// [`Value`] so the dialect is known before the model is built.
+/// Parses raw schema text. Lenient parsing goes straight to the model unless the document
+/// needs a draft-4 shape normalised (an `id` key, or a boolean `exclusiveMinimum` /
+/// `exclusiveMaximum`, which the model cannot hold); strict parsing, and those cases, go through
+/// a [`Value`] so the dialect is known before the model is built.
 fn parse_raw(
     raw: RawSchema<'_>,
     settings: &JsonSchemaSettings,
 ) -> JsonSchemaParseResult<JsonSchema> {
     if !settings.disallow_unknown_fields {
-        let schema: JsonSchema = raw.parse()?;
-        let resolved: ResolvedDialect = resolve_dialect(&schema, settings)?;
-        if !uses_legacy_id(resolved.dialect) || !may_contain_id_key(raw) {
-            return Ok(finish_parse(schema, &resolved));
+        match raw.parse::<JsonSchema>() {
+            Ok(schema) => {
+                let resolved: ResolvedDialect = resolve_dialect(&schema, settings)?;
+                if !uses_legacy_id(resolved.dialect) || !may_contain_key(raw, "\"id\"") {
+                    return Ok(finish_parse(schema, &resolved));
+                }
+            }
+            Err(error) => {
+                // A draft-4 boolean bound fails the direct parse; retry through a `Value` only
+                // when that can be the cause, and otherwise keep the direct error (it carries
+                // the line and column).
+                if !may_contain_key(raw, "\"exclusiveM") {
+                    return Err(error.into());
+                }
+                let value: Value = raw.parse()?;
+                let resolved: ResolvedDialect = resolve_dialect_for_value(&value, settings)?;
+                if resolved.dialect.exclusive_bounds != ExclusiveBounds::BooleanModifier {
+                    return Err(error.into());
+                }
+                return parse_value_in_dialect(value, &resolved, settings);
+            }
         }
     }
     let value: Value = raw.parse()?;
@@ -554,22 +619,34 @@ fn parse_raw(
 }
 
 /// Parses a schema document held as a [`Value`].
-fn parse_value(
+fn parse_value(value: Value, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<JsonSchema> {
+    let resolved: ResolvedDialect = resolve_dialect_for_value(&value, settings)?;
+    parse_value_in_dialect(value, &resolved, settings)
+}
+
+/// Resolves the dialect of a document held as a [`Value`] from its `$schema` and `settings`.
+fn resolve_dialect_for_value(
+    value: &Value,
+    settings: &JsonSchemaSettings,
+) -> JsonSchemaParseResult<ResolvedDialect> {
+    let schema_uri: Option<&str> = value.get("$schema").and_then(Value::as_str);
+    resolve_dialect_for_uri(schema_uri, settings)
+}
+
+/// Normalises the document's draft-4 shapes for `resolved`'s dialect and builds the model.
+fn parse_value_in_dialect(
     mut value: Value,
+    resolved: &ResolvedDialect,
     settings: &JsonSchemaSettings,
 ) -> JsonSchemaParseResult<JsonSchema> {
-    let schema_uri: Option<&str> = value.get("$schema").and_then(Value::as_str);
-    let resolved: ResolvedDialect = resolve_dialect_for_uri(schema_uri, settings)?;
-    if uses_legacy_id(resolved.dialect) {
-        normalize_legacy_ids(&mut value, resolved.dialect);
-    }
+    normalize_draft4_shapes(&mut value, resolved.dialect);
     let schema: JsonSchema = if settings.disallow_unknown_fields {
         let helper: DenyUnknownFieldsJsonSchema = serde_json::from_value(value)?;
         deny_unknown_fields_helper_to_schema(helper)
     } else {
         serde_json::from_value(value)?
     };
-    Ok(finish_parse(schema, &resolved))
+    Ok(finish_parse(schema, resolved))
 }
 
 /// Logs the dialect warnings and records the dialect on the root when the settings changed it.
@@ -588,33 +665,61 @@ fn uses_legacy_id(dialect: Dialect) -> bool {
     dialect.id_keyword() == "id"
 }
 
-/// Whether raw JSON text can contain an object key `id`: the key is either written literally or
-/// spelled with a `\u` escape. Uses `str::contains`, which is several times faster than a
-/// byte-window scan on large documents; text that is not UTF-8 answers `true` and is left to the
-/// parser to reject.
-fn may_contain_id_key(raw: RawSchema<'_>) -> bool {
+/// Whether raw JSON text can contain `needle` (a quoted key or key prefix): it is either written
+/// literally or the text has a `\u` escape that could spell it. Uses `str::contains`, which is
+/// several times faster than a byte-window scan on large documents; text that is not UTF-8
+/// answers `true` and is left to the parser to reject.
+fn may_contain_key(raw: RawSchema<'_>, needle: &str) -> bool {
     let text: Result<&str, std::str::Utf8Error> = match raw {
         RawSchema::Str(s) => Ok(s),
         RawSchema::Slice(b) => std::str::from_utf8(b),
     };
-    text.map_or(true, |s| s.contains("\"id\"") || s.contains("\\u"))
+    text.map_or(true, |s| s.contains(needle) || s.contains("\\u"))
 }
 
-/// Renames draft 4's string `id` to `$id` in every schema object of `root`, so the model holds
-/// one shape whatever the draft. Only schema positions are visited (from the dialect's keyword
-/// table), so a property named `id` is left alone. Iterative; an object that already has `$id`
-/// keeps both keys as written.
-fn normalize_legacy_ids(root: &mut Value, dialect: Dialect) {
+/// Rewrites draft-4 shapes in every schema object of `root` into the one shape the model holds,
+/// as `dialect` says:
+///
+/// - when the id keyword is `id`, a string `id` becomes `$id` (an object that already has `$id`
+///   keeps both keys as written);
+/// - under [`ExclusiveBounds::BooleanModifier`], `exclusiveMinimum: true` next to `minimum`
+///   becomes `exclusiveMinimum: <minimum>` with `minimum` removed, and `exclusiveMinimum: false`
+///   (or `true` without `minimum`, which has no effect) is removed; likewise for
+///   `exclusiveMaximum` / `maximum`. A numeric `exclusiveMinimum` is kept as the bound it states.
+///
+/// Only schema positions are visited (from the dialect's keyword table), so a property named
+/// `id` is left alone. Iterative.
+fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect) {
+    let legacy_id: bool = uses_legacy_id(dialect);
+    let boolean_bounds: bool = dialect.exclusive_bounds == ExclusiveBounds::BooleanModifier;
+    if !legacy_id && !boolean_bounds {
+        return;
+    }
     let mut stack: Vec<&mut Value> = vec![root];
     while let Some(node) = stack.pop() {
         let Value::Object(map) = node else {
             continue;
         };
-        if !map.contains_key("$id")
+        if legacy_id
+            && !map.contains_key("$id")
             && map.get("id").is_some_and(Value::is_string)
             && let Some(id) = map.remove("id")
         {
             map.insert("$id".to_string(), id);
+        }
+        if boolean_bounds {
+            for (modifier, bound) in [
+                ("exclusiveMinimum", "minimum"),
+                ("exclusiveMaximum", "maximum"),
+            ] {
+                let Some(&Value::Bool(exclusive)) = map.get(modifier) else {
+                    continue;
+                };
+                map.remove(modifier);
+                if exclusive && let Some(value) = map.remove(bound) {
+                    map.insert(modifier.to_string(), value);
+                }
+            }
         }
         for (key, child) in map.iter_mut() {
             let Some(position) = dialect.keyword(key).and_then(|k| k.subschemas) else {
@@ -945,8 +1050,8 @@ impl TryFrom<JsonSchema> for Vec<u8> {
 mod tests {
     use super::JsonSchema;
     use crate::json_schema::{
-        Dialect, FormatMode, JsonSchemaParseError, JsonSchemaSettings, SpecVersion,
-        UnknownSchemaUri,
+        Dialect, ExclusiveBounds, FormatMode, JsonSchemaParseError, JsonSchemaSettings,
+        SpecVersion, UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -2158,7 +2263,7 @@ mod tests {
     #[test]
     fn draft4_id_normalized_inside_items_array() {
         let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
-        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
         let expected: serde_json::Value = serde_json::json!([{"$id": "#first"}]);
         let actual: serde_json::Value = raw["items"].clone();
         assert_eq!(expected, actual);
@@ -2167,7 +2272,7 @@ mod tests {
     #[test]
     fn draft4_id_normalization_leaves_property_named_id() {
         let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
-        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
         let expected: serde_json::Value =
             serde_json::json!({"id": {"type": "string", "$id": "#name"}});
         let actual: serde_json::Value = raw["properties"].clone();
@@ -2177,7 +2282,7 @@ mod tests {
     #[test]
     fn draft4_id_normalized_in_dependencies_leaving_string_arrays() {
         let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
-        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
         let expected: serde_json::Value = serde_json::json!({"b": ["c"], "d": {"$id": "#d"}});
         let actual: serde_json::Value = raw["dependencies"].clone();
         assert_eq!(expected, actual);
@@ -2186,7 +2291,7 @@ mod tests {
     #[test]
     fn draft4_id_normalization_keeps_existing_dollar_id() {
         let mut raw: serde_json::Value = serde_json::json!({"$id": "http://example.com/dollar", "id": "http://example.com/plain"});
-        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
         let expected: serde_json::Value = serde_json::json!({"$id": "http://example.com/dollar", "id": "http://example.com/plain"});
         let actual: serde_json::Value = raw;
         assert_eq!(expected, actual);
@@ -2195,7 +2300,7 @@ mod tests {
     #[test]
     fn draft4_id_normalization_leaves_non_string_id() {
         let mut raw: serde_json::Value = serde_json::json!({"id": 5});
-        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
         let expected: serde_json::Value = serde_json::json!({"id": 5});
         let actual: serde_json::Value = raw;
         assert_eq!(expected, actual);
@@ -2487,51 +2592,47 @@ mod tests {
     fn deserialize_integer_with_minimum_and_maximum() {
         let json = r#"{"type":"integer","minimum":0,"maximum":255}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let expected_minimum: Option<f64> = Some(0.0);
-        let expected_maximum: Option<f64> = Some(255.0);
-        assert_eq!(expected_minimum, actual.minimum);
-        assert_eq!(expected_maximum, actual.maximum);
-        assert_eq!(actual.type_.as_deref(), Some("integer"));
+        let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
+            (Some(0_u64.into()), Some(255_u64.into()));
+        assert_eq!(expected, (actual.minimum, actual.maximum));
     }
 
     #[test]
     fn deserialize_integer_with_minimum_only() {
         let json = r#"{"type":"integer","minimum":-100}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<f64> = Some(-100.0);
-        assert_eq!(expected, actual.minimum);
-        assert_eq!(None, actual.maximum);
+        let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
+            (Some((-100_i64).into()), None);
+        assert_eq!(expected, (actual.minimum, actual.maximum));
     }
 
     #[test]
     fn deserialize_number_with_minimum_and_maximum_float() {
         let json = r#"{"type":"number","minimum":0.5,"maximum":100.5}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let expected_minimum: Option<f64> = Some(0.5);
-        let expected_maximum: Option<f64> = Some(100.5);
-        assert_eq!(expected_minimum, actual.minimum);
-        assert_eq!(expected_maximum, actual.maximum);
-        assert_eq!(actual.type_.as_deref(), Some("number"));
+        let expected: (Option<serde_json::Number>, Option<serde_json::Number>) = (
+            serde_json::Number::from_f64(0.5),
+            serde_json::Number::from_f64(100.5),
+        );
+        assert_eq!(expected, (actual.minimum, actual.maximum));
     }
 
     #[test]
     fn deserialize_integer_with_maximum_only() {
         let json = r#"{"type":"integer","maximum":100}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        assert_eq!(None, actual.minimum);
-        let expected_maximum: Option<f64> = Some(100.0);
-        assert_eq!(expected_maximum, actual.maximum);
-        assert_eq!(actual.type_.as_deref(), Some("integer"));
+        let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
+            (None, Some(100_u64.into()));
+        assert_eq!(expected, (actual.minimum, actual.maximum));
     }
 
     #[test]
     fn deserialize_number_with_maximum_only() {
         let json = r#"{"type":"number","maximum":99.5}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        assert_eq!(None, actual.minimum);
-        let expected_maximum: Option<f64> = Some(99.5);
-        assert_eq!(expected_maximum, actual.maximum);
-        assert_eq!(actual.type_.as_deref(), Some("number"));
+        let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
+            (None, serde_json::Number::from_f64(99.5));
+        assert_eq!(expected, (actual.minimum, actual.maximum));
     }
 
     #[test]
@@ -2542,6 +2643,120 @@ mod tests {
         let json = r#"{"type":"integer","minimum":0,"maximum":255}"#;
         let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
         assert!(result.is_ok());
+    }
+
+    // --- Numbers are held exactly ---
+
+    /// Parses `json` with `settings` and serializes the model back to compact JSON.
+    fn reserialize(json: &str, settings: &JsonSchemaSettings) -> String {
+        let schema: JsonSchema = JsonSchema::new_from_str(json, settings).expect("parse");
+        String::try_from(&schema).expect("serialize")
+    }
+
+    #[test]
+    fn numeric_keywords_round_trip_exactly() {
+        let json = r#"{"type":"integer","minimum":9007199254740993,"maximum":18446744073709551615,"exclusiveMinimum":-9223372036854775808,"exclusiveMaximum":1.5,"multipleOf":0.0001}"#;
+        let expected: &str = json;
+        let actual: String = reserialize(json, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_strict_accepts_exclusive_bounds_and_multiple_of_keys() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let json =
+            r#"{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":10,"multipleOf":0.5}"#;
+        let expected: &str = json;
+        let actual: String = reserialize(json, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_null_is_present() {
+        let actual: JsonSchema = JsonSchema::try_from(r#"{"const":null}"#).expect("parse");
+        let expected: Option<serde_json::Value> = Some(serde_json::Value::Null);
+        assert_eq!(expected, actual.const_value);
+    }
+
+    #[test]
+    fn const_null_is_present_when_strict() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: &str = r#"{"const":null}"#;
+        let actual: String = reserialize(r#"{"const":null}"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    // --- Draft-4 boolean exclusiveMinimum / exclusiveMaximum become numeric bounds ---
+
+    const DRAFT4_BOUNDS: &str = r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"object","properties":{"a":{"minimum":1.1,"exclusiveMinimum":true,"maximum":3,"exclusiveMaximum":false},"b":{"maximum":3,"exclusiveMaximum":true},"c":{"exclusiveMinimum":true},"d":{"minimum":0,"exclusiveMinimum":5}}}"#;
+
+    const DRAFT4_BOUNDS_NORMALIZED: &str = r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"object","properties":{"a":{"maximum":3,"exclusiveMinimum":1.1},"b":{"exclusiveMaximum":3},"c":{},"d":{"minimum":0,"exclusiveMinimum":5}}}"#;
+
+    #[test]
+    fn draft4_boolean_exclusive_bounds_normalized_from_str() {
+        let expected: &str = DRAFT4_BOUNDS_NORMALIZED;
+        let actual: String = reserialize(DRAFT4_BOUNDS, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_boolean_exclusive_bounds_normalized_from_slice() {
+        let schema: JsonSchema = JsonSchema::try_from(DRAFT4_BOUNDS.as_bytes()).expect("parse");
+        let expected: &str = DRAFT4_BOUNDS_NORMALIZED;
+        let actual: String = String::try_from(&schema).expect("serialize");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_boolean_exclusive_bounds_normalized_from_serde_value() {
+        let value: serde_json::Value = serde_json::from_str(DRAFT4_BOUNDS).expect("json");
+        let schema: JsonSchema = JsonSchema::try_from(&value).expect("parse");
+        let expected: &str = DRAFT4_BOUNDS_NORMALIZED;
+        let actual: String = String::try_from(&schema).expect("serialize");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_boolean_exclusive_bounds_normalized_when_strict() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: &str = DRAFT4_BOUNDS_NORMALIZED;
+        let actual: String = reserialize(DRAFT4_BOUNDS, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn exclusive_bounds_setting_normalizes_boolean_form_in_2020_12() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .exclusive_bounds(ExclusiveBounds::BooleanModifier)
+            .build();
+        let expected: &str = r#"{"exclusiveMinimum":1}"#;
+        let actual: String = reserialize(r#"{"minimum":1,"exclusiveMinimum":true}"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn boolean_exclusive_minimum_is_rejected_in_2020_12() {
+        let actual: Result<JsonSchema, JsonSchemaParseError> =
+            JsonSchema::try_from(r#"{"minimum":1,"exclusiveMinimum":true}"#);
+        assert!(matches!(actual, Err(JsonSchemaParseError::Serde(_))));
+    }
+
+    #[test]
+    fn invalid_schema_mentioning_exclusive_bound_keeps_direct_parse_error() {
+        let json = "{\"exclusiveMinimum\":1,\n\"minLength\":\"x\"}";
+        let expected: String =
+            "invalid type: string \"x\", expected u64 at line 2 column 15".to_string();
+        let actual: String = match JsonSchema::try_from(json) {
+            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(expected, actual);
     }
 
     #[test]

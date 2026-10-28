@@ -1,17 +1,6 @@
 use crate::json_pointer::JsonPointer;
+use serde_json::Number;
 use std::fmt;
-
-/// Wraps f64 so that `ValidationError` can derive Eq (f64 is not Eq; comparison is by bits).
-#[derive(Debug, Clone, Copy)]
-pub struct OrderedF64(pub f64);
-
-impl PartialEq for OrderedF64 {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
-    }
-}
-
-impl Eq for OrderedF64 {}
 
 pub type ValidationResult = Result<(), Vec<ValidationError>>;
 
@@ -130,19 +119,46 @@ pub enum ValidationError {
     BelowMinimum {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
-        /// The schema's minimum value.
-        minimum: OrderedF64,
+        /// The schema's minimum value, exactly as written.
+        minimum: Number,
         /// Actual instance value (for user-facing context).
-        actual: OrderedF64,
+        actual: Number,
     },
     /// Instance was above the schema's `maximum` (inclusive upper bound).
     AboveMaximum {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
-        /// The schema's maximum value.
-        maximum: OrderedF64,
+        /// The schema's maximum value, exactly as written.
+        maximum: Number,
         /// Actual instance value (for user-facing context).
-        actual: OrderedF64,
+        actual: Number,
+    },
+    /// Instance was not above the schema's `exclusiveMinimum` (exclusive lower bound).
+    NotAboveExclusiveMinimum {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's exclusive minimum, exactly as written.
+        exclusive_minimum: Number,
+        /// Actual instance value (for user-facing context).
+        actual: Number,
+    },
+    /// Instance was not below the schema's `exclusiveMaximum` (exclusive upper bound).
+    NotBelowExclusiveMaximum {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's exclusive maximum, exactly as written.
+        exclusive_maximum: Number,
+        /// Actual instance value (for user-facing context).
+        actual: Number,
+    },
+    /// Instance was not an integer multiple of the schema's `multipleOf`.
+    NotMultipleOf {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's `multipleOf`, exactly as written.
+        multiple_of: Number,
+        /// Actual instance value (for user-facing context).
+        actual: Number,
     },
     /// Schema had `minLength` but the string had fewer Unicode code points.
     TooShort {
@@ -226,6 +242,9 @@ impl ValidationError {
             | ValidationError::NotConst { instance_path, .. }
             | ValidationError::BelowMinimum { instance_path, .. }
             | ValidationError::AboveMaximum { instance_path, .. }
+            | ValidationError::NotAboveExclusiveMinimum { instance_path, .. }
+            | ValidationError::NotBelowExclusiveMaximum { instance_path, .. }
+            | ValidationError::NotMultipleOf { instance_path, .. }
             | ValidationError::TooShort { instance_path, .. }
             | ValidationError::TooLong { instance_path, .. }
             | ValidationError::PatternMismatch { instance_path, .. }
@@ -328,19 +347,41 @@ impl fmt::Display for ValidationError {
             ValidationError::BelowMinimum {
                 minimum, actual, ..
             } => {
-                write!(
-                    f,
-                    "{location}: value {} is below minimum {}",
-                    actual.0, minimum.0
-                )
+                write!(f, "{location}: value {actual} is below minimum {minimum}")
             }
             ValidationError::AboveMaximum {
                 maximum, actual, ..
             } => {
+                write!(f, "{location}: value {actual} is above maximum {maximum}")
+            }
+            ValidationError::NotAboveExclusiveMinimum {
+                exclusive_minimum,
+                actual,
+                ..
+            } => {
                 write!(
                     f,
-                    "{location}: value {} is above maximum {}",
-                    actual.0, maximum.0
+                    "{location}: value {actual} is not above exclusiveMinimum {exclusive_minimum}"
+                )
+            }
+            ValidationError::NotBelowExclusiveMaximum {
+                exclusive_maximum,
+                actual,
+                ..
+            } => {
+                write!(
+                    f,
+                    "{location}: value {actual} is not below exclusiveMaximum {exclusive_maximum}"
+                )
+            }
+            ValidationError::NotMultipleOf {
+                multiple_of,
+                actual,
+                ..
+            } => {
+                write!(
+                    f,
+                    "{location}: value {actual} is not a multiple of {multiple_of}"
                 )
             }
             ValidationError::TooShort {

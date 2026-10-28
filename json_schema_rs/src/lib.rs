@@ -6,6 +6,7 @@
 pub mod code_gen;
 pub mod json_pointer;
 pub mod json_schema;
+mod number;
 pub mod reverse_code_gen;
 pub mod sanitizers;
 pub mod validator;
@@ -22,4 +23,4 @@ pub use json_schema::{
     Vocabulary, resolve_dialect,
 };
 pub use reverse_code_gen::{SchemaGenerator, ToJsonSchema};
-pub use validator::{OrderedF64, ValidationError, ValidationResult, validate};
+pub use validator::{ValidationError, ValidationResult, validate};

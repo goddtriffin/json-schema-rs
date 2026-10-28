@@ -923,8 +923,8 @@ struct WithIntegerMinMax {
 #[test]
 fn derive_field_minimum_maximum_integer() {
     let mut byte_schema: JsonSchema = i64::json_schema();
-    byte_schema.minimum = Some(0.0);
-    byte_schema.maximum = Some(255.0);
+    byte_schema.minimum = Some(0_u64.into());
+    byte_schema.maximum = Some(255_u64.into());
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -951,8 +951,8 @@ struct WithFloatMinMax {
 #[test]
 fn derive_field_minimum_maximum_float() {
     let mut score_schema: JsonSchema = f64::json_schema();
-    score_schema.minimum = Some(0.0);
-    score_schema.maximum = Some(100.0);
+    score_schema.minimum = serde_json::Number::from_f64(0.0);
+    score_schema.maximum = serde_json::Number::from_f64(100.0);
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -995,7 +995,7 @@ struct WithOnlyMinimum {
 #[test]
 fn derive_field_only_minimum() {
     let mut value_schema: JsonSchema = i64::json_schema();
-    value_schema.minimum = Some(10.0);
+    value_schema.minimum = Some(10_u64.into());
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -1022,7 +1022,7 @@ struct WithOnlyMaximum {
 #[test]
 fn derive_field_only_maximum() {
     let mut value_schema: JsonSchema = i64::json_schema();
-    value_schema.maximum = Some(90.0);
+    value_schema.maximum = Some(90_u64.into());
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -1036,6 +1036,24 @@ fn derive_field_only_maximum() {
         ..Default::default()
     };
     let actual: JsonSchema = WithOnlyMaximum::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithExactBounds {
+    #[json_schema(minimum = -9223372036854775808, maximum = 18446744073709551615)]
+    wide: i64,
+    #[json_schema(exclusive_minimum = -1.5, exclusive_maximum = 9007199254740993, multiple_of = 0.25)]
+    fine: f64,
+}
+
+#[test]
+fn derive_numeric_attributes_are_exact() {
+    let expected: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"fine":{"type":"number","minimum":-1.7976931348623157e+308,"maximum":1.7976931348623157e+308,"exclusiveMinimum":-1.5,"exclusiveMaximum":9007199254740993,"multipleOf":0.25},"wide":{"type":"integer","minimum":-9223372036854775808,"maximum":18446744073709551615}},"additionalProperties":false,"required":["wide","fine"]}"#;
+    let actual: String = (&WithExactBounds::json_schema())
+        .try_into()
+        .expect("serialize");
     assert_eq!(expected, actual);
 }
 

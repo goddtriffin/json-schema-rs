@@ -625,69 +625,74 @@ impl ToJsonSchema for bool {
     }
 }
 
-fn integer_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
+/// An integer schema bounded by the Rust type's range, written exactly (`u64::MAX` is
+/// `18446744073709551615`, not a rounded float).
+fn integer_schema_with_bounds(
+    min: impl Into<serde_json::Number>,
+    max: impl Into<serde_json::Number>,
+) -> JsonSchema {
     JsonSchema {
         type_: Some("integer".to_string()),
-        minimum: Some(min),
-        maximum: Some(max),
+        minimum: Some(min.into()),
+        maximum: Some(max.into()),
         ..Default::default()
     }
 }
 
 impl ToJsonSchema for i8 {
     fn json_schema() -> JsonSchema {
-        integer_schema_with_bounds(f64::from(i8::MIN), f64::from(i8::MAX))
+        integer_schema_with_bounds(i8::MIN, i8::MAX)
     }
 }
 
 impl ToJsonSchema for u8 {
     fn json_schema() -> JsonSchema {
-        integer_schema_with_bounds(f64::from(u8::MIN), f64::from(u8::MAX))
+        integer_schema_with_bounds(u8::MIN, u8::MAX)
     }
 }
 
 impl ToJsonSchema for i16 {
     fn json_schema() -> JsonSchema {
-        integer_schema_with_bounds(f64::from(i16::MIN), f64::from(i16::MAX))
+        integer_schema_with_bounds(i16::MIN, i16::MAX)
     }
 }
 
 impl ToJsonSchema for u16 {
     fn json_schema() -> JsonSchema {
-        integer_schema_with_bounds(f64::from(u16::MIN), f64::from(u16::MAX))
+        integer_schema_with_bounds(u16::MIN, u16::MAX)
     }
 }
 
 impl ToJsonSchema for i32 {
     fn json_schema() -> JsonSchema {
-        integer_schema_with_bounds(f64::from(i32::MIN), f64::from(i32::MAX))
+        integer_schema_with_bounds(i32::MIN, i32::MAX)
     }
 }
 
 impl ToJsonSchema for u32 {
     fn json_schema() -> JsonSchema {
-        integer_schema_with_bounds(f64::from(u32::MIN), f64::from(u32::MAX))
+        integer_schema_with_bounds(u32::MIN, u32::MAX)
     }
 }
 
 impl ToJsonSchema for i64 {
     fn json_schema() -> JsonSchema {
-        #[expect(clippy::cast_precision_loss)]
-        integer_schema_with_bounds(i64::MIN as f64, 9_223_372_036_854_775_807.0_f64)
+        integer_schema_with_bounds(i64::MIN, i64::MAX)
     }
 }
 
 impl ToJsonSchema for u64 {
     fn json_schema() -> JsonSchema {
-        integer_schema_with_bounds(0.0_f64, 18_446_744_073_709_551_615.0_f64)
+        integer_schema_with_bounds(u64::MIN, u64::MAX)
     }
 }
 
+/// A number schema bounded by the Rust type's finite range.
 fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
         type_: Some("number".to_string()),
-        minimum: Some(min),
-        maximum: Some(max),
+        minimum: serde_json::Number::from_f64(min),
+        maximum: serde_json::Number::from_f64(max),
         ..Default::default()
     }
 }
@@ -830,14 +835,9 @@ mod tests {
 
     #[test]
     fn i64_json_schema() {
-        let expected: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
-            #[expect(clippy::cast_precision_loss)]
-            minimum: Some(i64::MIN as f64),
-            maximum: Some(9_223_372_036_854_775_807.0_f64),
-            ..Default::default()
-        };
-        let actual: JsonSchema = i64::json_schema();
+        let expected: &str =
+            r#"{"type":"integer","minimum":-9223372036854775808,"maximum":9223372036854775807}"#;
+        let actual: String = serde_json::to_string(&i64::json_schema()).expect("serialize");
         assert_eq!(expected, actual);
     }
 
@@ -850,76 +850,57 @@ mod tests {
 
     #[test]
     fn i32_json_schema() {
-        let expected_type: Option<&str> = Some("integer");
-        let actual: JsonSchema = i32::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(f64::from(i32::MIN)), actual.minimum);
-        assert_eq!(Some(f64::from(i32::MAX)), actual.maximum);
+        let expected: &str = r#"{"type":"integer","minimum":-2147483648,"maximum":2147483647}"#;
+        let actual: String = serde_json::to_string(&i32::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn u32_json_schema() {
-        let expected_type: Option<&str> = Some("integer");
-        let actual: JsonSchema = u32::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(f64::from(u32::MIN)), actual.minimum);
-        assert_eq!(Some(f64::from(u32::MAX)), actual.maximum);
+        let expected: &str = r#"{"type":"integer","minimum":0,"maximum":4294967295}"#;
+        let actual: String = serde_json::to_string(&u32::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn u64_json_schema() {
-        let expected_type: Option<&str> = Some("integer");
-        let actual: JsonSchema = u64::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(0.0_f64), actual.minimum);
-        assert_eq!(Some(18_446_744_073_709_551_615.0_f64), actual.maximum);
+        let expected: &str = r#"{"type":"integer","minimum":0,"maximum":18446744073709551615}"#;
+        let actual: String = serde_json::to_string(&u64::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn i8_json_schema() {
-        let expected_type: Option<&str> = Some("integer");
-        let actual: JsonSchema = i8::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(f64::from(i8::MIN)), actual.minimum);
-        assert_eq!(Some(f64::from(i8::MAX)), actual.maximum);
+        let expected: &str = r#"{"type":"integer","minimum":-128,"maximum":127}"#;
+        let actual: String = serde_json::to_string(&i8::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn u8_json_schema() {
-        let expected_type: Option<&str> = Some("integer");
-        let actual: JsonSchema = u8::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(0.0_f64), actual.minimum);
-        assert_eq!(Some(255.0_f64), actual.maximum);
+        let expected: &str = r#"{"type":"integer","minimum":0,"maximum":255}"#;
+        let actual: String = serde_json::to_string(&u8::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn i16_json_schema() {
-        let expected_type: Option<&str> = Some("integer");
-        let actual: JsonSchema = i16::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(f64::from(i16::MIN)), actual.minimum);
-        assert_eq!(Some(f64::from(i16::MAX)), actual.maximum);
+        let expected: &str = r#"{"type":"integer","minimum":-32768,"maximum":32767}"#;
+        let actual: String = serde_json::to_string(&i16::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn u16_json_schema() {
-        let expected_type: Option<&str> = Some("integer");
-        let actual: JsonSchema = u16::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(f64::from(u16::MIN)), actual.minimum);
-        assert_eq!(Some(f64::from(u16::MAX)), actual.maximum);
+        let expected: &str = r#"{"type":"integer","minimum":0,"maximum":65535}"#;
+        let actual: String = serde_json::to_string(&u16::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn f64_json_schema() {
-        let expected: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
-            minimum: Some(f64::MIN),
-            maximum: Some(f64::MAX),
-            ..Default::default()
-        };
-        let actual: JsonSchema = f64::json_schema();
+        let expected: &str = r#"{"type":"number","minimum":-1.7976931348623157e+308,"maximum":1.7976931348623157e+308}"#;
+        let actual: String = serde_json::to_string(&f64::json_schema()).expect("serialize");
         assert_eq!(expected, actual);
     }
 
@@ -932,11 +913,9 @@ mod tests {
 
     #[test]
     fn f32_json_schema() {
-        let expected_type: Option<&str> = Some("number");
-        let actual: JsonSchema = f32::json_schema();
-        assert_eq!(expected_type, actual.type_.as_deref());
-        assert_eq!(Some(f64::from(f32::MIN)), actual.minimum);
-        assert_eq!(Some(f64::from(f32::MAX)), actual.maximum);
+        let expected: &str = r#"{"type":"number","minimum":-3.4028234663852886e+38,"maximum":3.4028234663852886e+38}"#;
+        let actual: String = serde_json::to_string(&f32::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]

@@ -606,13 +606,13 @@ mod tests {
     #[test]
     fn unknown_nested_keyword_skips_case_with_exact_message() {
         let expected: CaseOutcome = CaseOutcome::Skipped(
-            "unsupported keyword \"multipleOf\" at /properties/foo/allOf/1".to_string(),
+            "unsupported keyword \"not\" at /properties/foo/allOf/1".to_string(),
         );
         let actual: CaseOutcome = run_flag(&json!({
             "schema": {
                 "properties": {
-                    "multipleOf": {"type": "string"},
-                    "foo": {"allOf": [{"type": "integer"}, {"multipleOf": 2}]}
+                    "not": {"type": "string"},
+                    "foo": {"allOf": [{"type": "integer"}, {"not": {"type": "string"}}]}
                 }
             },
             "tests": [{"instance": {}}]
