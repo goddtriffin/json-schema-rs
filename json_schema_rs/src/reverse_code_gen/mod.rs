@@ -5,15 +5,124 @@
 
 use crate::json_schema::JsonSchema;
 use crate::json_schema::json_schema::AdditionalProperties;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Trait for types that can produce a JSON Schema.
 ///
 /// Implemented for primitive/standard types (e.g. `String`, `Option<T>`) and for
 /// structs via `#[derive(ToJsonSchema)]` with optional container/field attributes.
 pub trait ToJsonSchema {
-    /// Returns the JSON Schema for this type.
+    /// Returns the JSON Schema for this type as a standalone root schema.
     fn json_schema() -> JsonSchema;
+
+    /// Returns the schema for this type as a subschema of the document `generator` is
+    /// building.
+    ///
+    /// Named types (derived structs and enums) return a `$ref` and register their body in the
+    /// generator's `$defs`; containers pass the generator through to their element types. The
+    /// default inlines [`ToJsonSchema::json_schema`], hoisting any `$defs` it carries into the
+    /// generator, so a hand-written impl only needs `json_schema`.
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        generator.inline_subschema(Self::json_schema())
+    }
+}
+
+/// Generator context for one root schema: owns the `$defs` map and the set of named types
+/// whose body is being built.
+///
+/// A named type found in the pending set returns its `$ref` immediately, so a cycle of any
+/// length between derived types terminates. Descent depth is bounded by the number of
+/// distinct named types (each is built at most once per generator) plus the nesting of
+/// container types written in the source.
+#[derive(Debug, Default)]
+pub struct SchemaGenerator {
+    defs: BTreeMap<String, JsonSchema>,
+    pending: BTreeSet<String>,
+    referenced_while_pending: BTreeSet<String>,
+}
+
+impl SchemaGenerator {
+    /// Creates a generator with no definitions.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns a `$ref` to the definition `name`, building its body with `build` the first
+    /// time `name` is requested.
+    ///
+    /// When `name` is already being built (a recursive reference), the `$ref` is returned
+    /// without calling `build`.
+    pub fn named_subschema(
+        &mut self,
+        name: &str,
+        build: impl FnOnce(&mut Self) -> JsonSchema,
+    ) -> JsonSchema {
+        if self.pending.contains(name) {
+            self.referenced_while_pending.insert(name.to_string());
+        } else if !self.defs.contains_key(name) {
+            self.pending.insert(name.to_string());
+            let body: JsonSchema = build(self);
+            self.pending.remove(name);
+            self.defs.insert(name.to_string(), body);
+        }
+        JsonSchema {
+            ref_: Some(format!("#/$defs/{name}")),
+            ..Default::default()
+        }
+    }
+
+    /// Builds the root schema for the named type `name` from `build`.
+    ///
+    /// The root body is returned inline. It is also placed in `$defs` when a nested type
+    /// refers back to it, so that `$ref` resolves.
+    #[must_use]
+    pub fn into_named_root_schema(
+        mut self,
+        name: &str,
+        build: impl FnOnce(&mut Self) -> JsonSchema,
+    ) -> JsonSchema {
+        self.pending.insert(name.to_string());
+        let body: JsonSchema = build(&mut self);
+        self.pending.remove(name);
+        if self.referenced_while_pending.contains(name) {
+            self.defs
+                .entry(name.to_string())
+                .or_insert_with(|| body.clone());
+        }
+        self.into_root_schema(body)
+    }
+
+    /// Attaches the collected `$defs` (if any) to `body` and returns it as the root schema.
+    #[must_use]
+    pub fn into_root_schema(self, mut body: JsonSchema) -> JsonSchema {
+        if !self.defs.is_empty() {
+            body.defs
+                .get_or_insert_with(BTreeMap::new)
+                .extend(self.defs);
+        }
+        body
+    }
+
+    /// Embeds a standalone schema as a subschema: its `$defs` (at any depth) move to the
+    /// generator's root `$defs`, and its `$schema` is dropped unless it declares its own
+    /// `$id` (`$schema` must not appear in a subschema that is not a resource root).
+    pub fn inline_subschema(&mut self, schema: JsonSchema) -> JsonSchema {
+        let mut flat: JsonSchema = merge_nested_defs_into_root(schema, &mut self.defs);
+        if flat.id.is_none() {
+            flat.schema = None;
+        }
+        flat
+    }
+}
+
+/// Returns `T`'s schema as a standalone root schema built with a fresh [`SchemaGenerator`]:
+/// the subschema from [`ToJsonSchema::json_schema_with`] plus any `$defs` it registered.
+#[must_use]
+pub fn root_schema_for<T: ToJsonSchema + ?Sized>() -> JsonSchema {
+    let mut generator: SchemaGenerator = SchemaGenerator::new();
+    let body: JsonSchema = T::json_schema_with(&mut generator);
+    generator.into_root_schema(body)
 }
 
 impl ToJsonSchema for String {
@@ -115,15 +224,23 @@ impl ToJsonSchema for f64 {
 
 impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
     fn json_schema() -> JsonSchema {
-        T::json_schema()
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        T::json_schema_with(generator)
     }
 }
 
 impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
     fn json_schema() -> JsonSchema {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
         JsonSchema {
             type_: Some("array".to_string()),
-            items: Some(Box::new(T::json_schema())),
+            items: Some(Box::new(T::json_schema_with(generator))),
             ..Default::default()
         }
     }
@@ -132,9 +249,13 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
 #[expect(clippy::implicit_hasher)]
 impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::HashSet<T> {
     fn json_schema() -> JsonSchema {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
         JsonSchema {
             type_: Some("array".to_string()),
-            items: Some(Box::new(T::json_schema())),
+            items: Some(Box::new(T::json_schema_with(generator))),
             unique_items: Some(true),
             ..Default::default()
         }
@@ -143,9 +264,15 @@ impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::
 
 impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
     fn json_schema() -> JsonSchema {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
         JsonSchema {
             type_: Some("object".to_string()),
-            additional_properties: Some(AdditionalProperties::Schema(Box::new(V::json_schema()))),
+            additional_properties: Some(AdditionalProperties::Schema(Box::new(
+                V::json_schema_with(generator),
+            ))),
             ..Default::default()
         }
     }
@@ -153,7 +280,11 @@ impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
 
 impl<T: ToJsonSchema> ToJsonSchema for Box<T> {
     fn json_schema() -> JsonSchema {
-        T::json_schema()
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        T::json_schema_with(generator)
     }
 }
 
@@ -226,7 +357,7 @@ impl ToJsonSchema for uuid::Uuid {
 
 #[cfg(test)]
 mod tests {
-    use super::ToJsonSchema;
+    use super::{SchemaGenerator, ToJsonSchema, root_schema_for};
     use crate::json_schema::JsonSchema;
     use std::collections::BTreeMap;
 
@@ -450,6 +581,169 @@ mod tests {
         let items: &JsonSchema = actual.items.as_ref().expect("items").as_ref();
         assert_eq!(items.type_.as_deref(), Some("string"));
         assert_eq!(items.format.as_deref(), Some("uuid"));
+    }
+
+    fn ref_to(name: &str) -> JsonSchema {
+        JsonSchema {
+            ref_: Some(format!("#/$defs/{name}")),
+            ..Default::default()
+        }
+    }
+
+    fn string_schema() -> JsonSchema {
+        JsonSchema {
+            type_: Some("string".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn named_subschema_returns_ref_and_registers_body() {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let reference: JsonSchema = generator.named_subschema("Name", |_| string_schema());
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(BTreeMap::from([("Name".to_string(), string_schema())])),
+            ..ref_to("Name")
+        };
+        let actual: JsonSchema = generator.into_root_schema(reference);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn named_subschema_builds_each_name_once() {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let mut builds: u32 = 0;
+        let _: JsonSchema = generator.named_subschema("Name", |_| {
+            builds += 1;
+            string_schema()
+        });
+        let _: JsonSchema = generator.named_subschema("Name", |_| {
+            builds += 1;
+            string_schema()
+        });
+        let expected: u32 = 1;
+        let actual: u32 = builds;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn named_subschema_returns_ref_for_pending_name_without_building() {
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let reference: JsonSchema = generator.named_subschema("Node", |generator| JsonSchema {
+            items: Some(Box::new(generator.named_subschema("Node", |_| {
+                panic!("a pending name must not be rebuilt")
+            }))),
+            ..Default::default()
+        });
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(BTreeMap::from([(
+                "Node".to_string(),
+                JsonSchema {
+                    items: Some(Box::new(ref_to("Node"))),
+                    ..Default::default()
+                },
+            )])),
+            ..ref_to("Node")
+        };
+        let actual: JsonSchema = generator.into_root_schema(reference);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_named_root_schema_without_back_reference_has_no_defs() {
+        let expected: JsonSchema = string_schema();
+        let actual: JsonSchema =
+            SchemaGenerator::new().into_named_root_schema("Name", |_| string_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_named_root_schema_with_back_reference_also_defines_root() {
+        let body: JsonSchema = JsonSchema {
+            items: Some(Box::new(ref_to("Node"))),
+            ..Default::default()
+        };
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(BTreeMap::from([("Node".to_string(), body.clone())])),
+            ..body
+        };
+        let actual: JsonSchema =
+            SchemaGenerator::new().into_named_root_schema("Node", |generator| JsonSchema {
+                items: Some(Box::new(generator.named_subschema("Node", |_| {
+                    panic!("a pending name must not be rebuilt")
+                }))),
+                ..Default::default()
+            });
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_hoists_defs_and_drops_schema_keyword() {
+        let standalone: JsonSchema = JsonSchema {
+            schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+            defs: Some(BTreeMap::from([("Inner".to_string(), string_schema())])),
+            ..ref_to("Inner")
+        };
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let expected: JsonSchema = JsonSchema {
+            defs: Some(BTreeMap::from([("Inner".to_string(), string_schema())])),
+            ..ref_to("Inner")
+        };
+        let actual: JsonSchema = generator.into_root_schema(inlined);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_keeps_schema_keyword_on_resource_root() {
+        let standalone: JsonSchema = JsonSchema {
+            schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+            id: Some("http://example.com/inner".to_string()),
+            ..string_schema()
+        };
+        let expected: JsonSchema = standalone.clone();
+        let actual: JsonSchema = SchemaGenerator::new().inline_subschema(standalone);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_root_schema_without_defs_leaves_defs_none() {
+        let expected: JsonSchema = string_schema();
+        let actual: JsonSchema = SchemaGenerator::new().into_root_schema(string_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn vec_of_named_type_root_schema_has_defs() {
+        struct Named;
+        impl ToJsonSchema for Named {
+            fn json_schema() -> JsonSchema {
+                root_schema_for::<Self>()
+            }
+
+            fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+                generator.named_subschema("Named", |_| string_schema())
+            }
+        }
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            items: Some(Box::new(ref_to("Named"))),
+            defs: Some(BTreeMap::from([("Named".to_string(), string_schema())])),
+            ..Default::default()
+        };
+        let actual: JsonSchema = Vec::<Named>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn hand_written_impl_inlines_through_default_json_schema_with() {
+        let expected: JsonSchema = JsonSchema {
+            type_: Some("array".to_string()),
+            items: Some(Box::new(super::HandWrittenExample::json_schema())),
+            ..Default::default()
+        };
+        let actual: JsonSchema = Vec::<super::HandWrittenExample>::json_schema();
+        assert_eq!(expected, actual);
     }
 
     #[test]
