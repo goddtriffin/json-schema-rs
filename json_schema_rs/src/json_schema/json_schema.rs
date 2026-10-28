@@ -591,6 +591,37 @@ impl JsonSchema {
             .is_some_and(serde_json::Value::is_string)
     }
 
+    /// Returns mutable references to this schema's direct subschemas, in a fixed order:
+    /// `$defs`, `definitions`, `properties`, `additionalProperties`, `items`, `allOf`, `anyOf`,
+    /// `oneOf`. Walk the whole tree with an explicit stack over this.
+    pub(crate) fn subschemas_mut(&mut self) -> Vec<&mut JsonSchema> {
+        let mut children: Vec<&mut JsonSchema> = Vec::new();
+        if let Some(defs) = self.defs.as_mut() {
+            children.extend(defs.values_mut());
+        }
+        if let Some(definitions) = self.definitions.as_mut() {
+            children.extend(definitions.values_mut());
+        }
+        children.extend(self.properties.values_mut());
+        if let Some(AdditionalProperties::Schema(schema)) = self.additional_properties.as_mut() {
+            children.push(schema.as_mut());
+        }
+        if let Some(items) = self.items.as_mut() {
+            children.push(items.as_mut());
+        }
+        for list in [
+            self.all_of.as_mut(),
+            self.any_of.as_mut(),
+            self.one_of.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            children.extend(list.iter_mut());
+        }
+        children
+    }
+
     /// Parse a JSON Schema from a string with the given settings.
     ///
     /// When [`JsonSchemaSettings::disallow_unknown_fields`] is `false`, unknown keys
