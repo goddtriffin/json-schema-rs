@@ -97,7 +97,7 @@ Run `make test` **and** `make benchmark` to confirm correctness and catch regres
 
 ### Git
 
-- **Never run `git add`, `git commit`, or `git push`.** The maintainer will always handle version control themselves. Make edits and leave staging and commits to them.
+- **Branch, PR, never merge.** Work on a feature branch, review your own diff, then commit, push and open a PR once it is ready for human review. Never merge a PR or push to `main`; a human reviewer merges. After the merge, reset the local checkout to `main` and close any related issues that did not close automatically. See [CLAUDE.md](../../../CLAUDE.md), *Version control*.
 
 ### Testing
 
