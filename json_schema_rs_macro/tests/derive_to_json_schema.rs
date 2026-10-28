@@ -408,6 +408,83 @@ fn derive_id_attribute_emits_id_in_schema() {
     assert!(json.contains("\"$id\":\"http://example.com/with-id\""));
 }
 
+// A type with `id` is its own schema resource: inside it, `#/$defs/...` resolves against its
+// `$id`. The broken nested cases are known failures for #46 (`tests/known_failures.rs`).
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct ResourceLeaf {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/with-dep")]
+#[expect(dead_code)]
+struct ResourceWithDep {
+    leaf: ResourceLeaf,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/no-dep")]
+#[expect(dead_code)]
+struct ResourceNoDep {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsResourceNoDep {
+    inner: ResourceNoDep,
+}
+
+fn schema_from_json(value: serde_json::Value) -> JsonSchema {
+    serde_json::from_value::<JsonSchema>(value).expect("valid schema")
+}
+
+#[test]
+fn derive_id_resource_as_root_keeps_its_defs_at_its_own_root() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.com/with-dep",
+        "type": "object",
+        "properties": { "leaf": { "$ref": "#/$defs/ResourceLeaf" } },
+        "additionalProperties": false,
+        "required": ["leaf"],
+        "$defs": {
+            "ResourceLeaf": {
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "additionalProperties": false,
+                "required": ["x"]
+            }
+        }
+    }));
+    let actual: JsonSchema = ResourceWithDep::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_nested_id_resource_without_named_dependencies() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "inner": { "$ref": "#/$defs/ResourceNoDep" } },
+        "additionalProperties": false,
+        "required": ["inner"],
+        "$defs": {
+            "ResourceNoDep": {
+                "$id": "https://example.com/no-dep",
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "additionalProperties": false,
+                "required": ["x"]
+            }
+        }
+    }));
+    let actual: JsonSchema = HoldsResourceNoDep::json_schema();
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn derive_unit_enum_json_schema() {
     let actual: JsonSchema = Status::json_schema();
