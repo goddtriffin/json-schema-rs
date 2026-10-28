@@ -19,5 +19,5 @@ pub use json_schema::{
     JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,
     JsonSchemaSettingsBuilder, SpecVersion, resolved_spec_version,
 };
-pub use reverse_code_gen::ToJsonSchema;
+pub use reverse_code_gen::{SchemaGenerator, ToJsonSchema};
 pub use validator::{OrderedF64, ValidationError, ValidationResult, validate};

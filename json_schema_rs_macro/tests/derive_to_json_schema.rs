@@ -130,7 +130,16 @@ fn derive_address_json_schema() {
 
 #[test]
 fn derive_nested_struct_emits_defs_and_ref() {
-    let address_schema: JsonSchema = Address::json_schema();
+    let address_schema: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: BTreeMap::from([
+            ("city".to_string(), String::json_schema()),
+            ("street".to_string(), String::json_schema()),
+        ]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["city".to_string(), "street".to_string()]),
+        ..Default::default()
+    };
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -160,7 +169,16 @@ fn derive_nested_struct_emits_defs_and_ref() {
 
 #[test]
 fn derive_two_fields_same_type_one_defs_entry() {
-    let address_schema: JsonSchema = Address::json_schema();
+    let address_schema: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: BTreeMap::from([
+            ("city".to_string(), String::json_schema()),
+            ("street".to_string(), String::json_schema()),
+        ]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["city".to_string(), "street".to_string()]),
+        ..Default::default()
+    };
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -251,7 +269,16 @@ fn derive_recursive_type_emits_defs_and_ref_no_stack_overflow() {
 
 #[test]
 fn derive_option_nested_struct_emits_defs() {
-    let address_schema: JsonSchema = Address::json_schema();
+    let address_schema: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: BTreeMap::from([
+            ("city".to_string(), String::json_schema()),
+            ("street".to_string(), String::json_schema()),
+        ]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["city".to_string(), "street".to_string()]),
+        ..Default::default()
+    };
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -281,7 +308,16 @@ fn derive_option_nested_struct_emits_defs() {
 
 #[test]
 fn derive_vec_nested_struct_emits_defs() {
-    let address_schema: JsonSchema = Address::json_schema();
+    let address_schema: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: BTreeMap::from([
+            ("city".to_string(), String::json_schema()),
+            ("street".to_string(), String::json_schema()),
+        ]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["city".to_string(), "street".to_string()]),
+        ..Default::default()
+    };
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -315,12 +351,26 @@ fn derive_vec_nested_struct_emits_defs() {
 
 #[test]
 fn derive_three_level_nested_emits_flat_defs() {
-    use json_schema_rs::reverse_code_gen::merge_nested_defs_into_root;
-
-    let inner_schema: JsonSchema = Inner::json_schema();
-    let mut temp_defs: BTreeMap<String, JsonSchema> = BTreeMap::new();
-    let outer_schema: JsonSchema =
-        merge_nested_defs_into_root(Outer::json_schema(), &mut temp_defs);
+    let inner_schema: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: BTreeMap::from([("x".to_string(), String::json_schema())]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["x".to_string()]),
+        ..Default::default()
+    };
+    let outer_schema: JsonSchema = JsonSchema {
+        type_: Some("object".to_string()),
+        properties: BTreeMap::from([(
+            "b".to_string(),
+            JsonSchema {
+                ref_: Some("#/$defs/Inner".to_string()),
+                ..Default::default()
+            },
+        )]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["b".to_string()]),
+        ..Default::default()
+    };
     let expected: JsonSchema = JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some("object".to_string()),
@@ -889,5 +939,249 @@ fn derive_deprecated_round_trip() {
     let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     let expected: JsonSchema = schema;
     let actual: JsonSchema = parsed;
+    assert_eq!(expected, actual);
+}
+
+// --- Recursion through the generator context (#4) ---
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct MutualA {
+    bs: Vec<MutualB>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct MutualB {
+    as_: Vec<MutualA>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct CycleA {
+    bs: Vec<CycleB>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct CycleB {
+    cs: Vec<CycleC>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct CycleC {
+    as_: Vec<CycleA>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct OverriddenNode {
+    #[json_schema(min_items = 1)]
+    children: Vec<OverriddenNode>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DeprecatedAddress {
+    #[json_schema(deprecated = true)]
+    address: Address,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithStatus {
+    status: Status,
+}
+
+fn ref_to(name: &str) -> JsonSchema {
+    JsonSchema {
+        ref_: Some(format!("#/$defs/{name}")),
+        ..Default::default()
+    }
+}
+
+fn array_of_ref(name: &str) -> JsonSchema {
+    JsonSchema {
+        type_: Some("array".to_string()),
+        items: Some(Box::new(ref_to(name))),
+        ..Default::default()
+    }
+}
+
+/// Body of a derived struct with one required property `key` whose schema is `property`.
+fn one_property_body(key: &str, property: JsonSchema) -> JsonSchema {
+    JsonSchema {
+        type_: Some("object".to_string()),
+        properties: BTreeMap::from([(key.to_string(), property)]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec![key.to_string()]),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn derive_mutual_recursion_emits_both_defs_linked_by_ref() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([
+            (
+                "MutualA".to_string(),
+                one_property_body("bs", array_of_ref("MutualB")),
+            ),
+            (
+                "MutualB".to_string(),
+                one_property_body("as_", array_of_ref("MutualA")),
+            ),
+        ])),
+        ..one_property_body("bs", array_of_ref("MutualB"))
+    };
+    let actual: JsonSchema = MutualA::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_mutual_recursion_from_other_root_emits_both_defs() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([
+            (
+                "MutualA".to_string(),
+                one_property_body("bs", array_of_ref("MutualB")),
+            ),
+            (
+                "MutualB".to_string(),
+                one_property_body("as_", array_of_ref("MutualA")),
+            ),
+        ])),
+        ..one_property_body("as_", array_of_ref("MutualA"))
+    };
+    let actual: JsonSchema = MutualB::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_three_type_cycle_emits_all_defs() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([
+            (
+                "CycleA".to_string(),
+                one_property_body("bs", array_of_ref("CycleB")),
+            ),
+            (
+                "CycleB".to_string(),
+                one_property_body("cs", array_of_ref("CycleC")),
+            ),
+            (
+                "CycleC".to_string(),
+                one_property_body("as_", array_of_ref("CycleA")),
+            ),
+        ])),
+        ..one_property_body("bs", array_of_ref("CycleB"))
+    };
+    let actual: JsonSchema = CycleA::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_self_reference_with_field_override_keeps_ref_and_override() {
+    let children: JsonSchema = JsonSchema {
+        min_items: Some(1),
+        ..array_of_ref("OverriddenNode")
+    };
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([(
+            "OverriddenNode".to_string(),
+            one_property_body("children", children.clone()),
+        )])),
+        ..one_property_body("children", children)
+    };
+    let actual: JsonSchema = OverriddenNode::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_field_override_on_named_type_is_ref_sibling() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([(
+            "Address".to_string(),
+            JsonSchema {
+                type_: Some("object".to_string()),
+                properties: BTreeMap::from([
+                    ("city".to_string(), String::json_schema()),
+                    ("street".to_string(), String::json_schema()),
+                ]),
+                additional_properties: Some(AdditionalProperties::Forbid),
+                required: Some(vec!["city".to_string(), "street".to_string()]),
+                ..Default::default()
+            },
+        )])),
+        ..one_property_body(
+            "address",
+            JsonSchema {
+                deprecated: Some(true),
+                ..ref_to("Address")
+            },
+        )
+    };
+    let actual: JsonSchema = DeprecatedAddress::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_enum_field_emits_defs_entry_without_schema_keyword() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([(
+            "Status".to_string(),
+            JsonSchema {
+                type_: Some("string".to_string()),
+                enum_values: Some(vec![
+                    serde_json::Value::String("Open".to_string()),
+                    serde_json::Value::String("Closed".to_string()),
+                ]),
+                ..Default::default()
+            },
+        )])),
+        ..one_property_body("status", ref_to("Status"))
+    };
+    let actual: JsonSchema = WithStatus::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn vec_of_derived_type_json_schema_is_standalone_with_defs() {
+    let expected: JsonSchema = JsonSchema {
+        defs: Some(BTreeMap::from([
+            (
+                "MutualA".to_string(),
+                one_property_body("bs", array_of_ref("MutualB")),
+            ),
+            (
+                "MutualB".to_string(),
+                one_property_body("as_", array_of_ref("MutualA")),
+            ),
+        ])),
+        ..array_of_ref("MutualA")
+    };
+    let actual: JsonSchema = Vec::<MutualA>::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+struct Empty {}
+
+#[test]
+fn derive_struct_without_fields_json_schema() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        ..Default::default()
+    };
+    let actual: JsonSchema = Empty::json_schema();
     assert_eq!(expected, actual);
 }
