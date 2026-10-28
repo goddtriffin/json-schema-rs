@@ -43,13 +43,14 @@ We run the [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Sche
 
 ### Known failures
 
-Every open bug issue has at least one regression test named `issue_<N>_...` that asserts the **correct** behaviour, so the refactor is measured by those tests flipping, and nothing that passes today can silently break. Validator, parser and codegen bugs live in `json_schema_rs/tests/known_failures.rs`; derive bugs in `json_schema_rs_macro/tests/known_failures.rs` (separate crates, so each file carries its own copy of the helpers it needs; while no derive bug has a test, its helper carries `#[expect(dead_code)]`, which turns into an error once a test uses it, so the attribute gets removed). Bugs the official suite also covers (#28, #29, #31–#34) have both a dedicated test and manifest entries.
+Every open bug issue has at least one regression test that asserts the **correct** behaviour, so the refactor is measured by those tests flipping, and nothing that passes today can silently break. Validator, parser and codegen bugs live in `json_schema_rs/tests/known_failures.rs`; derive bugs in `json_schema_rs_macro/tests/known_failures.rs` (separate crates, so each file carries its own copy of the helpers it needs; while no derive bug has a test, its helper carries `#[expect(dead_code)]`, which turns into an error once a test uses it, so the attribute gets removed). Bugs the official suite also covers (#28, #29, #31–#34) have both a dedicated test and manifest entries.
 
 - `known_failure(issue, body)` runs the body under `catch_unwind`: the test passes while the body panics and fails with "#N now behaves correctly" as soon as it completes, the same "unexpected pass" rule as the suite manifest.
 - `known_failure_in_child_process(issue, name, body)` is for bugs that abort the process (stack overflow: #4, #36) or never terminate (codegen hang: #35). The test re-runs itself as a child process filtered to `name` (selected by `JSON_SCHEMA_RS_KNOWN_FAILURE_CHILD`), with a 10 s timeout. A crash, a non-zero exit, or a timeout is "still failing"; a clean exit that printed the pass marker is an unexpected pass; a clean exit without the marker (a wrong `name`) fails the test rather than counting as "still failing". Two harness tests pin both of those outcomes.
 - Repro shapes are chosen so a hang holds memory flat (the #35 self-reference through an array of `#` allocates gigabytes while hanging, so it is left to #9's golden tests).
 - **When a fix lands:** unwrap the issue's tests into plain `#[test]`s, tighten them to full golden values where the issue asks for it (codegen tests assert only that generation succeeds or which structs are emitted, because the emitter's exact output is #9's to define; #4 checks termination only), and remove the issue's entries from `suite_xfail.json`.
-- **New bugs:** add an `issue_<N>_...` test with the wrapper when filing, unless it is fixed in the same change.
+- **Naming:** a test is named for the behaviour it checks (`integer_accepts_zero_fraction_float`), never for the issue. The issue number is the wrapper's first argument and the `// --- #N: ... ---` comment that groups the issue's tests; both go away on unwrap, so the test keeps a name that stays true.
+- **New bugs:** add a test with the wrapper when filing, unless it is fixed in the same change.
 
 ### Benchmark harness
 

@@ -1,4 +1,6 @@
-//! Known-failing regression tests: one or more tests per open bug issue, named `issue_<N>_...`.
+//! Known-failing regression tests: one or more tests per open bug issue, grouped under a
+//! `// --- #N: ... ---` comment. Test names describe the behaviour checked, never the issue
+//! number; the issue is the wrapper's first argument.
 //!
 //! Each test body asserts the **correct** behaviour. The wrapper inverts it: the test passes
 //! while the body still fails, and fails as soon as the body passes ("unexpected pass"), so a
@@ -164,7 +166,7 @@ fn generated_struct_names(output: &GenerateRustOutput) -> Vec<String> {
 // --- #18: codegen rejects allOf containing a $ref (fixed in #9) ---
 
 #[test]
-fn issue_18_codegen_accepts_all_of_ref() {
+fn codegen_accepts_all_of_ref() {
     known_failure(18, || {
         let expected: Result<(), String> = Ok(());
         let actual: Result<(), String> = generates(
@@ -182,7 +184,7 @@ fn issue_18_codegen_accepts_all_of_ref() {
 // --- #9: codegen struct-name collision drops the second type (fixed in #9) ---
 
 #[test]
-fn issue_9_codegen_struct_name_collision_keeps_both_types() {
+fn codegen_struct_name_collision_keeps_both_types() {
     known_failure(9, || {
         let output: GenerateRustOutput = generate_rust(
             &[parse(
@@ -206,7 +208,7 @@ fn issue_9_codegen_struct_name_collision_keeps_both_types() {
 // --- #28: $ref siblings ignored in 2019-09 / 2020-12 (fixed in #8) ---
 
 #[test]
-fn issue_28_ref_siblings_apply_in_2020_12() {
+fn ref_siblings_apply_in_2020_12() {
     known_failure(28, || {
         let expected: bool = false;
         let actual: bool = is_valid(
@@ -220,7 +222,7 @@ fn issue_28_ref_siblings_apply_in_2020_12() {
 // --- #29: type "integer" rejects 1.0 and values above i64::MAX (fixed in #5) ---
 
 #[test]
-fn issue_29_integer_accepts_zero_fraction_float() {
+fn integer_accepts_zero_fraction_float() {
     known_failure(29, || {
         let expected: bool = true;
         let actual: bool = is_valid(r#"{"type":"integer"}"#, "1.0");
@@ -229,7 +231,7 @@ fn issue_29_integer_accepts_zero_fraction_float() {
 }
 
 #[test]
-fn issue_29_integer_accepts_u64_above_i64_max() {
+fn integer_accepts_u64_above_i64_max() {
     known_failure(29, || {
         let expected: bool = true;
         let actual: bool = is_valid(r#"{"type":"integer"}"#, "18446744073709551615");
@@ -238,7 +240,7 @@ fn issue_29_integer_accepts_u64_above_i64_max() {
 }
 
 #[test]
-fn issue_29_integer_accepts_bignum() {
+fn integer_accepts_bignum() {
     known_failure(29, || {
         let expected: bool = true;
         let actual: bool = is_valid(
@@ -252,7 +254,7 @@ fn issue_29_integer_accepts_bignum() {
 // --- #30: strict mode never reports UnknownField (fixed in #7) ---
 
 #[test]
-fn issue_30_strict_mode_reports_unknown_field_with_path() {
+fn strict_mode_reports_unknown_field_with_path() {
     known_failure(30, || {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
@@ -276,7 +278,7 @@ fn issue_30_strict_mode_reports_unknown_field_with_path() {
 // --- #31: "type" arrays truncated to their first entry (fixed in #6) ---
 
 #[test]
-fn issue_31_type_array_accepts_second_entry_string() {
+fn type_array_accepts_second_entry_string() {
     known_failure(31, || {
         let expected: bool = true;
         let actual: bool = is_valid(r#"{"type":["integer","string"]}"#, r#""x""#);
@@ -285,7 +287,7 @@ fn issue_31_type_array_accepts_second_entry_string() {
 }
 
 #[test]
-fn issue_31_type_array_accepts_second_entry_object() {
+fn type_array_accepts_second_entry_object() {
     known_failure(31, || {
         let expected: bool = true;
         let actual: bool = is_valid(r#"{"type":["string","object"]}"#, "{}");
@@ -296,7 +298,7 @@ fn issue_31_type_array_accepts_second_entry_object() {
 // --- #32: type "null" accepts every instance (fixed in #6) ---
 
 #[test]
-fn issue_32_type_null_rejects_string() {
+fn type_null_rejects_string() {
     known_failure(32, || {
         let expected: bool = false;
         let actual: bool = is_valid(r#"{"type":"null"}"#, r#""x""#);
@@ -305,7 +307,7 @@ fn issue_32_type_null_rejects_string() {
 }
 
 #[test]
-fn issue_32_type_null_rejects_integer() {
+fn type_null_rejects_integer() {
     known_failure(32, || {
         let expected: bool = false;
         let actual: bool = is_valid(r#"{"type":"null"}"#, "1");
@@ -316,7 +318,7 @@ fn issue_32_type_null_rejects_integer() {
 // --- #33: enum / const / uniqueItems treat 1 and 1.0 as different (fixed in #5) ---
 
 #[test]
-fn issue_33_enum_matches_mathematically_equal_number() {
+fn enum_matches_mathematically_equal_number() {
     known_failure(33, || {
         let expected: bool = true;
         let actual: bool = is_valid(r#"{"enum":[0]}"#, "0.0");
@@ -325,7 +327,7 @@ fn issue_33_enum_matches_mathematically_equal_number() {
 }
 
 #[test]
-fn issue_33_const_matches_mathematically_equal_number() {
+fn const_matches_mathematically_equal_number() {
     known_failure(33, || {
         let expected: bool = true;
         let actual: bool = is_valid(r#"{"const":-2.0}"#, "-2");
@@ -334,7 +336,7 @@ fn issue_33_const_matches_mathematically_equal_number() {
 }
 
 #[test]
-fn issue_33_unique_items_rejects_mathematically_equal_numbers() {
+fn unique_items_rejects_mathematically_equal_numbers() {
     known_failure(33, || {
         let expected: bool = false;
         let actual: bool = is_valid(r#"{"type":"array","uniqueItems":true}"#, "[1, 1.0]");
@@ -345,7 +347,7 @@ fn issue_33_unique_items_rejects_mathematically_equal_numbers() {
 // --- #34: integer-valued decimals ("minLength": 2.0) fail to parse (fixed in #7) ---
 
 #[test]
-fn issue_34_count_keyword_accepts_integer_valued_decimal() {
+fn count_keyword_accepts_integer_valued_decimal() {
     known_failure(34, || {
         let instance: serde_json::Value = serde_json::json!("a");
         let expected: Result<bool, String> = Ok(false);
@@ -366,40 +368,32 @@ fn issue_34_count_keyword_accepts_integer_valued_decimal() {
 // hang holds memory flat. #9 adds golden tests for the full repros.
 
 #[test]
-fn issue_35_codegen_terminates_on_self_reference_via_root() {
-    known_failure_in_child_process(
-        35,
-        "issue_35_codegen_terminates_on_self_reference_via_root",
-        || {
-            let expected: Result<(), String> = Ok(());
-            let actual: Result<(), String> = generates(
-                r##"{"title":"Node","type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#"}},"required":["value"]}"##,
-            );
-            assert_eq!(expected, actual);
-        },
-    );
+fn codegen_terminates_on_self_reference_via_root() {
+    known_failure_in_child_process(35, "codegen_terminates_on_self_reference_via_root", || {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = generates(
+            r##"{"title":"Node","type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#"}},"required":["value"]}"##,
+        );
+        assert_eq!(expected, actual);
+    });
 }
 
 #[test]
-fn issue_35_codegen_terminates_on_self_reference_via_defs() {
-    known_failure_in_child_process(
-        35,
-        "issue_35_codegen_terminates_on_self_reference_via_defs",
-        || {
-            let expected: Result<(), String> = Ok(());
-            let actual: Result<(), String> = generates(
-                r##"{"type":"object","properties":{"head":{"$ref":"#/$defs/Node"}},"$defs":{"Node":{"type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#/$defs/Node"}}}}}"##,
-            );
-            assert_eq!(expected, actual);
-        },
-    );
+fn codegen_terminates_on_self_reference_via_defs() {
+    known_failure_in_child_process(35, "codegen_terminates_on_self_reference_via_defs", || {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = generates(
+            r##"{"type":"object","properties":{"head":{"$ref":"#/$defs/Node"}},"$defs":{"Node":{"type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#/$defs/Node"}}}}}"##,
+        );
+        assert_eq!(expected, actual);
+    });
 }
 
 #[test]
-fn issue_35_codegen_terminates_on_mutual_recursion_via_defs() {
+fn codegen_terminates_on_mutual_recursion_via_defs() {
     known_failure_in_child_process(
         35,
-        "issue_35_codegen_terminates_on_mutual_recursion_via_defs",
+        "codegen_terminates_on_mutual_recursion_via_defs",
         || {
             let expected: Result<(), String> = Ok(());
             let actual: Result<(), String> = generates(
@@ -415,21 +409,17 @@ fn issue_35_codegen_terminates_on_mutual_recursion_via_defs() {
 const IN_PLACE_LOOP_SCHEMA: &str = r##"{"anyOf":[{"type":"string"},{"$ref":"#"}]}"##;
 
 #[test]
-fn issue_36_validator_terminates_on_in_place_ref_loop() {
-    known_failure_in_child_process(
-        36,
-        "issue_36_validator_terminates_on_in_place_ref_loop",
-        || {
-            let expected: bool = false;
-            let actual: bool = is_valid(IN_PLACE_LOOP_SCHEMA, r#"{"x":1}"#);
-            assert_eq!(expected, actual);
-        },
-    );
+fn validator_terminates_on_in_place_ref_loop() {
+    known_failure_in_child_process(36, "validator_terminates_on_in_place_ref_loop", || {
+        let expected: bool = false;
+        let actual: bool = is_valid(IN_PLACE_LOOP_SCHEMA, r#"{"x":1}"#);
+        assert_eq!(expected, actual);
+    });
 }
 
 /// Passes today and must keep passing: the first `anyOf` branch matches before the loop.
 #[test]
-fn issue_36_in_place_ref_loop_schema_accepts_matching_branch() {
+fn in_place_ref_loop_schema_accepts_matching_branch() {
     let expected: bool = true;
     let actual: bool = is_valid(IN_PLACE_LOOP_SCHEMA, r#""hi""#);
     assert_eq!(expected, actual);
