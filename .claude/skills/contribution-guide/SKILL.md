@@ -61,16 +61,16 @@ Follow these steps for **every** new JSON Schema feature and for **every** updat
 
 1. **Spec audit:** Check the keyword (and related behavior) against **all** JSON Schema specifications we support (draft-00 through 2020-12) using **only** the local specs under `specs/` (`make vendor_specs`). Document how the keyword is defined and how it behaves in each relevant draft.
 2. **design.md:** Fill out the feature's section in design.md: "Our implementation" and **"Spec version quirks"** (and any subsections, e.g. for `type` and `type: "object"`). Note any differences between spec versions.
-3. **Settings and SpecVersion:** If different spec versions handle the feature differently, capture that in **settings** (e.g. options under `JsonSchemaSettings` or validator/codegen settings). Ensure the **SpecVersion** enum's `default_schema_settings()` (and any other version-driven API) returns the correct settings for each spec version.
-4. **Default = latest spec:** Ensure default settings (e.g. `JsonSchemaSettings::default()`) target the **latest** JSON Schema specification we support (Draft 2020-12) unless a different spec version is explicitly provided.
+3. **Dialect and settings:** If spec versions handle the feature differently, put the difference in the **`Dialect`** (`json_schema/dialect.rs`): a keyword in each draft's keyword table (with its subschema position), and a behaviour as a flag with each draft's default in `Dialect::for_spec_version`. Code reads `schema.dialect()`; never branch on `SpecVersion`. When the flag gets its first consumer, add its per-flag override to `JsonSchemaSettings` (an `Option`, `None` = follow the draft; an enum when the setting is a choice of modes) and apply it in `resolve_dialect`. Shape differences that downstream code should not see (draft-4 `id`) are normalised once at parse time. See design.md, *Dialects*.
+4. **Default = latest spec:** With no `$schema` and no settings, the dialect is Draft 2020-12 (the latest we support); `JsonSchemaSettings::default()` pins nothing and follows each document's `$schema`.
 5. **All tools:** Implement or update the feature for **every applicable tool**: JSON Schema → Rust codegen (and all frontends: library golden, CLI, generated Rust build + deserialize, macro), and the **validator**. Add tests for each; update the codegen scenario × frontend matrix in design.md when adding scenarios or frontends.
 
 **Checklist** (copy when starting a new feature or verification):
 
 - [ ] Spec audit (local specs only; draft-00 through 2020-12)
 - [ ] design.md: Our implementation + Spec version quirks
-- [ ] Settings/SpecVersion if spec versions differ
-- [ ] Default settings = Draft 2020-12
+- [ ] Dialect table/flag (+ settings override) if spec versions differ
+- [ ] Default dialect = Draft 2020-12
 - [ ] All tools: codegen (all frontends) + validator; tests; scenario × frontend matrix
 
 ## Working style

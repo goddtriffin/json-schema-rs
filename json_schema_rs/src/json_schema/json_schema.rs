@@ -1,8 +1,11 @@
 //! In-memory representation of JSON Schema for codegen.
 
+use super::dialect::{Dialect, ResolvedDialect, SubschemaPosition};
 use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
-use super::settings::JsonSchemaSettings;
+use super::settings::{JsonSchemaSettings, resolve_dialect, resolve_dialect_for_uri};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::Read;
 
@@ -271,6 +274,7 @@ pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchem
         all_of,
         any_of,
         one_of,
+        dialect: None,
     }
 }
 
@@ -281,7 +285,7 @@ pub struct JsonSchema {
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
 
-    /// Unique identifier for the schema (typically a URI). Stored and round-tripped. We support only `$id`; draft-04 `id` is not accepted or emitted. Reserved for future use as base URI when `$ref` resolution is implemented.
+    /// Unique identifier for the schema (typically a URI). Stored and round-tripped as `$id`. In a draft-4 document, `id` is read into this field at parse time. Reserved for future use as base URI when `$ref` resolution is implemented.
     #[serde(rename = "$id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 
@@ -400,6 +404,13 @@ pub struct JsonSchema {
     /// oneOf: instance must validate against exactly one subschema. Stored as-is at ingestion; validator and codegen (union enum) use it. Not emitted by reverse codegen.
     #[serde(rename = "oneOf", skip_serializing_if = "skip_one_of")]
     pub one_of: Option<Vec<JsonSchema>>,
+
+    /// The effective dialect when the parsing settings chose one other than what `$schema` alone
+    /// selects (a pinned spec version or a per-flag override). `None` follows `$schema` (Draft
+    /// 2020-12 when absent). Read the effective dialect with [`JsonSchema::dialect`]. Not
+    /// serialized.
+    #[serde(skip)]
+    pub dialect: Option<Dialect>,
 }
 
 impl<'de> Deserialize<'de> for JsonSchema {
@@ -503,28 +514,144 @@ impl<'de> Deserialize<'de> for JsonSchema {
             all_of: h.all_of,
             any_of: h.any_of,
             one_of: h.one_of,
+            dialect: None,
         })
     }
 }
 
-fn parse_strict_str(json: &str) -> Result<JsonSchema, JsonSchemaParseError> {
-    let helper: DenyUnknownFieldsJsonSchema = serde_json::from_str(json)?;
-    Ok(deny_unknown_fields_helper_to_schema(helper))
+/// Raw schema text, parsed with the matching `serde_json` entry point.
+#[derive(Clone, Copy)]
+enum RawSchema<'a> {
+    Str(&'a str),
+    Slice(&'a [u8]),
 }
 
-fn parse_strict_slice(slice: &[u8]) -> Result<JsonSchema, JsonSchemaParseError> {
-    let helper: DenyUnknownFieldsJsonSchema =
-        serde_json::from_slice(slice).map_err(JsonSchemaParseError::Serde)?;
-    Ok(deny_unknown_fields_helper_to_schema(helper))
+impl RawSchema<'_> {
+    fn parse<T: DeserializeOwned>(&self) -> serde_json::Result<T> {
+        match self {
+            RawSchema::Str(s) => serde_json::from_str(s),
+            RawSchema::Slice(b) => serde_json::from_slice(b),
+        }
+    }
 }
 
-fn parse_strict_value(value: &serde_json::Value) -> Result<JsonSchema, JsonSchemaParseError> {
-    let helper: DenyUnknownFieldsJsonSchema =
-        serde_json::from_value(value.clone()).map_err(JsonSchemaParseError::from)?;
-    Ok(deny_unknown_fields_helper_to_schema(helper))
+/// Parses raw schema text. Lenient parsing goes straight to the model unless the document is
+/// draft 4 and may contain an `id` key; strict parsing, and that draft-4 case, go through a
+/// [`Value`] so the dialect is known before the model is built.
+fn parse_raw(
+    raw: RawSchema<'_>,
+    settings: &JsonSchemaSettings,
+) -> JsonSchemaParseResult<JsonSchema> {
+    if !settings.disallow_unknown_fields {
+        let schema: JsonSchema = raw.parse()?;
+        let resolved: ResolvedDialect = resolve_dialect(&schema, settings)?;
+        if !uses_legacy_id(resolved.dialect) || !may_contain_id_key(raw) {
+            return Ok(finish_parse(schema, &resolved));
+        }
+    }
+    let value: Value = raw.parse()?;
+    parse_value(value, settings)
+}
+
+/// Parses a schema document held as a [`Value`].
+fn parse_value(
+    mut value: Value,
+    settings: &JsonSchemaSettings,
+) -> JsonSchemaParseResult<JsonSchema> {
+    let schema_uri: Option<&str> = value.get("$schema").and_then(Value::as_str);
+    let resolved: ResolvedDialect = resolve_dialect_for_uri(schema_uri, settings)?;
+    if uses_legacy_id(resolved.dialect) {
+        normalize_legacy_ids(&mut value, resolved.dialect);
+    }
+    let schema: JsonSchema = if settings.disallow_unknown_fields {
+        let helper: DenyUnknownFieldsJsonSchema = serde_json::from_value(value)?;
+        deny_unknown_fields_helper_to_schema(helper)
+    } else {
+        serde_json::from_value(value)?
+    };
+    Ok(finish_parse(schema, &resolved))
+}
+
+/// Logs the dialect warnings and records the dialect on the root when the settings changed it.
+fn finish_parse(mut schema: JsonSchema, resolved: &ResolvedDialect) -> JsonSchema {
+    for warning in &resolved.warnings {
+        log::debug!("json-schema-rs: {warning}");
+    }
+    if resolved.dialect != schema.dialect() {
+        schema.dialect = Some(resolved.dialect);
+    }
+    schema
+}
+
+/// Whether the dialect names a schema's URI with draft 4's `id` rather than `$id`.
+fn uses_legacy_id(dialect: Dialect) -> bool {
+    dialect.id_keyword() == "id"
+}
+
+/// Whether raw JSON text can contain an object key `id`: the key is either written literally or
+/// spelled with a `\u` escape. Uses `str::contains`, which is several times faster than a
+/// byte-window scan on large documents; text that is not UTF-8 answers `true` and is left to the
+/// parser to reject.
+fn may_contain_id_key(raw: RawSchema<'_>) -> bool {
+    let text: Result<&str, std::str::Utf8Error> = match raw {
+        RawSchema::Str(s) => Ok(s),
+        RawSchema::Slice(b) => std::str::from_utf8(b),
+    };
+    text.map_or(true, |s| s.contains("\"id\"") || s.contains("\\u"))
+}
+
+/// Renames draft 4's string `id` to `$id` in every schema object of `root`, so the model holds
+/// one shape whatever the draft. Only schema positions are visited (from the dialect's keyword
+/// table), so a property named `id` is left alone. Iterative; an object that already has `$id`
+/// keeps both keys as written.
+fn normalize_legacy_ids(root: &mut Value, dialect: Dialect) {
+    let mut stack: Vec<&mut Value> = vec![root];
+    while let Some(node) = stack.pop() {
+        let Value::Object(map) = node else {
+            continue;
+        };
+        if !map.contains_key("$id")
+            && map.get("id").is_some_and(Value::is_string)
+            && let Some(id) = map.remove("id")
+        {
+            map.insert("$id".to_string(), id);
+        }
+        for (key, child) in map.iter_mut() {
+            let Some(position) = dialect.keyword(key).and_then(|k| k.subschemas) else {
+                continue;
+            };
+            match (position, child) {
+                (
+                    SubschemaPosition::Array | SubschemaPosition::SingleOrArray,
+                    Value::Array(items),
+                ) => {
+                    stack.extend(items.iter_mut());
+                }
+                (SubschemaPosition::Map, Value::Object(entries)) => {
+                    stack.extend(entries.values_mut());
+                }
+                (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, child) => {
+                    stack.push(child);
+                }
+                (SubschemaPosition::Array | SubschemaPosition::Map, _) => {}
+            }
+        }
+    }
 }
 
 impl JsonSchema {
+    /// The effective [`Dialect`] of this schema as a document root: the one recorded at parse
+    /// time when the settings chose it, otherwise the one its `$schema` selects (Draft 2020-12
+    /// when absent or unrecognised).
+    #[must_use]
+    pub fn dialect(&self) -> Dialect {
+        self.dialect.unwrap_or_else(|| {
+            resolve_dialect_for_uri(self.schema.as_deref(), &JsonSchemaSettings::default())
+                .map(|resolved| resolved.dialect)
+                .unwrap_or_default()
+        })
+    }
+
     /// Returns true if this schema is an object with properties (for codegen).
     #[must_use]
     pub(crate) fn is_object_with_properties(&self) -> bool {
@@ -632,12 +759,7 @@ impl JsonSchema {
     /// Returns [`JsonSchemaParseError::Serde`] on invalid JSON or type mismatch.
     /// Returns [`JsonSchemaParseError::UnknownField`] when strict and an unknown key is present.
     pub fn new_from_str(json: &str, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Self> {
-        if settings.disallow_unknown_fields {
-            parse_strict_str(json)
-        } else {
-            let schema: JsonSchema = serde_json::from_str(json)?;
-            Ok(schema)
-        }
+        parse_raw(RawSchema::Str(json), settings)
     }
 
     /// Parse a JSON Schema from a byte slice with the given settings.
@@ -651,12 +773,7 @@ impl JsonSchema {
         slice: &[u8],
         settings: &JsonSchemaSettings,
     ) -> JsonSchemaParseResult<Self> {
-        if settings.disallow_unknown_fields {
-            parse_strict_slice(slice)
-        } else {
-            let schema: JsonSchema = serde_json::from_slice(slice)?;
-            Ok(schema)
-        }
+        parse_raw(RawSchema::Slice(slice), settings)
     }
 
     /// Parse a JSON Schema from an already-parsed [`serde_json::Value`] with the given settings.
@@ -671,12 +788,7 @@ impl JsonSchema {
         value: &serde_json::Value,
         settings: &JsonSchemaSettings,
     ) -> JsonSchemaParseResult<Self> {
-        if settings.disallow_unknown_fields {
-            parse_strict_value(value)
-        } else {
-            let schema: JsonSchema = serde_json::from_value(value.clone())?;
-            Ok(schema)
-        }
+        parse_value(value.clone(), settings)
     }
 
     /// Parse a JSON Schema from a reader with the given settings.
@@ -833,7 +945,8 @@ impl TryFrom<JsonSchema> for Vec<u8> {
 mod tests {
     use super::JsonSchema;
     use crate::json_schema::{
-        JsonSchemaParseError, JsonSchemaSettings, SpecVersion, resolved_spec_version,
+        Dialect, FormatMode, JsonSchemaParseError, JsonSchemaSettings, SpecVersion,
+        UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -1867,34 +1980,265 @@ mod tests {
     }
 
     #[test]
-    fn resolved_spec_version_infers_2020_12_from_schema_uri() {
-        let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{}}"#;
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
+    fn parsed_dialect_follows_schema_uri() {
+        let json = r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object"}"#;
         let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let expected: SpecVersion = SpecVersion::Draft202012;
-        let actual: SpecVersion = resolved_spec_version(&schema, &settings);
+        let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft07);
+        let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn resolved_spec_version_defaults_to_2020_12_when_schema_absent() {
+    fn parsed_dialect_defaults_to_2020_12_when_schema_absent() {
         let json = r#"{"type":"object","properties":{}}"#;
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let expected: SpecVersion = SpecVersion::Draft202012;
-        let actual: SpecVersion = resolved_spec_version(&schema, &settings);
+        let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft202012);
+        let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn resolved_spec_version_defaults_to_2020_12_when_schema_unknown_uri() {
+    fn parsed_dialect_defaults_to_2020_12_when_schema_unknown_uri() {
         let json =
             r#"{"$schema":"https://unknown.example/schema","type":"object","properties":{}}"#;
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let expected: SpecVersion = SpecVersion::Draft202012;
-        let actual: SpecVersion = resolved_spec_version(&schema, &settings);
+        let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft202012);
+        let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_without_settings_overrides_records_no_dialect() {
+        let json = r#"{"$schema":"http://json-schema.org/draft-07/schema#"}"#;
+        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<Dialect> = None;
+        let actual: Option<Dialect> = schema.dialect;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_with_pinned_spec_version_records_dialect() {
+        let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .spec_version(SpecVersion::Draft07)
+            .build();
+        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let expected: Option<Dialect> = Some(Dialect::for_spec_version(SpecVersion::Draft07));
+        let actual: Option<Dialect> = schema.dialect;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_with_pinned_spec_version_matching_schema_uri_records_no_dialect() {
+        let json = r#"{"$schema":"http://json-schema.org/draft-07/schema#"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .spec_version(SpecVersion::Draft07)
+            .build();
+        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let expected: Option<Dialect> = None;
+        let actual: Option<Dialect> = schema.dialect;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_with_format_mode_override_records_it() {
+        let json = r#"{"type":"string","format":"uuid"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .format_mode(FormatMode::Assertion)
+            .build();
+        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let expected: FormatMode = FormatMode::Assertion;
+        let actual: FormatMode = schema.dialect().format_mode;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_unknown_schema_uri_rejected_when_strict() {
+        let json = r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .unknown_schema_uri(UnknownSchemaUri::Reject)
+            .build();
+        let actual: Result<JsonSchema, JsonSchemaParseError> =
+            JsonSchema::new_from_str(json, &settings);
+        assert!(matches!(
+            actual,
+            Err(JsonSchemaParseError::UnknownSchemaUri { ref uri }) if uri == "https://example.com/custom-meta"
+        ));
+    }
+
+    #[test]
+    fn parse_unknown_schema_uri_rejected_when_strict_and_unknown_fields_disallowed() {
+        let json = r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .unknown_schema_uri(UnknownSchemaUri::Reject)
+            .build();
+        let actual: Result<JsonSchema, JsonSchemaParseError> =
+            JsonSchema::new_from_str(json, &settings);
+        assert!(matches!(
+            actual,
+            Err(JsonSchemaParseError::UnknownSchemaUri { ref uri }) if uri == "https://example.com/custom-meta"
+        ));
+    }
+
+    // --- Draft-4 `id` is normalised to `$id` ---
+
+    const DRAFT4_WITH_IDS: &str = r##"{
+        "$schema": "http://json-schema.org/draft-04/schema#",
+        "id": "http://example.com/root.json",
+        "type": "object",
+        "properties": {"id": {"type": "string", "id": "#name"}},
+        "definitions": {"a": {"id": "#a", "type": "integer"}}
+    }"##;
+
+    /// Draft-4 document with schema positions the model does not hold (`items` array form,
+    /// `dependencies`), for checking the normalisation walk on a raw [`serde_json::Value`].
+    const DRAFT4_RAW: &str = r##"{
+        "id": "http://example.com/root.json",
+        "properties": {"id": {"type": "string", "id": "#name"}},
+        "items": [{"id": "#first"}],
+        "dependencies": {"b": ["c"], "d": {"id": "#d"}}
+    }"##;
+
+    fn ids(schema: &JsonSchema) -> Vec<Option<String>> {
+        let definition: Option<String> = schema
+            .definitions
+            .as_ref()
+            .and_then(|d| d.get("a"))
+            .and_then(|a| a.id.clone());
+        let property: Option<String> = schema.properties.get("id").and_then(|p| p.id.clone());
+        vec![schema.id.clone(), property, definition]
+    }
+
+    fn draft4_expected_ids() -> Vec<Option<String>> {
+        vec![
+            Some("http://example.com/root.json".to_string()),
+            Some("#name".to_string()),
+            Some("#a".to_string()),
+        ]
+    }
+
+    #[test]
+    fn draft4_id_normalized_from_str() {
+        let expected: Vec<Option<String>> = draft4_expected_ids();
+        let schema: JsonSchema = JsonSchema::try_from(DRAFT4_WITH_IDS).expect("parse");
+        let actual: Vec<Option<String>> = ids(&schema);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalized_from_slice() {
+        let expected: Vec<Option<String>> = draft4_expected_ids();
+        let schema: JsonSchema = JsonSchema::try_from(DRAFT4_WITH_IDS.as_bytes()).expect("parse");
+        let actual: Vec<Option<String>> = ids(&schema);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalized_from_serde_value() {
+        let expected: Vec<Option<String>> = draft4_expected_ids();
+        let value: serde_json::Value = serde_json::from_str(DRAFT4_WITH_IDS).expect("json");
+        let schema: JsonSchema = JsonSchema::try_from(&value).expect("parse");
+        let actual: Vec<Option<String>> = ids(&schema);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalized_when_strict() {
+        let json = r#"{"$schema":"http://json-schema.org/draft-04/schema#","id":"http://example.com/s.json","type":"string"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let expected: Option<String> = Some("http://example.com/s.json".to_string());
+        let actual: Option<String> = schema.id;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalized_inside_items_array() {
+        let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
+        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        let expected: serde_json::Value = serde_json::json!([{"$id": "#first"}]);
+        let actual: serde_json::Value = raw["items"].clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalization_leaves_property_named_id() {
+        let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
+        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        let expected: serde_json::Value =
+            serde_json::json!({"id": {"type": "string", "$id": "#name"}});
+        let actual: serde_json::Value = raw["properties"].clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalized_in_dependencies_leaving_string_arrays() {
+        let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
+        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        let expected: serde_json::Value = serde_json::json!({"b": ["c"], "d": {"$id": "#d"}});
+        let actual: serde_json::Value = raw["dependencies"].clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalization_keeps_existing_dollar_id() {
+        let mut raw: serde_json::Value = serde_json::json!({"$id": "http://example.com/dollar", "id": "http://example.com/plain"});
+        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        let expected: serde_json::Value = serde_json::json!({"$id": "http://example.com/dollar", "id": "http://example.com/plain"});
+        let actual: serde_json::Value = raw;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_id_normalization_leaves_non_string_id() {
+        let mut raw: serde_json::Value = serde_json::json!({"id": 5});
+        super::normalize_legacy_ids(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        let expected: serde_json::Value = serde_json::json!({"id": 5});
+        let actual: serde_json::Value = raw;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_escaped_id_key_normalized() {
+        let json = r#"{"$schema":"http://json-schema.org/draft-04/schema#","\u0069d":"http://example.com/e.json"}"#;
+        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<String> = Some("http://example.com/e.json".to_string());
+        let actual: Option<String> = schema.id;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn pinned_draft4_normalizes_id_without_schema_uri() {
+        let json = r#"{"id":"http://example.com/p.json"}"#;
+        let schema: JsonSchema =
+            JsonSchema::new_from_str(json, &SpecVersion::Draft04.default_schema_settings())
+                .expect("parse");
+        let expected: Option<String> = Some("http://example.com/p.json".to_string());
+        let actual: Option<String> = schema.id;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft6_id_is_not_normalized() {
+        let json = r#"{"$schema":"http://json-schema.org/draft-06/schema#","id":"http://example.com/x.json"}"#;
+        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let expected: Option<String> = None;
+        let actual: Option<String> = schema.id;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft6_id_rejected_when_strict() {
+        let json = r#"{"$schema":"http://json-schema.org/draft-06/schema#","id":"http://example.com/x.json"}"#;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let actual: Result<JsonSchema, JsonSchemaParseError> =
+            JsonSchema::new_from_str(json, &settings);
+        assert!(actual.is_err());
     }
 
     #[test]

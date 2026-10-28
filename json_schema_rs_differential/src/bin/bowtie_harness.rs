@@ -197,7 +197,6 @@ fn case_spec_version(schema: &Value, dialect: SpecVersion) -> SpecVersion {
 fn strict_settings(spec_version: SpecVersion) -> JsonSchemaSettings {
     let mut settings: JsonSchemaSettings = spec_version.default_schema_settings();
     settings.disallow_unknown_fields = true;
-    settings.spec_version = Some(spec_version);
     settings
 }
 
@@ -224,7 +223,9 @@ fn parse_skip_message(schema: &Value, error: &JsonSchemaParseError) -> String {
                 None => format!("unsupported schema: {error}"),
             }
         }
-        JsonSchemaParseError::Io(_) => format!("unsupported schema: {error}"),
+        JsonSchemaParseError::Io(_) | JsonSchemaParseError::UnknownSchemaUri { .. } => {
+            format!("unsupported schema: {error}")
+        }
     }
 }
 

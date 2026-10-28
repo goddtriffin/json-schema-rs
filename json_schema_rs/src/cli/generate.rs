@@ -1,8 +1,8 @@
 //! `jsonschemars generate` subcommand: generate Rust from JSON Schema files.
 
 use super::utils::{
-    collect_schema_entries, read_schema_from_path, shared_import_prefix_for_output_relative,
-    write_mod_rs_files,
+    collect_schema_entries, display_schema_path, read_schema_from_path,
+    shared_import_prefix_for_output_relative, write_mod_rs_files,
 };
 use json_schema_rs::{
     CodeGenSettings, DedupeMode, JsonSchema, JsonSchemaSettings, ModelNameSource, generate_rust,
@@ -11,12 +11,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[expect(clippy::too_many_lines)]
 pub(crate) fn run_generate(
     lang: &str,
     inputs: &[String],
     output_dir: &Path,
-    jss_disallow_unknown_fields: bool,
+    schema_settings: &JsonSchemaSettings,
     cgs_model_name_source: Option<&str>,
     cgs_dedupe_mode: Option<&str>,
 ) -> Result<(), String> {
@@ -33,9 +32,6 @@ pub(crate) fn run_generate(
         return Err("no JSON Schema files found (look for .json in directories)".to_string());
     }
 
-    let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-        .disallow_unknown_fields(jss_disallow_unknown_fields)
-        .build();
     let code_gen_settings: CodeGenSettings = {
         let mut b = CodeGenSettings::builder();
         if let Some(src) = cgs_model_name_source {
@@ -58,15 +54,10 @@ pub(crate) fn run_generate(
     let mut successful: Vec<(JsonSchema, PathBuf)> = Vec::with_capacity(entries.len());
     let mut had_errors = false;
     for (input_path, output_relative) in &entries {
-        match read_schema_from_path(input_path, &schema_settings) {
+        match read_schema_from_path(input_path, schema_settings) {
             Ok(schema) => successful.push((schema, output_relative.clone())),
             Err(e) => {
-                let path_display = if input_path.as_os_str() == "-" {
-                    "stdin".to_string()
-                } else {
-                    input_path.display().to_string()
-                };
-                eprintln!("error: {path_display}: {e}");
+                eprintln!("error: {}: {e}", display_schema_path(input_path));
                 had_errors = true;
             }
         }
