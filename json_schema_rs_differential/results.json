@@ -13295,7 +13295,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/ava.json\": invalid file url: https://json.schemastore.org/ava.json"
+              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -13339,7 +13339,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/ava.json\": invalid file url: https://json.schemastore.org/ava.json"
+              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
