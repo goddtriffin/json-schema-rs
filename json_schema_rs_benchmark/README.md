@@ -14,75 +14,86 @@ per-category winner. This crate is a workspace member and is **not published**
 make benchmark          # from the repo root (research_benchmark is a backwards-compat alias)
 ```
 
-The competitor CLIs must be installed first, or the run aborts up front with install hints
-(a partial run would silently omit a competitor and misrepresent the comparison):
+The external tools must be installed first, or the run aborts up front with install hints (a
+partial run would silently omit a competitor and misrepresent the comparison):
 
 ```sh
-cargo install cargo-typify    # codegen competitor (typify)
-cargo install jsonschema-cli  # validation competitor (Stranger6667/jsonschema)
+cargo install hyperfine                # CLI-tier timing
+cargo install cargo-typify --locked    # codegen competitor (typify)
+cargo install jsonschema-cli --locked  # validation competitor (Stranger6667/jsonschema)
 ```
 
-Our own `jsonschemars` CLI and the `boon` wrapper are built by the driver, so they need no
-separate install.
+Competitors must also be their newest stable release: the run aborts with the upgrade command
+when a linked crate (`jsonschema`, `typify`, `boon` in `Cargo.lock`) is behind crates.io, or when
+a competitor CLI is not the same release as its crate. Bump the version in `Cargo.toml`, run
+`cargo update -p <crate>`, and reinstall the CLI at that version.
+
+Our own `jsonschemars` CLI, the `boon` wrapper and every in-process competitor (linked crates)
+are built by the driver.
 
 Outputs, committed for PR review:
 
-- `results.json` — machine-readable aggregated results.
-- `results.md` — human-readable table with the winner marked per category, plus the codegen
+- `results.json` — raw measurements (median, stddev, min, max, samples), compatibility matrix,
+  tool versions.
+- `results.md` — methodology, category winners, one table per tier/operation/metric, and the
   compatibility matrix.
 
 ## What it measures
 
-Two axes, on shared language-agnostic fixtures at small / medium / large / massive sizes:
+Two tiers, on shared fixtures (committed small / medium / large / massive, plus large synthetic
+fixtures generated deterministically into `target/benchmark-fixtures/` on every run):
 
-- **Codegen** (schema → code): our lib vs [typify] (`cargo typify`). ([schemafy] is a
-  proc-macro with no CLI, so it cannot be wired as a codegen competitor.)
-- **Validation** (schema + instance → result): our lib vs [jsonschema-cli] and [boon].
+| Tier | How | Tools | Time | Memory |
+|---|---|---|---|---|
+| In-process | every tool linked as a library, called on in-memory inputs | json-schema-rs, [jsonschema], [boon], [typify] | [criterion] median ± stddev | peak heap per operation (counting allocator) |
+| CLI | every tool's binary end to end, startup included | `jsonschemars`, `jsonschema-cli`, `boon_validate`, `cargo-typify` | [hyperfine] median ± stddev | peak RSS |
 
-Per-metric categories (lower is better for all):
-
-| Category | Source | Scope |
-|---|---|---|
-| codegen wall-time | `/usr/bin/time` (CLI) | all codegen tools |
-| schema-compile time | criterion (in-process) | our lib only |
-| validate (valid) | `/usr/bin/time` (CLI) + criterion | all validation tools / our lib |
-| validate (invalid) | `/usr/bin/time` (CLI) | all validation tools (error-path) |
-| peak memory | `/usr/bin/time` peak RSS | all tools |
-
-Wall-time and peak memory both come from `/usr/bin/time` (macOS `-l` / Linux `-v`), which
-reports `real` time and peak RSS in one shot for every tool uniformly. Our own in-process
-hot paths additionally use [criterion] (with optional [dhat] heap profiling under the
-`dhat-heap` feature) so we can split schema-compile from per-instance validate and gate our
-own regressions.
+Operations: `codegen` (schema → Rust source), `schema_compile` (in-process only),
+`validate_valid`, `validate_invalid`. Lower is better everywhere.
 
 ## Rules baked into the harness
 
-- Perf numbers are only reported on fixtures that **every wired tool handles** (apples to
-  apples). Each size tier has at least one such fixture.
-- A tool that cannot generate code for a fixture is recorded in the **codegen compat
-  matrix** as a failure (not timed) — never a hard error.
-- If **our** library fails a valid schema, that is surfaced loudly and filed as a GitHub
-  issue (we aim to support 100% of valid JSON Schema).
-- Invalid-instance validation timing is measured and reported as a separate, labeled
-  category (validators behave differently on the error path).
+- A cell is measured only when the tool is **correct** on it (codegen succeeds, schema compiles,
+  valid accepted, invalid rejected); anything else is a compatibility failure with a reason.
+- The run is **hermetic**: a fixture whose schema has an external `$ref` is not measured.
+- A tool **wins** a cell only when at least two tools were measured and its lead beats both 3%
+  and the sum of the two standard deviations; ties and single-tool cells are never bolded. `†`
+  flags a measurement whose stddev exceeds 10% of its median.
+- If **our** library fails a valid schema, that is filed as a GitHub issue (we aim to support
+  100% of valid JSON Schema).
+
+See [design.md](../design.md#benchmark-harness) for the full methodology.
+
+## Env knobs
+
+| Variable | Default | Effect |
+|---|---|---|
+| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` | criterion arguments |
+| `BENCH_SKIP_CRITERION=1` | unset | skip in-process timing |
+| `BENCH_CLI_WARMUP` | `3` | hyperfine warmup runs per CLI cell |
+| `BENCH_CLI_RUNS` | `15` | hyperfine timed runs per CLI cell |
 
 ## Layout
 
 ```
 json_schema_rs_benchmark/
-  src/lib.rs              # shared results model + winner logic
-  src/bin/aggregate.rs    # raw captures -> results.{json,md}
-  src/bin/boon_validate.rs# thin boon CLI wrapper (so the harness can time boon end-to-end)
-  benches/hot_paths.rs    # criterion micro-benchmarks of our hot paths
-  scripts/run_benchmark.sh# driver invoked by `make benchmark`
-  scripts/tools.sh        # per-competitor CLI invocation definitions
-  fixtures/<size>/...     # schemas + instances, plus a manifest of tool support
-  results.json, results.md# committed aggregated results
+  src/lib.rs               # results model, statistics, winner rule, report rendering
+  src/adapters.rs          # every tool behind one interface (in-process tier)
+  src/fixtures.rs          # fixture discovery shared by both tiers
+  src/bin/aggregate.rs     # raw captures -> results.{json,md}
+  src/bin/heap_profile.rs  # per-operation peak heap + in-process compatibility
+  src/bin/gen_fixtures.rs  # deterministic large synthetic fixtures
+  src/bin/list_fixtures.rs # fixture list for the CLI tier
+  src/bin/boon_validate.rs # thin boon CLI wrapper (boon has no CLI)
+  benches/cross_tool.rs    # criterion timing of every tool
+  scripts/run_benchmark.sh # driver invoked by `make benchmark`
+  scripts/tools.sh         # CLI-tier tool definitions
+  fixtures/<size>/...      # committed schemas + instances, plus a provenance manifest
+  results.json, results.md # committed aggregated results
 ```
 
 [typify]: https://github.com/oxidecomputer/typify
-[schemafy]: https://github.com/Marwes/schemafy
-[jsonschema-cli]: https://github.com/Stranger6667/jsonschema
+[jsonschema]: https://github.com/Stranger6667/jsonschema
 [boon]: https://github.com/santhosh-tekuri/boon
 [criterion]: https://github.com/bheisler/criterion.rs
-[dhat]: https://github.com/nnethercote/dhat-rs
+[hyperfine]: https://github.com/sharkdp/hyperfine

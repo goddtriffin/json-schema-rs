@@ -13,19 +13,36 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
-# Aggregator: reads criterion + /usr/bin/time output and emits results.{json,md}.
+# Aggregator: reads the raw captures of both tiers and emits results.{json,md}.
 [[bin]]
 name = "aggregate"
 path = "src/bin/aggregate.rs"
 
-# Thin CLI wrapper around the `boon` validator so the harness can time it like any other tool.
+# Thin CLI wrapper around the `boon` validator so the CLI tier can time it like any other tool.
 [[bin]]
 name = "boon_validate"
 path = "src/bin/boon_validate.rs"
 
-# In-process criterion micro-benchmarks of OUR hot paths (parse->compile, validate, codegen).
+# Deterministic generator for the large synthetic fixtures (written under target/, never committed).
+[[bin]]
+name = "gen_fixtures"
+path = "src/bin/gen_fixtures.rs"
+
+# In-process peak-heap profile of every (tool, fixture, operation) under a counting allocator;
+# also the authoritative in-process compatibility check.
+[[bin]]
+name = "heap_profile"
+path = "src/bin/heap_profile.rs"
+
+# Prints the fixture set (id, dir, external refs) so the CLI tier discovers exactly what the
+# in-process tier does.
+[[bin]]
+name = "list_fixtures"
+path = "src/bin/list_fixtures.rs"
+
+# In-process criterion timing of every tool (linked as a library) on every fixture.
 [[bench]]
-name = "hot_paths"
+name = "cross_tool"
 harness = false
 
 [lints]
@@ -37,11 +54,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 clap = "4"
 boon = "0.6"
+jsonschema = { version = "0.60", default-features = false }
+typify = { version = "0.8", default-features = false }
+schemars = "0.8"
+syn = "3"
+prettyplease = "0.3"
+peak_alloc = "0.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-dhat = "0.3"
-
-# Enables dhat heap profiling in the criterion benches (opt-in; swaps the global allocator).
-[features]
-dhat-heap = []
