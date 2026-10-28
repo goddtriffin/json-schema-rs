@@ -409,7 +409,9 @@ fn derive_id_attribute_emits_id_in_schema() {
 }
 
 // A type with `id` is its own schema resource: inside it, `#/$defs/...` resolves against its
-// `$id`. The broken nested cases are known failures for #46 (`tests/known_failures.rs`).
+// `$id` (2020-12 core §9.2.1), so it carries the `$defs` its refs name and refers to itself as
+// `#`. Each expected schema was checked with jsonschema-cli 0.60.2 (it accepts a valid instance
+// and rejects an invalid one).
 
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
@@ -482,6 +484,329 @@ fn derive_nested_id_resource_without_named_dependencies() {
         }
     }));
     let actual: JsonSchema = HoldsResourceNoDep::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsResourceWithDep {
+    inner: ResourceWithDep,
+}
+
+#[test]
+fn nested_id_resource_carries_the_defs_its_refs_need() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "inner": { "$ref": "#/$defs/ResourceWithDep" } },
+        "additionalProperties": false,
+        "required": ["inner"],
+        "$defs": {
+            "ResourceWithDep": {
+                "$id": "https://example.com/with-dep",
+                "type": "object",
+                "properties": { "leaf": { "$ref": "#/$defs/ResourceLeaf" } },
+                "additionalProperties": false,
+                "required": ["leaf"],
+                "$defs": {
+                    "ResourceLeaf": {
+                        "type": "object",
+                        "properties": { "x": { "type": "string" } },
+                        "additionalProperties": false,
+                        "required": ["x"]
+                    }
+                }
+            }
+        }
+    }));
+    let actual: JsonSchema = HoldsResourceWithDep::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/node")]
+#[expect(dead_code)]
+struct ResourceNode {
+    next: Option<Box<ResourceNode>>,
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsResourceNode {
+    node: ResourceNode,
+}
+
+#[test]
+fn nested_recursive_id_resource_refers_to_its_own_root() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "node": { "$ref": "#/$defs/ResourceNode" } },
+        "additionalProperties": false,
+        "required": ["node"],
+        "$defs": {
+            "ResourceNode": {
+                "$id": "https://example.com/node",
+                "type": "object",
+                "properties": {
+                    "next": { "$ref": "#" },
+                    "x": { "type": "string" }
+                },
+                "additionalProperties": false,
+                "required": ["x"]
+            }
+        }
+    }));
+    let actual: JsonSchema = HoldsResourceNode::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn recursive_id_resource_as_root_refers_to_itself_as_hash() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.com/node",
+        "type": "object",
+        "properties": {
+            "next": { "$ref": "#" },
+            "x": { "type": "string" }
+        },
+        "additionalProperties": false,
+        "required": ["x"]
+    }));
+    let actual: JsonSchema = ResourceNode::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// A resource whose own `$defs` entry refers back to the resource: `#` inside that entry
+// resolves against the resource too.
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/tree")]
+#[expect(dead_code)]
+struct ResourceTree {
+    branches: Vec<ResourceBranch>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct ResourceBranch {
+    subtree: Option<Box<ResourceTree>>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsResourceTree {
+    tree: ResourceTree,
+}
+
+#[test]
+fn nested_id_resource_dependency_refers_back_to_the_resource_as_hash() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "tree": { "$ref": "#/$defs/ResourceTree" } },
+        "additionalProperties": false,
+        "required": ["tree"],
+        "$defs": {
+            "ResourceTree": {
+                "$id": "https://example.com/tree",
+                "type": "object",
+                "properties": {
+                    "branches": { "type": "array", "items": { "$ref": "#/$defs/ResourceBranch" } }
+                },
+                "additionalProperties": false,
+                "required": ["branches"],
+                "$defs": {
+                    "ResourceBranch": {
+                        "type": "object",
+                        "properties": { "subtree": { "$ref": "#" } },
+                        "additionalProperties": false
+                    }
+                }
+            }
+        }
+    }));
+    let actual: JsonSchema = HoldsResourceTree::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// A hand-written resource with its own `$defs`, valid on its own.
+struct HandWrittenResource;
+
+impl ToJsonSchema for HandWrittenResource {
+    fn json_schema() -> JsonSchema {
+        schema_from_json(serde_json::json!({
+            "$id": "https://example.com/hand",
+            "type": "object",
+            "properties": { "x": { "$ref": "#/$defs/Str" } },
+            "required": ["x"],
+            "$defs": { "Str": { "type": "string" } }
+        }))
+    }
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsHandWrittenResource {
+    hand: HandWrittenResource,
+}
+
+#[test]
+fn hand_written_id_resource_keeps_its_own_defs() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "hand": HandWrittenResource::json_schema() },
+        "additionalProperties": false,
+        "required": ["hand"]
+    }));
+    let actual: JsonSchema = HoldsHandWrittenResource::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// Two `$id` types that refer to each other: each is embedded once at the document root, and
+// refers to the other by its `$id`.
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/ping")]
+#[expect(dead_code)]
+struct ResourcePing {
+    pong: Option<Box<ResourcePong>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/pong")]
+#[expect(dead_code)]
+struct ResourcePong {
+    ping: Option<Box<ResourcePing>>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsResourcePing {
+    ping: ResourcePing,
+}
+
+#[test]
+fn mutually_referencing_id_resources_refer_to_each_other_by_id() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "ping": { "$ref": "#/$defs/ResourcePing" } },
+        "additionalProperties": false,
+        "required": ["ping"],
+        "$defs": {
+            "ResourcePing": {
+                "$id": "https://example.com/ping",
+                "type": "object",
+                "properties": { "pong": { "$ref": "https://example.com/pong" } },
+                "additionalProperties": false
+            },
+            "ResourcePong": {
+                "$id": "https://example.com/pong",
+                "type": "object",
+                "properties": { "ping": { "$ref": "https://example.com/ping" } },
+                "additionalProperties": false
+            }
+        }
+    }));
+    let actual: JsonSchema = HoldsResourcePing::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn mutually_referencing_id_resource_as_root_embeds_the_other_in_its_defs() {
+    let expected: JsonSchema = schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.com/ping",
+        "type": "object",
+        "properties": { "pong": { "$ref": "#/$defs/ResourcePong" } },
+        "additionalProperties": false,
+        "$defs": {
+            "ResourcePong": {
+                "$id": "https://example.com/pong",
+                "type": "object",
+                "properties": { "ping": { "$ref": "https://example.com/ping" } },
+                "additionalProperties": false
+            }
+        }
+    }));
+    let actual: JsonSchema = ResourcePing::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// One `$id` type used directly and from inside another resource: embedded once.
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/shared")]
+#[expect(dead_code)]
+struct SharedResource {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/uses-shared")]
+#[expect(dead_code)]
+struct UsesSharedResource {
+    shared: SharedResource,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsSharedResourceDirectFirst {
+    direct: SharedResource,
+    via: UsesSharedResource,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsSharedResourceViaFirst {
+    via: UsesSharedResource,
+    direct: SharedResource,
+}
+
+fn shared_resource_expected_schema() -> JsonSchema {
+    schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "direct": { "$ref": "#/$defs/SharedResource" },
+            "via": { "$ref": "#/$defs/UsesSharedResource" }
+        },
+        "additionalProperties": false,
+        "required": ["direct", "via"],
+        "$defs": {
+            "SharedResource": {
+                "$id": "https://example.com/shared",
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "additionalProperties": false,
+                "required": ["x"]
+            },
+            "UsesSharedResource": {
+                "$id": "https://example.com/uses-shared",
+                "type": "object",
+                "properties": { "shared": { "$ref": "https://example.com/shared" } },
+                "additionalProperties": false,
+                "required": ["shared"]
+            }
+        }
+    }))
+}
+
+#[test]
+fn id_resource_used_from_two_places_is_embedded_once_when_first_used_directly() {
+    let expected: JsonSchema = shared_resource_expected_schema();
+    let actual: JsonSchema = HoldsSharedResourceDirectFirst::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn id_resource_used_from_two_places_is_embedded_once_when_first_used_inside_a_resource() {
+    let expected: JsonSchema = JsonSchema {
+        required: Some(vec!["via".to_string(), "direct".to_string()]),
+        ..shared_resource_expected_schema()
+    };
+    let actual: JsonSchema = HoldsSharedResourceViaFirst::json_schema();
     assert_eq!(expected, actual);
 }
 
