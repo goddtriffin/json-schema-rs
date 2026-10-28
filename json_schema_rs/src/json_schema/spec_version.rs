@@ -3,7 +3,7 @@
 use super::settings::JsonSchemaSettings;
 
 /// JSON Schema specification version. One variant per vendored spec.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpecVersion {
     Draft00,
     Draft01,
@@ -70,38 +70,46 @@ impl SpecVersion {
         }
     }
 
-    /// Returns [`JsonSchemaSettings`] tuned for this spec version.
-    /// Callers can use the builder to override individual options.
+    /// Returns [`JsonSchemaSettings`] that pin this spec version: `$schema` is not used to choose
+    /// the draft, and every per-draft behaviour follows this version's
+    /// [`Dialect`](super::dialect::Dialect). Callers can use the builder to override individual
+    /// options.
     ///
-    /// **Default (latest) spec:** [`Draft202012`](SpecVersion::Draft202012) is
-    /// the latest supported spec; its settings match
-    /// `JsonSchemaSettings::default()` when no options are set.
+    /// [`JsonSchemaSettings::default()`] pins nothing: it follows each document's `$schema` and
+    /// uses **Draft 2020-12** (the latest supported spec) when `$schema` is absent.
     #[must_use]
     pub fn default_schema_settings(self) -> JsonSchemaSettings {
-        JsonSchemaSettings {
-            disallow_unknown_fields: false,
-            spec_version: None,
-        }
+        JsonSchemaSettings::builder().spec_version(self).build()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::json_schema::SpecVersion;
-    use crate::json_schema::settings::JsonSchemaSettings;
+    use crate::json_schema::dialect::ResolvedDialect;
+    use crate::json_schema::json_schema::JsonSchema;
+    use crate::json_schema::settings::{JsonSchemaSettings, resolve_dialect};
 
     #[test]
-    fn spec_version_returns_settings() {
-        let settings: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
-        assert!(!settings.disallow_unknown_fields);
+    fn default_schema_settings_pins_spec_version() {
+        let expected: JsonSchemaSettings = JsonSchemaSettings {
+            spec_version: Some(SpecVersion::Draft07),
+            ..JsonSchemaSettings::default()
+        };
+        let actual: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
+        assert_eq!(expected, actual);
     }
 
-    /// Default builder output matches Draft 2020-12 (latest spec) settings.
+    /// Without `$schema`, default settings resolve to the same dialect as pinning Draft 2020-12.
     #[test]
-    fn default_settings_match_draft202012() {
-        let from_builder: JsonSchemaSettings = JsonSchemaSettings::default();
-        let from_spec: JsonSchemaSettings = SpecVersion::Draft202012.default_schema_settings();
-        assert_eq!(from_builder, from_spec);
+    fn default_settings_resolve_to_draft202012() {
+        let schema: JsonSchema = JsonSchema::default();
+        let expected: ResolvedDialect =
+            resolve_dialect(&schema, &SpecVersion::Draft202012.default_schema_settings())
+                .expect("resolve");
+        let actual: ResolvedDialect =
+            resolve_dialect(&schema, &JsonSchemaSettings::default()).expect("resolve");
+        assert_eq!(expected, actual);
     }
 
     // --- schema_uri() exhaustive: one expected URI per variant ---

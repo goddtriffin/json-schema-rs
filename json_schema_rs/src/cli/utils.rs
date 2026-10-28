@@ -1,7 +1,7 @@
 //! CLI helpers: schema/payload I/O, schema file discovery, mod.rs emission.
 
 use json_schema_rs::sanitizers::{sanitize_output_relative, sanitize_path_component};
-use json_schema_rs::{JsonSchema, JsonSchemaSettings};
+use json_schema_rs::{DialectWarning, JsonSchema, JsonSchemaSettings, resolve_dialect};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -19,15 +19,32 @@ pub(crate) fn read_schema_from_reader<R: Read>(
     JsonSchema::new_from_slice(&buf, schema_settings).map_err(|e| e.to_string())
 }
 
+/// Reads and parses a schema file (`-` is stdin), printing its dialect warnings to stderr.
 pub(crate) fn read_schema_from_path(
     path: &PathBuf,
     schema_settings: &JsonSchemaSettings,
 ) -> Result<JsonSchema, String> {
-    if path.as_os_str() == "-" {
-        read_schema_from_reader(io::stdin(), schema_settings)
+    let schema: JsonSchema = if path.as_os_str() == "-" {
+        read_schema_from_reader(io::stdin(), schema_settings)?
     } else {
         let f = File::open(path).map_err(|e| format!("failed to open schema file: {e}"))?;
-        read_schema_from_reader(f, schema_settings)
+        read_schema_from_reader(f, schema_settings)?
+    };
+    let warnings: Vec<DialectWarning> = resolve_dialect(&schema, schema_settings)
+        .map_err(|e| e.to_string())?
+        .warnings;
+    for warning in warnings {
+        eprintln!("warning: {}: {warning}", display_schema_path(path));
+    }
+    Ok(schema)
+}
+
+/// How a schema path is shown in messages (`stdin` for `-`).
+pub(crate) fn display_schema_path(path: &Path) -> String {
+    if path.as_os_str() == "-" {
+        "stdin".to_string()
+    } else {
+        path.display().to_string()
     }
 }
 
