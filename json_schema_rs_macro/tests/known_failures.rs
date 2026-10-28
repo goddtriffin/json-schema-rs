@@ -1,5 +1,6 @@
 //! Known-failing regression tests for `#[derive(ToJsonSchema)]`: one or more tests per open
-//! bug issue, named `issue_<N>_...`.
+//! bug issue, grouped under a `// --- #N: ... ---` comment. Test names describe the behaviour
+//! checked, never the issue number; the issue is the wrapper's first argument.
 //!
 //! Each test body asserts the **correct** behaviour. The wrapper inverts it: the test passes
 //! while the body still fails, and fails as soon as the body passes ("unexpected pass"). When
@@ -41,7 +42,9 @@ fn schema_from_json(value: serde_json::Value) -> JsonSchema {
     serde_json::from_value::<JsonSchema>(value).expect("valid schema")
 }
 
-// #46: a type with `id` is its own schema resource. Nested in root `$defs`, its `#/$defs/...`
+// --- #46: nested $id resources must carry their own $defs ---
+//
+// A type with `id` is its own schema resource. Nested in root `$defs`, its `#/$defs/...`
 // refs resolve against its `$id` (2020-12 core §9.2.1), so it must carry the `$defs` they name
 // and refer to itself as `#`. Each expected schema was checked with jsonschema-cli 0.60.2 (it
 // accepts a valid instance and rejects an invalid one). The cases that already work are plain
@@ -102,7 +105,7 @@ struct HoldsHandWrittenResource {
 }
 
 #[test]
-fn issue_46_nested_id_resource_carries_the_defs_its_refs_need() {
+fn nested_id_resource_carries_the_defs_its_refs_need() {
     known_failure(46, || {
         let expected: JsonSchema = schema_from_json(serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -134,7 +137,7 @@ fn issue_46_nested_id_resource_carries_the_defs_its_refs_need() {
 }
 
 #[test]
-fn issue_46_nested_recursive_id_resource_refers_to_its_own_root() {
+fn nested_recursive_id_resource_refers_to_its_own_root() {
     known_failure(46, || {
         let expected: JsonSchema = schema_from_json(serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -161,7 +164,7 @@ fn issue_46_nested_recursive_id_resource_refers_to_its_own_root() {
 }
 
 #[test]
-fn issue_46_hand_written_id_resource_keeps_its_own_defs() {
+fn hand_written_id_resource_keeps_its_own_defs() {
     known_failure(46, || {
         let expected: JsonSchema = schema_from_json(serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
