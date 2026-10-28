@@ -3,13 +3,16 @@
 //! Collects every validation error (no fail-fast) and returns them in a single result.
 
 mod error;
-pub use error::{OrderedF64, ValidationError, ValidationResult};
+pub use error::{ValidationError, ValidationResult};
 
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::json_schema::AdditionalProperties;
 use crate::json_schema::ref_resolver;
 use crate::json_schema::{Dialect, JsonSchema};
-use serde_json::Value;
+use crate::number::{self, JsonEqKey};
+use serde_json::{Number, Value};
+use std::cmp::Ordering;
+use std::collections::HashSet;
 
 /// Returns the JSON type name of the value for use in "got" error messages.
 fn json_type_name(v: &Value) -> &'static str {
@@ -84,7 +87,7 @@ fn validate_with_root(
         };
 
         if let Some(ref expected) = schema.const_value
-            && instance != expected
+            && !number::json_equal(instance, expected)
         {
             let expected_str: String = value_to_display_string(expected);
             let actual_str: String = value_to_display_string(instance);
@@ -97,7 +100,7 @@ fn validate_with_root(
         }
         if let Some(ref allowed) = schema.enum_values
             && !allowed.is_empty()
-            && !allowed.iter().any(|a| a == instance)
+            && !allowed.iter().any(|a| number::json_equal(a, instance))
         {
             let invalid_value: String = value_to_display_string(instance);
             let allowed_strs: Vec<String> = allowed.iter().map(value_to_display_string).collect();
@@ -291,63 +294,22 @@ fn validate_with_root(
                 }
             }
             Some("integer") => {
-                let valid = instance.as_number().is_some_and(|n| n.as_i64().is_some());
+                let valid: bool = instance
+                    .as_number()
+                    .is_some_and(|n| number::is_integer(n, dialect.integer_semantics));
                 if !valid {
                     errors.push(ValidationError::ExpectedInteger {
                         instance_path: instance_path.clone(),
                         got: json_type_name(instance).to_string(),
                     });
-                } else if let Some(instance_f64) =
-                    instance.as_number().and_then(serde_json::Number::as_f64)
-                {
-                    if let Some(min) = schema.minimum
-                        && instance_f64 < min
-                    {
-                        errors.push(ValidationError::BelowMinimum {
-                            instance_path: instance_path.clone(),
-                            minimum: crate::validator::error::OrderedF64(min),
-                            actual: crate::validator::error::OrderedF64(instance_f64),
-                        });
-                    }
-                    if let Some(max) = schema.maximum
-                        && instance_f64 > max
-                    {
-                        errors.push(ValidationError::AboveMaximum {
-                            instance_path: instance_path.clone(),
-                            maximum: crate::validator::error::OrderedF64(max),
-                            actual: crate::validator::error::OrderedF64(instance_f64),
-                        });
-                    }
                 }
             }
             Some("number") => {
-                let valid = instance.as_number().is_some();
-                if !valid {
+                if !instance.is_number() {
                     errors.push(ValidationError::ExpectedNumber {
                         instance_path: instance_path.clone(),
                         got: json_type_name(instance).to_string(),
                     });
-                } else if let Some(instance_f64) =
-                    instance.as_number().and_then(serde_json::Number::as_f64)
-                {
-                    if let Some(min) = schema.minimum
-                        && instance_f64 < min
-                    {
-                        errors.push(ValidationError::BelowMinimum {
-                            instance_path: instance_path.clone(),
-                            minimum: crate::validator::error::OrderedF64(min),
-                            actual: crate::validator::error::OrderedF64(instance_f64),
-                        });
-                    }
-                    if let Some(max) = schema.maximum
-                        && instance_f64 > max
-                    {
-                        errors.push(ValidationError::AboveMaximum {
-                            instance_path: instance_path.clone(),
-                            maximum: crate::validator::error::OrderedF64(max),
-                            actual: crate::validator::error::OrderedF64(instance_f64),
-                        });
-                    }
                 }
             }
             Some("array") => {
@@ -376,26 +338,6 @@ fn validate_with_root(
                         max_items,
                         actual_count,
                     });
-                }
-                if schema.unique_items == Some(true) {
-                    let mut duplicate_value_opt: Option<String> = None;
-                    for i in 0..arr.len() {
-                        for j in (i + 1)..arr.len() {
-                            if arr[i] == arr[j] {
-                                duplicate_value_opt = Some(value_to_display_string(&arr[i]));
-                                break;
-                            }
-                        }
-                        if duplicate_value_opt.is_some() {
-                            break;
-                        }
-                    }
-                    if let Some(duplicate_value) = duplicate_value_opt {
-                        errors.push(ValidationError::DuplicateArrayItems {
-                            instance_path: instance_path.clone(),
-                            duplicate_value,
-                        });
-                    }
                 }
                 if let Some(ref item_schema) = schema.items {
                     let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
@@ -442,6 +384,20 @@ fn validate_with_root(
                 }
             }
         }
+        // Numeric and uniqueness keywords apply to every instance of their kind, whatever `type`
+        // says (a schema without `type` still bounds numbers).
+        if let Some(n) = instance.as_number() {
+            push_numeric_errors(schema, n, &instance_path, &mut errors);
+        }
+        if schema.unique_items == Some(true)
+            && let Some(items) = instance.as_array()
+            && let Some(duplicate) = first_duplicate(items)
+        {
+            errors.push(ValidationError::DuplicateArrayItems {
+                instance_path: instance_path.clone(),
+                duplicate_value: value_to_display_string(duplicate),
+            });
+        }
     }
 
     if errors.is_empty() {
@@ -451,15 +407,94 @@ fn validate_with_root(
     }
 }
 
+/// Checks `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and `multipleOf` against
+/// the numeric instance `n`, comparing exactly (see [`number::cmp_num`]).
+fn push_numeric_errors(
+    schema: &JsonSchema,
+    n: &Number,
+    instance_path: &JsonPointer,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(ref minimum) = schema.minimum
+        && number::cmp_num(n, minimum) == Ordering::Less
+    {
+        errors.push(ValidationError::BelowMinimum {
+            instance_path: instance_path.clone(),
+            minimum: minimum.clone(),
+            actual: n.clone(),
+        });
+    }
+    if let Some(ref maximum) = schema.maximum
+        && number::cmp_num(n, maximum) == Ordering::Greater
+    {
+        errors.push(ValidationError::AboveMaximum {
+            instance_path: instance_path.clone(),
+            maximum: maximum.clone(),
+            actual: n.clone(),
+        });
+    }
+    if let Some(ref exclusive_minimum) = schema.exclusive_minimum
+        && number::cmp_num(n, exclusive_minimum) != Ordering::Greater
+    {
+        errors.push(ValidationError::NotAboveExclusiveMinimum {
+            instance_path: instance_path.clone(),
+            exclusive_minimum: exclusive_minimum.clone(),
+            actual: n.clone(),
+        });
+    }
+    if let Some(ref exclusive_maximum) = schema.exclusive_maximum
+        && number::cmp_num(n, exclusive_maximum) != Ordering::Less
+    {
+        errors.push(ValidationError::NotBelowExclusiveMaximum {
+            instance_path: instance_path.clone(),
+            exclusive_maximum: exclusive_maximum.clone(),
+            actual: n.clone(),
+        });
+    }
+    if let Some(ref multiple_of) = schema.multiple_of
+        && !number::is_multiple_of(n, multiple_of)
+    {
+        errors.push(ValidationError::NotMultipleOf {
+            instance_path: instance_path.clone(),
+            multiple_of: multiple_of.clone(),
+            actual: n.clone(),
+        });
+    }
+}
+
+/// Arrays up to this length are checked pairwise for `uniqueItems`; longer ones through a hash
+/// set (the pairwise scan does no hashing or allocation, which wins on short arrays; jsonschema-rs
+/// switches at the same size).
+const UNIQUE_ITEMS_PAIRWISE_MAX: usize = 15;
+
+/// The first element of `items` equal (by [`number::json_equal`]) to an earlier one.
+fn first_duplicate(items: &[Value]) -> Option<&Value> {
+    if items.len() <= UNIQUE_ITEMS_PAIRWISE_MAX {
+        return items.iter().enumerate().find_map(|(j, later)| {
+            items[..j]
+                .iter()
+                .any(|earlier| number::json_equal(earlier, later))
+                .then_some(later)
+        });
+    }
+    let mut seen: HashSet<JsonEqKey<'_>> = HashSet::with_capacity(items.len());
+    items.iter().find(|item| !seen.insert(JsonEqKey(item)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{OrderedF64, ValidationError, ValidationResult, validate};
+    use super::{ValidationError, ValidationResult, validate};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
     use crate::json_schema::json_schema::AdditionalProperties;
     use crate::json_schema::ref_resolver::RefResolutionError;
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    /// A finite `f64` as a JSON number.
+    fn float(v: f64) -> serde_json::Number {
+        serde_json::Number::from_f64(v).expect("finite")
+    }
 
     fn schema_object_with_required(
         required: Vec<&str>,
@@ -2661,8 +2696,8 @@ mod tests {
             unique_items: None,
             min_items: None,
             max_items: None,
-            minimum: Some(0.0),
-            maximum: Some(255.0),
+            minimum: Some(0_u64.into()),
+            maximum: Some(255_u64.into()),
             min_length: None,
             max_length: None,
             pattern: None,
@@ -2695,8 +2730,8 @@ mod tests {
             unique_items: None,
             min_items: None,
             max_items: None,
-            minimum: Some(10.0),
-            maximum: Some(100.0),
+            minimum: Some(10_u64.into()),
+            maximum: Some(100_u64.into()),
             min_length: None,
             max_length: None,
             pattern: None,
@@ -2711,8 +2746,8 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
             instance_path: JsonPointer::root(),
-            minimum: OrderedF64(10.0),
-            actual: OrderedF64(5.0),
+            minimum: 10_u64.into(),
+            actual: 5_u64.into(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2733,8 +2768,8 @@ mod tests {
             unique_items: None,
             min_items: None,
             max_items: None,
-            minimum: Some(0.0),
-            maximum: Some(10.0),
+            minimum: Some(0_u64.into()),
+            maximum: Some(10_u64.into()),
             min_length: None,
             max_length: None,
             pattern: None,
@@ -2749,8 +2784,8 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
             instance_path: JsonPointer::root(),
-            maximum: OrderedF64(10.0),
-            actual: OrderedF64(20.0),
+            maximum: 10_u64.into(),
+            actual: 20_u64.into(),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2805,8 +2840,8 @@ mod tests {
             unique_items: None,
             min_items: None,
             max_items: None,
-            minimum: Some(0.5),
-            maximum: Some(99.5),
+            minimum: Some(float(0.5)),
+            maximum: Some(float(99.5)),
             min_length: None,
             max_length: None,
             pattern: None,
@@ -2839,8 +2874,8 @@ mod tests {
             unique_items: None,
             min_items: None,
             max_items: None,
-            minimum: Some(1.0),
-            maximum: Some(10.0),
+            minimum: Some(1_u64.into()),
+            maximum: Some(10_u64.into()),
             min_length: None,
             max_length: None,
             pattern: None,
@@ -2855,8 +2890,8 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
             instance_path: JsonPointer::root(),
-            minimum: OrderedF64(1.0),
-            actual: OrderedF64(0.5),
+            minimum: 1_u64.into(),
+            actual: float(0.5),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2877,8 +2912,8 @@ mod tests {
             unique_items: None,
             min_items: None,
             max_items: None,
-            minimum: Some(0.0),
-            maximum: Some(1.0),
+            minimum: Some(0_u64.into()),
+            maximum: Some(1_u64.into()),
             min_length: None,
             max_length: None,
             pattern: None,
@@ -2893,8 +2928,8 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
             instance_path: JsonPointer::root(),
-            maximum: OrderedF64(1.0),
-            actual: OrderedF64(2.5),
+            maximum: 1_u64.into(),
+            actual: float(2.5),
         }]);
         assert_eq!(expected, actual);
     }
@@ -2922,8 +2957,8 @@ mod tests {
                         unique_items: None,
                         min_items: None,
                         max_items: None,
-                        minimum: Some(10.0),
-                        maximum: Some(100.0),
+                        minimum: Some(10_u64.into()),
+                        maximum: Some(100_u64.into()),
                         min_length: None,
                         max_length: None,
                         pattern: None,
@@ -2951,8 +2986,8 @@ mod tests {
                         unique_items: None,
                         min_items: None,
                         max_items: None,
-                        minimum: Some(10.0),
-                        maximum: Some(100.0),
+                        minimum: Some(10_u64.into()),
+                        maximum: Some(100_u64.into()),
                         min_length: None,
                         max_length: None,
                         pattern: None,
@@ -2994,13 +3029,13 @@ mod tests {
         let expected: ValidationResult = Err(vec![
             ValidationError::AboveMaximum {
                 instance_path: JsonPointer::root().push("high"),
-                maximum: OrderedF64(100.0),
-                actual: OrderedF64(200.0),
+                maximum: 100_u64.into(),
+                actual: 200_u64.into(),
             },
             ValidationError::BelowMinimum {
                 instance_path: JsonPointer::root().push("low"),
-                minimum: OrderedF64(10.0),
-                actual: OrderedF64(5.0),
+                minimum: 10_u64.into(),
+                actual: 5_u64.into(),
             },
         ]);
         assert_eq!(expected, actual);
@@ -4800,6 +4835,424 @@ mod tests {
             r#"{"$schema":"http://json-schema.org/draft-07/schema#","anyOf":[{"type":"string","format":"uuid"}]}"#,
             &crate::JsonSchemaSettings::default(),
         );
+        assert_eq!(expected, actual);
+    }
+
+    // --- Exact numbers: integer rule, bounds, multipleOf, mathematical equality ---
+
+    /// Parses `schema_json` with `settings` and validates `instance_json` against it.
+    fn validate_text(
+        schema_json: &str,
+        instance_json: &str,
+        settings: &crate::json_schema::JsonSchemaSettings,
+    ) -> ValidationResult {
+        let schema: JsonSchema = JsonSchema::new_from_str(schema_json, settings).expect("schema");
+        let instance: serde_json::Value = serde_json::from_str(instance_json).expect("instance");
+        validate(&schema, &instance)
+    }
+
+    /// Whether `instance_json` is valid against `schema_json` under default settings.
+    fn is_valid(schema_json: &str, instance_json: &str) -> bool {
+        validate_text(
+            schema_json,
+            instance_json,
+            &crate::json_schema::JsonSchemaSettings::default(),
+        )
+        .is_ok()
+    }
+
+    /// A JSON number parsed from `text`, exactly as `serde_json` reads it.
+    fn num(text: &str) -> serde_json::Number {
+        serde_json::from_str(text).expect("number")
+    }
+
+    const DRAFT4: &str = "http://json-schema.org/draft-04/schema#";
+
+    #[test]
+    fn integer_accepts_zero_fraction_float() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"type":"integer"}"#, "1.0");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_accepts_u64_above_i64_max() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"type":"integer"}"#, "18446744073709551615");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_accepts_bignum() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            r#"{"type":"integer"}"#,
+            "12345678910111213141516171819202122232425",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_rejects_fraction() {
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
+            instance_path: JsonPointer::root(),
+            got: "number".to_string(),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"type":"integer"}"#,
+            "1.5",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_integer_rejects_zero_fraction_float() {
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            &format!(r#"{{"$schema":"{DRAFT4}","type":"integer"}}"#),
+            "1.0",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_integer_accepts_u64_above_i64_max() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            &format!(r#"{{"$schema":"{DRAFT4}","type":"integer"}}"#),
+            "18446744073709551615",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_semantics_setting_overrides_draft() {
+        let settings: crate::json_schema::JsonSchemaSettings =
+            crate::json_schema::JsonSchemaSettings::builder()
+                .integer_semantics(crate::json_schema::IntegerSemantics::Numeric)
+                .build();
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_text(
+            &format!(r#"{{"$schema":"{DRAFT4}","type":"integer"}}"#),
+            "1.0",
+            &settings,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_type_error_and_bound_error_are_both_reported() {
+        let expected: ValidationResult = Err(vec![
+            ValidationError::ExpectedInteger {
+                instance_path: JsonPointer::root(),
+                got: "number".to_string(),
+            },
+            ValidationError::BelowMinimum {
+                instance_path: JsonPointer::root(),
+                minimum: num("2"),
+                actual: num("1.5"),
+            },
+        ]);
+        let actual: ValidationResult = validate_text(
+            r#"{"type":"integer","minimum":2}"#,
+            "1.5",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn minimum_beyond_f64_precision_rejects_smaller_integer() {
+        let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
+            instance_path: JsonPointer::root(),
+            minimum: num("9007199254740993"),
+            actual: num("9007199254740992"),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"type":"integer","minimum":9007199254740993}"#,
+            "9007199254740992",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn maximum_u64_max_accepts_u64_max() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            r#"{"type":"integer","maximum":18446744073709551615}"#,
+            "18446744073709551615",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn maximum_integer_rejects_float_just_above() {
+        let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
+            instance_path: JsonPointer::root(),
+            maximum: num("300"),
+            actual: num("300.5"),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"maximum":300}"#,
+            "300.5",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn minimum_applies_without_type() {
+        let expected: bool = false;
+        let actual: bool = is_valid(r#"{"minimum":1.1}"#, "0.6");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn numeric_keywords_ignore_non_numbers() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            r#"{"minimum":1,"maximum":0,"exclusiveMinimum":1,"exclusiveMaximum":0,"multipleOf":7}"#,
+            r#""x""#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn exclusive_minimum_rejects_boundary() {
+        let expected: ValidationResult = Err(vec![ValidationError::NotAboveExclusiveMinimum {
+            instance_path: JsonPointer::root(),
+            exclusive_minimum: num("1.1"),
+            actual: num("1.1"),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"exclusiveMinimum":1.1}"#,
+            "1.1",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn exclusive_minimum_accepts_above() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"exclusiveMinimum":1.1}"#, "1.2");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn exclusive_maximum_rejects_boundary() {
+        let expected: ValidationResult = Err(vec![ValidationError::NotBelowExclusiveMaximum {
+            instance_path: JsonPointer::root(),
+            exclusive_maximum: num("3"),
+            actual: num("3.0"),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"exclusiveMaximum":3}"#,
+            "3.0",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn exclusive_maximum_accepts_below() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"exclusiveMaximum":3}"#, "2.9");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn exclusive_maximum_equal_large_float_is_invalid() {
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            r#"{"exclusiveMaximum":9.727837981879871e+26}"#,
+            "9.727837981879871e+26",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_boolean_exclusive_minimum_rejects_boundary() {
+        let expected: ValidationResult = Err(vec![ValidationError::NotAboveExclusiveMinimum {
+            instance_path: JsonPointer::root(),
+            exclusive_minimum: num("1.1"),
+            actual: num("1.1"),
+        }]);
+        let actual: ValidationResult = validate_text(
+            &format!(r#"{{"$schema":"{DRAFT4}","minimum":1.1,"exclusiveMinimum":true}}"#),
+            "1.1",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_false_exclusive_maximum_keeps_inclusive_boundary() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            &format!(r#"{{"$schema":"{DRAFT4}","maximum":3.0,"exclusiveMaximum":false}}"#),
+            "3.0",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_of_rejects_non_multiple() {
+        let expected: ValidationResult = Err(vec![ValidationError::NotMultipleOf {
+            instance_path: JsonPointer::root(),
+            multiple_of: num("1.5"),
+            actual: num("35"),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"multipleOf":1.5}"#,
+            "35",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_of_accepts_small_decimal_multiple() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"multipleOf":0.0001}"#, "0.0075");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_of_integer_accepts_huge_whole_float() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"type":"integer","multipleOf":0.5}"#, "1e308");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_matches_mathematically_equal_number() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"enum":[0]}"#, "0.0");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_matches_mathematically_equal_nested_number() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"enum":[[1]]}"#, "[1.0]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_number_does_not_match_boolean() {
+        let expected: bool = false;
+        let actual: bool = is_valid(r#"{"enum":[0]}"#, "false");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_matches_mathematically_equal_number() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"const":-2.0}"#, "-2");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_null_rejects_zero() {
+        let expected: ValidationResult = Err(vec![ValidationError::NotConst {
+            instance_path: JsonPointer::root(),
+            expected: "null".to_string(),
+            actual: "0".to_string(),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"const":null}"#,
+            "0",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_null_accepts_null() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"const":null}"#, "null");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_rejects_mathematically_equal_numbers() {
+        let expected: bool = false;
+        let actual: bool = is_valid(r#"{"type":"array","uniqueItems":true}"#, "[1, 1.0]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_applies_without_type() {
+        let expected: ValidationResult = Err(vec![ValidationError::DuplicateArrayItems {
+            instance_path: JsonPointer::root(),
+            duplicate_value: r#"{"a":1,"b":2}"#.to_string(),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"uniqueItems":true}"#,
+            r#"[{"a": 1, "b": 2}, {"b": 2, "a": 1}]"#,
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_accepts_distinct_values() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            r#"{"uniqueItems":true}"#,
+            r#"[0, false, null, "0", [0], {"a": 0}, 1.5]"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_rejects_duplicate_in_long_array() {
+        let mut items: Vec<String> = (0..40).map(|i| i.to_string()).collect();
+        items.push("17.0".to_string());
+        let expected: ValidationResult = Err(vec![ValidationError::DuplicateArrayItems {
+            instance_path: JsonPointer::root(),
+            duplicate_value: "17.0".to_string(),
+        }]);
+        let actual: ValidationResult = validate_text(
+            r#"{"uniqueItems":true}"#,
+            &format!("[{}]", items.join(",")),
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_accepts_distinct_long_array() {
+        let items: Vec<String> = (0..40).map(|i| format!("{i}.5")).collect();
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"uniqueItems":true}"#, &format!("[{}]", items.join(",")));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_false_allows_duplicates() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"uniqueItems":false}"#, "[1, 1]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn numeric_error_messages_show_exact_values() {
+        let errors: Vec<ValidationError> = validate_text(
+            r#"{"minimum":9007199254740993,"exclusiveMaximum":0,"multipleOf":2}"#,
+            "9007199254740991",
+            &crate::json_schema::JsonSchemaSettings::default(),
+        )
+        .expect_err("invalid");
+        let expected: Vec<String> = vec![
+            "root: value 9007199254740991 is below minimum 9007199254740993".to_string(),
+            "root: value 9007199254740991 is not below exclusiveMaximum 0".to_string(),
+            "root: value 9007199254740991 is not a multiple of 2".to_string(),
+        ];
+        let actual: Vec<String> = errors.iter().map(ToString::to_string).collect();
         assert_eq!(expected, actual);
     }
 }
