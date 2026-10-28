@@ -9,4 +9,18 @@ Official-suite tests that failed on `main` and pass with this PR (most relevant 
 
 ## Performance
 
-Time and memory changes of our library versus `main`'s benchmark results, beyond noise only: the biggest few with before → after, plus a count of the rest. One line if nothing moved beyond noise.
+Time and memory changes of our library versus `main`'s benchmark results, counting only cells that moved beyond noise on code paths this PR changed: a short summary (biggest few with before → after, count, category-winner changes, why), then the full tables collapsed. One line, and no tables, if nothing moved beyond noise.
+
+<details><summary>Memory (N cells)</summary>
+
+| Tier | Fixture | Operation | `main` | This PR | Change |
+|---|---|---|---|---|---|
+
+</details>
+
+<details><summary>Time (N cells)</summary>
+
+| Tier | Fixture | Operation | `main` | This PR | Change |
+|---|---|---|---|---|---|
+
+</details>

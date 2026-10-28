@@ -67,7 +67,8 @@ Every change goes through a pull request that a human reviews and merges.
 
 Succinct, at-a-glance, actionable: what changed and why, then these two sections, both
 measured against `main`'s committed results files. Highlight what matters most and give
-counts for the rest; never list everything.
+counts for the rest in the visible text; full detail goes only in collapsed `<details>`
+blocks (the Performance tables), and nothing the PR did not cause appears at all.
 
 - **JSON Schema spec parity:** official-suite tests that failed on `main` and pass now (and
   any that regressed). Sources: entries removed from (or added to)
@@ -75,7 +76,12 @@ counts for the rest; never list everything.
   `json_schema_rs_differential/results.md`. Name the most relevant groups (keyword and
   draft) with counts. If nothing changed, write `n/a`.
 - **Performance:** our library's time and memory (peak heap / peak RSS) versus `main`'s
-  benchmark results. Report only changes beyond noise (larger than the 3% threshold and
-  the standard deviations the harness uses for winners): the biggest few with before → after,
-  plus a count of the rest, and note any change in category winners. If nothing moved
-  beyond noise, say so in one line.
+  benchmark results. A cell counts only if it moved beyond noise (larger than the 3% threshold
+  and the standard deviations the harness uses for winners) **and** sits on a code path the PR
+  changed; a cell that moved but runs only code the PR did not touch is run-to-run noise and is
+  left out. Write a short visible summary (the biggest few with before → after, the count of
+  cells that moved, any change in category winners, and why things moved), then two tables,
+  **Memory** and **Time**, each collapsed by default in its own `<details>` block, listing
+  **every** counted cell: tier, fixture, operation, `main`, this PR, change (%), sorted by
+  change. Leave a blank line after `<summary>` so the Markdown table renders. If nothing moved
+  beyond noise, say so in one line and omit the tables.

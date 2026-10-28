@@ -150,8 +150,91 @@ fn container_comment(attrs: &[Attribute]) -> SynResult<Option<String>> {
     Ok(None)
 }
 
-/// Extracts a numeric value (integer or float literal) from `#[json_schema(key = N)]` on a field.
-fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<f64>> {
+/// A numeric attribute value, kept exactly as written: integers stay integers.
+#[derive(Debug, Clone, Copy)]
+enum NumericLiteral {
+    Unsigned(u64),
+    Signed(i64),
+    Float(f64),
+}
+
+impl NumericLiteral {
+    /// An expression of type `Option<serde_json::Number>` for this value.
+    fn to_number_expr(self) -> TokenStream2 {
+        match self {
+            NumericLiteral::Unsigned(n) => {
+                let lit = proc_macro2::Literal::u64_suffixed(n);
+                quote! { Some(::serde_json::Number::from(#lit)) }
+            }
+            NumericLiteral::Signed(i64::MIN) => {
+                quote! { Some(::serde_json::Number::from(i64::MIN)) }
+            }
+            NumericLiteral::Signed(n) => {
+                let lit = proc_macro2::Literal::i64_suffixed(n.abs());
+                if n < 0 {
+                    quote! { Some(::serde_json::Number::from(-#lit)) }
+                } else {
+                    quote! { Some(::serde_json::Number::from(#lit)) }
+                }
+            }
+            NumericLiteral::Float(f) => {
+                let lit = proc_macro2::Literal::f64_suffixed(f.abs());
+                if f.is_sign_negative() {
+                    quote! { ::serde_json::Number::from_f64(-#lit) }
+                } else {
+                    quote! { ::serde_json::Number::from_f64(#lit) }
+                }
+            }
+        }
+    }
+}
+
+/// Reads an integer or float literal, optionally negated (`-5`, `1.5`), as written.
+fn numeric_literal(expr: &Expr, key: &str) -> SynResult<NumericLiteral> {
+    let error = || {
+        Error::new_spanned(
+            expr,
+            format!("json_schema({key} = ...) requires an integer or float literal"),
+        )
+    };
+    let (negative, lit): (bool, &Lit) = match expr {
+        Expr::Lit(expr_lit) => (false, &expr_lit.lit),
+        Expr::Unary(syn::ExprUnary {
+            op: syn::UnOp::Neg(_),
+            expr: inner,
+            ..
+        }) => match inner.as_ref() {
+            Expr::Lit(expr_lit) => (true, &expr_lit.lit),
+            _ => return Err(error()),
+        },
+        _ => return Err(error()),
+    };
+    match lit {
+        Lit::Int(lit_int) => {
+            let magnitude: u64 = lit_int.base10_parse()?;
+            if !negative {
+                return Ok(NumericLiteral::Unsigned(magnitude));
+            }
+            let value: i64 = 0_i64.checked_sub_unsigned(magnitude).ok_or_else(|| {
+                Error::new_spanned(expr, format!("json_schema({key} = ...) is below i64::MIN"))
+            })?;
+            Ok(NumericLiteral::Signed(value))
+        }
+        Lit::Float(lit_float) => {
+            let magnitude: f64 = lit_float.base10_parse()?;
+            Ok(NumericLiteral::Float(if negative {
+                -magnitude
+            } else {
+                magnitude
+            }))
+        }
+        _ => Err(error()),
+    }
+}
+
+/// Extracts a numeric value (integer or float literal, optionally negated) from
+/// `#[json_schema(key = N)]` on a field, exactly as written.
+fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<NumericLiteral>> {
     for attr in &field.attrs {
         if !attr.path().is_ident("json_schema") {
             continue;
@@ -165,45 +248,16 @@ fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<f64>> {
             if !nv.path.is_ident(key) {
                 continue;
             }
-            let value: f64 = match &nv.value {
-                Expr::Lit(expr_lit) => match &expr_lit.lit {
-                    Lit::Int(lit_int) => {
-                        let n: i64 = lit_int.base10_parse()?;
-                        #[expect(clippy::cast_precision_loss)]
-                        let f: f64 = n as f64;
-                        f
-                    }
-                    Lit::Float(lit_float) => lit_float.base10_parse()?,
-                    _ => {
-                        return Err(Error::new_spanned(
-                            &nv.value,
-                            format!(
-                                "json_schema({key} = ...) requires an integer or float literal"
-                            ),
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(Error::new_spanned(
-                        &nv.value,
-                        format!("json_schema({key} = ...) requires an integer or float literal"),
-                    ));
-                }
-            };
-            return Ok(Some(value));
+            return numeric_literal(&nv.value, key).map(Some);
         }
     }
     Ok(None)
 }
 
-/// Extracts `minimum = N` from a field's `#[json_schema(...)]` attribute.
-fn field_minimum(field: &Field) -> SynResult<Option<f64>> {
-    field_numeric_attr(field, "minimum")
-}
-
-/// Extracts `maximum = N` from a field's `#[json_schema(...)]` attribute.
-fn field_maximum(field: &Field) -> SynResult<Option<f64>> {
-    field_numeric_attr(field, "maximum")
+/// An `Option<serde_json::Number>` expression for the numeric attribute `key`, `None` when absent.
+fn field_number_expr(field: &Field, key: &str) -> SynResult<TokenStream2> {
+    Ok(field_numeric_attr(field, key)?
+        .map_or_else(|| quote! { None }, NumericLiteral::to_number_expr))
 }
 
 /// Extracts an integer value (u64) from `#[json_schema(key = N)]` on a field.
@@ -541,8 +595,11 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             required_keys.push(key);
         }
         let field_desc_expr: TokenStream2 = doc_description_expr(&doc_exprs(&field.attrs));
-        let field_min: Option<f64> = field_minimum(field)?;
-        let field_max: Option<f64> = field_maximum(field)?;
+        let min_expr: TokenStream2 = field_number_expr(field, "minimum")?;
+        let max_expr: TokenStream2 = field_number_expr(field, "maximum")?;
+        let exclusive_min_expr: TokenStream2 = field_number_expr(field, "exclusive_minimum")?;
+        let exclusive_max_expr: TokenStream2 = field_number_expr(field, "exclusive_maximum")?;
+        let multiple_of_expr: TokenStream2 = field_number_expr(field, "multiple_of")?;
         let field_min_items: Option<u64> = field_min_items(field)?;
         let field_max_items: Option<u64> = field_max_items(field)?;
         let field_min_length: Option<u64> = field_min_length(field)?;
@@ -558,18 +615,6 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             quote! { schema.default_value = #ov; }
         } else {
             quote! {}
-        };
-        let min_expr: TokenStream2 = if let Some(m) = field_min {
-            let lit = proc_macro2::Literal::f64_unsuffixed(m);
-            quote! { Some(#lit) }
-        } else {
-            quote! { None }
-        };
-        let max_expr: TokenStream2 = if let Some(m) = field_max {
-            let lit = proc_macro2::Literal::f64_unsuffixed(m);
-            quote! { Some(#lit) }
-        } else {
-            quote! { None }
         };
         let min_items_expr: TokenStream2 = if let Some(n) = field_min_items {
             let lit = proc_macro2::Literal::u64_unsuffixed(n);
@@ -614,6 +659,9 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 schema.description = #field_desc_expr.or(schema.description);
                 schema.minimum = #min_expr.or(schema.minimum);
                 schema.maximum = #max_expr.or(schema.maximum);
+                schema.exclusive_minimum = #exclusive_min_expr.or(schema.exclusive_minimum);
+                schema.exclusive_maximum = #exclusive_max_expr.or(schema.exclusive_maximum);
+                schema.multiple_of = #multiple_of_expr.or(schema.multiple_of);
                 schema.min_items = #min_items_expr.or(schema.min_items);
                 schema.max_items = #max_items_expr.or(schema.max_items);
                 schema.min_length = #min_length_expr.or(schema.min_length);

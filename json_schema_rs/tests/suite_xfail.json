@@ -75,17 +75,9 @@
     },
     "allOf.json": {
       "allOf combined with anyOf, oneOf": [
-        "allOf: false, anyOf: false, oneOf: false",
-        "allOf: false, anyOf: false, oneOf: true",
         "allOf: false, anyOf: true, oneOf: false",
         "allOf: false, anyOf: true, oneOf: true",
-        "allOf: true, anyOf: false, oneOf: false",
-        "allOf: true, anyOf: false, oneOf: true",
-        "allOf: true, anyOf: true, oneOf: false",
-        "allOf: true, anyOf: true, oneOf: true"
-      ],
-      "allOf simple types": [
-        "mismatch one"
+        "allOf: true, anyOf: true, oneOf: false"
       ],
       "allOf with base schema": [
         "mismatch base schema"
@@ -122,9 +114,6 @@
       ]
     },
     "anyOf.json": {
-      "anyOf": [
-        "neither anyOf valid"
-      ],
       "anyOf with base schema": [
         "both anyOf invalid",
         "mismatch base schema"
@@ -164,23 +153,6 @@
         "number is valid",
         "object is valid",
         "string is valid"
-      ]
-    },
-    "const.json": {
-      "const with -2.0 matches integer and float types": [
-        "integer -2 is valid"
-      ],
-      "const with 0 does not match other zero-like types": [
-        "float zero is valid"
-      ],
-      "const with 1 does not match true": [
-        "float one is valid"
-      ],
-      "const with null": [
-        "not null is invalid"
-      ],
-      "float and integers are equal up to 64-bit representation limits": [
-        "float is valid"
       ]
     },
     "contains.json": {
@@ -311,36 +283,6 @@
         "wrong type",
         "wrong type both",
         "wrong type other"
-      ]
-    },
-    "enum.json": {
-      "enum with 0 does not match false": [
-        "float zero is valid"
-      ],
-      "enum with 1 does not match true": [
-        "float one is valid"
-      ],
-      "enum with [0] does not match [false]": [
-        "[0.0] is valid"
-      ],
-      "enum with [1] does not match [true]": [
-        "[1.0] is valid"
-      ]
-    },
-    "exclusiveMaximum.json": {
-      "exclusiveMaximum validation": [
-        "above the exclusiveMaximum is invalid",
-        "below the exclusiveMaximum is valid",
-        "boundary point is invalid",
-        "ignores non-numbers"
-      ]
-    },
-    "exclusiveMinimum.json": {
-      "exclusiveMinimum validation": [
-        "above the exclusiveMinimum is valid",
-        "below the exclusiveMinimum is invalid",
-        "boundary point is invalid",
-        "ignores non-numbers"
       ]
     },
     "if-then-else.json": {
@@ -494,14 +436,6 @@
         "too long is invalid"
       ]
     },
-    "maximum.json": {
-      "maximum validation": [
-        "above the maximum is invalid"
-      ],
-      "maximum validation with unsigned integer": [
-        "above the maximum is invalid"
-      ]
-    },
     "minContains.json": {
       "maxContains < minContains": [
         "empty data",
@@ -581,37 +515,6 @@
         "too short is invalid"
       ]
     },
-    "minimum.json": {
-      "minimum validation": [
-        "below the minimum is invalid"
-      ],
-      "minimum validation with signed integer": [
-        "float below the minimum is invalid",
-        "int below the minimum is invalid"
-      ]
-    },
-    "multipleOf.json": {
-      "by int": [
-        "ignores non-numbers",
-        "int by int",
-        "int by int fail"
-      ],
-      "by number": [
-        "35 is not multiple of 1.5",
-        "4.5 is multiple of 1.5",
-        "zero is multiple of anything"
-      ],
-      "by small number": [
-        "0.0075 is multiple of 0.0001",
-        "0.00751 is not multiple of 0.0001"
-      ],
-      "float division = inf": [
-        "always invalid, but naive implementations may raise an overflow error"
-      ],
-      "small multiple of large integer": [
-        "any integer is a multiple of 1e-8"
-      ]
-    },
     "not.json": {
       "allow everything with boolean schema false": [
         "array is valid",
@@ -676,10 +579,6 @@
       "nested oneOf, to check validation semantics": [
         "anything non-null is invalid"
       ],
-      "oneOf": [
-        "first oneOf valid",
-        "neither oneOf valid"
-      ],
       "oneOf with base schema": [
         "one oneOf valid"
       ],
@@ -708,18 +607,6 @@
         "in implementations that strip $anchor, this may match either $def",
         "match $ref to $anchor",
         "no match on enum or $ref to $anchor"
-      ]
-    },
-    "optional/bignum.json": {
-      "float comparison with high precision": [
-        "comparison works for high numbers"
-      ],
-      "float comparison with high precision on negative numbers": [
-        "comparison works for very negative numbers"
-      ],
-      "integer": [
-        "a bignum is an integer",
-        "a negative bignum is an integer"
       ]
     },
     "optional/cross-draft.json": {
@@ -828,11 +715,6 @@
         "literal unicode character in json string",
         "unicode character in hex format in string",
         "unicode matching is case-sensitive"
-      ]
-    },
-    "optional/float-overflow.json": {
-      "all integers are multiples of 0.5, if overflow is handled": [
-        "valid if optional overflow handling is implemented"
       ]
     },
     "optional/format/date-time.json": {
@@ -1505,9 +1387,6 @@
       ]
     },
     "type.json": {
-      "integer type matches integers": [
-        "a float with zero fractional part is an integer"
-      ],
       "multiple types can be specified in an array": [
         "a string is valid"
       ],
@@ -1852,19 +1731,6 @@
       ]
     },
     "uniqueItems.json": {
-      "uniqueItems validation": [
-        "non-unique array of arrays is invalid",
-        "non-unique array of integers is invalid",
-        "non-unique array of more than two arrays is invalid",
-        "non-unique array of more than two integers is invalid",
-        "non-unique array of nested objects is invalid",
-        "non-unique array of objects is invalid",
-        "non-unique array of strings is invalid",
-        "non-unique heterogeneous types are invalid",
-        "numbers are unique if mathematically unequal",
-        "objects are non-unique despite key order",
-        "property order of array of objects is ignored"
-      ],
       "uniqueItems with an array of items": [
         "[false, false] from items array is not valid",
         "[false, true] from items array is valid",
@@ -1943,17 +1809,9 @@
     },
     "allOf.json": {
       "allOf combined with anyOf, oneOf": [
-        "allOf: false, anyOf: false, oneOf: false",
-        "allOf: false, anyOf: false, oneOf: true",
         "allOf: false, anyOf: true, oneOf: false",
         "allOf: false, anyOf: true, oneOf: true",
-        "allOf: true, anyOf: false, oneOf: false",
-        "allOf: true, anyOf: false, oneOf: true",
-        "allOf: true, anyOf: true, oneOf: false",
-        "allOf: true, anyOf: true, oneOf: true"
-      ],
-      "allOf simple types": [
-        "mismatch one"
+        "allOf: true, anyOf: true, oneOf: false"
       ],
       "allOf with base schema": [
         "mismatch base schema"
@@ -1990,9 +1848,6 @@
       ]
     },
     "anyOf.json": {
-      "anyOf": [
-        "neither anyOf valid"
-      ],
       "anyOf with base schema": [
         "both anyOf invalid",
         "mismatch base schema"
@@ -2032,23 +1887,6 @@
         "number is valid",
         "object is valid",
         "string is valid"
-      ]
-    },
-    "const.json": {
-      "const with -2.0 matches integer and float types": [
-        "integer -2 is valid"
-      ],
-      "const with 0 does not match other zero-like types": [
-        "float zero is valid"
-      ],
-      "const with 1 does not match true": [
-        "float one is valid"
-      ],
-      "const with null": [
-        "not null is invalid"
-      ],
-      "float and integers are equal up to 64-bit representation limits": [
-        "float is valid"
       ]
     },
     "contains.json": {
@@ -2268,36 +2106,6 @@
         "incorrect parent schema"
       ]
     },
-    "enum.json": {
-      "enum with 0 does not match false": [
-        "float zero is valid"
-      ],
-      "enum with 1 does not match true": [
-        "float one is valid"
-      ],
-      "enum with [0] does not match [false]": [
-        "[0.0] is valid"
-      ],
-      "enum with [1] does not match [true]": [
-        "[1.0] is valid"
-      ]
-    },
-    "exclusiveMaximum.json": {
-      "exclusiveMaximum validation": [
-        "above the exclusiveMaximum is invalid",
-        "below the exclusiveMaximum is valid",
-        "boundary point is invalid",
-        "ignores non-numbers"
-      ]
-    },
-    "exclusiveMinimum.json": {
-      "exclusiveMinimum validation": [
-        "above the exclusiveMinimum is valid",
-        "below the exclusiveMinimum is invalid",
-        "boundary point is invalid",
-        "ignores non-numbers"
-      ]
-    },
     "if-then-else.json": {
       "else: false fails when condition does not match": [
         "does not match if → else executes → invalid",
@@ -2452,14 +2260,6 @@
         "too long is invalid"
       ]
     },
-    "maximum.json": {
-      "maximum validation": [
-        "above the maximum is invalid"
-      ],
-      "maximum validation with unsigned integer": [
-        "above the maximum is invalid"
-      ]
-    },
     "minContains.json": {
       "maxContains < minContains": [
         "empty data",
@@ -2539,37 +2339,6 @@
         "too short is invalid"
       ]
     },
-    "minimum.json": {
-      "minimum validation": [
-        "below the minimum is invalid"
-      ],
-      "minimum validation with signed integer": [
-        "float below the minimum is invalid",
-        "int below the minimum is invalid"
-      ]
-    },
-    "multipleOf.json": {
-      "by int": [
-        "ignores non-numbers",
-        "int by int",
-        "int by int fail"
-      ],
-      "by number": [
-        "35 is not multiple of 1.5",
-        "4.5 is multiple of 1.5",
-        "zero is multiple of anything"
-      ],
-      "by small number": [
-        "0.0075 is multiple of 0.0001",
-        "0.00751 is not multiple of 0.0001"
-      ],
-      "float division = inf": [
-        "always invalid, but naive implementations may raise an overflow error"
-      ],
-      "small multiple of large integer": [
-        "any integer is a multiple of 1e-8"
-      ]
-    },
     "not.json": {
       "allow everything with boolean schema false": [
         "array is valid",
@@ -2634,10 +2403,6 @@
       "nested oneOf, to check validation semantics": [
         "anything non-null is invalid"
       ],
-      "oneOf": [
-        "first oneOf valid",
-        "neither oneOf valid"
-      ],
       "oneOf with base schema": [
         "one oneOf valid"
       ],
@@ -2666,18 +2431,6 @@
         "in implementations that strip $anchor, this may match either $def",
         "match $ref to $anchor",
         "no match on enum or $ref to $anchor"
-      ]
-    },
-    "optional/bignum.json": {
-      "float comparison with high precision": [
-        "comparison works for high numbers"
-      ],
-      "float comparison with high precision on negative numbers": [
-        "comparison works for very negative numbers"
-      ],
-      "integer": [
-        "a bignum is an integer",
-        "a negative bignum is an integer"
       ]
     },
     "optional/cross-draft.json": {
@@ -2789,11 +2542,6 @@
         "literal unicode character in json string",
         "unicode character in hex format in string",
         "unicode matching is case-sensitive"
-      ]
-    },
-    "optional/float-overflow.json": {
-      "all integers are multiples of 0.5, if overflow is handled": [
-        "valid if optional overflow handling is implemented"
       ]
     },
     "optional/format-assertion.json": {
@@ -3446,9 +3194,6 @@
       ]
     },
     "type.json": {
-      "integer type matches integers": [
-        "a float with zero fractional part is an integer"
-      ],
       "multiple types can be specified in an array": [
         "a string is valid"
       ],
@@ -3814,19 +3559,6 @@
       ]
     },
     "uniqueItems.json": {
-      "uniqueItems validation": [
-        "non-unique array of arrays is invalid",
-        "non-unique array of integers is invalid",
-        "non-unique array of more than two arrays is invalid",
-        "non-unique array of more than two integers is invalid",
-        "non-unique array of nested objects is invalid",
-        "non-unique array of objects is invalid",
-        "non-unique array of strings is invalid",
-        "non-unique heterogeneous types are invalid",
-        "numbers are unique if mathematically unequal",
-        "objects are non-unique despite key order",
-        "property order of array of objects is ignored"
-      ],
       "uniqueItems with an array of items": [
         "[false, false] from items array is not valid",
         "[false, true] from items array is valid",
@@ -3933,17 +3665,9 @@
     },
     "allOf.json": {
       "allOf combined with anyOf, oneOf": [
-        "allOf: false, anyOf: false, oneOf: false",
-        "allOf: false, anyOf: false, oneOf: true",
         "allOf: false, anyOf: true, oneOf: false",
         "allOf: false, anyOf: true, oneOf: true",
-        "allOf: true, anyOf: false, oneOf: false",
-        "allOf: true, anyOf: false, oneOf: true",
-        "allOf: true, anyOf: true, oneOf: false",
-        "allOf: true, anyOf: true, oneOf: true"
-      ],
-      "allOf simple types": [
-        "mismatch one"
+        "allOf: true, anyOf: true, oneOf: false"
       ],
       "allOf with base schema": [
         "mismatch base schema"
@@ -3953,9 +3677,6 @@
       ]
     },
     "anyOf.json": {
-      "anyOf": [
-        "neither anyOf valid"
-      ],
       "anyOf with base schema": [
         "both anyOf invalid",
         "mismatch base schema"
@@ -4010,20 +3731,6 @@
         "wrong type other"
       ]
     },
-    "enum.json": {
-      "enum with 0 does not match false": [
-        "float zero is valid"
-      ],
-      "enum with 1 does not match true": [
-        "float one is valid"
-      ],
-      "enum with [0] does not match [false]": [
-        "[0.0] is valid"
-      ],
-      "enum with [1] does not match [true]": [
-        "[1.0] is valid"
-      ]
-    },
     "items.json": {
       "a schema given for items": [
         "wrong type of items"
@@ -4072,24 +3779,6 @@
         "too long is invalid"
       ]
     },
-    "maximum.json": {
-      "exclusiveMaximum validation": [
-        "below the maximum is still valid",
-        "boundary point is invalid"
-      ],
-      "maximum validation": [
-        "above the maximum is invalid"
-      ],
-      "maximum validation (explicit false exclusivity)": [
-        "above the maximum is invalid",
-        "below the maximum is valid",
-        "boundary point is valid",
-        "ignores non-numbers"
-      ],
-      "maximum validation with unsigned integer": [
-        "above the maximum is invalid"
-      ]
-    },
     "minItems.json": {
       "minItems validation": [
         "too short is invalid"
@@ -4109,47 +3798,6 @@
         "ignores strings",
         "longer is valid",
         "too short is invalid"
-      ]
-    },
-    "minimum.json": {
-      "exclusiveMinimum validation": [
-        "above the minimum is still valid",
-        "boundary point is invalid"
-      ],
-      "minimum validation": [
-        "below the minimum is invalid"
-      ],
-      "minimum validation (explicit false exclusivity)": [
-        "above the minimum is valid",
-        "below the minimum is invalid",
-        "boundary point is valid",
-        "ignores non-numbers"
-      ],
-      "minimum validation with signed integer": [
-        "float below the minimum is invalid",
-        "int below the minimum is invalid"
-      ]
-    },
-    "multipleOf.json": {
-      "by int": [
-        "ignores non-numbers",
-        "int by int",
-        "int by int fail"
-      ],
-      "by number": [
-        "35 is not multiple of 1.5",
-        "4.5 is multiple of 1.5",
-        "zero is multiple of anything"
-      ],
-      "by small number": [
-        "0.0075 is multiple of 0.0001",
-        "0.00751 is not multiple of 0.0001"
-      ],
-      "float division = inf": [
-        "invalid, but naive implementations may raise an overflow error"
-      ],
-      "small multiple of large integer": [
-        "any integer is a multiple of 1e-8"
       ]
     },
     "not.json": {
@@ -4190,21 +3838,11 @@
       "nested oneOf, to check validation semantics": [
         "anything non-null is invalid"
       ],
-      "oneOf": [
-        "first oneOf valid",
-        "neither oneOf valid"
-      ],
       "oneOf with base schema": [
         "one oneOf valid"
       ]
     },
     "optional/bignum.json": {
-      "float comparison with high precision": [
-        "comparison works for high numbers"
-      ],
-      "float comparison with high precision on negative numbers": [
-        "comparison works for very negative numbers"
-      ],
       "integer": [
         "a bignum is an integer",
         "a negative bignum is an integer"
@@ -4256,11 +3894,6 @@
         "literal unicode character in json string",
         "unicode character in hex format in string",
         "unicode matching is case-sensitive"
-      ]
-    },
-    "optional/float-overflow.json": {
-      "all integers are multiples of 0.5, if overflow is handled": [
-        "valid if optional overflow handling is implemented"
       ]
     },
     "optional/format/date-time.json": {
@@ -4528,19 +4161,6 @@
       ]
     },
     "uniqueItems.json": {
-      "uniqueItems validation": [
-        "non-unique array of arrays is invalid",
-        "non-unique array of integers is invalid",
-        "non-unique array of more than two arrays is invalid",
-        "non-unique array of more than two integers is invalid",
-        "non-unique array of nested objects is invalid",
-        "non-unique array of objects is invalid",
-        "non-unique array of strings is invalid",
-        "non-unique heterogeneous types are invalid",
-        "numbers are unique if mathematically unequal",
-        "objects are non-unique despite key order",
-        "property order of array of objects is ignored"
-      ],
       "uniqueItems with an array of items": [
         "[false, false] from items array is not valid",
         "[false, true] from items array is valid",
@@ -4644,17 +4264,9 @@
     },
     "allOf.json": {
       "allOf combined with anyOf, oneOf": [
-        "allOf: false, anyOf: false, oneOf: false",
-        "allOf: false, anyOf: false, oneOf: true",
         "allOf: false, anyOf: true, oneOf: false",
         "allOf: false, anyOf: true, oneOf: true",
-        "allOf: true, anyOf: false, oneOf: false",
-        "allOf: true, anyOf: false, oneOf: true",
-        "allOf: true, anyOf: true, oneOf: false",
-        "allOf: true, anyOf: true, oneOf: true"
-      ],
-      "allOf simple types": [
-        "mismatch one"
+        "allOf: true, anyOf: true, oneOf: false"
       ],
       "allOf with base schema": [
         "mismatch base schema"
@@ -4673,9 +4285,6 @@
       ]
     },
     "anyOf.json": {
-      "anyOf": [
-        "neither anyOf valid"
-      ],
       "anyOf with base schema": [
         "both anyOf invalid",
         "mismatch base schema"
@@ -4715,23 +4324,6 @@
         "number is valid",
         "object is valid",
         "string is valid"
-      ]
-    },
-    "const.json": {
-      "const with -2.0 matches integer and float types": [
-        "integer -2 is valid"
-      ],
-      "const with 0 does not match other zero-like types": [
-        "float zero is valid"
-      ],
-      "const with 1 does not match true": [
-        "float one is valid"
-      ],
-      "const with null": [
-        "not null is invalid"
-      ],
-      "float and integers are equal up to 64-bit representation limits": [
-        "float is valid"
       ]
     },
     "contains.json": {
@@ -4824,36 +4416,6 @@
         "wrong type other"
       ]
     },
-    "enum.json": {
-      "enum with 0 does not match false": [
-        "float zero is valid"
-      ],
-      "enum with 1 does not match true": [
-        "float one is valid"
-      ],
-      "enum with [0] does not match [false]": [
-        "[0.0] is valid"
-      ],
-      "enum with [1] does not match [true]": [
-        "[1.0] is valid"
-      ]
-    },
-    "exclusiveMaximum.json": {
-      "exclusiveMaximum validation": [
-        "above the exclusiveMaximum is invalid",
-        "below the exclusiveMaximum is valid",
-        "boundary point is invalid",
-        "ignores non-numbers"
-      ]
-    },
-    "exclusiveMinimum.json": {
-      "exclusiveMinimum validation": [
-        "above the exclusiveMinimum is valid",
-        "below the exclusiveMinimum is invalid",
-        "boundary point is invalid",
-        "ignores non-numbers"
-      ]
-    },
     "items.json": {
       "a schema given for items": [
         "wrong type of items"
@@ -4927,14 +4489,6 @@
         "too long is invalid"
       ]
     },
-    "maximum.json": {
-      "maximum validation": [
-        "above the maximum is invalid"
-      ],
-      "maximum validation with unsigned integer": [
-        "above the maximum is invalid"
-      ]
-    },
     "minItems.json": {
       "minItems validation": [
         "too short is invalid"
@@ -4966,37 +4520,6 @@
       "minProperties validation with a decimal": [
         "longer is valid",
         "too short is invalid"
-      ]
-    },
-    "minimum.json": {
-      "minimum validation": [
-        "below the minimum is invalid"
-      ],
-      "minimum validation with signed integer": [
-        "float below the minimum is invalid",
-        "int below the minimum is invalid"
-      ]
-    },
-    "multipleOf.json": {
-      "by int": [
-        "ignores non-numbers",
-        "int by int",
-        "int by int fail"
-      ],
-      "by number": [
-        "35 is not multiple of 1.5",
-        "4.5 is multiple of 1.5",
-        "zero is multiple of anything"
-      ],
-      "by small number": [
-        "0.0075 is multiple of 0.0001",
-        "0.00751 is not multiple of 0.0001"
-      ],
-      "float division = inf": [
-        "always invalid, but naive implementations may raise an overflow error"
-      ],
-      "small multiple of large integer": [
-        "any integer is a multiple of 1e-8"
       ]
     },
     "not.json": {
@@ -5059,10 +4582,6 @@
       "nested oneOf, to check validation semantics": [
         "anything non-null is invalid"
       ],
-      "oneOf": [
-        "first oneOf valid",
-        "neither oneOf valid"
-      ],
       "oneOf with base schema": [
         "one oneOf valid"
       ],
@@ -5083,18 +4602,6 @@
         "first oneOf valid",
         "neither oneOf valid",
         "second oneOf valid"
-      ]
-    },
-    "optional/bignum.json": {
-      "float comparison with high precision": [
-        "comparison works for high numbers"
-      ],
-      "float comparison with high precision on negative numbers": [
-        "comparison works for very negative numbers"
-      ],
-      "integer": [
-        "a bignum is an integer",
-        "a negative bignum is an integer"
       ]
     },
     "optional/ecmascript-regex.json": {
@@ -5143,11 +4650,6 @@
         "literal unicode character in json string",
         "unicode character in hex format in string",
         "unicode matching is case-sensitive"
-      ]
-    },
-    "optional/float-overflow.json": {
-      "all integers are multiples of 0.5, if overflow is handled": [
-        "valid if optional overflow handling is implemented"
       ]
     },
     "optional/format/date-time.json": {
@@ -5515,9 +5017,6 @@
       ]
     },
     "type.json": {
-      "integer type matches integers": [
-        "a float with zero fractional part is an integer"
-      ],
       "multiple types can be specified in an array": [
         "a string is valid"
       ],
@@ -5541,19 +5040,6 @@
       ]
     },
     "uniqueItems.json": {
-      "uniqueItems validation": [
-        "non-unique array of arrays is invalid",
-        "non-unique array of integers is invalid",
-        "non-unique array of more than two arrays is invalid",
-        "non-unique array of more than two integers is invalid",
-        "non-unique array of nested objects is invalid",
-        "non-unique array of objects is invalid",
-        "non-unique array of strings is invalid",
-        "non-unique heterogeneous types are invalid",
-        "numbers are unique if mathematically unequal",
-        "objects are non-unique despite key order",
-        "property order of array of objects is ignored"
-      ],
       "uniqueItems with an array of items": [
         "[false, false] from items array is not valid",
         "[false, true] from items array is valid",
@@ -5657,17 +5143,9 @@
     },
     "allOf.json": {
       "allOf combined with anyOf, oneOf": [
-        "allOf: false, anyOf: false, oneOf: false",
-        "allOf: false, anyOf: false, oneOf: true",
         "allOf: false, anyOf: true, oneOf: false",
         "allOf: false, anyOf: true, oneOf: true",
-        "allOf: true, anyOf: false, oneOf: false",
-        "allOf: true, anyOf: false, oneOf: true",
-        "allOf: true, anyOf: true, oneOf: false",
-        "allOf: true, anyOf: true, oneOf: true"
-      ],
-      "allOf simple types": [
-        "mismatch one"
+        "allOf: true, anyOf: true, oneOf: false"
       ],
       "allOf with base schema": [
         "mismatch base schema"
@@ -5686,9 +5164,6 @@
       ]
     },
     "anyOf.json": {
-      "anyOf": [
-        "neither anyOf valid"
-      ],
       "anyOf with base schema": [
         "both anyOf invalid",
         "mismatch base schema"
@@ -5728,23 +5203,6 @@
         "number is valid",
         "object is valid",
         "string is valid"
-      ]
-    },
-    "const.json": {
-      "const with -2.0 matches integer and float types": [
-        "integer -2 is valid"
-      ],
-      "const with 0 does not match other zero-like types": [
-        "float zero is valid"
-      ],
-      "const with 1 does not match true": [
-        "float one is valid"
-      ],
-      "const with null": [
-        "not null is invalid"
-      ],
-      "float and integers are equal up to 64-bit representation limits": [
-        "float is valid"
       ]
     },
     "contains.json": {
@@ -5839,36 +5297,6 @@
         "wrong type",
         "wrong type both",
         "wrong type other"
-      ]
-    },
-    "enum.json": {
-      "enum with 0 does not match false": [
-        "float zero is valid"
-      ],
-      "enum with 1 does not match true": [
-        "float one is valid"
-      ],
-      "enum with [0] does not match [false]": [
-        "[0.0] is valid"
-      ],
-      "enum with [1] does not match [true]": [
-        "[1.0] is valid"
-      ]
-    },
-    "exclusiveMaximum.json": {
-      "exclusiveMaximum validation": [
-        "above the exclusiveMaximum is invalid",
-        "below the exclusiveMaximum is valid",
-        "boundary point is invalid",
-        "ignores non-numbers"
-      ]
-    },
-    "exclusiveMinimum.json": {
-      "exclusiveMinimum validation": [
-        "above the exclusiveMinimum is valid",
-        "below the exclusiveMinimum is invalid",
-        "boundary point is invalid",
-        "ignores non-numbers"
       ]
     },
     "if-then-else.json": {
@@ -6000,14 +5428,6 @@
         "too long is invalid"
       ]
     },
-    "maximum.json": {
-      "maximum validation": [
-        "above the maximum is invalid"
-      ],
-      "maximum validation with unsigned integer": [
-        "above the maximum is invalid"
-      ]
-    },
     "minItems.json": {
       "minItems validation": [
         "too short is invalid"
@@ -6039,37 +5459,6 @@
       "minProperties validation with a decimal": [
         "longer is valid",
         "too short is invalid"
-      ]
-    },
-    "minimum.json": {
-      "minimum validation": [
-        "below the minimum is invalid"
-      ],
-      "minimum validation with signed integer": [
-        "float below the minimum is invalid",
-        "int below the minimum is invalid"
-      ]
-    },
-    "multipleOf.json": {
-      "by int": [
-        "ignores non-numbers",
-        "int by int",
-        "int by int fail"
-      ],
-      "by number": [
-        "35 is not multiple of 1.5",
-        "4.5 is multiple of 1.5",
-        "zero is multiple of anything"
-      ],
-      "by small number": [
-        "0.0075 is multiple of 0.0001",
-        "0.00751 is not multiple of 0.0001"
-      ],
-      "float division = inf": [
-        "always invalid, but naive implementations may raise an overflow error"
-      ],
-      "small multiple of large integer": [
-        "any integer is a multiple of 1e-8"
       ]
     },
     "not.json": {
@@ -6132,10 +5521,6 @@
       "nested oneOf, to check validation semantics": [
         "anything non-null is invalid"
       ],
-      "oneOf": [
-        "first oneOf valid",
-        "neither oneOf valid"
-      ],
       "oneOf with base schema": [
         "one oneOf valid"
       ],
@@ -6156,18 +5541,6 @@
         "first oneOf valid",
         "neither oneOf valid",
         "second oneOf valid"
-      ]
-    },
-    "optional/bignum.json": {
-      "float comparison with high precision": [
-        "comparison works for high numbers"
-      ],
-      "float comparison with high precision on negative numbers": [
-        "comparison works for very negative numbers"
-      ],
-      "integer": [
-        "a bignum is an integer",
-        "a negative bignum is an integer"
       ]
     },
     "optional/content.json": {
@@ -6240,11 +5613,6 @@
         "literal unicode character in json string",
         "unicode character in hex format in string",
         "unicode matching is case-sensitive"
-      ]
-    },
-    "optional/float-overflow.json": {
-      "all integers are multiples of 0.5, if overflow is handled": [
-        "valid if optional overflow handling is implemented"
       ]
     },
     "optional/format/date-time.json": {
@@ -6796,9 +6164,6 @@
       ]
     },
     "type.json": {
-      "integer type matches integers": [
-        "a float with zero fractional part is an integer"
-      ],
       "multiple types can be specified in an array": [
         "a string is valid"
       ],
@@ -6822,19 +6187,6 @@
       ]
     },
     "uniqueItems.json": {
-      "uniqueItems validation": [
-        "non-unique array of arrays is invalid",
-        "non-unique array of integers is invalid",
-        "non-unique array of more than two arrays is invalid",
-        "non-unique array of more than two integers is invalid",
-        "non-unique array of nested objects is invalid",
-        "non-unique array of objects is invalid",
-        "non-unique array of strings is invalid",
-        "non-unique heterogeneous types are invalid",
-        "numbers are unique if mathematically unequal",
-        "objects are non-unique despite key order",
-        "property order of array of objects is ignored"
-      ],
       "uniqueItems with an array of items": [
         "[false, false] from items array is not valid",
         "[false, true] from items array is valid",
