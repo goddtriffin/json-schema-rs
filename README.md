@@ -12,16 +12,19 @@ drafts 4, 6, 7, 2019-09 and 2020-12 (Draft 2020-12 when `$schema` is absent);
 specs for every published draft (draft-00 through 2020-12); run
 `make vendor_specs` to fetch them locally—specs are not stored in the repo.
 Supported keywords include **type** (object, string, integer, number, boolean), **properties**, **required**, **const** (draft-06+;
-validator: instance must equal const; codegen: string const → single-value enum, non-string const → fallback; reverse: single-variant unit enum → const), **enum**
-(string-only; codegen emits Rust enums), **items** (array with single-schema
+validator: instance must equal const, numbers by value so `1` equals `1.0`; codegen: string const → single-value enum, non-string const → fallback; reverse: single-variant unit enum → const), **enum**
+(validator compares numbers by value; codegen emits Rust enums for string-only enums), **items** (array with single-schema
 items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
 codegen emits `HashSet<T>` for hashable item types and the validator enforces
-uniqueness), **minItems** and **maxItems** (array/set length constraints;
+uniqueness, with `1` and `1.0` equal and object key order ignored), **minItems** and **maxItems** (array/set length constraints;
 validator enforces; codegen emits
 `#[json_schema(min_items = ..., max_items = ...)]` on generated array/set
 fields; reverse codegen supports the same attributes on Vec and HashSet fields),
-**minimum** and **maximum** (validation and codegen type selection: narrow
-integer/float types when both bounds are present and valid), **minLength** and
+**minimum**, **maximum**, **exclusiveMinimum**, **exclusiveMaximum** and
+**multipleOf** (held and compared exactly, with no rounding or epsilon:
+`"minimum": 9007199254740993` rejects `9007199254740992`, `0.0075` is a multiple
+of `0.0001`; the bounds choose narrow integer/float types in codegen; draft 4's
+boolean `exclusiveMinimum` is read as draft 6's numeric form), **minLength** and
 **maxLength** (string length constraints in Unicode code points; validator
 enforces; codegen emits `#[json_schema(min_length = ..., max_length = ...)]`
 on generated string fields; reverse codegen supports the same attributes on
@@ -160,7 +163,11 @@ to prefer property keys over `title` for struct names. CLI:
 default, so nothing needs configuring. `JsonSchemaSettings::builder()` can
 `.spec_version(SpecVersion::Draft07)` (ignore `$schema`),
 `.format_mode(FormatMode::Assertion)` (check `format` whatever the draft: drafts 4,
-6 and 7 check it by default, 2019-09 and 2020-12 only record it), and
+6 and 7 check it by default, 2019-09 and 2020-12 only record it),
+`.integer_semantics(IntegerSemantics::Numeric)` (whether `1.0` is an integer:
+draft 4 says no, draft 6 and later yes),
+`.exclusive_bounds(ExclusiveBounds::BooleanModifier)` (read `exclusiveMinimum` /
+`exclusiveMaximum` as draft 4's boolean modifier or as draft 6's number), and
 `.unknown_schema_uri(UnknownSchemaUri::Reject)` (refuse an unrecognized
 `$schema` instead of falling back to 2020-12 with a warning).
 `JsonSchema::dialect()` returns a parsed schema's effective rules and
@@ -168,6 +175,8 @@ default, so nothing needs configuring. `JsonSchemaSettings::builder()` can
 logs warnings at `debug` level through the `log` crate; the CLI prints them to
 stderr. CLI: `--jss-spec-version draft-04|draft-06|draft-07|2019-09|2020-12`
 (and `draft-00` to `draft-05`), `--jss-format-mode annotation|assertion`,
+`--jss-integer-semantics lexical|numeric`,
+`--jss-exclusive-bounds boolean-modifier|numeric`,
 `--jss-unknown-schema-uri fallback|reject`.
 
 ## Using the macro (compile-time codegen)
@@ -205,8 +214,10 @@ generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
 **ToJsonSchema** (e.g. `Root::json_schema()`). Hand-written structs can use
 `#[derive(ToJsonSchema)]` from `json_schema_rs_macro` with optional
 `#[json_schema(title = "...")]` and, on fields,
-**`#[json_schema(minimum = N, maximum = N)]`** to set JSON Schema bounds for
-integer/number properties. Convert a schema to JSON with
+**`#[json_schema(minimum = N, maximum = N)]`** (and `exclusive_minimum`,
+`exclusive_maximum`, `multiple_of`) to set JSON Schema bounds for
+integer/number properties, kept exactly as written; integer types emit their
+exact range (`u64` → `0`..`18446744073709551615`). Convert a schema to JSON with
 `String::try_from(&schema)` or `.try_into()`. Emits `$defs` and `$ref` for shared
 and recursive types, including mutually recursive ones (`A` → `B` → `A`).
 Same-name types from different modules get separate entries (`Config0`,

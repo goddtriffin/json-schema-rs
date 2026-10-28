@@ -219,38 +219,6 @@ fn ref_siblings_apply_in_2020_12() {
     });
 }
 
-// --- #29: type "integer" rejects 1.0 and values above i64::MAX (fixed in #5) ---
-
-#[test]
-fn integer_accepts_zero_fraction_float() {
-    known_failure(29, || {
-        let expected: bool = true;
-        let actual: bool = is_valid(r#"{"type":"integer"}"#, "1.0");
-        assert_eq!(expected, actual);
-    });
-}
-
-#[test]
-fn integer_accepts_u64_above_i64_max() {
-    known_failure(29, || {
-        let expected: bool = true;
-        let actual: bool = is_valid(r#"{"type":"integer"}"#, "18446744073709551615");
-        assert_eq!(expected, actual);
-    });
-}
-
-#[test]
-fn integer_accepts_bignum() {
-    known_failure(29, || {
-        let expected: bool = true;
-        let actual: bool = is_valid(
-            r#"{"type":"integer"}"#,
-            "12345678910111213141516171819202122232425",
-        );
-        assert_eq!(expected, actual);
-    });
-}
-
 // --- #30: strict mode never reports UnknownField (fixed in #7) ---
 
 #[test]
@@ -311,35 +279,6 @@ fn type_null_rejects_integer() {
     known_failure(32, || {
         let expected: bool = false;
         let actual: bool = is_valid(r#"{"type":"null"}"#, "1");
-        assert_eq!(expected, actual);
-    });
-}
-
-// --- #33: enum / const / uniqueItems treat 1 and 1.0 as different (fixed in #5) ---
-
-#[test]
-fn enum_matches_mathematically_equal_number() {
-    known_failure(33, || {
-        let expected: bool = true;
-        let actual: bool = is_valid(r#"{"enum":[0]}"#, "0.0");
-        assert_eq!(expected, actual);
-    });
-}
-
-#[test]
-fn const_matches_mathematically_equal_number() {
-    known_failure(33, || {
-        let expected: bool = true;
-        let actual: bool = is_valid(r#"{"const":-2.0}"#, "-2");
-        assert_eq!(expected, actual);
-    });
-}
-
-#[test]
-fn unique_items_rejects_mathematically_equal_numbers() {
-    known_failure(33, || {
-        let expected: bool = false;
-        let actual: bool = is_valid(r#"{"type":"array","uniqueItems":true}"#, "[1, 1.0]");
         assert_eq!(expected, actual);
     });
 }

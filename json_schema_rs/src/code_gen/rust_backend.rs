@@ -8,6 +8,7 @@ use super::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
 use crate::json_schema::JsonSchema;
 use crate::json_schema::json_schema::AdditionalProperties;
 use crate::json_schema::ref_resolver;
+use crate::number;
 use crate::sanitizers::{
     enum_variant_names_with_collision_resolution, sanitize_field_name, sanitize_struct_name,
 };
@@ -385,10 +386,11 @@ fn json_default_to_rust_expr(
     let inner: String = match value {
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => {
-            if n.is_i64() {
-                n.as_i64().unwrap().to_string()
+            if n.is_f64() {
+                n.as_f64()?.to_string()
             } else {
-                n.as_f64().unwrap().to_string()
+                // `u64` / `i64`: `Number`'s `Display` writes the integer exactly.
+                n.to_string()
             }
         }
         serde_json::Value::String(s) => {
@@ -635,67 +637,92 @@ fn struct_name_from(
         })
 }
 
-const I64_MAX_AS_F64: f64 = 9_223_372_036_854_775_807.0_f64; // i64::MAX, exactly representable
+/// The narrowest Rust integer type holding every integer in `lo..=hi`, or `None` when the range
+/// is empty or no 64-bit type holds it.
+fn rust_integer_type_for_range(lo: i128, hi: i128) -> Option<&'static str> {
+    if lo > hi {
+        return None;
+    }
+    let candidates: [(&'static str, i128, i128); 8] = [
+        ("u8", 0, i128::from(u8::MAX)),
+        ("u16", 0, i128::from(u16::MAX)),
+        ("u32", 0, i128::from(u32::MAX)),
+        ("u64", 0, i128::from(u64::MAX)),
+        ("i8", i128::from(i8::MIN), i128::from(i8::MAX)),
+        ("i16", i128::from(i16::MIN), i128::from(i16::MAX)),
+        ("i32", i128::from(i32::MIN), i128::from(i32::MAX)),
+        ("i64", i128::from(i64::MIN), i128::from(i64::MAX)),
+    ];
+    candidates
+        .into_iter()
+        .find(|&(_, min, max)| lo >= min && hi <= max)
+        .map(|(name, _, _)| name)
+}
 
-/// Returns the Rust type string for an integer or number schema using `minimum` and `maximum` when both present and valid; otherwise fallback to `i64` or `f64`.
+/// The tighter of two optional bounds under `keep` (`Ordering::Greater` keeps the larger, for
+/// lower bounds; `Ordering::Less` the smaller, for upper bounds).
+fn tighter_bound<T: Ord>(a: Option<T>, b: Option<T>, keep: Ordering) -> Option<T> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if a.cmp(&b) == keep { a } else { b }),
+        (a, None) | (None, a) => a,
+    }
+}
+
+/// Returns the Rust type string for an integer or number schema from its bounds (`minimum`,
+/// `maximum`, `exclusiveMinimum`, `exclusiveMaximum`), compared exactly; falls back to `i64` or
+/// `f64` when a side is unbounded or the range fits no narrower type.
+///
+/// An integer schema takes the narrowest type holding every integer its bounds allow (an
+/// exclusive bound `e` admits integers from `⌊e⌋ + 1` / up to `⌈e⌉ - 1`), unsigned when the
+/// range starts at zero or above. A number schema is `f32` when both sides are bounded within
+/// `f32::MIN..=f32::MAX`.
 fn rust_numeric_type_for_schema(schema: &JsonSchema) -> String {
     if schema.is_integer() {
-        let min: Option<f64> = schema.minimum;
-        let max: Option<f64> = schema.maximum;
-        #[expect(clippy::cast_precision_loss)]
-        let i64_min_f64: f64 = i64::MIN as f64;
-        let (min_i64, max_i64): (Option<i64>, Option<i64>) = match (min, max) {
-            (Some(mi), Some(ma)) if mi <= ma => {
-                let valid_min: bool =
-                    mi.fract() == 0.0 && (i64_min_f64..=I64_MAX_AS_F64).contains(&mi);
-                let valid_max: bool =
-                    ma.fract() == 0.0 && (i64_min_f64..=I64_MAX_AS_F64).contains(&ma);
-                if valid_min && valid_max {
-                    #[expect(clippy::cast_possible_truncation)]
-                    let min_i: i64 = mi as i64;
-                    #[expect(clippy::cast_possible_truncation)]
-                    let max_i: i64 = ma as i64;
-                    (Some(min_i), Some(max_i))
-                } else {
-                    (None, None)
-                }
-            }
-            _ => (None, None),
+        let lower: Option<i128> = tighter_bound(
+            schema
+                .minimum
+                .as_ref()
+                .and_then(|n| number::integer_lower_bound(n, false)),
+            schema
+                .exclusive_minimum
+                .as_ref()
+                .and_then(|n| number::integer_lower_bound(n, true)),
+            Ordering::Greater,
+        );
+        let upper: Option<i128> = tighter_bound(
+            schema
+                .maximum
+                .as_ref()
+                .and_then(|n| number::integer_upper_bound(n, false)),
+            schema
+                .exclusive_maximum
+                .as_ref()
+                .and_then(|n| number::integer_upper_bound(n, true)),
+            Ordering::Less,
+        );
+        let narrow: Option<&'static str> = match (lower, upper) {
+            (Some(lo), Some(hi)) => rust_integer_type_for_range(lo, hi),
+            _ => None,
         };
-        if let (Some(lo), Some(hi)) = (min_i64, max_i64) {
-            if lo >= 0 {
-                if hi <= i64::from(u8::MAX) {
-                    return "u8".to_string();
-                }
-                if hi <= i64::from(u16::MAX) {
-                    return "u16".to_string();
-                }
-                if hi <= i64::from(u32::MAX) {
-                    return "u32".to_string();
-                }
-                return "u64".to_string();
-            }
-            if lo >= i64::from(i8::MIN) && hi <= i64::from(i8::MAX) {
-                return "i8".to_string();
-            }
-            if lo >= i64::from(i16::MIN) && hi <= i64::from(i16::MAX) {
-                return "i16".to_string();
-            }
-            if lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX) {
-                return "i32".to_string();
-            }
-        }
-        return "i64".to_string();
+        return narrow.unwrap_or("i64").to_string();
     }
     if schema.is_number() {
-        let min: Option<f64> = schema.minimum;
-        let max: Option<f64> = schema.maximum;
-        if let (Some(mi), Some(ma)) = (min, max)
-            && mi <= ma
-            && mi >= f64::from(f32::MIN)
-            && ma <= f64::from(f32::MAX)
-            && mi.is_finite()
-            && ma.is_finite()
+        let lower: Option<&serde_json::Number> = [&schema.minimum, &schema.exclusive_minimum]
+            .into_iter()
+            .flatten()
+            .max_by(|a, b| number::cmp_num(a, b));
+        let upper: Option<&serde_json::Number> = [&schema.maximum, &schema.exclusive_maximum]
+            .into_iter()
+            .flatten()
+            .min_by(|a, b| number::cmp_num(a, b));
+        if let (Some(lo), Some(hi)) = (lower, upper)
+            && let (Some(f32_min), Some(f32_max)) = (
+                serde_json::Number::from_f64(f64::from(f32::MIN)),
+                serde_json::Number::from_f64(f64::from(f32::MAX)),
+            )
+            && number::cmp_num(lo, hi) != Ordering::Greater
+            && number::cmp_num(lo, &f32_min) != Ordering::Less
+            && number::cmp_num(hi, &f32_max) != Ordering::Greater
         {
             return "f32".to_string();
         }
@@ -877,6 +904,22 @@ fn merge_property_schemas(
     Ok(a.clone())
 }
 
+/// The tighter of two optional numeric bounds under `keep` (see [`tighter_bound`]), compared
+/// exactly.
+fn tighter_number(
+    a: Option<&serde_json::Number>,
+    b: Option<&serde_json::Number>,
+    keep: Ordering,
+) -> Option<serde_json::Number> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if number::cmp_num(a, b) == keep { a } else { b }.clone()),
+        (a, None) | (None, a) => a.cloned(),
+    }
+}
+
+/// Merges `other`'s numeric bounds into `target` for `allOf`: each bound keeps the tighter of
+/// the two, compared exactly. `multipleOf` keeps `target`'s when both have one (it does not
+/// change the emitted type). A lower bound above the upper bound is a conflict.
 fn merge_numeric_bounds(
     target: &mut JsonSchema,
     other: &JsonSchema,
@@ -884,23 +927,36 @@ fn merge_numeric_bounds(
     min_kw: &str,
     max_kw: &str,
 ) -> CodeGenResult<()> {
-    let (t_min, t_max) = (target.minimum, target.maximum);
-    let (o_min, o_max) = (other.minimum, other.maximum);
-    let new_min = match (t_min, o_min) {
-        (Some(t), Some(o)) => Some(t.max(o)),
-        (a, None) | (None, a) => a,
-    };
-    let new_max = match (t_max, o_max) {
-        (Some(t), Some(o)) => Some(t.min(o)),
-        (a, None) | (None, a) => a,
-    };
-    if let (Some(mi), Some(ma)) = (new_min, new_max)
-        && mi > ma
+    let new_min: Option<serde_json::Number> = tighter_number(
+        target.minimum.as_ref(),
+        other.minimum.as_ref(),
+        Ordering::Greater,
+    );
+    let new_max: Option<serde_json::Number> = tighter_number(
+        target.maximum.as_ref(),
+        other.maximum.as_ref(),
+        Ordering::Less,
+    );
+    if let (Some(mi), Some(ma)) = (&new_min, &new_max)
+        && number::cmp_num(mi, ma) == Ordering::Greater
     {
         return Err(CodeGenError::AllOfMergeConflictingNumericBounds {
             property_key: property_key.to_string(),
             keyword: format!("{min_kw}/{max_kw}"),
         });
+    }
+    target.exclusive_minimum = tighter_number(
+        target.exclusive_minimum.as_ref(),
+        other.exclusive_minimum.as_ref(),
+        Ordering::Greater,
+    );
+    target.exclusive_maximum = tighter_number(
+        target.exclusive_maximum.as_ref(),
+        other.exclusive_maximum.as_ref(),
+        Ordering::Less,
+    );
+    if target.multiple_of.is_none() {
+        target.multiple_of.clone_from(&other.multiple_of);
     }
     target.minimum = new_min;
     target.maximum = new_max;
@@ -3213,6 +3269,42 @@ pub struct RootVariant1 {
     }
 
     #[test]
+    fn merge_all_of_keeps_tighter_bounds_exactly() {
+        let s1: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740992,"maximum":18446744073709551615,"exclusiveMinimum":0,"multipleOf":2}}}"#,
+        )
+        .unwrap();
+        let s2: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993,"maximum":18446744073709551614,"exclusiveMaximum":1e19,"multipleOf":3}}}"#,
+        )
+        .unwrap();
+        let merged: JsonSchema = merge_all_of(&[s1, s2]).unwrap();
+        let expected: &str = r#"{"type":"integer","minimum":9007199254740993,"maximum":18446744073709551614,"exclusiveMinimum":0,"exclusiveMaximum":1e+19,"multipleOf":2}"#;
+        let actual: String = serde_json::to_string(&merged.properties["n"]).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn merge_all_of_conflicting_bounds_beyond_f64_precision_errors() {
+        let s1: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993}}}"#,
+        )
+        .unwrap();
+        let s2: JsonSchema = serde_json::from_str(
+            r#"{"type":"object","properties":{"n":{"type":"integer","maximum":9007199254740992}}}"#,
+        )
+        .unwrap();
+        let actual = merge_all_of(&[s1, s2]);
+        assert!(matches!(
+            actual,
+            Err(CodeGenError::AllOfMergeConflictingNumericBounds {
+                property_key: ref k,
+                keyword: ref w
+            }) if k == "n" && w == "minimum/maximum"
+        ));
+    }
+
+    #[test]
     fn batch_error_when_allof_merge_fails_in_second_schema() {
         let s0: JsonSchema =
             serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
@@ -3552,6 +3644,189 @@ pub struct Root {
 }
 
 ";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_exclusive_bounds_emits_u8() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":-1,"exclusiveMaximum":256}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: u8,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_fractional_bounds_rounds_inward() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":-0.5,"maximum":255.9}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: u8,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_u64_range_emits_u64() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":18446744073709551615}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: u64,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_range_beyond_64_bits_emits_i64_fallback() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":-1,"maximum":18446744073709551615}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: i64,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_empty_range_emits_i64_fallback() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":5,"maximum":5}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: i64,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_with_tighter_exclusive_bound_wins() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":-100,"exclusiveMinimum":-1,"maximum":300,"exclusiveMaximum":200}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: u8,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn number_with_exclusive_bounds_in_f32_range_emits_f32() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":1}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: f32,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn number_with_bound_beyond_f32_emits_f64() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"number","minimum":0,"maximum":1e39}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: f64,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn integer_default_above_i64_max_is_exact() {
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":18446744073709551615,"default":18446744073709551615}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+fn default_root_n() -> u64 { 18446744073709551615 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default = "default_root_n")]
+    pub n: u64,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 

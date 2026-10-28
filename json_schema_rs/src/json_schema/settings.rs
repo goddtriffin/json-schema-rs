@@ -1,6 +1,8 @@
 //! JSON Schema ingestion settings.
 
-use super::dialect::{Dialect, DialectWarning, FormatMode, ResolvedDialect};
+use super::dialect::{
+    Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, ResolvedDialect,
+};
 use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
 use super::json_schema::JsonSchema;
 use super::spec_version::SpecVersion;
@@ -35,6 +37,14 @@ pub struct JsonSchemaSettings {
     /// 2019-09 and 2020-12 treat it as an annotation.
     pub format_mode: Option<FormatMode>,
 
+    /// Which numbers `"type": "integer"` accepts. `None` follows the draft: draft 4 is lexical
+    /// (`1.0` is not an integer), draft 6 and later numeric (`1.0` is an integer).
+    pub integer_semantics: Option<IntegerSemantics>,
+
+    /// How `exclusiveMinimum` / `exclusiveMaximum` are read. `None` follows the draft: draft 4's
+    /// boolean modifier of `minimum` / `maximum`, or draft 6+'s numeric bound.
+    pub exclusive_bounds: Option<ExclusiveBounds>,
+
     /// What to do when `$schema` is not a recognised metaschema URI.
     pub unknown_schema_uri: UnknownSchemaUri,
 }
@@ -45,6 +55,8 @@ pub struct JsonSchemaSettingsBuilder {
     disallow_unknown_fields: Option<bool>,
     spec_version: Option<SpecVersion>,
     format_mode: Option<FormatMode>,
+    integer_semantics: Option<IntegerSemantics>,
+    exclusive_bounds: Option<ExclusiveBounds>,
     unknown_schema_uri: Option<UnknownSchemaUri>,
 }
 
@@ -72,6 +84,24 @@ impl JsonSchemaSettingsBuilder {
         self
     }
 
+    /// Accept only lexical integers ([`IntegerSemantics::Lexical`]) or any number with a zero
+    /// fractional part ([`IntegerSemantics::Numeric`]) for `"type": "integer"`, whatever the
+    /// draft's default.
+    #[must_use]
+    pub fn integer_semantics(mut self, value: IntegerSemantics) -> Self {
+        self.integer_semantics = Some(value);
+        self
+    }
+
+    /// Read `exclusiveMinimum` / `exclusiveMaximum` as draft 4's boolean modifier
+    /// ([`ExclusiveBounds::BooleanModifier`]) or as numeric bounds ([`ExclusiveBounds::Numeric`]),
+    /// whatever the draft's default.
+    #[must_use]
+    pub fn exclusive_bounds(mut self, value: ExclusiveBounds) -> Self {
+        self.exclusive_bounds = Some(value);
+        self
+    }
+
     /// Set what happens when `$schema` is not a recognised metaschema URI (default:
     /// [`UnknownSchemaUri::Fallback`]).
     #[must_use]
@@ -87,6 +117,8 @@ impl JsonSchemaSettingsBuilder {
             disallow_unknown_fields: self.disallow_unknown_fields.unwrap_or(false),
             spec_version: self.spec_version,
             format_mode: self.format_mode,
+            integer_semantics: self.integer_semantics,
+            exclusive_bounds: self.exclusive_bounds,
             unknown_schema_uri: self.unknown_schema_uri.unwrap_or_default(),
         }
     }
@@ -155,6 +187,12 @@ pub(crate) fn resolve_dialect_for_uri(
     if let Some(format_mode) = settings.format_mode {
         dialect.format_mode = format_mode;
     }
+    if let Some(integer_semantics) = settings.integer_semantics {
+        dialect.integer_semantics = integer_semantics;
+    }
+    if let Some(exclusive_bounds) = settings.exclusive_bounds {
+        dialect.exclusive_bounds = exclusive_bounds;
+    }
     Ok(ResolvedDialect { dialect, warnings })
 }
 
@@ -162,7 +200,9 @@ pub(crate) fn resolve_dialect_for_uri(
 mod tests {
     use super::{JsonSchemaSettings, UnknownSchemaUri, resolve_dialect};
     use crate::json_schema::SpecVersion;
-    use crate::json_schema::dialect::{Dialect, DialectWarning, FormatMode, ResolvedDialect};
+    use crate::json_schema::dialect::{
+        Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, ResolvedDialect,
+    };
     use crate::json_schema::error::JsonSchemaParseError;
     use crate::json_schema::json_schema::JsonSchema;
 
@@ -208,12 +248,16 @@ mod tests {
             disallow_unknown_fields: true,
             spec_version: Some(SpecVersion::Draft06),
             format_mode: Some(FormatMode::Annotation),
+            integer_semantics: Some(IntegerSemantics::Lexical),
+            exclusive_bounds: Some(ExclusiveBounds::BooleanModifier),
             unknown_schema_uri: UnknownSchemaUri::Reject,
         };
         let actual: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .spec_version(SpecVersion::Draft06)
             .format_mode(FormatMode::Annotation)
+            .integer_semantics(IntegerSemantics::Lexical)
+            .exclusive_bounds(ExclusiveBounds::BooleanModifier)
             .unknown_schema_uri(UnknownSchemaUri::Reject)
             .build();
         assert_eq!(expected, actual);
@@ -336,6 +380,56 @@ mod tests {
             .expect("resolve")
             .dialect
             .format_mode;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_integer_semantics_override_beats_draft_default() {
+        let schema: JsonSchema = schema_with_uri("http://json-schema.org/draft-04/schema#");
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .integer_semantics(IntegerSemantics::Numeric)
+            .build();
+        let expected: IntegerSemantics = IntegerSemantics::Numeric;
+        let actual: IntegerSemantics = resolve_dialect(&schema, &settings)
+            .expect("resolve")
+            .dialect
+            .integer_semantics;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_without_override_uses_draft_integer_semantics() {
+        let schema: JsonSchema = schema_with_uri("http://json-schema.org/draft-04/schema#");
+        let expected: IntegerSemantics = IntegerSemantics::Lexical;
+        let actual: IntegerSemantics = resolve_dialect(&schema, &JsonSchemaSettings::default())
+            .expect("resolve")
+            .dialect
+            .integer_semantics;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_exclusive_bounds_override_beats_draft_default() {
+        let schema: JsonSchema = schema_with_uri("https://json-schema.org/draft/2020-12/schema");
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .exclusive_bounds(ExclusiveBounds::BooleanModifier)
+            .build();
+        let expected: ExclusiveBounds = ExclusiveBounds::BooleanModifier;
+        let actual: ExclusiveBounds = resolve_dialect(&schema, &settings)
+            .expect("resolve")
+            .dialect
+            .exclusive_bounds;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_without_override_uses_draft_exclusive_bounds() {
+        let schema: JsonSchema = schema_with_uri("https://json-schema.org/draft/2020-12/schema");
+        let expected: ExclusiveBounds = ExclusiveBounds::Numeric;
+        let actual: ExclusiveBounds = resolve_dialect(&schema, &JsonSchemaSettings::default())
+            .expect("resolve")
+            .dialect
+            .exclusive_bounds;
         assert_eq!(expected, actual);
     }
 }

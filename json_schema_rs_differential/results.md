@@ -25,17 +25,17 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Draft | Tests | Compliance | Coverage | Correctness | Failed | Skipped (unsupported) | Errored | Disagree with majority | Wrong vs expected |
 |---|---|---|---|---|---|---|---|---|---|
-| draft4 | 615 | 54.63% | 63.90% | 85.50% | 57 | 222 | 0 | 57 | 57 |
-| draft6 | 834 | 48.56% | 56.12% | 86.54% | 63 | 366 | 0 | 63 | 63 |
-| draft7 | 922 | 49.13% | 55.97% | 87.79% | 63 | 406 | 0 | 63 | 63 |
-| draft2019-09 | 1242 | 37.68% | 42.91% | 87.80% | 65 | 709 | 0 | 65 | 65 |
-| draft2020-12 | 1277 | 37.98% | 42.99% | 88.34% | 64 | 728 | 0 | 64 | 64 |
+| draft4 | 615 | 62.93% | 68.78% | 91.49% | 36 | 192 | 0 | 36 | 36 |
+| draft6 | 834 | 54.92% | 59.23% | 92.71% | 36 | 340 | 0 | 36 | 36 |
+| draft7 | 922 | 54.88% | 58.79% | 93.36% | 36 | 380 | 0 | 36 | 36 |
+| draft2019-09 | 1242 | 41.95% | 45.01% | 93.20% | 38 | 683 | 0 | 38 | 38 |
+| draft2020-12 | 1277 | 42.13% | 45.03% | 93.57% | 37 | 702 | 0 | 37 | 37 |
 
 ### Compliance per implementation (non-optional suite, all drafts)
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 43.91% | 2147 | 312 | 2431 | 0 | 4890 |
+| `localhost/json-schema-rs` (ours) | 49.28% | 2410 | 183 | 2297 | 0 | 4890 |
 | `cpp-blaze` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
 | `dotnet-jsonschema-net` | 100.00% | 4275 | 0 | 0 | 0 | 4275 |
 | `go-jsonschema` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
@@ -50,7 +50,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 52.29% | 1394 | 1009 | 263 | 0 | 2666 |
+| `localhost/json-schema-rs` (ours) | 53.15% | 1417 | 1001 | 248 | 0 | 2666 |
 | `dotnet-jsonschema-net` | 60.11% | 1439 | 917 | 0 | 38 | 2394 |
 | `go-jsonschema` | 74.08% | 1975 | 661 | 0 | 30 | 2666 |
 | `java-networknt-json-schema-validator` | 77.72% | 2072 | 584 | 0 | 10 | 2666 |
@@ -89,7 +89,6 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 | keyword "unevaluatedProperties" | 120 | 52 | draft2019-09: 60, draft2020-12: 60 |
 | schema: invalid JSON Schema: invalid type: map, expected a string | 112 | 29 | draft2019-09: 34, draft4: 26, draft6: 26, draft7: 26 |
 | schema: invalid JSON Schema: invalid type: boolean `false`, expected struct DenyUnknownFieldsJsonSchema | 107 | 36 | draft2019-09: 22, draft2020-12: 47, draft6: 19, draft7: 19 |
-| keyword "multipleOf" | 95 | 35 | draft2019-09: 19, draft2020-12: 19, draft4: 19, draft6: 19, draft7: 19 |
 | keyword "else" | 91 | 32 | draft2019-09: 33, draft2020-12: 33, draft7: 25 |
 | keyword "propertyNames" | 88 | 28 | draft2019-09: 24, draft2020-12: 24, draft6: 20, draft7: 20 |
 | keyword "if" | 57 | 22 | draft2019-09: 19, draft2020-12: 27, draft7: 11 |
@@ -103,8 +102,6 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 | keyword "$anchor" | 35 | 15 | draft2019-09: 16, draft2020-12: 19 |
 | keyword "$recursiveAnchor" | 33 | 10 | draft2019-09: 33 |
 | keyword "unevaluatedItems" | 32 | 13 | draft2019-09: 15, draft2020-12: 17 |
-| keyword "exclusiveMaximum" | 27 | 11 | draft2019-09: 5, draft2020-12: 5, draft4: 7, draft6: 5, draft7: 5 |
-| keyword "exclusiveMinimum" | 27 | 11 | draft2019-09: 5, draft2020-12: 5, draft4: 7, draft6: 5, draft7: 5 |
 | schema: invalid JSON Schema: invalid type: floating point `2.0`, expected u64 | 24 | 12 | draft2019-09: 6, draft2020-12: 6, draft6: 6, draft7: 6 |
 | schema: invalid JSON Schema: invalid type: boolean `true`, expected a string | 22 | 9 | draft2019-09: 16, draft6: 3, draft7: 3 |
 | $ref: UnsupportedRef { ref_str: "schema-refs-absolute-uris-defs2.json" } | 12 | 4 | draft2019-09: 3, draft2020-12: 3, draft6: 3, draft7: 3 |
@@ -200,7 +197,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 54.63% | 336 | 57 | 222 | 0 | 615 |
+| `localhost/json-schema-rs` (ours) | 62.93% | 387 | 36 | 192 | 0 | 615 |
 | `cpp-blaze` | 100.00% | 615 | 0 | 0 | 0 | 615 |
 | `go-jsonschema` | 100.00% | 615 | 0 | 0 | 0 | 615 |
 | `java-networknt-json-schema-validator` | 100.00% | 615 | 0 | 0 | 0 | 615 |
@@ -214,7 +211,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 54.04% | 147 | 100 | 25 | 0 | 272 |
+| `localhost/json-schema-rs` (ours) | 55.15% | 150 | 100 | 22 | 0 | 272 |
 | `go-jsonschema` | 90.81% | 247 | 21 | 0 | 4 | 272 |
 | `java-networknt-json-schema-validator` | 96.69% | 263 | 9 | 0 | 0 | 272 |
 | `js-ajv` | 36.03% | 98 | 2 | 0 | 172 | 272 |
@@ -223,9 +220,9 @@ Optional suite:
 | `rust-boon` | 98.90% | 269 | 3 | 0 | 0 | 272 |
 | `rust-jsonschema` | 99.26% | 270 | 2 | 0 | 0 | 272 |
 
-**Disagreements with the competitor majority: 148**
+**Disagreements with the competitor majority: 127**
 
-<details><summary>Disagreements with the competitor majority (148)</summary>
+<details><summary>Disagreements with the competitor majority (127)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
@@ -235,25 +232,15 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `additionalProperties.json` | additionalProperties can exist by itself | an additional invalid property is invalid (invalid) | 8/8 | likely our bug |
 | `additionalProperties.json` | additionalProperties does not look in applicators | properties defined in allOf are not examined (invalid) | 8/8 | likely our bug |
 | `allOf.json` | allOf with base schema | mismatch base schema (invalid) | 8/8 | likely our bug |
-| `allOf.json` | allOf simple types | mismatch one (invalid) | 8/8 | likely our bug |
 | `allOf.json` | nested allOf, to check validation semantics | anything non-null is invalid (invalid) | 8/8 | likely our bug |
-| `anyOf.json` | anyOf | neither anyOf valid (invalid) | 8/8 | likely our bug |
+| `allOf.json` | allOf combined with anyOf, oneOf | allOf: false, anyOf: true, oneOf: false (invalid); allOf: false, anyOf: true, oneOf: true (invalid); allOf: true, anyOf: true, oneOf: false (invalid) | 8/8 | likely our bug |
 | `anyOf.json` | anyOf with base schema | mismatch base schema (invalid); both anyOf invalid (invalid) | 8/8 | likely our bug |
 | `anyOf.json` | nested anyOf, to check validation semantics | anything non-null is invalid (invalid) | 8/8 | likely our bug |
-| `enum.json` | enum with 0 does not match false | float zero is valid (valid) | 8/8 | likely our bug |
-| `enum.json` | enum with [0] does not match [false] | [0.0] is valid (valid) | 8/8 | likely our bug |
-| `enum.json` | enum with 1 does not match true | float one is valid (valid) | 8/8 | likely our bug |
-| `enum.json` | enum with [1] does not match [true] | [1.0] is valid (valid) | 8/8 | likely our bug |
 | `items.json` | a schema given for items | wrong type of items (invalid) | 8/8 | likely our bug |
 | `maxItems.json` | maxItems validation | too long is invalid (invalid) | 8/8 | likely our bug |
 | `maxLength.json` | maxLength validation | too long is invalid (invalid) | 8/8 | likely our bug |
-| `maximum.json` | maximum validation | above the maximum is invalid (invalid) | 8/8 | likely our bug |
-| `maximum.json` | maximum validation with unsigned integer | above the maximum is invalid (invalid) | 8/8 | likely our bug |
 | `minItems.json` | minItems validation | too short is invalid (invalid) | 8/8 | likely our bug |
 | `minLength.json` | minLength validation | too short is invalid (invalid); one grapheme is not long enough (invalid) | 8/8 | likely our bug |
-| `minimum.json` | minimum validation | below the minimum is invalid (invalid) | 8/8 | likely our bug |
-| `minimum.json` | minimum validation with signed integer | float below the minimum is invalid (invalid); int below the minimum is invalid (invalid) | 8/8 | likely our bug |
-| `oneOf.json` | oneOf | first oneOf valid (valid); neither oneOf valid (invalid) | 8/8 | likely our bug |
 | `oneOf.json` | oneOf with base schema | one oneOf valid (valid) | 8/8 | likely our bug |
 | `oneOf.json` | nested oneOf, to check validation semantics | anything non-null is invalid (invalid) | 8/8 | likely our bug |
 | `pattern.json` | pattern validation | a non-matching pattern is invalid (invalid) | 8/8 | likely our bug |
@@ -263,7 +250,6 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `type.json` | multiple types can be specified in an array | a string is valid (valid) | 8/8 | likely our bug |
 | `type.json` | type: array or object | object is valid (valid) | 8/8 | likely our bug |
 | `type.json` | type: array, object or null | object is valid (valid); null is valid (valid) | 8/8 | likely our bug |
-| `uniqueItems.json` | uniqueItems validation | non-unique array of integers is invalid (invalid); non-unique array of more than two integers is invalid (invalid); numbers are unique if mathematically unequal (invalid); non-unique array of strings is invalid (invalid); non-unique array of objects is invalid (invalid); property order of array of objects is ignored (invalid); non-unique array of nested objects is invalid (invalid); non-unique array of arrays is invalid (invalid); non-unique array of more than two arrays is invalid (invalid); non-unique heterogeneous types are invalid (invalid); objects are non-unique despite key order (invalid) | 8/8 | likely our bug |
 | `optional/bignum.json` | integer | a bignum is an integer (valid); a negative bignum is an integer (valid) | 6/7 | likely our bug |
 | `optional/ecmascript-regex.json` | patterns always use unicode semantics with pattern | unicode matching is case-sensitive (invalid) | 6/6 | likely our bug |
 | `optional/ecmascript-regex.json` | \\w in patterns matches [A-Za-z0-9_], not unicode letters | literal unicode character in json string (invalid); unicode character in hex format in string (invalid); unicode matching is case-sensitive (invalid) | 6/7, 7/7 | likely our bug |
@@ -314,7 +300,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 48.56% | 405 | 63 | 366 | 0 | 834 |
+| `localhost/json-schema-rs` (ours) | 54.92% | 458 | 36 | 340 | 0 | 834 |
 | `cpp-blaze` | 100.00% | 834 | 0 | 0 | 0 | 834 |
 | `dotnet-jsonschema-net` | 100.00% | 834 | 0 | 0 | 0 | 834 |
 | `go-jsonschema` | 100.00% | 834 | 0 | 0 | 0 | 834 |
@@ -329,7 +315,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 56.30% | 192 | 117 | 32 | 0 | 341 |
+| `localhost/json-schema-rs` (ours) | 57.77% | 197 | 115 | 29 | 0 | 341 |
 | `dotnet-jsonschema-net` | 65.10% | 222 | 112 | 0 | 7 | 341 |
 | `go-jsonschema` | 92.67% | 316 | 21 | 0 | 4 | 341 |
 | `java-networknt-json-schema-validator` | 97.36% | 332 | 9 | 0 | 0 | 341 |
@@ -339,9 +325,9 @@ Optional suite:
 | `rust-boon` | 99.41% | 339 | 2 | 0 | 0 | 341 |
 | `rust-jsonschema` | 100.00% | 341 | 0 | 0 | 0 | 341 |
 
-**Disagreements with the competitor majority: 169**
+**Disagreements with the competitor majority: 140**
 
-<details><summary>Disagreements with the competitor majority (169)</summary>
+<details><summary>Disagreements with the competitor majority (140)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
@@ -351,42 +337,24 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `additionalProperties.json` | additionalProperties can exist by itself | an additional invalid property is invalid (invalid) | 9/9 | likely our bug |
 | `additionalProperties.json` | additionalProperties does not look in applicators | properties defined in allOf are not examined (invalid) | 9/9 | likely our bug |
 | `allOf.json` | allOf with base schema | mismatch base schema (invalid) | 9/9 | likely our bug |
-| `allOf.json` | allOf simple types | mismatch one (invalid) | 9/9 | likely our bug |
 | `allOf.json` | nested allOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `anyOf.json` | anyOf | neither anyOf valid (invalid) | 9/9 | likely our bug |
+| `allOf.json` | allOf combined with anyOf, oneOf | allOf: false, anyOf: true, oneOf: false (invalid); allOf: false, anyOf: true, oneOf: true (invalid); allOf: true, anyOf: true, oneOf: false (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | anyOf with base schema | mismatch base schema (invalid); both anyOf invalid (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | nested anyOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with null | not null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with 0 does not match other zero-like types | float zero is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with -2.0 matches integer and float types | integer -2 is valid (valid) | 9/9 | likely our bug |
-| `const.json` | float and integers are equal up to 64-bit representation limits | float is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 0 does not match false | float zero is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [0] does not match [false] | [0.0] is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [1] does not match [true] | [1.0] is valid (valid) | 9/9 | likely our bug |
 | `items.json` | a schema given for items | wrong type of items (invalid) | 9/9 | likely our bug |
 | `maxItems.json` | maxItems validation | too long is invalid (invalid) | 9/9 | likely our bug |
 | `maxLength.json` | maxLength validation | too long is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation | above the maximum is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation with unsigned integer | above the maximum is invalid (invalid) | 9/9 | likely our bug |
 | `minItems.json` | minItems validation | too short is invalid (invalid) | 9/9 | likely our bug |
 | `minLength.json` | minLength validation | too short is invalid (invalid); one grapheme is not long enough (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation | below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation with signed integer | float below the minimum is invalid (invalid); int below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `oneOf.json` | oneOf | first oneOf valid (valid); neither oneOf valid (invalid) | 9/9 | likely our bug |
 | `oneOf.json` | oneOf with base schema | one oneOf valid (valid) | 9/9 | likely our bug |
 | `oneOf.json` | nested oneOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
 | `pattern.json` | pattern validation | a non-matching pattern is invalid (invalid) | 9/9 | likely our bug |
 | `ref.json` | root pointer ref | mismatch (invalid); recursive mismatch (invalid) | 9/9 | likely our bug |
 | `refRemote.json` | base URI change | base URI change ref invalid (invalid) | 9/9 | likely our bug |
-| `type.json` | integer type matches integers | a float with zero fractional part is an integer (valid) | 9/9 | likely our bug |
 | `type.json` | null type matches only the null object | an integer is not null (invalid); a float is not null (invalid); zero is not null (invalid); a string is not null (invalid); an empty string is not null (invalid); an object is not null (invalid); an array is not null (invalid); true is not null (invalid); false is not null (invalid) | 9/9 | likely our bug |
 | `type.json` | multiple types can be specified in an array | a string is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array or object | object is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array, object or null | object is valid (valid); null is valid (valid) | 9/9 | likely our bug |
-| `uniqueItems.json` | uniqueItems validation | non-unique array of integers is invalid (invalid); non-unique array of more than two integers is invalid (invalid); numbers are unique if mathematically unequal (invalid); non-unique array of strings is invalid (invalid); non-unique array of objects is invalid (invalid); property order of array of objects is ignored (invalid); non-unique array of nested objects is invalid (invalid); non-unique array of arrays is invalid (invalid); non-unique array of more than two arrays is invalid (invalid); non-unique heterogeneous types are invalid (invalid); objects are non-unique despite key order (invalid) | 9/9 | likely our bug |
-| `optional/bignum.json` | integer | a bignum is an integer (valid); a negative bignum is an integer (valid) | 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | patterns always use unicode semantics with pattern | unicode matching is case-sensitive (invalid) | 7/7 | likely our bug |
 | `optional/ecmascript-regex.json` | \\w in patterns matches [A-Za-z0-9_], not unicode letters | literal unicode character in json string (invalid); unicode character in hex format in string (invalid); unicode matching is case-sensitive (invalid) | 7/8, 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | pattern with ASCII ranges | literal unicode character in json string (invalid); unicode character in hex format in string (invalid) | 8/8 | likely our bug |
@@ -430,7 +398,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 49.13% | 453 | 63 | 406 | 0 | 922 |
+| `localhost/json-schema-rs` (ours) | 54.88% | 506 | 36 | 380 | 0 | 922 |
 | `cpp-blaze` | 100.00% | 922 | 0 | 0 | 0 | 922 |
 | `dotnet-jsonschema-net` | 100.00% | 922 | 0 | 0 | 0 | 922 |
 | `go-jsonschema` | 100.00% | 922 | 0 | 0 | 0 | 922 |
@@ -445,7 +413,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 52.82% | 328 | 249 | 44 | 0 | 621 |
+| `localhost/json-schema-rs` (ours) | 53.62% | 333 | 247 | 41 | 0 | 621 |
 | `dotnet-jsonschema-net` | 58.62% | 364 | 248 | 0 | 9 | 621 |
 | `go-jsonschema` | 84.22% | 523 | 92 | 0 | 6 | 621 |
 | `java-networknt-json-schema-validator` | 93.08% | 578 | 41 | 0 | 2 | 621 |
@@ -455,9 +423,9 @@ Optional suite:
 | `rust-boon` | 95.01% | 590 | 29 | 0 | 2 | 621 |
 | `rust-jsonschema` | 99.68% | 619 | 0 | 0 | 2 | 621 |
 
-**Disagreements with the competitor majority: 233**
+**Disagreements with the competitor majority: 204**
 
-<details><summary>Disagreements with the competitor majority (233)</summary>
+<details><summary>Disagreements with the competitor majority (204)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
@@ -467,42 +435,24 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `additionalProperties.json` | additionalProperties can exist by itself | an additional invalid property is invalid (invalid) | 9/9 | likely our bug |
 | `additionalProperties.json` | additionalProperties does not look in applicators | properties defined in allOf are not examined (invalid) | 9/9 | likely our bug |
 | `allOf.json` | allOf with base schema | mismatch base schema (invalid) | 9/9 | likely our bug |
-| `allOf.json` | allOf simple types | mismatch one (invalid) | 9/9 | likely our bug |
 | `allOf.json` | nested allOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `anyOf.json` | anyOf | neither anyOf valid (invalid) | 9/9 | likely our bug |
+| `allOf.json` | allOf combined with anyOf, oneOf | allOf: false, anyOf: true, oneOf: false (invalid); allOf: false, anyOf: true, oneOf: true (invalid); allOf: true, anyOf: true, oneOf: false (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | anyOf with base schema | mismatch base schema (invalid); both anyOf invalid (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | nested anyOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with null | not null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with 0 does not match other zero-like types | float zero is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with -2.0 matches integer and float types | integer -2 is valid (valid) | 9/9 | likely our bug |
-| `const.json` | float and integers are equal up to 64-bit representation limits | float is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 0 does not match false | float zero is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [0] does not match [false] | [0.0] is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [1] does not match [true] | [1.0] is valid (valid) | 9/9 | likely our bug |
 | `items.json` | a schema given for items | wrong type of items (invalid) | 9/9 | likely our bug |
 | `maxItems.json` | maxItems validation | too long is invalid (invalid) | 9/9 | likely our bug |
 | `maxLength.json` | maxLength validation | too long is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation | above the maximum is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation with unsigned integer | above the maximum is invalid (invalid) | 9/9 | likely our bug |
 | `minItems.json` | minItems validation | too short is invalid (invalid) | 9/9 | likely our bug |
 | `minLength.json` | minLength validation | too short is invalid (invalid); one grapheme is not long enough (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation | below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation with signed integer | float below the minimum is invalid (invalid); int below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `oneOf.json` | oneOf | first oneOf valid (valid); neither oneOf valid (invalid) | 9/9 | likely our bug |
 | `oneOf.json` | oneOf with base schema | one oneOf valid (valid) | 9/9 | likely our bug |
 | `oneOf.json` | nested oneOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
 | `pattern.json` | pattern validation | a non-matching pattern is invalid (invalid) | 9/9 | likely our bug |
 | `ref.json` | root pointer ref | mismatch (invalid); recursive mismatch (invalid) | 9/9 | likely our bug |
 | `refRemote.json` | base URI change | base URI change ref invalid (invalid) | 9/9 | likely our bug |
-| `type.json` | integer type matches integers | a float with zero fractional part is an integer (valid) | 9/9 | likely our bug |
 | `type.json` | null type matches only the null object | an integer is not null (invalid); a float is not null (invalid); zero is not null (invalid); a string is not null (invalid); an empty string is not null (invalid); an object is not null (invalid); an array is not null (invalid); true is not null (invalid); false is not null (invalid) | 9/9 | likely our bug |
 | `type.json` | multiple types can be specified in an array | a string is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array or object | object is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array, object or null | object is valid (valid); null is valid (valid) | 9/9 | likely our bug |
-| `uniqueItems.json` | uniqueItems validation | non-unique array of integers is invalid (invalid); non-unique array of more than two integers is invalid (invalid); numbers are unique if mathematically unequal (invalid); non-unique array of strings is invalid (invalid); non-unique array of objects is invalid (invalid); property order of array of objects is ignored (invalid); non-unique array of nested objects is invalid (invalid); non-unique array of arrays is invalid (invalid); non-unique array of more than two arrays is invalid (invalid); non-unique heterogeneous types are invalid (invalid); objects are non-unique despite key order (invalid) | 9/9 | likely our bug |
-| `optional/bignum.json` | integer | a bignum is an integer (valid); a negative bignum is an integer (valid) | 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | patterns always use unicode semantics with pattern | unicode matching is case-sensitive (invalid) | 7/7 | likely our bug |
 | `optional/ecmascript-regex.json` | \\w in patterns matches [A-Za-z0-9_], not unicode letters | literal unicode character in json string (invalid); unicode character in hex format in string (invalid); unicode matching is case-sensitive (invalid) | 7/8, 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | pattern with ASCII ranges | literal unicode character in json string (invalid); unicode character in hex format in string (invalid) | 8/8 | likely our bug |
@@ -554,7 +504,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 37.68% | 468 | 65 | 709 | 0 | 1242 |
+| `localhost/json-schema-rs` (ours) | 41.95% | 521 | 38 | 683 | 0 | 1242 |
 | `cpp-blaze` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
 | `dotnet-jsonschema-net` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
 | `go-jsonschema` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
@@ -569,7 +519,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 50.70% | 360 | 269 | 81 | 0 | 710 |
+| `localhost/json-schema-rs` (ours) | 51.41% | 365 | 267 | 78 | 0 | 710 |
 | `dotnet-jsonschema-net` | 59.58% | 423 | 277 | 0 | 10 | 710 |
 | `go-jsonschema` | 62.11% | 441 | 262 | 0 | 7 | 710 |
 | `java-networknt-json-schema-validator` | 62.82% | 446 | 261 | 0 | 3 | 710 |
@@ -579,9 +529,9 @@ Optional suite:
 | `rust-boon` | 63.94% | 454 | 253 | 0 | 3 | 710 |
 | `rust-jsonschema` | 64.08% | 455 | 252 | 0 | 3 | 710 |
 
-**Disagreements with the competitor majority: 82**
+**Disagreements with the competitor majority: 53**
 
-<details><summary>Disagreements with the competitor majority (82)</summary>
+<details><summary>Disagreements with the competitor majority (53)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
@@ -591,30 +541,15 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `additionalProperties.json` | additionalProperties can exist by itself | an additional invalid property is invalid (invalid) | 9/9 | likely our bug |
 | `additionalProperties.json` | additionalProperties does not look in applicators | properties defined in allOf are not examined (invalid) | 9/9 | likely our bug |
 | `allOf.json` | allOf with base schema | mismatch base schema (invalid) | 9/9 | likely our bug |
-| `allOf.json` | allOf simple types | mismatch one (invalid) | 9/9 | likely our bug |
 | `allOf.json` | nested allOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `anyOf.json` | anyOf | neither anyOf valid (invalid) | 9/9 | likely our bug |
+| `allOf.json` | allOf combined with anyOf, oneOf | allOf: false, anyOf: true, oneOf: false (invalid); allOf: false, anyOf: true, oneOf: true (invalid); allOf: true, anyOf: true, oneOf: false (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | anyOf with base schema | mismatch base schema (invalid); both anyOf invalid (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | nested anyOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with null | not null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with 0 does not match other zero-like types | float zero is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with -2.0 matches integer and float types | integer -2 is valid (valid) | 9/9 | likely our bug |
-| `const.json` | float and integers are equal up to 64-bit representation limits | float is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 0 does not match false | float zero is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [0] does not match [false] | [0.0] is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [1] does not match [true] | [1.0] is valid (valid) | 9/9 | likely our bug |
 | `items.json` | a schema given for items | wrong type of items (invalid) | 9/9 | likely our bug |
 | `maxItems.json` | maxItems validation | too long is invalid (invalid) | 9/9 | likely our bug |
 | `maxLength.json` | maxLength validation | too long is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation | above the maximum is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation with unsigned integer | above the maximum is invalid (invalid) | 9/9 | likely our bug |
 | `minItems.json` | minItems validation | too short is invalid (invalid) | 9/9 | likely our bug |
 | `minLength.json` | minLength validation | too short is invalid (invalid); one grapheme is not long enough (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation | below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation with signed integer | float below the minimum is invalid (invalid); int below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `oneOf.json` | oneOf | first oneOf valid (valid); neither oneOf valid (invalid) | 9/9 | likely our bug |
 | `oneOf.json` | oneOf with base schema | one oneOf valid (valid) | 9/9 | likely our bug |
 | `oneOf.json` | nested oneOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
 | `pattern.json` | pattern validation | a non-matching pattern is invalid (invalid) | 9/9 | likely our bug |
@@ -622,13 +557,10 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `ref.json` | root pointer ref | mismatch (invalid); recursive mismatch (invalid) | 9/9 | likely our bug |
 | `ref.json` | ref applies alongside sibling keywords | ref valid, maxItems invalid (invalid) | 9/9 | likely our bug |
 | `refRemote.json` | base URI change | base URI change ref invalid (invalid) | 9/9 | likely our bug |
-| `type.json` | integer type matches integers | a float with zero fractional part is an integer (valid) | 9/9 | likely our bug |
 | `type.json` | null type matches only the null object | an integer is not null (invalid); a float is not null (invalid); zero is not null (invalid); a string is not null (invalid); an empty string is not null (invalid); an object is not null (invalid); an array is not null (invalid); true is not null (invalid); false is not null (invalid) | 9/9 | likely our bug |
 | `type.json` | multiple types can be specified in an array | a string is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array or object | object is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array, object or null | object is valid (valid); null is valid (valid) | 9/9 | likely our bug |
-| `uniqueItems.json` | uniqueItems validation | non-unique array of integers is invalid (invalid); non-unique array of more than two integers is invalid (invalid); numbers are unique if mathematically unequal (invalid); non-unique array of strings is invalid (invalid); non-unique array of objects is invalid (invalid); property order of array of objects is ignored (invalid); non-unique array of nested objects is invalid (invalid); non-unique array of arrays is invalid (invalid); non-unique array of more than two arrays is invalid (invalid); non-unique heterogeneous types are invalid (invalid); objects are non-unique despite key order (invalid) | 9/9 | likely our bug |
-| `optional/bignum.json` | integer | a bignum is an integer (valid); a negative bignum is an integer (valid) | 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | patterns always use unicode semantics with pattern | unicode matching is case-sensitive (invalid) | 7/7 | likely our bug |
 | `optional/ecmascript-regex.json` | \\w in patterns matches [A-Za-z0-9_], not unicode letters | literal unicode character in json string (invalid); unicode character in hex format in string (invalid); unicode matching is case-sensitive (invalid) | 7/8, 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | pattern with ASCII ranges | literal unicode character in json string (invalid); unicode character in hex format in string (invalid) | 8/8 | likely our bug |
@@ -680,7 +612,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 37.98% | 485 | 64 | 728 | 0 | 1277 |
+| `localhost/json-schema-rs` (ours) | 42.13% | 538 | 37 | 702 | 0 | 1277 |
 | `cpp-blaze` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
 | `dotnet-jsonschema-net` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
 | `go-jsonschema` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
@@ -695,7 +627,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 50.83% | 367 | 274 | 81 | 0 | 722 |
+| `localhost/json-schema-rs` (ours) | 51.52% | 372 | 272 | 78 | 0 | 722 |
 | `dotnet-jsonschema-net` | 59.56% | 430 | 280 | 0 | 12 | 722 |
 | `go-jsonschema` | 62.05% | 448 | 265 | 0 | 9 | 722 |
 | `java-networknt-json-schema-validator` | 62.74% | 453 | 264 | 0 | 5 | 722 |
@@ -705,9 +637,9 @@ Optional suite:
 | `rust-boon` | 63.85% | 461 | 256 | 0 | 5 | 722 |
 | `rust-jsonschema` | 64.27% | 464 | 257 | 0 | 1 | 722 |
 
-**Disagreements with the competitor majority: 81**
+**Disagreements with the competitor majority: 52**
 
-<details><summary>Disagreements with the competitor majority (81)</summary>
+<details><summary>Disagreements with the competitor majority (52)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
@@ -717,43 +649,25 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `additionalProperties.json` | additionalProperties can exist by itself | an additional invalid property is invalid (invalid) | 9/9 | likely our bug |
 | `additionalProperties.json` | additionalProperties does not look in applicators | properties defined in allOf are not examined (invalid) | 9/9 | likely our bug |
 | `allOf.json` | allOf with base schema | mismatch base schema (invalid) | 9/9 | likely our bug |
-| `allOf.json` | allOf simple types | mismatch one (invalid) | 9/9 | likely our bug |
 | `allOf.json` | nested allOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `anyOf.json` | anyOf | neither anyOf valid (invalid) | 9/9 | likely our bug |
+| `allOf.json` | allOf combined with anyOf, oneOf | allOf: false, anyOf: true, oneOf: false (invalid); allOf: false, anyOf: true, oneOf: true (invalid); allOf: true, anyOf: true, oneOf: false (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | anyOf with base schema | mismatch base schema (invalid); both anyOf invalid (invalid) | 9/9 | likely our bug |
 | `anyOf.json` | nested anyOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with null | not null is invalid (invalid) | 9/9 | likely our bug |
-| `const.json` | const with 0 does not match other zero-like types | float zero is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `const.json` | const with -2.0 matches integer and float types | integer -2 is valid (valid) | 9/9 | likely our bug |
-| `const.json` | float and integers are equal up to 64-bit representation limits | float is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 0 does not match false | float zero is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [0] does not match [false] | [0.0] is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with 1 does not match true | float one is valid (valid) | 9/9 | likely our bug |
-| `enum.json` | enum with [1] does not match [true] | [1.0] is valid (valid) | 9/9 | likely our bug |
 | `items.json` | a schema given for items | wrong type of items (invalid) | 9/9 | likely our bug |
 | `maxItems.json` | maxItems validation | too long is invalid (invalid) | 9/9 | likely our bug |
 | `maxLength.json` | maxLength validation | too long is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation | above the maximum is invalid (invalid) | 9/9 | likely our bug |
-| `maximum.json` | maximum validation with unsigned integer | above the maximum is invalid (invalid) | 9/9 | likely our bug |
 | `minItems.json` | minItems validation | too short is invalid (invalid) | 9/9 | likely our bug |
 | `minLength.json` | minLength validation | too short is invalid (invalid); one grapheme is not long enough (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation | below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `minimum.json` | minimum validation with signed integer | float below the minimum is invalid (invalid); int below the minimum is invalid (invalid) | 9/9 | likely our bug |
-| `oneOf.json` | oneOf | first oneOf valid (valid); neither oneOf valid (invalid) | 9/9 | likely our bug |
 | `oneOf.json` | oneOf with base schema | one oneOf valid (valid) | 9/9 | likely our bug |
 | `oneOf.json` | nested oneOf, to check validation semantics | anything non-null is invalid (invalid) | 9/9 | likely our bug |
 | `pattern.json` | pattern validation | a non-matching pattern is invalid (invalid) | 9/9 | likely our bug |
 | `ref.json` | root pointer ref | mismatch (invalid); recursive mismatch (invalid) | 9/9 | likely our bug |
 | `ref.json` | ref applies alongside sibling keywords | ref valid, maxItems invalid (invalid) | 9/9 | likely our bug |
 | `refRemote.json` | base URI change | base URI change ref invalid (invalid) | 9/9 | likely our bug |
-| `type.json` | integer type matches integers | a float with zero fractional part is an integer (valid) | 9/9 | likely our bug |
 | `type.json` | null type matches only the null object | an integer is not null (invalid); a float is not null (invalid); zero is not null (invalid); a string is not null (invalid); an empty string is not null (invalid); an object is not null (invalid); an array is not null (invalid); true is not null (invalid); false is not null (invalid) | 9/9 | likely our bug |
 | `type.json` | multiple types can be specified in an array | a string is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array or object | object is valid (valid) | 9/9 | likely our bug |
 | `type.json` | type: array, object or null | object is valid (valid); null is valid (valid) | 9/9 | likely our bug |
-| `uniqueItems.json` | uniqueItems validation | non-unique array of integers is invalid (invalid); non-unique array of more than two integers is invalid (invalid); numbers are unique if mathematically unequal (invalid); non-unique array of strings is invalid (invalid); non-unique array of objects is invalid (invalid); property order of array of objects is ignored (invalid); non-unique array of nested objects is invalid (invalid); non-unique array of arrays is invalid (invalid); non-unique array of more than two arrays is invalid (invalid); non-unique heterogeneous types are invalid (invalid); objects are non-unique despite key order (invalid) | 9/9 | likely our bug |
-| `optional/bignum.json` | integer | a bignum is an integer (valid); a negative bignum is an integer (valid) | 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | patterns always use unicode semantics with pattern | unicode matching is case-sensitive (invalid) | 7/7 | likely our bug |
 | `optional/ecmascript-regex.json` | \\w in patterns matches [A-Za-z0-9_], not unicode letters | literal unicode character in json string (invalid); unicode character in hex format in string (invalid); unicode matching is case-sensitive (invalid) | 7/8, 8/8 | likely our bug |
 | `optional/ecmascript-regex.json` | pattern with ASCII ranges | literal unicode character in json string (invalid); unicode character in hex format in string (invalid) | 8/8 | likely our bug |
@@ -1147,7 +1061,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'bar'
 ```
 
-### 2. suite draft2020-12/anyOf.json — anyOf complex types / neither anyOf valid (complex)
+### 2. suite draft2020-12/anyOf.json — anyOf / neither anyOf valid
 
 Schema:
 
@@ -1156,24 +1070,10 @@ Schema:
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "anyOf": [
     {
-      "properties": {
-        "bar": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "bar"
-      ]
+      "type": "integer"
     },
     {
-      "properties": {
-        "foo": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "foo"
-      ]
+      "minimum": 2
     }
   ]
 }
@@ -1182,10 +1082,7 @@ Schema:
 Instance:
 
 ```json
-{
-  "bar": "quux",
-  "foo": 2
-}
+1.5
 ```
 
 **json-schema-rs**: invalid (1 message line(s))
@@ -1197,7 +1094,7 @@ root: instance does not match any of the 2 subschema(s)
 **jsonschema**: invalid (1 message line(s))
 
 ```text
-/: {"bar":"quux","foo":2} is not valid under any of the schemas listed in the 'anyOf' keyword
+/: 1.5 is not valid under any of the schemas listed in the 'anyOf' keyword
 ```
 
 **boon**: invalid (4 message line(s))
@@ -1205,8 +1102,8 @@ root: instance does not match any of the 2 subschema(s)
 ```text
 jsonschema validation failed with mem://differential/schema.json#
 - at '': anyOf failed
-  - at '/bar': want integer, but got string
-  - at '/foo': want string, but got number
+  - at '': want integer, but got number
+  - at '': must be >=2, but got 1.5
 ```
 
 ### 3. suite draft2020-12/const.json — const validation / another value is invalid
@@ -1408,7 +1305,79 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': value must be one of 1, 2, 3
 ```
 
-### 8. suite draft2020-12/infinite-loop-detection.json — evaluating the same schema location against the same data location twice is not a sign of an infinite loop / failing case
+### 8. suite draft2020-12/exclusiveMaximum.json — exclusiveMaximum validation / boundary point is invalid
+
+Schema:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "exclusiveMaximum": 3.0
+}
+```
+
+Instance:
+
+```json
+3.0
+```
+
+**json-schema-rs**: invalid (1 message line(s))
+
+```text
+root: value 3.0 is not below exclusiveMaximum 3.0
+```
+
+**jsonschema**: invalid (1 message line(s))
+
+```text
+/: 3.0 is greater than or equal to the maximum of 3.0
+```
+
+**boon**: invalid (2 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '': must be < 3.0 but got 3.0
+```
+
+### 9. suite draft2020-12/exclusiveMinimum.json — exclusiveMinimum validation / boundary point is invalid
+
+Schema:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "exclusiveMinimum": 1.1
+}
+```
+
+Instance:
+
+```json
+1.1
+```
+
+**json-schema-rs**: invalid (1 message line(s))
+
+```text
+root: value 1.1 is not above exclusiveMinimum 1.1
+```
+
+**jsonschema**: invalid (1 message line(s))
+
+```text
+/: 1.1 is less than or equal to the minimum of 1.1
+```
+
+**boon**: invalid (2 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '': must be > 1.1 but got 1.1
+```
+
+### 10. suite draft2020-12/infinite-loop-detection.json — evaluating the same schema location against the same data location twice is not a sign of an infinite loop / failing case
 
 Schema:
 
@@ -1467,7 +1436,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '/foo': want integer, but got string
 ```
 
-### 9. suite draft2020-12/items.json — nested items / nested array with invalid type
+### 11. suite draft2020-12/items.json — nested items / nested array with invalid type
 
 Schema:
 
@@ -1544,7 +1513,115 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/0/0/0/0': want number, but got string
 ```
 
-### 10. suite draft2020-12/oneOf.json — oneOf / both oneOf valid
+### 12. suite draft2020-12/maximum.json — maximum validation / above the maximum is invalid
+
+Schema:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "maximum": 3.0
+}
+```
+
+Instance:
+
+```json
+3.5
+```
+
+**json-schema-rs**: invalid (1 message line(s))
+
+```text
+root: value 3.5 is above maximum 3.0
+```
+
+**jsonschema**: invalid (1 message line(s))
+
+```text
+/: 3.5 is greater than the maximum of 3.0
+```
+
+**boon**: invalid (2 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '': must be <=3.0, but got 3.5
+```
+
+### 13. suite draft2020-12/minimum.json — minimum validation / below the minimum is invalid
+
+Schema:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "minimum": 1.1
+}
+```
+
+Instance:
+
+```json
+0.6
+```
+
+**json-schema-rs**: invalid (1 message line(s))
+
+```text
+root: value 0.6 is below minimum 1.1
+```
+
+**jsonschema**: invalid (1 message line(s))
+
+```text
+/: 0.6 is less than the minimum of 1.1
+```
+
+**boon**: invalid (2 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '': must be >=1.1, but got 0.6
+```
+
+### 14. suite draft2020-12/multipleOf.json — by int / int by int fail
+
+Schema:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "multipleOf": 2
+}
+```
+
+Instance:
+
+```json
+7
+```
+
+**json-schema-rs**: invalid (1 message line(s))
+
+```text
+root: value 7 is not a multiple of 2
+```
+
+**jsonschema**: invalid (1 message line(s))
+
+```text
+/: 7 is not a multiple of 2
+```
+
+**boon**: invalid (2 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '': 7 is not multipleOf 2
+```
+
+### 15. suite draft2020-12/oneOf.json — oneOf / both oneOf valid
 
 Schema:
 
@@ -1587,7 +1664,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': oneOf failed, subschemas 0, 1 matched
 ```
 
-### 11. suite draft2020-12/properties.json — object properties validation / one property invalid is invalid
+### 16. suite draft2020-12/properties.json — object properties validation / one property invalid is invalid
 
 Schema:
 
@@ -1633,7 +1710,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/bar': want string, but got object
 ```
 
-### 12. suite draft2020-12/ref.json — relative pointer ref to object / mismatch
+### 17. suite draft2020-12/ref.json — relative pointer ref to object / mismatch
 
 Schema:
 
@@ -1678,7 +1755,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/bar': want integer, but got boolean
 ```
 
-### 13. suite draft2020-12/refRemote.json — remote ref / remote ref invalid
+### 18. suite draft2020-12/refRemote.json — remote ref / remote ref invalid
 
 Schema:
 
@@ -1713,7 +1790,7 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading http://localhost:1234/draft2020-12/integer.json
 ```
 
-### 14. suite draft2020-12/required.json — required validation / non-present required property is invalid
+### 19. suite draft2020-12/required.json — required validation / non-present required property is invalid
 
 Schema:
 
@@ -1757,7 +1834,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'foo'
 ```
 
-### 15. suite draft2020-12/type.json — integer type matches integers / a float is not an integer
+### 20. suite draft2020-12/type.json — integer type matches integers / a float is not an integer
 
 Schema:
 
@@ -1793,7 +1870,46 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': want integer, but got number
 ```
 
-### 16. suite draft2020-12/vocabulary.json — ignore unrecognized optional vocabulary / string value
+### 21. suite draft2020-12/uniqueItems.json — uniqueItems validation / non-unique array of integers is invalid
+
+Schema:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "uniqueItems": true
+}
+```
+
+Instance:
+
+```json
+[
+  1,
+  1
+]
+```
+
+**json-schema-rs**: invalid (1 message line(s))
+
+```text
+root: array has duplicate items (value: 1)
+```
+
+**jsonschema**: invalid (1 message line(s))
+
+```text
+/: [1,1] has non-unique elements
+```
+
+**boon**: invalid (2 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '': items at 0 and 1 are equal
+```
+
+### 22. suite draft2020-12/vocabulary.json — ignore unrecognized optional vocabulary / string value
 
 Schema:
 
@@ -1828,7 +1944,7 @@ schema rejected: Unknown meta-schema: 'http://localhost:1234/draft2020-12/metasc
 schema rejected: error loading http://localhost:1234/draft2020-12/metaschema-optional-vocabulary.json
 ```
 
-### 17. fixture small/config — small/config/instances/invalid/bad-port-and-enum.json
+### 23. fixture small/config — small/config/instances/invalid/bad-port-and-enum.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -1865,7 +1981,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/port': must be <=65535, but got 99999
 ```
 
-### 18. fixture small/config — small/config/instances/invalid/missing-required.json
+### 24. fixture small/config — small/config/instances/invalid/missing-required.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -1897,7 +2013,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'version'
 ```
 
-### 19. fixture small/config — small/config/instances/invalid/wrong-type.json
+### 25. fixture small/config — small/config/instances/invalid/wrong-type.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -1930,7 +2046,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/debug': want boolean, but got string
 ```
 
-### 20. fixture small/prettierrc — small/prettierrc/instances/invalid/bad-enum.json
+### 26. fixture small/prettierrc — small/prettierrc/instances/invalid/bad-enum.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -1965,7 +2081,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 21. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-semi.json
+### 27. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-semi.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -1998,7 +2114,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 22. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-tabwidth.json
+### 28. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-tabwidth.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2031,7 +2147,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 23. fixture medium/user-profile — medium/user-profile/instances/invalid/duplicate-roles-and-bad-username.json
+### 29. fixture medium/user-profile — medium/user-profile/instances/invalid/duplicate-roles-and-bad-username.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2071,7 +2187,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/username': 'no spaces!' does not match pattern '^[a-zA-Z0-9_]+$'
 ```
 
-### 24. fixture medium/user-profile — medium/user-profile/instances/invalid/empty-roles-and-bad-enum.json
+### 30. fixture medium/user-profile — medium/user-profile/instances/invalid/empty-roles-and-bad-enum.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2111,7 +2227,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/roles': minimum 1 items required, but got 0 items
 ```
 
-### 25. fixture medium/user-profile — medium/user-profile/instances/invalid/missing-nested-required.json
+### 31. fixture medium/user-profile — medium/user-profile/instances/invalid/missing-nested-required.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2155,7 +2271,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/addresses/0': missing properties 'city', 'country'
 ```
 
-### 26. fixture medium/package-json — medium/package-json/instances/invalid/name-wrong-type.json
+### 32. fixture medium/package-json — medium/package-json/instances/invalid/name-wrong-type.json
 
 Schema: `medium/package-json/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2171,7 +2287,7 @@ Instance (`medium/package-json/instances/invalid/name-wrong-type.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: error (1 message line(s))
@@ -2186,7 +2302,7 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading https://json.schemastore.org/ava.json
 ```
 
-### 27. fixture medium/package-json — medium/package-json/instances/invalid/scripts-wrong-type.json
+### 33. fixture medium/package-json — medium/package-json/instances/invalid/scripts-wrong-type.json
 
 Schema: `medium/package-json/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2203,7 +2319,7 @@ Instance (`medium/package-json/instances/invalid/scripts-wrong-type.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `patternProperties`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: error (1 message line(s))
@@ -2218,7 +2334,7 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading https://json.schemastore.org/ava.json
 ```
 
-### 28. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
+### 34. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2262,7 +2378,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '/services/0/language': value must be one of 'rust', 'go', 'python', 'typescript', 'java', 'csharp'
 ```
 
-### 29. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
+### 35. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2310,7 +2426,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0': additionalProperties 'unexpectedField' not allowed
 ```
 
-### 30. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
+### 36. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2359,7 +2475,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0/resources/cpuMillicores': must be >=10, but got 5
 ```
 
-### 31. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
+### 37. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2374,7 +2490,7 @@ Instance (`large/circleci/instances/invalid/bad-version.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2390,7 +2506,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/version': value must be one of '2.1', 2.1
 ```
 
-### 32. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
+### 38. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2405,7 +2521,7 @@ Instance (`large/circleci/instances/invalid/missing-version.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2421,7 +2537,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'version'
 ```
 
-### 33. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
+### 39. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2437,7 +2553,7 @@ Instance (`large/circleci/instances/invalid/workflows-wrong-type.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `markdownDescription`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2453,7 +2569,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/workflows': want object, but got string
 ```
 
-### 34. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
+### 40. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2536,7 +2652,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 35. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
+### 41. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2621,7 +2737,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(183 more lines in results.json)_
 
-### 36. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
+### 42. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2698,7 +2814,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 37. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
+### 43. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2715,7 +2831,7 @@ Instance (`massive/k8s-deployment/instances/invalid/additional-property.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2731,7 +2847,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': additionalProperties 'bogusTopLevel' not allowed
 ```
 
-### 38. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
+### 44. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2765,7 +2881,7 @@ Instance (`massive/k8s-deployment/instances/invalid/bad-replicas-type.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2781,7 +2897,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/spec/replicas': want null or integer, but got string
 ```
 
-### 39. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
+### 45. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2800,7 +2916,7 @@ Instance (`massive/k8s-deployment/instances/invalid/wrong-kind.json`):
 **json-schema-rs**: error (1 message line(s))
 
 ```text
-schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
+schema rejected: invalid JSON Schema: unknown field `x-kubernetes-patch-strategy`, expected one of `$schema`, `$id`, `$ref`, `type`, `$defs`, `definitions`, `properties`, `additionalProperties`, `required`, `title`, `description`, `$comment`, `enum`, `const`, `items`, `uniqueItems`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, `default`, `deprecated`, `examples`, `allOf`, `anyOf`, `oneOf`
 ```
 
 **jsonschema**: invalid (1 message line(s))

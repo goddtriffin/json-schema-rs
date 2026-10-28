@@ -32,7 +32,9 @@ heck = "0.5"
 log.workspace = true
 regress = "0.10"
 serde.workspace = true
-serde_json.workspace = true
+# `float_roundtrip`: parse every float to the nearest `f64` (the default parser can be one ULP off),
+# so numbers written by this crate read back exactly.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]

@@ -5,7 +5,10 @@ mod utils;
 mod validate;
 
 use clap::{Arg, ArgMatches, Command};
-use json_schema_rs::{FormatMode, JsonSchemaSettings, SpecVersion, UnknownSchemaUri};
+use json_schema_rs::{
+    ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings, SpecVersion,
+    UnknownSchemaUri,
+};
 use std::path::PathBuf;
 
 /// `--jss-spec-version` values, paired with the spec version each selects.
@@ -23,7 +26,7 @@ const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
 ];
 
 /// JSON Schema Settings (`jss-`) arguments shared by every subcommand that reads a schema.
-fn jss_args() -> [Arg; 4] {
+fn jss_args() -> [Arg; 6] {
     [
         Arg::new("jss-disallow-unknown-fields")
             .long("jss-disallow-unknown-fields")
@@ -39,6 +42,16 @@ fn jss_args() -> [Arg; 4] {
             .value_name("MODE")
             .value_parser(["annotation", "assertion"])
             .help("JSON Schema Settings: check `format` (assertion) or only record it (annotation) (default: the draft's rule)"),
+        Arg::new("jss-integer-semantics")
+            .long("jss-integer-semantics")
+            .value_name("RULE")
+            .value_parser(["lexical", "numeric"])
+            .help("JSON Schema Settings: `type: integer` accepts only numbers written without a fraction or exponent (lexical) or any number with a zero fractional part, such as 1.0 (numeric) (default: the draft's rule)"),
+        Arg::new("jss-exclusive-bounds")
+            .long("jss-exclusive-bounds")
+            .value_name("SHAPE")
+            .value_parser(["boolean-modifier", "numeric"])
+            .help("JSON Schema Settings: read exclusiveMinimum/exclusiveMaximum as a boolean that makes minimum/maximum exclusive (boolean-modifier) or as the bound itself (numeric) (default: the draft's rule)"),
         Arg::new("jss-unknown-schema-uri")
             .long("jss-unknown-schema-uri")
             .value_name("POLICY")
@@ -60,6 +73,18 @@ fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
         builder = builder.format_mode(match mode.as_str() {
             "assertion" => FormatMode::Assertion,
             _ => FormatMode::Annotation,
+        });
+    }
+    if let Some(rule) = matches.get_one::<String>("jss-integer-semantics") {
+        builder = builder.integer_semantics(match rule.as_str() {
+            "lexical" => IntegerSemantics::Lexical,
+            _ => IntegerSemantics::Numeric,
+        });
+    }
+    if let Some(shape) = matches.get_one::<String>("jss-exclusive-bounds") {
+        builder = builder.exclusive_bounds(match shape.as_str() {
+            "boolean-modifier" => ExclusiveBounds::BooleanModifier,
+            _ => ExclusiveBounds::Numeric,
         });
     }
     if let Some(policy) = matches.get_one::<String>("jss-unknown-schema-uri") {
