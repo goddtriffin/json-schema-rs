@@ -192,7 +192,9 @@ generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
 **`#[json_schema(minimum = N, maximum = N)]`** to set JSON Schema bounds for
 integer/number properties. Convert a schema to JSON with
 `String::try_from(&schema)` or `.try_into()`. Emits `$defs` and `$ref` for shared
-and recursive types. Add **json-schema-rs-macro** when using the derive. Details:
+and recursive types, including mutually recursive ones (`A` → `B` → `A`). A
+hand-written `impl ToJsonSchema` only needs `json_schema()`; implement
+`json_schema_with(&mut SchemaGenerator)` to place the type in `$defs`. Add **json-schema-rs-macro** when using the derive. Details:
 [design.md](design.md).
 
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
