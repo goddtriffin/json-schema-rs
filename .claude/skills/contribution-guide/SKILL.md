@@ -83,7 +83,7 @@ Always drive repo workflows through their **Makefile target** rather than a manu
 
 ### Check validator changes against other implementations
 
-When a change affects **validator behavior** (new or changed keyword support, verdict fixes), run `make differential` at the end of the round as well and commit the refreshed `json_schema_rs_differential/results.{json,md}`. It runs our validator next to other implementations through Bowtie, so the diff shows changes in coverage (unsupported keywords), correctness, and disagreements with the majority. See `json_schema_rs_differential/README.md` for prerequisites (bowtie, Docker, `make vendor_test_suite`).
+Every PR runs `make differential` once, as the final step together with `make benchmark` (after correctness is confirmed), and commits the refreshed `json_schema_rs_differential/results.{json,md}`. It runs our validator next to other implementations through Bowtie, so the diff shows changes in coverage (unsupported keywords), correctness, and disagreements with the majority; the PR body's *JSON Schema spec parity* section summarises that change (see CLAUDE.md, *Pull request body*). See `json_schema_rs_differential/README.md` for prerequisites (bowtie, Docker, `make vendor_test_suite`).
 
 ### Orchestrate with subagents
 
@@ -91,7 +91,7 @@ Default to **fanning work out to subagents** and keeping the main agent as an **
 
 ### Verify at the end of a round — never mid-flight
 
-Run `make test` **and** `make benchmark` to confirm correctness and catch regressions, and run them at the **end of an implementation round**, once the code is actually ready for linting and testing. **Do not** run `make test`/`make lint`/`make benchmark` in the *middle* of development — and especially not while subagents are still working. Mid-round verification at best slows the round down, and at worst breaks a subagent's in-flight work because that code was not yet ready to compile, lint, or test. The orchestrator runs the full verification pass **once**, after all subagents have returned and their work is integrated. (A subagent may run a **narrow, targeted** check on its own isolated piece before returning; the *full* `make test` / `make benchmark` sweep is the orchestrator's job at the end.)
+Run `make test` to confirm correctness at the **end of an implementation round**, once the code is actually ready for linting and testing. **Do not** run `make test`/`make lint`/`make benchmark` in the *middle* of development — and especially not while subagents are still working. Mid-round verification at best slows the round down, and at worst breaks a subagent's in-flight work because that code was not yet ready to compile, lint, or test. The orchestrator runs the full verification pass **once**, after all subagents have returned and their work is integrated. `make benchmark` and `make differential` take several minutes each: run them only once the change is correct, as the very last step before opening or updating the PR, never in the middle of work. (A subagent may run a **narrow, targeted** check on its own isolated piece before returning; the *full* `make test` / `make benchmark` sweep is the orchestrator's job at the end.)
 
 ## Contribution Guidelines
 
@@ -115,7 +115,7 @@ Run `make test` **and** `make benchmark` to confirm correctness and catch regres
 
 - **Durable wording only:** Never use temporal or minimal phrasing in docs or comments. Do not say "first pass," "in this pass," "keywords supported in this pass," "not yet implemented," "not yet feature complete," or "in this release." Document what is implemented and what is ignored; avoid framing by release or phase.
 - **Rust conventions and style:** We care greatly that our code adheres to **idiomatic Rust**—standard types, traits, patterns, and the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/). We often review competitor libraries implemented in other languages; our library is written in Rust and **must** follow Rust conventions, coding style, and best practices (e.g. use `Result` for fallible operations, prefer enums over stringly-typed errors). Do not mirror non-Rust idioms from competitors when they conflict with Rust conventions. This applies to production code and tests.
-- Run `make lint test` (and `make benchmark`) to verify — at the **end of an implementation round**, never mid-development. See [Verify at the end of a round](#working-style).
+- Run `make lint test` to verify — at the **end of an implementation round**, never mid-development; `make benchmark` and `make differential` once, last, before the PR. See [Verify at the end of a round](#working-style).
 - Use `#[expect]` not `#[allow]` for Clippy overrides.
 - Never fail silently; log errors internally (customer-facing message can differ).
 - Follow existing patterns: custom Error enum, BTreeMap for ordering, explicit type annotations on all variables.

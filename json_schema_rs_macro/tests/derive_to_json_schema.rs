@@ -1185,3 +1185,170 @@ fn derive_struct_without_fields_json_schema() {
     let actual: JsonSchema = Empty::json_schema();
     assert_eq!(expected, actual);
 }
+
+// --- $defs keyed by type identity (#24) ---
+
+mod first {
+    use json_schema_rs_macro::ToJsonSchema;
+
+    #[derive(ToJsonSchema)]
+    #[expect(dead_code)]
+    pub(super) struct Config {
+        name: String,
+    }
+}
+
+mod second {
+    use json_schema_rs_macro::ToJsonSchema;
+
+    #[derive(ToJsonSchema)]
+    #[expect(dead_code)]
+    pub(super) struct Config {
+        port: i64,
+    }
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct TwoConfigs {
+    a: first::Config,
+    b: second::Config,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct RepeatedConfig {
+    a: first::Config,
+    b: second::Config,
+    c: first::Config,
+}
+
+#[test]
+fn derive_schema_id_is_module_path_and_type_name() {
+    let expected: &str = "derive_to_json_schema::first::Config";
+    let actual: &str = first::Config::schema_id();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_same_name_types_get_suffixed_defs_entries() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: Some(BTreeMap::from([
+            (
+                "Config0".to_string(),
+                one_property_body("name", String::json_schema()),
+            ),
+            (
+                "Config1".to_string(),
+                one_property_body("port", i64::json_schema()),
+            ),
+        ])),
+        properties: BTreeMap::from([
+            ("a".to_string(), ref_to("Config0")),
+            ("b".to_string(), ref_to("Config1")),
+        ]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["a".to_string(), "b".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = TwoConfigs::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_same_name_type_used_twice_shares_one_suffixed_entry() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: Some(BTreeMap::from([
+            (
+                "Config0".to_string(),
+                one_property_body("name", String::json_schema()),
+            ),
+            (
+                "Config1".to_string(),
+                one_property_body("port", i64::json_schema()),
+            ),
+        ])),
+        properties: BTreeMap::from([
+            ("a".to_string(), ref_to("Config0")),
+            ("b".to_string(), ref_to("Config1")),
+            ("c".to_string(), ref_to("Config0")),
+        ]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = RepeatedConfig::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_unique_name_stays_unsuffixed_when_another_module_reuses_it_elsewhere() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        defs: Some(BTreeMap::from([(
+            "Config".to_string(),
+            one_property_body("name", String::json_schema()),
+        )])),
+        ..one_property_body("config", ref_to("Config"))
+    };
+    let actual: JsonSchema = OneConfig::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct OneConfig {
+    config: first::Config,
+}
+
+#[cfg(feature = "uuid")]
+mod user {
+    use json_schema_rs_macro::ToJsonSchema;
+
+    #[derive(ToJsonSchema)]
+    #[expect(dead_code)]
+    pub(super) struct Uuid {
+        value: String,
+    }
+}
+
+#[cfg(feature = "uuid")]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithUserUuid {
+    id: user::Uuid,
+    library_id: uuid::Uuid,
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn derive_user_type_named_uuid_gets_defs_entry_beside_inlined_library_uuid() {
+    let expected: JsonSchema = JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        type_: Some("object".to_string()),
+        defs: Some(BTreeMap::from([(
+            "Uuid".to_string(),
+            one_property_body("value", String::json_schema()),
+        )])),
+        properties: BTreeMap::from([
+            ("id".to_string(), ref_to("Uuid")),
+            (
+                "library_id".to_string(),
+                JsonSchema {
+                    type_: Some("string".to_string()),
+                    format: Some("uuid".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]),
+        additional_properties: Some(AdditionalProperties::Forbid),
+        required: Some(vec!["id".to_string(), "library_id".to_string()]),
+        ..Default::default()
+    };
+    let actual: JsonSchema = WithUserUuid::json_schema();
+    assert_eq!(expected, actual);
+}

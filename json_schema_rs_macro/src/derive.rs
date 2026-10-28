@@ -690,7 +690,9 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
 ///
 /// The body lives in a hidden inherent fn so it is written once: `json_schema_with` registers
 /// it in the generator's `$defs` and returns a `$ref`; `json_schema` builds it as the root
-/// with a fresh generator and adds `$schema`.
+/// with a fresh generator and adds `$schema`. The type's identity in the generator is its full
+/// path (`module_path!()` expands where the type is defined), so same-name types from
+/// different modules get separate `$defs` entries.
 fn named_type_impl(
     name: &Ident,
     generator_ident: &TokenStream2,
@@ -710,7 +712,11 @@ fn named_type_impl(
         impl ::json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> ::json_schema_rs::JsonSchema {
                 let mut schema: ::json_schema_rs::JsonSchema = ::json_schema_rs::SchemaGenerator::new()
-                    .into_named_root_schema(#name_lit, Self::__json_schema_rs_body);
+                    .into_named_root_schema(
+                        <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                        #name_lit,
+                        Self::__json_schema_rs_body,
+                    );
                 schema.schema = Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string());
                 schema
             }
@@ -718,7 +724,15 @@ fn named_type_impl(
             fn json_schema_with(
                 generator: &mut ::json_schema_rs::SchemaGenerator,
             ) -> ::json_schema_rs::JsonSchema {
-                generator.named_subschema(#name_lit, Self::__json_schema_rs_body)
+                generator.named_subschema(
+                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    #name_lit,
+                    Self::__json_schema_rs_body,
+                )
+            }
+
+            fn schema_id() -> &'static str {
+                ::core::concat!(::core::module_path!(), "::", #name_lit)
             }
         }
     }
