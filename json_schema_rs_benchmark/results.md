@@ -25,7 +25,7 @@ Two tiers, lower is better everywhere. **In-process**: every tool is linked as a
 | in-process | schema compile | peak heap | jsonschemars | 10 / 11 |
 | in-process | validate (valid) | time | jsonschema | 11 / 11 |
 | in-process | validate (valid) | peak heap | jsonschema | 11 / 11 |
-| in-process | validate (invalid) | time | jsonschema | 9 / 11 |
+| in-process | validate (invalid) | time | jsonschema | 10 / 11 |
 | in-process | validate (invalid) | peak heap | jsonschema | 9 / 11 |
 | CLI | codegen | time | jsonschemars | 9 / 9 |
 | CLI | codegen | peak RSS | jsonschemars | 6 / 9 |
@@ -40,16 +40,16 @@ Two tiers, lower is better everywhere. **In-process**: every tool is linked as a
 
 | Fixture | jsonschemars | typify |
 |---|---|---|
-| generated/deep-nesting | **6.383 ± 0.035 ms** | 9.602 ± 0.053 ms |
-| generated/large-array | **74.871 ± 0.236 µs** | 1.031 ± 0.016 ms |
-| generated/many-defs | **38.358 ± 0.184 ms** | 122.570 ± 2.947 ms |
-| generated/wide-object | **138.877 ± 1.225 ms** | 147.006 ± 0.326 ms |
-| large/api-catalog | **208.905 ± 0.240 µs** | 3.101 ± 0.031 ms |
-| large/circleci | 1.442 ± 0.003 ms | — |
-| massive/data-warehouse | **9.632 ± 0.018 ms** | 269.952 ± 2.057 ms |
-| massive/k8s-deployment | 19.055 ± 0.099 ms | **1.815 ± 0.003 ms** |
-| medium/user-profile | **94.066 ± 0.088 µs** | 1.417 ± 0.003 ms |
-| small/config | **29.959 ± 0.024 µs** | 509.403 ± 6.517 µs |
+| generated/deep-nesting | **6.450 ± 0.019 ms** | 9.673 ± 0.083 ms |
+| generated/large-array | **75.779 ± 0.190 µs** | 1.035 ± 0.001 ms |
+| generated/many-defs | **38.237 ± 0.179 ms** | 122.372 ± 1.977 ms |
+| generated/wide-object | **140.012 ± 0.727 ms** | 147.572 ± 0.738 ms |
+| large/api-catalog | **211.021 ± 0.375 µs** | 3.111 ± 0.035 ms |
+| large/circleci | 1.451 ± 0.003 ms | — |
+| massive/data-warehouse | **9.819 ± 0.024 ms** | 269.875 ± 0.669 ms |
+| massive/k8s-deployment | 19.251 ± 0.400 ms | **1.827 ± 0.005 ms** |
+| medium/user-profile | **94.804 ± 0.043 µs** | 1.431 ± 0.015 ms |
+| small/config | **30.187 ± 0.270 µs** | 521.636 ± 8.627 µs |
 
 ### codegen — peak heap
 
@@ -70,17 +70,17 @@ Two tiers, lower is better everywhere. **In-process**: every tool is linked as a
 
 | Fixture | boon | jsonschema | jsonschemars |
 |---|---|---|---|
-| generated/deep-nesting | 1.029 ± 0.003 ms | 206.992 ± 0.834 µs | **65.583 ± 0.098 µs** |
-| generated/large-array | 45.004 ± 0.153 µs | 20.960 ± 0.052 µs | **4.306 ± 0.021 µs** |
-| generated/many-defs | 13.805 ± 0.024 ms | 3.020 ± 0.035 ms | **691.439 ± 0.999 µs** |
-| generated/wide-object | 23.307 ± 0.040 ms | 2.502 ± 0.005 ms | **789.395 ± 0.669 µs** |
-| large/api-catalog | 178.956 ± 1.835 µs | 103.491 ± 0.069 µs | **15.463 ± 0.031 µs** |
-| large/circleci | 2.876 ± 0.015 ms | 1.027 ± 0.020 ms | **258.837 ± 0.297 µs** |
-| massive/data-warehouse | 45.095 ± 0.141 ms | 6.322 ± 0.093 ms | **1.244 ± 0.001 ms** |
-| massive/k8s-deployment | 7.377 ± 0.020 ms | 1.599 ± 0.011 ms | **611.140 ± 0.857 µs** |
-| medium/user-profile | 66.769 ± 0.337 µs | 40.033 ± 0.053 µs | **5.685 ± 0.031 µs** |
-| small/config | 26.908 ± 0.079 µs | 18.957 ± 0.086 µs | **1.857 ± 0.006 µs** |
-| small/prettierrc | 205.255 ± 0.511 µs | 110.412 ± 0.117 µs | **25.294 ± 0.040 µs** |
+| generated/deep-nesting | 1.026 ± 0.013 ms | 207.665 ± 0.971 µs | **66.195 ± 0.146 µs** |
+| generated/large-array | 45.004 ± 0.071 µs | 21.005 ± 0.041 µs | **4.284 ± 0.006 µs** |
+| generated/many-defs | 13.607 ± 0.039 ms | 3.020 ± 0.004 ms | **683.938 ± 11.764 µs** |
+| generated/wide-object | 23.247 ± 0.044 ms | 2.545 ± 0.008 ms | **789.405 ± 1.814 µs** |
+| large/api-catalog | 178.391 ± 0.152 µs | 103.456 ± 0.068 µs | **15.443 ± 0.030 µs** |
+| large/circleci | 2.867 ± 0.013 ms | 1.020 ± 0.001 ms | **257.843 ± 0.794 µs** |
+| massive/data-warehouse | 44.669 ± 0.188 ms | 6.366 ± 0.011 ms | **1.251 ± 0.006 ms** |
+| massive/k8s-deployment | 7.312 ± 0.012 ms | 1.614 ± 0.006 ms | **618.036 ± 1.997 µs** |
+| medium/user-profile | 67.040 ± 0.140 µs | 40.536 ± 0.055 µs | **5.640 ± 0.013 µs** |
+| small/config | 27.024 ± 0.161 µs | 19.153 ± 0.097 µs | **1.855 ± 0.007 µs** |
+| small/prettierrc | 206.030 ± 0.378 µs | 112.995 ± 0.135 µs | **25.339 ± 0.033 µs** |
 
 ### schema compile — peak heap
 
@@ -102,17 +102,17 @@ Two tiers, lower is better everywhere. **In-process**: every tool is linked as a
 
 | Fixture | boon | jsonschema | jsonschemars |
 |---|---|---|---|
-| generated/deep-nesting | 6.452 ± 0.036 µs | **2.434 ± 0.011 µs** | 139.591 ± 0.261 µs |
-| generated/large-array | 17.861 ± 0.065 ms | **7.434 ± 0.167 ms** | 149.920 ± 0.922 ms |
-| generated/many-defs | 1.709 ± 0.005 ms | **616.342 ± 7.626 µs** | 18.859 ± 0.190 ms |
-| generated/wide-object | 167.106 ± 1.052 µs | **108.526 ± 1.075 µs** | 807.403 ± 2.068 µs |
-| large/api-catalog | 558.347 ± 1.940 ns | **240.039 ± 1.264 ns** | 6.789 ± 0.028 µs |
-| large/circleci | 2.287 ± 0.027 µs | **467.826 ± 0.540 ns** | 2.214 ± 0.003 µs |
-| massive/data-warehouse | 69.242 ± 0.156 µs | **23.754 ± 0.104 µs** | 630.823 ± 1.916 µs |
-| massive/k8s-deployment | 515.356 ± 4.033 ns | **216.113 ± 0.471 ns** | 4.670 ± 0.015 µs |
-| medium/user-profile | 836.802 ± 3.185 ns | **371.250 ± 1.551 ns** | 6.067 ± 0.043 µs |
-| small/config | 222.824 ± 0.411 ns | **112.665 ± 1.375 ns** | 2.824 ± 0.011 µs |
-| small/prettierrc | 718.523 ± 5.287 ns | **173.819 ± 1.402 ns** | 3.179 ± 0.004 µs |
+| generated/deep-nesting | 6.392 ± 0.019 µs | **2.441 ± 0.006 µs** | 141.232 ± 0.149 µs |
+| generated/large-array | 18.014 ± 0.113 ms | **7.334 ± 0.063 ms** | 149.407 ± 0.738 ms |
+| generated/many-defs | 1.756 ± 0.006 ms | **615.040 ± 11.342 µs** | 19.208 ± 0.031 ms |
+| generated/wide-object | 170.803 ± 0.970 µs | **108.673 ± 2.367 µs** | 804.895 ± 1.681 µs |
+| large/api-catalog | 559.223 ± 1.295 ns | **241.211 ± 2.126 ns** | 6.883 ± 0.021 µs |
+| large/circleci | 2.233 ± 0.014 µs | **464.993 ± 1.905 ns** | 2.238 ± 0.009 µs |
+| massive/data-warehouse | 68.733 ± 0.157 µs | **23.642 ± 0.053 µs** | 632.550 ± 2.504 µs |
+| massive/k8s-deployment | 515.437 ± 1.606 ns | **214.931 ± 0.741 ns** | 4.680 ± 0.015 µs |
+| medium/user-profile | 845.699 ± 6.432 ns | **377.981 ± 3.819 ns** | 5.977 ± 0.019 µs |
+| small/config | 225.017 ± 0.187 ns | **113.718 ± 0.197 ns** | 2.848 ± 0.013 µs |
+| small/prettierrc | 722.697 ± 3.740 ns | **178.435 ± 2.452 ns** | 3.192 ± 0.008 µs |
 
 ### validate (valid) — peak heap
 
@@ -134,17 +134,17 @@ Two tiers, lower is better everywhere. **In-process**: every tool is linked as a
 
 | Fixture | boon | jsonschema | jsonschemars |
 |---|---|---|---|
-| generated/deep-nesting | 7.694 ± 0.014 µs | **2.804 ± 0.007 µs** | 140.152 ± 0.195 µs |
-| generated/large-array | 17.930 ± 0.029 ms | **7.430 ± 0.028 ms** | 148.917 ± 1.209 ms |
-| generated/many-defs | 1.729 ± 0.019 ms | **620.320 ± 2.913 µs** | 18.850 ± 0.225 ms |
-| generated/wide-object | 168.532 ± 0.276 µs | **110.432 ± 0.376 µs** | 800.530 ± 7.253 µs |
-| large/api-catalog | 646.083 ± 1.818 ns | **393.240 ± 0.907 ns** | 5.382 ± 0.008 µs |
-| large/circleci | **125.065 ± 0.126 ns** | 130.024 ± 0.490 ns | 429.205 ± 0.864 ns |
-| massive/data-warehouse | 178.088 ± 2.341 µs | **140.549 ± 0.979 µs** | 925.492 ± 13.954 µs |
-| massive/k8s-deployment | 174.387 ± 1.474 ns | **134.947 ± 0.217 ns** | 579.483 ± 2.246 ns |
-| medium/user-profile | 364.826 ± 0.786 ns | **305.302 ± 0.754 ns** | 2.404 ± 0.017 µs |
-| small/config | 286.301 ± 1.624 ns | **243.368 ± 1.001 ns** | 2.854 ± 0.015 µs |
-| small/prettierrc | **532.175 ± 4.990 ns** | 905.911 ± 7.410 ns | 900.303 ± 1.085 ns |
+| generated/deep-nesting | 7.505 ± 0.012 µs | **2.796 ± 0.011 µs** | 141.867 ± 0.134 µs |
+| generated/large-array | 18.020 ± 0.049 ms | **7.361 ± 0.036 ms** | 151.070 ± 1.406 ms |
+| generated/many-defs | 1.753 ± 0.007 ms | **622.911 ± 1.767 µs** | 19.079 ± 0.364 ms |
+| generated/wide-object | 170.808 ± 0.218 µs | **109.142 ± 0.365 µs** | 807.422 ± 2.370 µs |
+| large/api-catalog | 690.478 ± 2.201 ns | **395.239 ± 1.497 ns** | 5.424 ± 0.013 µs |
+| large/circleci | 138.550 ± 0.322 ns | **131.336 ± 0.904 ns** | 431.820 ± 1.782 ns |
+| massive/data-warehouse | 180.093 ± 0.993 µs | **141.920 ± 0.278 µs** | 921.013 ± 3.260 µs |
+| massive/k8s-deployment | 205.406 ± 0.545 ns | **135.174 ± 0.727 ns** | 585.226 ± 2.073 ns |
+| medium/user-profile | 373.861 ± 0.998 ns | **309.846 ± 0.688 ns** | 2.437 ± 0.012 µs |
+| small/config | 290.300 ± 0.597 ns | **246.392 ± 1.021 ns** | 2.882 ± 0.011 µs |
+| small/prettierrc | **538.386 ± 1.193 ns** | 903.990 ± 3.655 ns | 908.611 ± 1.405 ns |
 
 ### validate (invalid) — peak heap
 
@@ -168,95 +168,95 @@ Two tiers, lower is better everywhere. **In-process**: every tool is linked as a
 
 | Fixture | jsonschemars | typify |
 |---|---|---|
-| generated/deep-nesting | **11.184 ± 0.204 ms** | 108.298 ± 1.517 ms |
-| generated/large-array | **1.809 ± 0.041 ms** | 87.405 ± 0.679 ms |
-| generated/many-defs | **45.362 ± 0.245 ms** | 439.280 ± 3.714 ms |
-| generated/wide-object | **144.470 ± 2.032 ms** | 512.771 ± 3.557 ms |
-| large/api-catalog | **2.194 ± 0.048 ms** | 94.658 ± 0.623 ms |
-| large/circleci | 4.234 ± 0.187 ms | — |
-| massive/data-warehouse | **14.092 ± 0.296 ms** | 792.247 ± 3.925 ms |
-| massive/k8s-deployment | **28.274 ± 0.591 ms** | 86.732 ± 1.144 ms |
-| medium/user-profile | **1.853 ± 0.055 ms** | 88.917 ± 0.959 ms |
-| small/config | **1.724 ± 0.051 ms** | 85.370 ± 0.571 ms |
+| generated/deep-nesting | **11.187 ± 0.252 ms** | 108.441 ± 1.423 ms |
+| generated/large-array | **1.820 ± 0.050 ms** | 88.248 ± 1.592 ms |
+| generated/many-defs | **45.175 ± 0.207 ms** | 440.574 ± 3.827 ms |
+| generated/wide-object | **142.555 ± 2.097 ms** | 511.449 ± 4.467 ms |
+| large/api-catalog | **2.176 ± 0.036 ms** | 94.336 ± 0.388 ms |
+| large/circleci | 4.142 ± 0.058 ms | — |
+| massive/data-warehouse | **14.144 ± 0.169 ms** | 791.741 ± 4.434 ms |
+| massive/k8s-deployment | **28.284 ± 0.630 ms** | 86.890 ± 1.187 ms |
+| medium/user-profile | **1.876 ± 0.043 ms** | 88.508 ± 0.668 ms |
+| small/config | **1.704 ± 0.041 ms** | 85.356 ± 0.764 ms |
 
 ### codegen — peak RSS
 
 | Fixture | jsonschemars | typify |
 |---|---|---|
-| generated/deep-nesting | 45.58 ± 0.00 MiB | **37.98 ± 0.02 MiB** |
-| generated/large-array | **3.97 ± 0.01 MiB** | 33.31 ± 0.01 MiB |
-| generated/many-defs | 116.11 ± 0.03 MiB | **98.08 ± 0.02 MiB** |
-| generated/wide-object | **39.50 ± 0.09 MiB** | 115.19 ± 0.63 MiB |
-| large/api-catalog | **5.05 MiB** | 34.59 ± 0.05 MiB |
-| large/circleci | 13.30 MiB | — |
-| massive/data-warehouse | **38.66 MiB** | 177.00 ± 0.40 MiB |
+| generated/deep-nesting | 45.50 MiB | **38.00 MiB** |
+| generated/large-array | **3.92 MiB** | 33.31 MiB |
+| generated/many-defs | 116.05 MiB | **98.67 ± 0.34 MiB** |
+| generated/wide-object | **40.02 ± 0.28 MiB** | 115.22 ± 0.75 MiB |
+| large/api-catalog | **5.03 MiB** | 34.67 MiB |
+| large/circleci | 13.33 MiB | — |
+| massive/data-warehouse | **38.27 ± 0.01 MiB** | 176.55 ± 0.17 MiB |
 | massive/k8s-deployment | 96.97 MiB | **31.80 ± 0.01 MiB** |
-| medium/user-profile | **4.03 ± 0.01 MiB** | 33.58 MiB |
-| small/config | **3.44 MiB** | 32.94 ± 0.02 MiB |
+| medium/user-profile | **3.95 ± 0.01 MiB** | 33.58 ± 0.00 MiB |
+| small/config | **3.45 MiB** | 32.94 ± 0.02 MiB |
 
 ### validate (valid) — time
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| generated/deep-nesting | 4.415 ± 0.393 ms | 4.154 ± 0.164 ms | **1.908 ± 0.078 ms** |
-| generated/large-array | 58.877 ± 1.386 ms | **44.876 ± 0.411 ms** | 189.650 ± 1.112 ms |
-| generated/many-defs | 23.027 ± 0.755 ms | **11.610 ± 0.468 ms** | 26.215 ± 0.180 ms |
-| generated/wide-object | 27.875 ± 0.276 ms | 8.029 ± 0.118 ms | **4.139 ± 0.047 ms** |
-| large/api-catalog | 3.183 ± 0.073 ms | 3.895 ± 0.171 ms | **1.705 ± 0.059 ms** |
-| large/circleci | 6.879 ± 0.077 ms | 5.738 ± 0.055 ms | **2.042 ± 0.038 ms** |
-| massive/data-warehouse | 50.089 ± 0.378 ms | 11.916 ± 0.082 ms | **4.437 ± 0.092 ms** |
-| massive/k8s-deployment | 11.927 ± 0.177 ms | 336.792 ± 58.759 ms † | **2.731 ± 0.057 ms** |
-| medium/user-profile | 2.936 ± 0.066 ms | 3.721 ± 0.147 ms | **1.545 ± 0.035 ms** |
-| small/config | 2.862 ± 0.088 ms | 3.640 ± 0.218 ms | **1.512 ± 0.035 ms** |
-| small/prettierrc | 3.186 ± 0.097 ms | 3.782 ± 0.167 ms | **1.635 ± 0.082 ms** |
+| generated/deep-nesting | 4.330 ± 0.352 ms | 4.199 ± 0.534 ms † | **1.966 ± 0.041 ms** |
+| generated/large-array | 58.927 ± 0.440 ms | **44.837 ± 0.901 ms** | 189.137 ± 1.941 ms |
+| generated/many-defs | 23.042 ± 0.243 ms | **11.475 ± 0.134 ms** | 26.325 ± 0.214 ms |
+| generated/wide-object | 27.858 ± 0.130 ms | 8.293 ± 0.480 ms | **4.237 ± 0.158 ms** |
+| large/api-catalog | 3.130 ± 0.085 ms | 4.034 ± 0.088 ms | **1.639 ± 0.079 ms** |
+| large/circleci | 6.897 ± 0.208 ms | 5.736 ± 0.099 ms | **2.039 ± 0.038 ms** |
+| massive/data-warehouse | 50.118 ± 0.511 ms | 11.984 ± 0.136 ms | **4.590 ± 0.349 ms** |
+| massive/k8s-deployment | 11.898 ± 0.207 ms | 342.183 ± 329.429 ms † | **2.711 ± 0.047 ms** |
+| medium/user-profile | 2.901 ± 0.070 ms | 3.773 ± 0.086 ms | **1.594 ± 0.058 ms** |
+| small/config | 2.804 ± 0.032 ms | 3.602 ± 0.265 ms | **1.513 ± 0.040 ms** |
+| small/prettierrc | 3.089 ± 0.092 ms | 3.702 ± 0.187 ms | **1.560 ± 0.025 ms** |
 
 ### validate (valid) — peak RSS
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| generated/deep-nesting | 6.89 ± 0.03 MiB | 9.88 MiB | **4.14 ± 0.00 MiB** |
-| generated/large-array | **55.80 ± 0.02 MiB** | 64.69 MiB | 68.48 MiB |
-| generated/many-defs | 20.70 ± 0.79 MiB | 21.36 ± 0.01 MiB | **14.45 MiB** |
-| generated/wide-object | 15.12 ± 0.01 MiB | 15.27 MiB | **7.16 ± 0.01 MiB** |
-| large/api-catalog | 5.86 MiB | 10.34 ± 0.00 MiB | **3.30 MiB** |
-| large/circleci | 9.20 ± 0.01 MiB | 13.08 ± 0.02 MiB | **4.50 MiB** |
-| massive/data-warehouse | 22.08 MiB | 20.98 ± 0.02 MiB | **7.89 MiB** |
-| massive/k8s-deployment | 11.88 ± 0.02 MiB | 20.45 ± 0.01 MiB | **6.47 ± 0.01 MiB** |
-| medium/user-profile | 5.70 MiB | 10.06 ± 0.01 MiB | **3.22 MiB** |
-| small/config | 5.69 ± 0.02 MiB | 9.88 ± 0.01 MiB | **3.14 MiB** |
-| small/prettierrc | 5.80 ± 0.01 MiB | 8.94 ± 0.02 MiB | **3.31 ± 0.01 MiB** |
+| generated/deep-nesting | 6.89 MiB | 9.86 ± 0.02 MiB | **4.20 ± 0.02 MiB** |
+| generated/large-array | **55.80 ± 0.03 MiB** | 64.69 MiB | 68.38 ± 0.04 MiB |
+| generated/many-defs | 19.06 ± 0.01 MiB | 21.34 ± 0.02 MiB | **14.36 ± 0.01 MiB** |
+| generated/wide-object | 15.14 MiB | 15.30 ± 0.01 MiB | **7.16 MiB** |
+| large/api-catalog | 5.86 ± 0.00 MiB | 10.36 ± 0.01 MiB | **3.33 MiB** |
+| large/circleci | 9.19 ± 0.01 MiB | 13.06 ± 0.01 MiB | **4.48 MiB** |
+| massive/data-warehouse | 23.05 MiB | 20.98 ± 0.02 MiB | **7.89 ± 0.02 MiB** |
+| massive/k8s-deployment | 11.86 MiB | 20.52 MiB | **6.44 ± 0.01 MiB** |
+| medium/user-profile | 5.69 ± 0.01 MiB | 10.08 MiB | **3.20 MiB** |
+| small/config | 5.67 ± 0.01 MiB | 9.86 ± 0.01 MiB | **3.14 MiB** |
+| small/prettierrc | 5.80 ± 0.01 MiB | 8.94 ± 0.01 MiB | **3.28 MiB** |
 
 ### validate (invalid) — time
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| generated/deep-nesting | 4.146 ± 0.129 ms | 4.094 ± 0.073 ms | **1.911 ± 0.033 ms** |
-| generated/large-array | 58.933 ± 0.736 ms | **44.623 ± 0.511 ms** | 189.242 ± 1.056 ms |
-| generated/many-defs | 23.108 ± 0.183 ms | **11.333 ± 0.107 ms** | 26.184 ± 0.248 ms |
-| generated/wide-object | 27.843 ± 0.135 ms | 8.060 ± 0.093 ms | **4.140 ± 0.203 ms** |
-| large/api-catalog | 3.103 ± 0.047 ms | 3.973 ± 0.038 ms | **1.607 ± 0.041 ms** |
-| large/circleci | 6.827 ± 0.062 ms | 5.724 ± 0.180 ms | **2.008 ± 0.034 ms** |
-| massive/data-warehouse | 51.247 ± 0.283 ms | 11.911 ± 0.082 ms | **4.629 ± 0.162 ms** |
-| massive/k8s-deployment | 11.843 ± 0.095 ms | 322.379 ± 41.713 ms † | **2.776 ± 0.066 ms** |
-| medium/user-profile | 2.871 ± 0.050 ms | 3.800 ± 0.083 ms | **1.519 ± 0.019 ms** |
-| small/config | 2.882 ± 0.057 ms | 3.673 ± 0.063 ms | **1.515 ± 0.038 ms** |
-| small/prettierrc | 3.083 ± 0.109 ms | 3.789 ± 0.048 ms | **1.579 ± 0.031 ms** |
+| generated/deep-nesting | 4.133 ± 0.117 ms | 4.151 ± 0.054 ms | **1.986 ± 0.124 ms** |
+| generated/large-array | 58.852 ± 0.318 ms | **44.852 ± 0.591 ms** | 188.528 ± 1.260 ms |
+| generated/many-defs | 23.154 ± 0.235 ms | **11.627 ± 0.415 ms** | 26.408 ± 0.217 ms |
+| generated/wide-object | 27.889 ± 0.205 ms | 8.216 ± 0.310 ms | **4.214 ± 0.206 ms** |
+| large/api-catalog | 3.113 ± 0.119 ms | 3.997 ± 0.116 ms | **1.565 ± 0.033 ms** |
+| large/circleci | 6.802 ± 0.044 ms | 5.708 ± 0.053 ms | **2.008 ± 0.031 ms** |
+| massive/data-warehouse | 51.169 ± 1.563 ms | 11.938 ± 0.070 ms | **4.680 ± 0.170 ms** |
+| massive/k8s-deployment | 11.786 ± 0.107 ms | 311.848 ± 393.027 ms † | **2.733 ± 0.072 ms** |
+| medium/user-profile | 2.877 ± 0.115 ms | 3.732 ± 0.074 ms | **1.512 ± 0.029 ms** |
+| small/config | 2.852 ± 0.052 ms | 3.563 ± 0.054 ms | **1.493 ± 0.035 ms** |
+| small/prettierrc | 3.128 ± 0.066 ms | 3.760 ± 0.142 ms | **1.523 ± 0.029 ms** |
 
 ### validate (invalid) — peak RSS
 
 | Fixture | boon | jsonschema-cli | jsonschemars |
 |---|---|---|---|
-| generated/deep-nesting | 6.89 MiB | 10.02 MiB | **4.19 ± 0.01 MiB** |
-| generated/large-array | **55.80 ± 0.01 MiB** | 64.88 MiB | 68.47 ± 0.02 MiB |
-| generated/many-defs | 19.09 MiB | 21.44 ± 0.01 MiB | **14.50 MiB** |
-| generated/wide-object | 15.44 MiB | 15.42 MiB | **7.17 ± 0.14 MiB** |
-| large/api-catalog | 5.86 MiB | 10.50 ± 0.01 MiB | **3.31 MiB** |
-| large/circleci | 9.17 ± 0.03 MiB | 13.03 ± 0.03 MiB | **4.48 MiB** |
-| massive/data-warehouse | 22.62 ± 0.07 MiB | 21.06 ± 0.03 MiB | **7.66 MiB** |
-| massive/k8s-deployment | 11.81 ± 0.01 MiB | 20.53 MiB | **6.44 ± 0.01 MiB** |
-| medium/user-profile | 5.70 MiB | 10.23 ± 0.02 MiB | **3.22 MiB** |
-| small/config | 5.67 MiB | 10.00 MiB | **3.19 MiB** |
-| small/prettierrc | 5.81 ± 0.01 MiB | 9.14 ± 0.00 MiB | **3.28 MiB** |
+| generated/deep-nesting | 6.89 ± 0.00 MiB | 10.02 ± 0.01 MiB | **4.27 MiB** |
+| generated/large-array | **55.77 ± 0.01 MiB** | 64.83 MiB | 68.39 ± 0.01 MiB |
+| generated/many-defs | 20.31 MiB | 21.41 ± 0.01 MiB | **14.47 MiB** |
+| generated/wide-object | 15.20 MiB | 15.42 MiB | **7.20 ± 0.14 MiB** |
+| large/api-catalog | 5.86 ± 0.02 MiB | 10.50 ± 0.01 MiB | **3.34 ± 0.01 MiB** |
+| large/circleci | 9.16 ± 0.02 MiB | 13.12 ± 0.01 MiB | **4.42 ± 0.00 MiB** |
+| massive/data-warehouse | 22.69 ± 0.06 MiB | 21.06 MiB | **7.70 MiB** |
+| massive/k8s-deployment | 11.83 MiB | 20.53 ± 0.02 MiB | **6.42 ± 0.01 MiB** |
+| medium/user-profile | 5.70 ± 0.01 MiB | 10.20 MiB | **3.25 MiB** |
+| small/config | 5.66 ± 0.01 MiB | 10.00 ± 0.00 MiB | **3.22 MiB** |
+| small/prettierrc | 5.81 ± 0.00 MiB | 9.12 ± 0.01 MiB | **3.27 MiB** |
 
 ## Compatibility
 
