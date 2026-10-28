@@ -41,6 +41,13 @@ see [design.md](design.md).
 
 ## Version control
 
-- **Never run `git add`, `git commit`, or `git push`.** The maintainer handles all staging
-  and commits. Make the edits (including refreshing the benchmark results files) and leave
-  version control to them.
+Every change goes through a pull request that a human reviews and merges.
+
+1. **Work on a feature branch**, never on `main` (e.g. `feat/<topic>`, `fix/<topic>`).
+2. **Review your own changes before opening the PR.** Read the full diff, run `make lint test`
+   and `make benchmark`, and fix what you find. Only open a PR that is ready for a human to
+   review.
+3. **Commit, push, and open the PR** once it is ready. Link the issue it closes (`closes #N`).
+4. **Never merge a PR**, and never push to `main`. Wait for a human reviewer to approve and merge.
+5. **After the PR is merged:** switch to `main`, pull, delete the local feature branch, and close
+   any related issues that did not close automatically (and tick them off in the roadmap #15).
