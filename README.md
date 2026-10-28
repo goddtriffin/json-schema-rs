@@ -278,7 +278,7 @@ Please submit an issue or bug request if the library needs updating.
   run fails on any unexpected failure **and** any unexpected pass. When a fix makes suite
   tests pass, remove their entries (or run `make update_suite_xfail`) and commit the
   manifest. `make test_json_schema_suite` runs only the suite.
-- **Known bugs as tests:** every open bug issue has a test named `issue_<N>_...` in
+- **Known bugs as tests:** every open bug issue has a test in
   `json_schema_rs/tests/known_failures.rs` or `json_schema_rs_macro/tests/known_failures.rs`.
   It asserts the correct behaviour and passes while the bug is present; when the bug is
   fixed it fails, and the fix unwraps it into a normal test. See

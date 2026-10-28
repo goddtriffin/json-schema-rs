@@ -36,6 +36,10 @@ see [design.md](design.md).
 
 - One assertion per test; named `expected`/`actual` with explicit type annotations; compare
   the **whole** value (full golden strings for codegen), never a subset/`contains`.
+- Name tests for the behaviour they check, never for an issue, PR or bug number
+  (`integer_accepts_zero_fraction_float`, not `issue_29_integer_...`). A known-failure test
+  carries its issue as the `known_failure(N, ...)` argument and its `// --- #N: ... ---` group
+  comment, so unwrapping it on the fix leaves a name that stays true.
 - Run `make lint test` before completing any change. Also run `cargo test --features uuid`
   when touching uuid-gated code.
 - Use `#[expect(...)]`, never `#[allow(...)]` (workspace forbids `allow_attributes`).
