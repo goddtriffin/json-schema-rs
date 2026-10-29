@@ -57,7 +57,10 @@ pub(crate) fn run_generate(
         match read_json_schema_from_path(input_path, schema_settings) {
             Ok(schema) => successful.push((schema, output_relative.clone())),
             Err(e) => {
-                eprintln!("error: {}: {e}", display_schema_path(input_path));
+                // One line per problem the schema has, each naming the file.
+                for line in e.lines() {
+                    eprintln!("error: {}: {line}", display_schema_path(input_path));
+                }
                 had_errors = true;
             }
         }

@@ -250,7 +250,7 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
     let schema: Schema = match catch_panic(|| Schema::new_from_serde_value(&case.schema, &settings))
     {
         Ok(Ok(schema)) => schema,
-        Ok(Err(error)) => return CaseOutcome::Skipped(parse_skip_message(&error)),
+        Ok(Err(errors)) => return CaseOutcome::Skipped(parse_skip_message(errors.first())),
         Err(panic_message) => return CaseOutcome::Errored(panic_message),
     };
     let registry: Registry<'_> = match catch_panic(|| {
