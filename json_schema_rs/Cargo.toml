@@ -30,6 +30,8 @@ uuid = ["dep:uuid"]
 clap = { version = "4", features = ["derive"] }
 heck = "0.5"
 log.workspace = true
+# SIMD substring search for the draft-4 parse prefilter (already in the tree via serde_json).
+memchr = "2.7"
 regress = "0.10"
 serde.workspace = true
 # `float_roundtrip`: parse every float to the nearest `f64` (the default parser can be one ULP off),

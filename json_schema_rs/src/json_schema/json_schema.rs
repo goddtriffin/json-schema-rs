@@ -1,9 +1,12 @@
 //! In-memory representation of JSON Schema for codegen.
 
-use super::dialect::{Dialect, ExclusiveBounds, ResolvedDialect, SubschemaPosition};
+use super::dialect::{
+    Dialect, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
+};
 use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
 use super::settings::{JsonSchemaSettings, resolve_dialect, resolve_dialect_for_uri};
 use crate::json_pointer::JsonPointer;
+use memchr::memmem;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -401,8 +404,10 @@ impl RawSchema<'_> {
 
 /// Parses raw schema text. Lenient parsing goes straight to the model unless the document
 /// needs a draft-4 shape normalised (an `id` key, or a boolean `exclusiveMinimum` /
-/// `exclusiveMaximum`, which the model cannot hold); strict parsing, and those cases, go through
-/// a [`Value`] so the dialect is known before the model is built.
+/// `exclusiveMaximum`, which the model cannot hold) or its count keywords checked under
+/// [`IntegerSemantics::Lexical`] (the model stores `2.0` as `2`, so the written form is gone);
+/// strict parsing, and those cases, go through a [`Value`] so the dialect is known before the
+/// model is built.
 fn parse_raw(
     raw: RawSchema<'_>,
     settings: &JsonSchemaSettings,
@@ -411,7 +416,7 @@ fn parse_raw(
         match raw.parse::<JsonSchema>() {
             Ok(schema) => {
                 let resolved: ResolvedDialect = resolve_dialect(&schema, settings)?;
-                if !uses_legacy_id(resolved.dialect) || !may_contain_key(raw, "\"id\"") {
+                if !needs_value_pass(raw, resolved.dialect) {
                     return Ok(finish_parse(schema, &resolved));
                 }
             }
@@ -454,16 +459,21 @@ fn resolve_dialect_for_value(
     resolve_dialect_for_uri(schema_uri, settings)
 }
 
-/// Checks the document's keywords (strict parsing), normalises its draft-4 shapes for
-/// `resolved`'s dialect and builds the model. Keywords are checked before normalising, so a
-/// draft-4 document is held to draft 4's keywords as written (`id`, not `$id`).
+/// Checks the document's keywords (unknown keys when strict, count keywords' written form under
+/// [`IntegerSemantics::Lexical`]), normalises its draft-4 shapes for `resolved`'s dialect and
+/// builds the model. Keywords are checked before normalising, so a draft-4 document is held to
+/// draft 4's keywords as written (`id`, not `$id`).
 fn parse_value_in_dialect(
     mut value: Cow<'_, Value>,
     resolved: &ResolvedDialect,
     settings: &JsonSchemaSettings,
 ) -> JsonSchemaParseResult<JsonSchema> {
-    if settings.disallow_unknown_fields {
-        reject_unknown_keywords(&value, resolved.dialect)?;
+    let checks: KeywordChecks = KeywordChecks {
+        reject_unknown: settings.disallow_unknown_fields,
+        lexical_counts: resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
+    };
+    if checks.reject_unknown || checks.lexical_counts {
+        check_keywords(&value, resolved.dialect, checks)?;
     }
     if needs_draft4_normalization(resolved.dialect) {
         normalize_draft4_shapes(value.to_mut(), resolved.dialect);
@@ -475,15 +485,46 @@ fn parse_value_in_dialect(
     Ok(finish_parse(schema, resolved))
 }
 
-/// Returns [`JsonSchemaParseError::UnknownField`] for the first key that is not a keyword of
-/// `dialect` (its keyword table, see [`Dialect::keywords`]), walking schema objects depth-first
-/// with each object's keys in map order, so the same document always reports the same key.
+/// The count keywords: their value is a non-negative integer.
+const COUNT_KEYWORDS: [&str; 8] = [
+    "maxContains",
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "minContains",
+    "minItems",
+    "minLength",
+    "minProperties",
+];
+
+/// Which checks [`check_keywords`] runs.
+#[derive(Clone, Copy)]
+struct KeywordChecks {
+    /// Reject keys that are not keywords of the dialect (strict parsing).
+    reject_unknown: bool,
+    /// Reject count keywords written with a fraction or exponent (`2.0`, `2e0`), which are not
+    /// integers under [`IntegerSemantics::Lexical`] (draft 4).
+    lexical_counts: bool,
+}
+
+/// Checks the keys of every schema object, walking depth-first with each object's keys in map
+/// order, so the same document always reports the same error:
+///
+/// - with `reject_unknown`, the first key that is not a keyword of `dialect` (its keyword table,
+///   see [`Dialect::keywords`]) is [`JsonSchemaParseError::UnknownField`];
+/// - with `lexical_counts`, a count keyword whose number was written with a fraction or exponent
+///   is [`JsonSchemaParseError::InvalidKeywordValue`]. `serde_json` reads such a number as a
+///   float and an integer literal as an integer, so the float form is the written form.
 ///
 /// Every schema object is checked: the root and each subschema the table's
 /// [`SubschemaPosition`]s reach, including those under keywords the model does not hold (`not`,
 /// `if`, ...). Keys in non-schema positions (property names, `enum` values, `default`) are data,
 /// not keywords, and are not checked. Iterative.
-fn reject_unknown_keywords(root: &Value, dialect: Dialect) -> JsonSchemaParseResult<()> {
+fn check_keywords(
+    root: &Value,
+    dialect: Dialect,
+    checks: KeywordChecks,
+) -> JsonSchemaParseResult<()> {
     // Each visited subschema records how it was reached (`steps`) instead of carrying its own
     // pointer, so the walk allocates no strings; the pointer is built only for an error.
     let mut steps: Vec<PathStep<'_>> = Vec::new();
@@ -495,11 +536,26 @@ fn reject_unknown_keywords(root: &Value, dialect: Dialect) -> JsonSchemaParseRes
         };
         for (key, child) in map {
             let Some(keyword) = dialect.keyword(key) else {
-                return Err(JsonSchemaParseError::UnknownField {
-                    key: key.clone(),
-                    path: path_to(&steps, at),
-                });
+                if checks.reject_unknown {
+                    return Err(JsonSchemaParseError::UnknownField {
+                        key: key.clone(),
+                        path: path_to(&steps, at),
+                    });
+                }
+                continue;
             };
+            if checks.lexical_counts
+                && COUNT_KEYWORDS.contains(&key.as_str())
+                && let Value::Number(n) = child
+                && n.is_f64()
+            {
+                return Err(JsonSchemaParseError::InvalidKeywordValue {
+                    keyword: key.clone(),
+                    path: path_to(&steps, at),
+                    value: child.clone(),
+                    expected: "a non-negative integer written without a fraction or exponent",
+                });
+            }
             let Some(position) = keyword.subschemas else {
                 continue;
             };
@@ -601,6 +657,46 @@ fn may_contain_key(raw: RawSchema<'_>, needle: &str) -> bool {
         RawSchema::Slice(b) => std::str::from_utf8(b),
     };
     text.map_or(true, |s| s.contains(needle) || s.contains("\\u"))
+}
+
+/// Whether a lenient parse that succeeded directly must be redone through a [`Value`]: the
+/// dialect reads draft 4's `id` and the text can contain an `id` key, or the dialect has
+/// [`IntegerSemantics::Lexical`] and the text can contain a count keyword (the model stores
+/// `2.0` as `2`, so only the `Value` still has the written form). A `\u` escape could spell
+/// either key, so it always answers `true`; text that is not UTF-8 also answers `true` and is
+/// left to the parser. Drafts 6 and later scan nothing; draft 4 scans the text at most three
+/// times.
+fn needs_value_pass(raw: RawSchema<'_>, dialect: Dialect) -> bool {
+    let legacy_id: bool = uses_legacy_id(dialect);
+    let lexical_counts: bool = dialect.integer_semantics == IntegerSemantics::Lexical;
+    if !legacy_id && !lexical_counts {
+        return false;
+    }
+    let text: &str = match raw {
+        RawSchema::Str(s) => s,
+        RawSchema::Slice(b) => match std::str::from_utf8(b) {
+            Ok(s) => s,
+            Err(_) => return true,
+        },
+    };
+    let bytes: &[u8] = text.as_bytes();
+    memmem::find(bytes, b"\\u").is_some()
+        || (legacy_id && memmem::find(bytes, b"\"id\"").is_some())
+        || (lexical_counts && contains_count_key(text))
+}
+
+/// Whether `text` has a quoted name from [`COUNT_KEYWORDS`] written literally. One SIMD pass over
+/// the `"m` positions (every count keyword starts with `min` or `max`) instead of one scan per
+/// keyword. A string value that spells a keyword also matches; the check on the `Value` sorts
+/// that out.
+fn contains_count_key(text: &str) -> bool {
+    let bytes: &[u8] = text.as_bytes();
+    memmem::find_iter(bytes, b"\"m").any(|quote| {
+        let name: &[u8] = &bytes[quote + 1..];
+        COUNT_KEYWORDS.iter().any(|keyword| {
+            name.starts_with(keyword.as_bytes()) && name.get(keyword.len()) == Some(&b'"')
+        })
+    })
 }
 
 /// Rewrites draft-4 shapes in every schema object of `root` into the one shape the model holds,
@@ -975,8 +1071,8 @@ impl TryFrom<JsonSchema> for Vec<u8> {
 mod tests {
     use super::JsonSchema;
     use crate::json_schema::{
-        Dialect, ExclusiveBounds, FormatMode, JsonSchemaParseError, JsonSchemaSettings,
-        SpecVersion, UnknownSchemaUri,
+        Dialect, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaParseError,
+        JsonSchemaSettings, SpecVersion, UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -2287,6 +2383,204 @@ mod tests {
                 .to_string(),
         );
         let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":"2"}"#);
+        assert_eq!(expected, actual);
+    }
+
+    const DRAFT4_SCHEMA: &str = "http://json-schema.org/draft-04/schema#";
+
+    /// A parse's outcome: `Ok` on success, `Err((keyword, path, value))` for
+    /// [`JsonSchemaParseError::InvalidKeywordValue`]. Any other error panics, failing the test.
+    type KeywordValueOutcome = Result<(), (String, String, String)>;
+
+    fn keyword_value_outcome(
+        result: Result<JsonSchema, JsonSchemaParseError>,
+    ) -> KeywordValueOutcome {
+        match result {
+            Ok(_) => Ok(()),
+            Err(JsonSchemaParseError::InvalidKeywordValue {
+                keyword,
+                path,
+                value,
+                ..
+            }) => Err((keyword, path.as_str().to_string(), value.to_string())),
+            Err(other) => panic!("expected success or InvalidKeywordValue, got {other:?}"),
+        }
+    }
+
+    fn invalid_value(keyword: &str, path: &str, value: &str) -> KeywordValueOutcome {
+        Err((keyword.to_string(), path.to_string(), value.to_string()))
+    }
+
+    /// `body` (the keys after `$schema`) as a draft-4 document, parsed with `settings`.
+    fn parse_draft4(body: &str, settings: &JsonSchemaSettings) -> KeywordValueOutcome {
+        let json: String = format!(r#"{{"$schema":"{DRAFT4_SCHEMA}",{body}}}"#);
+        keyword_value_outcome(JsonSchema::new_from_str(&json, settings))
+    }
+
+    #[test]
+    fn draft4_rejects_integer_valued_decimal_count() {
+        let expected: KeywordValueOutcome = invalid_value("minLength", "", "2.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""minLength":2.0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_exponent_count() {
+        let expected: KeywordValueOutcome = invalid_value("maxItems", "", "2.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""maxItems":2e0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_in_nested_schema() {
+        let expected: KeywordValueOutcome = invalid_value("maxLength", "/properties/a", "3.0");
+        let actual: KeywordValueOutcome = parse_draft4(
+            r#""properties":{"a":{"type":"string","maxLength":3.0}}"#,
+            &JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_the_model_does_not_hold() {
+        let expected: KeywordValueOutcome = invalid_value("minProperties", "", "1.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""minProperties":1.0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_accepts_integer_count() {
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = parse_draft4(
+            r#""minLength":2,"maxItems":3,"minProperties":1"#,
+            &JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_does_not_check_count_keyword_names_used_as_data() {
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = parse_draft4(
+            r#""properties":{"minLength":{"type":"string"}},"enum":[{"minLength":2.0}]"#,
+            &JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_when_strict() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: KeywordValueOutcome = invalid_value("minItems", "", "2.0");
+        let actual: KeywordValueOutcome = parse_draft4(r#""minItems":2.0"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_from_serde_value() {
+        let value: serde_json::Value =
+            serde_json::json!({"$schema": DRAFT4_SCHEMA, "items": {"minLength": 2.0}});
+        let expected: KeywordValueOutcome = invalid_value("minLength", "/items", "2.0");
+        let actual: KeywordValueOutcome = keyword_value_outcome(JsonSchema::try_from(&value));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_accepts_decimal_count_with_numeric_integer_override() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .integer_semantics(IntegerSemantics::Numeric)
+            .build();
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = parse_draft4(r#""minLength":2.0"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn lexical_integer_override_rejects_decimal_count_in_2020_12() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .integer_semantics(IntegerSemantics::Lexical)
+            .build();
+        let expected: KeywordValueOutcome = invalid_value("minLength", "", "2.0");
+        let actual: KeywordValueOutcome =
+            keyword_value_outcome(JsonSchema::new_from_str(r#"{"minLength":2.0}"#, &settings));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft6_accepts_integer_valued_decimal_count() {
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = keyword_value_outcome(JsonSchema::try_from(
+            r#"{"$schema":"http://json-schema.org/draft-06/schema#","minLength":2.0}"#,
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_prefilter_finds_quoted_name() {
+        let expected: bool = true;
+        let actual: bool = super::contains_count_key(r#"{"minimum":1,"maxLength":2}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_prefilter_ignores_other_min_max_keys() {
+        let expected: bool = false;
+        let actual: bool =
+            super::contains_count_key(r#"{"minimum":1,"maximum":2,"maxLengthy":3,"x":"min"}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn value_pass_assumes_escaped_key_may_match_in_draft4() {
+        let expected: bool = true;
+        let actual: bool = super::needs_value_pass(
+            super::RawSchema::Str(r#"{"\u006dinLength":2}"#),
+            Dialect::for_spec_version(SpecVersion::Draft04),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn value_pass_not_needed_in_2020_12() {
+        let expected: bool = false;
+        let actual: bool = super::needs_value_pass(
+            super::RawSchema::Str(r#"{"\u0069d":"x","minLength":2.0}"#),
+            Dialect::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn value_pass_not_needed_in_draft4_without_id_or_count_keys() {
+        let expected: bool = false;
+        let actual: bool = super::needs_value_pass(
+            super::RawSchema::Str(r#"{"type":"string","minimum":1}"#),
+            Dialect::for_spec_version(SpecVersion::Draft04),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_spelled_with_escape() {
+        let expected: KeywordValueOutcome = invalid_value("minLength", "", "2.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""\u006dinLength":2.0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn invalid_keyword_value_display() {
+        let expected: &str = "invalid \"maxLength\" value 3.0 at /properties/a: expected a non-negative integer written without a fraction or exponent";
+        let json: String =
+            format!(r#"{{"$schema":"{DRAFT4_SCHEMA}","properties":{{"a":{{"maxLength":3.0}}}}}}"#);
+        let actual: String = JsonSchema::try_from(json.as_str())
+            .expect_err("draft 4 rejects 3.0")
+            .to_string();
         assert_eq!(expected, actual);
     }
 

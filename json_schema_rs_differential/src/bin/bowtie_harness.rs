@@ -208,6 +208,7 @@ fn parse_skip_message(error: &JsonSchemaParseError) -> String {
             path.display_root_or_path()
         ),
         JsonSchemaParseError::Serde(_)
+        | JsonSchemaParseError::InvalidKeywordValue { .. }
         | JsonSchemaParseError::Io(_)
         | JsonSchemaParseError::UnknownSchemaUri { .. } => {
             format!("unsupported schema: {error}")
