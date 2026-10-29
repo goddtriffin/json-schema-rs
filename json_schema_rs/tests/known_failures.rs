@@ -14,8 +14,7 @@
 //! Official-suite failures are tracked separately in `suite_xfail.json`.
 
 use json_schema_rs::{
-    CodeGenSettings, GenerateRustOutput, JsonSchema, JsonSchemaParseError, JsonSchemaSettings,
-    generate_rust, validate,
+    CodeGenSettings, GenerateRustOutput, JsonSchema, JsonSchemaSettings, generate_rust, validate,
 };
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -219,30 +218,6 @@ fn ref_siblings_apply_in_2020_12() {
     });
 }
 
-// --- #30: strict mode never reports UnknownField (fixed in #7) ---
-
-#[test]
-fn strict_mode_reports_unknown_field_with_path() {
-    known_failure(30, || {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .disallow_unknown_fields(true)
-            .build();
-        let actual: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::new_from_str(
-            r#"{"type":"object","properties":{"a":{"type":"string","bogus":1}}}"#,
-            &settings,
-        );
-        // Expected: Err(UnknownField { key: "bogus", path: "/properties/a" }).
-        assert!(
-            matches!(
-                &actual,
-                Err(JsonSchemaParseError::UnknownField { key, path })
-                    if key == "bogus" && path == "/properties/a"
-            ),
-            "{actual:?}"
-        );
-    });
-}
-
 // --- #31: "type" arrays truncated to their first entry (fixed in #6) ---
 
 #[test]
@@ -279,23 +254,6 @@ fn type_null_rejects_integer() {
     known_failure(32, || {
         let expected: bool = false;
         let actual: bool = is_valid(r#"{"type":"null"}"#, "1");
-        assert_eq!(expected, actual);
-    });
-}
-
-// --- #34: integer-valued decimals ("minLength": 2.0) fail to parse (fixed in #7) ---
-
-#[test]
-fn count_keyword_accepts_integer_valued_decimal() {
-    known_failure(34, || {
-        let instance: serde_json::Value = serde_json::json!("a");
-        let expected: Result<bool, String> = Ok(false);
-        let actual: Result<bool, String> = JsonSchema::new_from_str(
-            r#"{"type":"string","minLength":2.0}"#,
-            &JsonSchemaSettings::default(),
-        )
-        .map(|schema| validate(&schema, &instance).is_ok())
-        .map_err(|e| e.to_string());
         assert_eq!(expected, actual);
     });
 }

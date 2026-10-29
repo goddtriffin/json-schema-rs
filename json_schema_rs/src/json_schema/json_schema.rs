@@ -1,11 +1,16 @@
 //! In-memory representation of JSON Schema for codegen.
 
-use super::dialect::{Dialect, ExclusiveBounds, ResolvedDialect, SubschemaPosition};
+use super::dialect::{
+    Dialect, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
+};
 use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
 use super::settings::{JsonSchemaSettings, resolve_dialect, resolve_dialect_for_uri};
+use crate::json_pointer::JsonPointer;
+use memchr::memmem;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Read;
 
@@ -122,6 +127,51 @@ where
     }
 }
 
+/// Deserializes a count keyword (`minLength`, `maxLength`, `minItems`, `maxItems`). Since draft 6
+/// these are non-negative integers by value, so any number with a zero fractional part that fits
+/// a `u64` is accepted (`2`, `2.0`, `2e0`); a negative, fractional or out-of-range value makes
+/// the schema invalid. Draft 4 asks for an integer too; its value-based reading is accepted in
+/// every draft (design.md, *minLength / maxLength*).
+fn deserialize_non_negative_integer<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let n: serde_json::Number = serde_json::Number::deserialize(deserializer)?;
+    non_negative_integer(&n).map(Some).ok_or_else(|| {
+        serde::de::Error::custom(format!("expected a non-negative integer, got {n}"))
+    })
+}
+
+/// The value of `n` as a `u64` when it is a non-negative integer by value: an unsigned integer,
+/// or a float with a zero fractional part below 2^64.
+fn non_negative_integer(n: &serde_json::Number) -> Option<u64> {
+    // 2^64: every float with a zero fraction in [0, 2^64) converts to `u64` exactly.
+    const U64_LIMIT: f64 = 18_446_744_073_709_551_616.0;
+    if let Some(u) = n.as_u64() {
+        return Some(u);
+    }
+    let f: f64 = n.as_f64()?;
+    if (0.0..U64_LIMIT).contains(&f) && f.fract() == 0.0 {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "f is a non-negative whole number below 2^64, so the cast is exact"
+        )]
+        let u: u64 = f as u64;
+        Some(u)
+    } else {
+        None
+    }
+}
+
+/// Deserializes `properties`; `null` reads as no properties, like an absent key.
+fn deserialize_properties<'de, D>(deserializer: D) -> Result<BTreeMap<String, JsonSchema>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<BTreeMap<String, JsonSchema>>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
 /// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
 /// First type in the array is used; codegen uses `object` and `string`.
 fn deserialize_type_optional<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -142,183 +192,8 @@ where
     Ok(first)
 }
 
-/// Type keyword deserializer for [`DenyUnknownFieldsJsonSchema`]: single string or array (takes first).
-pub(crate) fn deserialize_type_optional_deny_unknown_fields<'de, D>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum TypeOrArray {
-        Single(String),
-        Array(Vec<String>),
-    }
-    let value: TypeOrArray = Deserialize::deserialize(deserializer)?;
-    let first = match value {
-        TypeOrArray::Single(s) => Some(s),
-        TypeOrArray::Array(a) => a.into_iter().next(),
-    };
-    Ok(first)
-}
-
-/// Schema helper with `deny_unknown_fields`: same shape as our schema model but with `#[serde(deny_unknown_fields)]`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DenyUnknownFieldsJsonSchema {
-    #[serde(default, rename = "$schema")]
-    pub(crate) schema: Option<String>,
-    #[serde(default, rename = "$id")]
-    pub(crate) id: Option<String>,
-    #[serde(default, rename = "$ref")]
-    pub(crate) ref_: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_type_optional_deny_unknown_fields",
-        rename = "type"
-    )]
-    pub(crate) type_: Option<String>,
-    #[serde(default, rename = "$defs")]
-    pub(crate) defs: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>,
-    #[serde(default)]
-    pub(crate) definitions: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>,
-    #[serde(default)]
-    pub(crate) properties: Option<BTreeMap<String, DenyUnknownFieldsJsonSchema>>,
-    #[serde(default, rename = "additionalProperties")]
-    pub(crate) additional_properties: Option<AdditionalProperties>,
-    #[serde(default)]
-    pub(crate) required: Option<Vec<String>>,
-    #[serde(default)]
-    pub(crate) title: Option<String>,
-    #[serde(default)]
-    pub(crate) description: Option<String>,
-    #[serde(default, rename = "$comment")]
-    pub(crate) comment: Option<String>,
-    #[serde(default, rename = "enum")]
-    pub(crate) enum_values: Option<Vec<serde_json::Value>>,
-    #[serde(default, rename = "const", deserialize_with = "deserialize_present")]
-    pub(crate) const_value: Option<serde_json::Value>,
-    #[serde(default)]
-    pub(crate) items: Option<Box<DenyUnknownFieldsJsonSchema>>,
-    #[serde(default, rename = "uniqueItems")]
-    pub(crate) unique_items: Option<bool>,
-    #[serde(default, rename = "minItems")]
-    pub(crate) min_items: Option<u64>,
-    #[serde(default, rename = "maxItems")]
-    pub(crate) max_items: Option<u64>,
-    #[serde(default)]
-    pub(crate) minimum: Option<serde_json::Number>,
-    #[serde(default)]
-    pub(crate) maximum: Option<serde_json::Number>,
-    #[serde(default, rename = "exclusiveMinimum")]
-    pub(crate) exclusive_minimum: Option<serde_json::Number>,
-    #[serde(default, rename = "exclusiveMaximum")]
-    pub(crate) exclusive_maximum: Option<serde_json::Number>,
-    #[serde(
-        default,
-        rename = "multipleOf",
-        deserialize_with = "deserialize_multiple_of"
-    )]
-    pub(crate) multiple_of: Option<serde_json::Number>,
-    #[serde(default, rename = "minLength")]
-    pub(crate) min_length: Option<u64>,
-    #[serde(default, rename = "maxLength")]
-    pub(crate) max_length: Option<u64>,
-    #[serde(default)]
-    pub(crate) pattern: Option<String>,
-    #[serde(default)]
-    pub(crate) format: Option<String>,
-    #[serde(default, rename = "default")]
-    pub(crate) default_value: Option<serde_json::Value>,
-    #[serde(default)]
-    pub(crate) deprecated: Option<bool>,
-    #[serde(default)]
-    pub(crate) examples: Option<Vec<serde_json::Value>>,
-    #[serde(default, rename = "allOf")]
-    pub(crate) all_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
-    #[serde(default, rename = "anyOf")]
-    pub(crate) any_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
-    #[serde(default, rename = "oneOf")]
-    pub(crate) one_of: Option<Vec<DenyUnknownFieldsJsonSchema>>,
-}
-
-/// Converts a strict (deny-unknown-fields) deserialized helper into the public [`JsonSchema`] model.
-pub(crate) fn deny_unknown_fields_helper_to_schema(h: DenyUnknownFieldsJsonSchema) -> JsonSchema {
-    let defs: Option<BTreeMap<String, JsonSchema>> = h.defs.map(|m| {
-        m.into_iter()
-            .map(|(k, v)| (k, deny_unknown_fields_helper_to_schema(v)))
-            .collect()
-    });
-    let definitions: Option<BTreeMap<String, JsonSchema>> = h.definitions.map(|m| {
-        m.into_iter()
-            .map(|(k, v)| (k, deny_unknown_fields_helper_to_schema(v)))
-            .collect()
-    });
-    let properties: BTreeMap<String, JsonSchema> = h
-        .properties
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| (k, deny_unknown_fields_helper_to_schema(v)))
-        .collect();
-    let items: Option<Box<JsonSchema>> = h
-        .items
-        .map(|b| Box::new(deny_unknown_fields_helper_to_schema(*b)));
-    let all_of: Option<Vec<JsonSchema>> = h.all_of.map(|v| {
-        v.into_iter()
-            .map(deny_unknown_fields_helper_to_schema)
-            .collect()
-    });
-    let any_of: Option<Vec<JsonSchema>> = h.any_of.map(|v| {
-        v.into_iter()
-            .map(deny_unknown_fields_helper_to_schema)
-            .collect()
-    });
-    let one_of: Option<Vec<JsonSchema>> = h.one_of.map(|v| {
-        v.into_iter()
-            .map(deny_unknown_fields_helper_to_schema)
-            .collect()
-    });
-    JsonSchema {
-        schema: h.schema,
-        id: h.id,
-        ref_: h.ref_,
-        type_: h.type_,
-        defs,
-        definitions,
-        properties,
-        additional_properties: h.additional_properties,
-        required: h.required,
-        title: h.title,
-        description: h.description,
-        comment: h.comment,
-        enum_values: h.enum_values,
-        const_value: h.const_value,
-        items,
-        unique_items: h.unique_items,
-        min_items: h.min_items,
-        max_items: h.max_items,
-        minimum: h.minimum,
-        maximum: h.maximum,
-        exclusive_minimum: h.exclusive_minimum,
-        exclusive_maximum: h.exclusive_maximum,
-        multiple_of: h.multiple_of,
-        min_length: h.min_length,
-        max_length: h.max_length,
-        pattern: h.pattern,
-        format: h.format,
-        default_value: h.default_value,
-        deprecated: h.deprecated,
-        examples: h.examples,
-        all_of,
-        any_of,
-        one_of,
-        dialect: None,
-    }
-}
-
 /// Schema model used for code generation.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct JsonSchema {
     /// Declares the JSON Schema dialect (meta-schema URI). When present, stored and round-tripped; used for draft inference when no explicit spec version is set.
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
@@ -333,7 +208,12 @@ pub struct JsonSchema {
     pub ref_: Option<String>,
 
     /// Schema type; `object`, `string`, `integer`, and `number` drive codegen; others are ignored.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_type_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub type_: Option<String>,
 
     /// Reusable subschemas (draft 2019-09+). Stored and round-tripped.
@@ -345,7 +225,11 @@ pub struct JsonSchema {
     pub definitions: Option<BTreeMap<String, JsonSchema>>,
 
     /// Object properties (only when type is "object"). Default empty; use `BTreeMap` for stable ordering.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_properties",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub properties: BTreeMap<String, JsonSchema>,
 
     /// When set, controls whether properties not in `properties` are allowed (Allow/absent), forbidden (Forbid), or must validate against a schema (Schema). We do not implement `patternProperties` yet, so "additional" means any key not in `properties`.
@@ -376,7 +260,12 @@ pub struct JsonSchema {
     pub enum_values: Option<Vec<serde_json::Value>>,
 
     /// Single allowed value for the instance (JSON Schema `const`, draft-06+). When present, instance must equal this value (numbers by value: `1` equals `1.0`). `"const": null` is `Some(Value::Null)`. Codegen uses only string const (single-variant enum).
-    #[serde(rename = "const", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "const",
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub const_value: Option<serde_json::Value>,
 
     /// Schema for all array elements (when type is "array"). Single-schema form only; tuple-typing (array of schemas) not supported.
@@ -388,11 +277,21 @@ pub struct JsonSchema {
     pub unique_items: Option<bool>,
 
     /// Minimum number of array elements. Array-only; used by validator and codegen (emitted as field attribute).
-    #[serde(rename = "minItems", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "minItems",
+        default,
+        deserialize_with = "deserialize_non_negative_integer",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub min_items: Option<u64>,
 
     /// Maximum number of array elements. Array-only; used by validator and codegen (emitted as field attribute).
-    #[serde(rename = "maxItems", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "maxItems",
+        default,
+        deserialize_with = "deserialize_non_negative_integer",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_items: Option<u64>,
 
     /// Inclusive lower bound for numeric instances, held exactly as written (an integer stays an
@@ -420,15 +319,30 @@ pub struct JsonSchema {
     /// A numeric instance must be an integer multiple of this value (decided exactly; see
     /// design.md, *multipleOf*). Parsing rejects zero and negative values, which every draft
     /// forbids. Used for validation.
-    #[serde(rename = "multipleOf", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "multipleOf",
+        default,
+        deserialize_with = "deserialize_multiple_of",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub multiple_of: Option<serde_json::Number>,
 
     /// Minimum string length in Unicode code points. String-only; used by validator and codegen.
-    #[serde(rename = "minLength", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "minLength",
+        default,
+        deserialize_with = "deserialize_non_negative_integer",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub min_length: Option<u64>,
 
     /// Maximum string length in Unicode code points. String-only; used by validator and codegen.
-    #[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "maxLength",
+        default,
+        deserialize_with = "deserialize_non_negative_integer",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_length: Option<u64>,
 
     /// ECMA 262 regex pattern; string instance is valid if the pattern matches anywhere in the string. String-only; used by validator and codegen.
@@ -472,126 +386,6 @@ pub struct JsonSchema {
     pub dialect: Option<Dialect>,
 }
 
-impl<'de> Deserialize<'de> for JsonSchema {
-    #[expect(clippy::too_many_lines)]
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct JsonSchemaHelper {
-            #[serde(default, rename = "$schema")]
-            schema: Option<String>,
-            #[serde(default, rename = "$id")]
-            id: Option<String>,
-            #[serde(default, rename = "$ref")]
-            ref_: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_type_optional")]
-            #[serde(rename = "type")]
-            type_: Option<String>,
-            #[serde(default, rename = "$defs")]
-            defs: Option<BTreeMap<String, JsonSchema>>,
-            #[serde(default)]
-            definitions: Option<BTreeMap<String, JsonSchema>>,
-            #[serde(default)]
-            properties: Option<BTreeMap<String, JsonSchema>>,
-            #[serde(default, rename = "additionalProperties")]
-            additional_properties: Option<AdditionalProperties>,
-            #[serde(default)]
-            required: Option<Vec<String>>,
-            #[serde(default)]
-            title: Option<String>,
-            #[serde(default)]
-            description: Option<String>,
-            #[serde(default, rename = "$comment")]
-            comment: Option<String>,
-            #[serde(default, rename = "enum")]
-            enum_values: Option<Vec<serde_json::Value>>,
-            #[serde(default, rename = "const", deserialize_with = "deserialize_present")]
-            const_value: Option<serde_json::Value>,
-            #[serde(default)]
-            items: Option<Box<JsonSchema>>,
-            #[serde(default, rename = "uniqueItems")]
-            unique_items: Option<bool>,
-            #[serde(default, rename = "minItems")]
-            min_items: Option<u64>,
-            #[serde(default, rename = "maxItems")]
-            max_items: Option<u64>,
-            #[serde(default)]
-            minimum: Option<serde_json::Number>,
-            #[serde(default)]
-            maximum: Option<serde_json::Number>,
-            #[serde(default, rename = "exclusiveMinimum")]
-            exclusive_minimum: Option<serde_json::Number>,
-            #[serde(default, rename = "exclusiveMaximum")]
-            exclusive_maximum: Option<serde_json::Number>,
-            #[serde(
-                default,
-                rename = "multipleOf",
-                deserialize_with = "deserialize_multiple_of"
-            )]
-            multiple_of: Option<serde_json::Number>,
-            #[serde(default, rename = "minLength")]
-            min_length: Option<u64>,
-            #[serde(default, rename = "maxLength")]
-            max_length: Option<u64>,
-            #[serde(default)]
-            pattern: Option<String>,
-            #[serde(default)]
-            format: Option<String>,
-            #[serde(default, rename = "default")]
-            default_value: Option<serde_json::Value>,
-            #[serde(default)]
-            deprecated: Option<bool>,
-            #[serde(default)]
-            examples: Option<Vec<serde_json::Value>>,
-            #[serde(default, rename = "allOf")]
-            all_of: Option<Vec<JsonSchema>>,
-            #[serde(default, rename = "anyOf")]
-            any_of: Option<Vec<JsonSchema>>,
-            #[serde(default, rename = "oneOf")]
-            one_of: Option<Vec<JsonSchema>>,
-        }
-        let h: JsonSchemaHelper = JsonSchemaHelper::deserialize(deserializer)?;
-        Ok(JsonSchema {
-            schema: h.schema,
-            id: h.id,
-            ref_: h.ref_,
-            type_: h.type_,
-            defs: h.defs,
-            definitions: h.definitions,
-            properties: h.properties.unwrap_or_default(),
-            additional_properties: h.additional_properties,
-            required: h.required,
-            title: h.title,
-            description: h.description,
-            comment: h.comment,
-            enum_values: h.enum_values,
-            const_value: h.const_value,
-            items: h.items,
-            unique_items: h.unique_items,
-            min_items: h.min_items,
-            max_items: h.max_items,
-            minimum: h.minimum,
-            maximum: h.maximum,
-            exclusive_minimum: h.exclusive_minimum,
-            exclusive_maximum: h.exclusive_maximum,
-            multiple_of: h.multiple_of,
-            min_length: h.min_length,
-            max_length: h.max_length,
-            pattern: h.pattern,
-            format: h.format,
-            default_value: h.default_value,
-            deprecated: h.deprecated,
-            examples: h.examples,
-            all_of: h.all_of,
-            any_of: h.any_of,
-            one_of: h.one_of,
-            dialect: None,
-        })
-    }
-}
-
 /// Raw schema text, parsed with the matching `serde_json` entry point.
 #[derive(Clone, Copy)]
 enum RawSchema<'a> {
@@ -610,8 +404,10 @@ impl RawSchema<'_> {
 
 /// Parses raw schema text. Lenient parsing goes straight to the model unless the document
 /// needs a draft-4 shape normalised (an `id` key, or a boolean `exclusiveMinimum` /
-/// `exclusiveMaximum`, which the model cannot hold); strict parsing, and those cases, go through
-/// a [`Value`] so the dialect is known before the model is built.
+/// `exclusiveMaximum`, which the model cannot hold) or its count keywords checked under
+/// [`IntegerSemantics::Lexical`] (the model stores `2.0` as `2`, so the written form is gone);
+/// strict parsing, and those cases, go through a [`Value`] so the dialect is known before the
+/// model is built.
 fn parse_raw(
     raw: RawSchema<'_>,
     settings: &JsonSchemaSettings,
@@ -620,7 +416,7 @@ fn parse_raw(
         match raw.parse::<JsonSchema>() {
             Ok(schema) => {
                 let resolved: ResolvedDialect = resolve_dialect(&schema, settings)?;
-                if !uses_legacy_id(resolved.dialect) || !may_contain_key(raw, "\"id\"") {
+                if !needs_value_pass(raw, resolved.dialect) {
                     return Ok(finish_parse(schema, &resolved));
                 }
             }
@@ -636,16 +432,20 @@ fn parse_raw(
                 if resolved.dialect.exclusive_bounds != ExclusiveBounds::BooleanModifier {
                     return Err(error.into());
                 }
-                return parse_value_in_dialect(value, &resolved, settings);
+                return parse_value_in_dialect(Cow::Owned(value), &resolved, settings);
             }
         }
     }
     let value: Value = raw.parse()?;
-    parse_value(value, settings)
+    parse_value(Cow::Owned(value), settings)
 }
 
-/// Parses a schema document held as a [`Value`].
-fn parse_value(value: Value, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<JsonSchema> {
+/// Parses a schema document held as a [`Value`], borrowed or owned. A borrowed document is
+/// copied only when draft-4 shapes must be rewritten.
+fn parse_value(
+    value: Cow<'_, Value>,
+    settings: &JsonSchemaSettings,
+) -> JsonSchemaParseResult<JsonSchema> {
     let resolved: ResolvedDialect = resolve_dialect_for_value(&value, settings)?;
     parse_value_in_dialect(value, &resolved, settings)
 }
@@ -659,20 +459,171 @@ fn resolve_dialect_for_value(
     resolve_dialect_for_uri(schema_uri, settings)
 }
 
-/// Normalises the document's draft-4 shapes for `resolved`'s dialect and builds the model.
+/// Checks the document's keywords (unknown keys when strict, count keywords' written form under
+/// [`IntegerSemantics::Lexical`]), normalises its draft-4 shapes for `resolved`'s dialect and
+/// builds the model. Keywords are checked before normalising, so a draft-4 document is held to
+/// draft 4's keywords as written (`id`, not `$id`).
 fn parse_value_in_dialect(
-    mut value: Value,
+    mut value: Cow<'_, Value>,
     resolved: &ResolvedDialect,
     settings: &JsonSchemaSettings,
 ) -> JsonSchemaParseResult<JsonSchema> {
-    normalize_draft4_shapes(&mut value, resolved.dialect);
-    let schema: JsonSchema = if settings.disallow_unknown_fields {
-        let helper: DenyUnknownFieldsJsonSchema = serde_json::from_value(value)?;
-        deny_unknown_fields_helper_to_schema(helper)
-    } else {
-        serde_json::from_value(value)?
+    let checks: KeywordChecks = KeywordChecks {
+        reject_unknown: settings.disallow_unknown_fields,
+        lexical_counts: resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
+    };
+    if checks.reject_unknown || checks.lexical_counts {
+        check_keywords(&value, resolved.dialect, checks)?;
+    }
+    if needs_draft4_normalization(resolved.dialect) {
+        normalize_draft4_shapes(value.to_mut(), resolved.dialect);
+    }
+    let schema: JsonSchema = match value {
+        Cow::Owned(value) => serde_json::from_value(value)?,
+        Cow::Borrowed(value) => JsonSchema::deserialize(value)?,
     };
     Ok(finish_parse(schema, resolved))
+}
+
+/// The count keywords: their value is a non-negative integer.
+const COUNT_KEYWORDS: [&str; 8] = [
+    "maxContains",
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "minContains",
+    "minItems",
+    "minLength",
+    "minProperties",
+];
+
+/// Which checks [`check_keywords`] runs.
+#[derive(Clone, Copy)]
+struct KeywordChecks {
+    /// Reject keys that are not keywords of the dialect (strict parsing).
+    reject_unknown: bool,
+    /// Reject count keywords written with a fraction or exponent (`2.0`, `2e0`), which are not
+    /// integers under [`IntegerSemantics::Lexical`] (draft 4).
+    lexical_counts: bool,
+}
+
+/// Checks the keys of every schema object, walking depth-first with each object's keys in map
+/// order, so the same document always reports the same error:
+///
+/// - with `reject_unknown`, the first key that is not a keyword of `dialect` (its keyword table,
+///   see [`Dialect::keywords`]) is [`JsonSchemaParseError::UnknownField`];
+/// - with `lexical_counts`, a count keyword whose number was written with a fraction or exponent
+///   is [`JsonSchemaParseError::InvalidKeywordValue`]. `serde_json` reads such a number as a
+///   float and an integer literal as an integer, so the float form is the written form.
+///
+/// Every schema object is checked: the root and each subschema the table's
+/// [`SubschemaPosition`]s reach, including those under keywords the model does not hold (`not`,
+/// `if`, ...). Keys in non-schema positions (property names, `enum` values, `default`) are data,
+/// not keywords, and are not checked. Iterative.
+fn check_keywords(
+    root: &Value,
+    dialect: Dialect,
+    checks: KeywordChecks,
+) -> JsonSchemaParseResult<()> {
+    // Each visited subschema records how it was reached (`steps`) instead of carrying its own
+    // pointer, so the walk allocates no strings; the pointer is built only for an error.
+    let mut steps: Vec<PathStep<'_>> = Vec::new();
+    let mut stack: Vec<(&Value, Option<usize>)> = vec![(root, None)];
+    let mut children: Vec<(&Value, Option<usize>)> = Vec::new();
+    while let Some((node, at)) = stack.pop() {
+        let Value::Object(map) = node else {
+            continue;
+        };
+        for (key, child) in map {
+            let Some(keyword) = dialect.keyword(key) else {
+                if checks.reject_unknown {
+                    return Err(JsonSchemaParseError::UnknownField {
+                        key: key.clone(),
+                        path: path_to(&steps, at),
+                    });
+                }
+                continue;
+            };
+            if checks.lexical_counts
+                && COUNT_KEYWORDS.contains(&key.as_str())
+                && let Value::Number(n) = child
+                && n.is_f64()
+            {
+                return Err(JsonSchemaParseError::InvalidKeywordValue {
+                    keyword: key.clone(),
+                    path: path_to(&steps, at),
+                    value: child.clone(),
+                    expected: "a non-negative integer written without a fraction or exponent",
+                });
+            }
+            let Some(position) = keyword.subschemas else {
+                continue;
+            };
+            steps.push(PathStep {
+                parent: at,
+                segment: PathSegment::Key(key),
+            });
+            let keyword_at: usize = steps.len() - 1;
+            match (position, child) {
+                (
+                    SubschemaPosition::Array | SubschemaPosition::SingleOrArray,
+                    Value::Array(items),
+                ) => {
+                    for (index, item) in items.iter().enumerate() {
+                        steps.push(PathStep {
+                            parent: Some(keyword_at),
+                            segment: PathSegment::Index(index),
+                        });
+                        children.push((item, Some(steps.len() - 1)));
+                    }
+                }
+                (SubschemaPosition::Map, Value::Object(entries)) => {
+                    for (name, entry) in entries {
+                        steps.push(PathStep {
+                            parent: Some(keyword_at),
+                            segment: PathSegment::Key(name),
+                        });
+                        children.push((entry, Some(steps.len() - 1)));
+                    }
+                }
+                (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, child) => {
+                    children.push((child, Some(keyword_at)));
+                }
+                (SubschemaPosition::Array | SubschemaPosition::Map, _) => {}
+            }
+        }
+        // Reversed so the stack visits subschemas in map order.
+        stack.extend(children.drain(..).rev());
+    }
+    Ok(())
+}
+
+/// One step of the strict key walk's path: a segment and the step it extends (`None` = root).
+struct PathStep<'a> {
+    parent: Option<usize>,
+    segment: PathSegment<'a>,
+}
+
+/// An object key or array index in a [`PathStep`].
+enum PathSegment<'a> {
+    Key(&'a str),
+    Index(usize),
+}
+
+/// The JSON Pointer of the subschema reached by step `at` (`None` = root).
+fn path_to(steps: &[PathStep<'_>], at: Option<usize>) -> JsonPointer {
+    let mut segments: Vec<String> = Vec::new();
+    let mut current: Option<usize> = at;
+    while let Some(index) = current {
+        let step: &PathStep<'_> = &steps[index];
+        segments.push(match step.segment {
+            PathSegment::Key(key) => key.to_string(),
+            PathSegment::Index(i) => i.to_string(),
+        });
+        current = step.parent;
+    }
+    segments.reverse();
+    JsonPointer::from(segments)
 }
 
 /// Logs the dialect warnings and records the dialect on the root when the settings changed it.
@@ -684,6 +635,11 @@ fn finish_parse(mut schema: JsonSchema, resolved: &ResolvedDialect) -> JsonSchem
         schema.dialect = Some(resolved.dialect);
     }
     schema
+}
+
+/// Whether `dialect` has draft-4 shapes that [`normalize_draft4_shapes`] rewrites.
+fn needs_draft4_normalization(dialect: Dialect) -> bool {
+    uses_legacy_id(dialect) || dialect.exclusive_bounds == ExclusiveBounds::BooleanModifier
 }
 
 /// Whether the dialect names a schema's URI with draft 4's `id` rather than `$id`.
@@ -703,6 +659,46 @@ fn may_contain_key(raw: RawSchema<'_>, needle: &str) -> bool {
     text.map_or(true, |s| s.contains(needle) || s.contains("\\u"))
 }
 
+/// Whether a lenient parse that succeeded directly must be redone through a [`Value`]: the
+/// dialect reads draft 4's `id` and the text can contain an `id` key, or the dialect has
+/// [`IntegerSemantics::Lexical`] and the text can contain a count keyword (the model stores
+/// `2.0` as `2`, so only the `Value` still has the written form). A `\u` escape could spell
+/// either key, so it always answers `true`; text that is not UTF-8 also answers `true` and is
+/// left to the parser. Drafts 6 and later scan nothing; draft 4 scans the text at most three
+/// times.
+fn needs_value_pass(raw: RawSchema<'_>, dialect: Dialect) -> bool {
+    let legacy_id: bool = uses_legacy_id(dialect);
+    let lexical_counts: bool = dialect.integer_semantics == IntegerSemantics::Lexical;
+    if !legacy_id && !lexical_counts {
+        return false;
+    }
+    let text: &str = match raw {
+        RawSchema::Str(s) => s,
+        RawSchema::Slice(b) => match std::str::from_utf8(b) {
+            Ok(s) => s,
+            Err(_) => return true,
+        },
+    };
+    let bytes: &[u8] = text.as_bytes();
+    memmem::find(bytes, b"\\u").is_some()
+        || (legacy_id && memmem::find(bytes, b"\"id\"").is_some())
+        || (lexical_counts && contains_count_key(text))
+}
+
+/// Whether `text` has a quoted name from [`COUNT_KEYWORDS`] written literally. One SIMD pass over
+/// the `"m` positions (every count keyword starts with `min` or `max`) instead of one scan per
+/// keyword. A string value that spells a keyword also matches; the check on the `Value` sorts
+/// that out.
+fn contains_count_key(text: &str) -> bool {
+    let bytes: &[u8] = text.as_bytes();
+    memmem::find_iter(bytes, b"\"m").any(|quote| {
+        let name: &[u8] = &bytes[quote + 1..];
+        COUNT_KEYWORDS.iter().any(|keyword| {
+            name.starts_with(keyword.as_bytes()) && name.get(keyword.len()) == Some(&b'"')
+        })
+    })
+}
+
 /// Rewrites draft-4 shapes in every schema object of `root` into the one shape the model holds,
 /// as `dialect` says:
 ///
@@ -718,9 +714,6 @@ fn may_contain_key(raw: RawSchema<'_>, needle: &str) -> bool {
 fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect) {
     let legacy_id: bool = uses_legacy_id(dialect);
     let boolean_bounds: bool = dialect.exclusive_bounds == ExclusiveBounds::BooleanModifier;
-    if !legacy_id && !boolean_bounds {
-        return;
-    }
     let mut stack: Vec<&mut Value> = vec![root];
     while let Some(node) = stack.pop() {
         let Value::Object(map) = node else {
@@ -883,11 +876,13 @@ impl JsonSchema {
     /// Parse a JSON Schema from a string with the given settings.
     ///
     /// When [`JsonSchemaSettings::disallow_unknown_fields`] is `false`, unknown keys
-    /// are ignored (lenient). When `true`, any unknown key causes an error (strict).
+    /// are ignored (lenient). When `true`, a key the document's draft does not define as a
+    /// keyword, in any schema object, causes an error (strict).
     ///
     /// # Errors
     ///
-    /// Returns [`JsonSchemaParseError::Serde`] on invalid JSON or type mismatch.
+    /// Returns [`JsonSchemaParseError::Serde`] on invalid JSON, a type mismatch, or an invalid
+    /// keyword value (e.g. `"minLength": 2.5`).
     /// Returns [`JsonSchemaParseError::UnknownField`] when strict and an unknown key is present.
     pub fn new_from_str(json: &str, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Self> {
         parse_raw(RawSchema::Str(json), settings)
@@ -919,7 +914,7 @@ impl JsonSchema {
         value: &serde_json::Value,
         settings: &JsonSchemaSettings,
     ) -> JsonSchemaParseResult<Self> {
-        parse_value(value.clone(), settings)
+        parse_value(Cow::Borrowed(value), settings)
     }
 
     /// Parse a JSON Schema from a reader with the given settings.
@@ -1076,8 +1071,8 @@ impl TryFrom<JsonSchema> for Vec<u8> {
 mod tests {
     use super::JsonSchema;
     use crate::json_schema::{
-        Dialect, ExclusiveBounds, FormatMode, JsonSchemaParseError, JsonSchemaSettings,
-        SpecVersion, UnknownSchemaUri,
+        Dialect, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaParseError,
+        JsonSchemaSettings, SpecVersion, UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -1999,14 +1994,9 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{},"unknown":42}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("unknown") || msg.contains("Unknown"),
-            "error message should mention unknown field: {msg}"
-        );
+        let expected: StrictOutcome = Err(("unknown".to_string(), String::new()));
+        let actual: StrictOutcome = strict_outcome(JsonSchema::new_from_str(json, &settings));
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -2015,8 +2005,583 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"nested":{"type":"object","properties":{},"bad":1}}}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
-        assert!(result.is_err());
+        let expected: StrictOutcome = Err(("bad".to_string(), "/properties/nested".to_string()));
+        let actual: StrictOutcome = strict_outcome(JsonSchema::new_from_str(json, &settings));
+        assert_eq!(expected, actual);
+    }
+
+    /// A strict parse's outcome: `Ok` on success, `Err((key, path))` for
+    /// [`JsonSchemaParseError::UnknownField`]. Any other error panics, failing the test.
+    type StrictOutcome = Result<(), (String, String)>;
+
+    fn strict_outcome(result: Result<JsonSchema, JsonSchemaParseError>) -> StrictOutcome {
+        match result {
+            Ok(_) => Ok(()),
+            Err(JsonSchemaParseError::UnknownField { key, path }) => {
+                Err((key, path.as_str().to_string()))
+            }
+            Err(other) => panic!("expected success or UnknownField, got {other:?}"),
+        }
+    }
+
+    fn strict_parse(json: &str) -> StrictOutcome {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        strict_outcome(JsonSchema::new_from_str(json, &settings))
+    }
+
+    fn unknown(key: &str, path: &str) -> StrictOutcome {
+        Err((key.to_string(), path.to_string()))
+    }
+
+    #[test]
+    fn strict_reports_unknown_key_with_schema_path() {
+        let expected: StrictOutcome = unknown("bogus", "/properties/a");
+        let actual: StrictOutcome =
+            strict_parse(r#"{"type":"object","properties":{"a":{"type":"string","bogus":1}}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_key_in_defs() {
+        let expected: StrictOutcome = unknown("bogus", "/$defs/a");
+        let actual: StrictOutcome = strict_parse(r#"{"$defs":{"a":{"bogus":1}}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_key_in_all_of_entry() {
+        let expected: StrictOutcome = unknown("bogus", "/allOf/1");
+        let actual: StrictOutcome = strict_parse(r#"{"allOf":[{},{"bogus":1}]}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_key_in_items() {
+        let expected: StrictOutcome = unknown("bogus", "/items");
+        let actual: StrictOutcome = strict_parse(r#"{"items":{"bogus":1}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_key_in_draft7_items_array() {
+        let expected: StrictOutcome = unknown("bogus", "/items/1");
+        let actual: StrictOutcome = strict_parse(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","items":[{},{"bogus":1}]}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_key_in_additional_properties() {
+        let expected: StrictOutcome = unknown("bogus", "/additionalProperties");
+        let actual: StrictOutcome = strict_parse(r#"{"additionalProperties":{"bogus":1}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_key_under_keyword_the_model_does_not_hold() {
+        let expected: StrictOutcome = unknown("bogus", "/not/properties/x");
+        let actual: StrictOutcome = strict_parse(r#"{"not":{"properties":{"x":{"bogus":1}}}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_escapes_property_name_in_path() {
+        let expected: StrictOutcome = unknown("bogus", "/properties/a~1b~0c");
+        let actual: StrictOutcome = strict_parse(r#"{"properties":{"a/b~c":{"bogus":1}}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_root_key_before_nested_key() {
+        let expected: StrictOutcome = unknown("zzz", "");
+        let actual: StrictOutcome = strict_parse(r#"{"properties":{"a":{"bogus":1}},"zzz":1}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_accepts_spec_keywords_the_model_does_not_hold() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(
+            r#"{"not":{},"if":{},"then":{},"else":{},"patternProperties":{"^a":{}},"propertyNames":{},"contains":{},"minContains":1,"dependentRequired":{"a":["b"]},"unevaluatedProperties":false,"$anchor":"x"}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_does_not_check_property_names() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(r#"{"properties":{"bogus":{"type":"string"}}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_does_not_check_keys_inside_keyword_values() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(
+            r#"{"enum":[{"bogus":1}],"const":{"bogus":1},"default":{"bogus":1},"examples":[{"bogus":1}]}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_skips_string_array_entries_of_dependencies() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","dependencies":{"a":["b"],"c":{"required":["d"]}}}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_rejects_defs_in_draft7() {
+        let expected: StrictOutcome = unknown("$defs", "");
+        let actual: StrictOutcome = strict_parse(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","$defs":{"a":{}}}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_accepts_defs_in_2019_09() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(
+            r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","$defs":{"a":{}}}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_rejects_defs_when_settings_pin_draft7() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .spec_version(SpecVersion::Draft07)
+            .build();
+        let expected: StrictOutcome = unknown("$defs", "");
+        let actual: StrictOutcome =
+            strict_outcome(JsonSchema::new_from_str(r#"{"$defs":{"a":{}}}"#, &settings));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_rejects_dollar_id_in_draft4() {
+        let expected: StrictOutcome = unknown("$id", "");
+        let actual: StrictOutcome = strict_parse(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","$id":"http://example.com/x.json"}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_rejects_additional_items_in_2020_12() {
+        let expected: StrictOutcome = unknown("additionalItems", "");
+        let actual: StrictOutcome = strict_parse(r#"{"additionalItems":false}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_accepts_additional_items_in_2019_09() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(
+            r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","additionalItems":false}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_from_serde_value_reports_nested_unknown_key() {
+        let value: serde_json::Value = serde_json::json!({"anyOf": [{"bogus": 1}]});
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: StrictOutcome = unknown("bogus", "/anyOf/0");
+        let actual: StrictOutcome =
+            strict_outcome(JsonSchema::new_from_serde_value(&value, &settings));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn lenient_ignores_unknown_keys_everywhere() {
+        let expected: JsonSchema =
+            JsonSchema::try_from(r#"{"properties":{"a":{"type":"string"}}}"#).expect("parse");
+        let actual: JsonSchema =
+            JsonSchema::try_from(r#"{"bogus":1,"properties":{"a":{"type":"string","bogus":1}}}"#)
+                .expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unknown_field_display_names_root() {
+        let expected: &str = "unknown keyword \"bogus\" at root";
+        let actual: String = JsonSchema::new_from_str(
+            r#"{"bogus":1}"#,
+            &JsonSchemaSettings::builder()
+                .disallow_unknown_fields(true)
+                .build(),
+        )
+        .expect_err("strict parse fails")
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unknown_field_display_names_path() {
+        let expected: &str = "unknown keyword \"bogus\" at /properties/a";
+        let actual: String = JsonSchema::new_from_str(
+            r#"{"properties":{"a":{"bogus":1}}}"#,
+            &JsonSchemaSettings::builder()
+                .disallow_unknown_fields(true)
+                .build(),
+        )
+        .expect_err("strict parse fails")
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    /// Parses `json` with default settings, mapping the error to its message.
+    fn parse_message(json: &str) -> Result<JsonSchema, String> {
+        JsonSchema::try_from(json).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn null_properties_parse_as_no_properties() {
+        let expected: Result<JsonSchema, String> = parse_message(r#"{"type":"object"}"#);
+        let actual: Result<JsonSchema, String> =
+            parse_message(r#"{"type":"object","properties":null}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_length_integer_valued_decimal_parses_as_integer() {
+        let expected: Result<JsonSchema, String> = parse_message(r#"{"minLength":2}"#);
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":2.0}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn max_length_integer_valued_decimal_parses_as_integer() {
+        let expected: Result<JsonSchema, String> = parse_message(r#"{"maxLength":2}"#);
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"maxLength":2.0}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_integer_valued_decimal_parses_as_integer() {
+        let expected: Result<JsonSchema, String> = parse_message(r#"{"minItems":2}"#);
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"minItems":2.0}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn max_items_integer_valued_decimal_parses_as_integer() {
+        let expected: Result<JsonSchema, String> = parse_message(r#"{"maxItems":2}"#);
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"maxItems":2.0}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_exponent_form_parses_as_integer() {
+        let expected: Result<JsonSchema, String> = parse_message(r#"{"minLength":100}"#);
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":1e2}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_negative_zero_parses_as_zero() {
+        let expected: Result<JsonSchema, String> = parse_message(r#"{"minLength":0}"#);
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":-0.0}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_accepts_u64_max() {
+        let expected: Result<Option<u64>, String> = Ok(Some(u64::MAX));
+        let actual: Result<Option<u64>, String> =
+            parse_message(r#"{"maxLength":18446744073709551615}"#).map(|s| s.max_length);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_integer_valued_decimal_parses_when_strict() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: Result<Option<u64>, String> = Ok(Some(2));
+        let actual: Result<Option<u64>, String> =
+            JsonSchema::new_from_str(r#"{"minItems":2.0}"#, &settings)
+                .map(|s| s.min_items)
+                .map_err(|e| e.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_integer_valued_decimal_parses_from_serde_value() {
+        let value: serde_json::Value = serde_json::json!({"maxItems": 3.0});
+        let expected: Result<Option<u64>, String> = Ok(Some(3));
+        let actual: Result<Option<u64>, String> = JsonSchema::try_from(&value)
+            .map(|s| s.max_items)
+            .map_err(|e| e.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_integer_valued_decimal_serializes_as_integer() {
+        let expected: String = r#"{"minLength":2}"#.to_string();
+        let actual: String =
+            String::try_from(&JsonSchema::try_from(r#"{"minLength":2.0}"#).expect("parse"))
+                .expect("serialize");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_rejects_fraction() {
+        let expected: Result<JsonSchema, String> = Err(
+            "invalid JSON Schema: expected a non-negative integer, got 2.5 at line 1 column 17"
+                .to_string(),
+        );
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":2.5}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_rejects_negative_integer() {
+        let expected: Result<JsonSchema, String> = Err(
+            "invalid JSON Schema: expected a non-negative integer, got -1 at line 1 column 15"
+                .to_string(),
+        );
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"minItems":-1}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_rejects_negative_decimal() {
+        let expected: Result<JsonSchema, String> = Err(
+            "invalid JSON Schema: expected a non-negative integer, got -2.0 at line 1 column 17"
+                .to_string(),
+        );
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"maxItems":-2.0}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_rejects_value_beyond_u64() {
+        let expected: Result<JsonSchema, String> = Err(
+            "invalid JSON Schema: expected a non-negative integer, got 1.8446744073709552e+19 at line 1 column 34"
+                .to_string(),
+        );
+        let actual: Result<JsonSchema, String> =
+            parse_message(r#"{"maxLength":18446744073709551616}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_rejects_string() {
+        let expected: Result<JsonSchema, String> = Err(
+            "invalid JSON Schema: invalid type: string \"2\", expected a JSON number at line 1 column 16"
+                .to_string(),
+        );
+        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":"2"}"#);
+        assert_eq!(expected, actual);
+    }
+
+    const DRAFT4_SCHEMA: &str = "http://json-schema.org/draft-04/schema#";
+
+    /// A parse's outcome: `Ok` on success, `Err((keyword, path, value))` for
+    /// [`JsonSchemaParseError::InvalidKeywordValue`]. Any other error panics, failing the test.
+    type KeywordValueOutcome = Result<(), (String, String, String)>;
+
+    fn keyword_value_outcome(
+        result: Result<JsonSchema, JsonSchemaParseError>,
+    ) -> KeywordValueOutcome {
+        match result {
+            Ok(_) => Ok(()),
+            Err(JsonSchemaParseError::InvalidKeywordValue {
+                keyword,
+                path,
+                value,
+                ..
+            }) => Err((keyword, path.as_str().to_string(), value.to_string())),
+            Err(other) => panic!("expected success or InvalidKeywordValue, got {other:?}"),
+        }
+    }
+
+    fn invalid_value(keyword: &str, path: &str, value: &str) -> KeywordValueOutcome {
+        Err((keyword.to_string(), path.to_string(), value.to_string()))
+    }
+
+    /// `body` (the keys after `$schema`) as a draft-4 document, parsed with `settings`.
+    fn parse_draft4(body: &str, settings: &JsonSchemaSettings) -> KeywordValueOutcome {
+        let json: String = format!(r#"{{"$schema":"{DRAFT4_SCHEMA}",{body}}}"#);
+        keyword_value_outcome(JsonSchema::new_from_str(&json, settings))
+    }
+
+    #[test]
+    fn draft4_rejects_integer_valued_decimal_count() {
+        let expected: KeywordValueOutcome = invalid_value("minLength", "", "2.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""minLength":2.0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_exponent_count() {
+        let expected: KeywordValueOutcome = invalid_value("maxItems", "", "2.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""maxItems":2e0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_in_nested_schema() {
+        let expected: KeywordValueOutcome = invalid_value("maxLength", "/properties/a", "3.0");
+        let actual: KeywordValueOutcome = parse_draft4(
+            r#""properties":{"a":{"type":"string","maxLength":3.0}}"#,
+            &JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_the_model_does_not_hold() {
+        let expected: KeywordValueOutcome = invalid_value("minProperties", "", "1.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""minProperties":1.0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_accepts_integer_count() {
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = parse_draft4(
+            r#""minLength":2,"maxItems":3,"minProperties":1"#,
+            &JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_does_not_check_count_keyword_names_used_as_data() {
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = parse_draft4(
+            r#""properties":{"minLength":{"type":"string"}},"enum":[{"minLength":2.0}]"#,
+            &JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_when_strict() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: KeywordValueOutcome = invalid_value("minItems", "", "2.0");
+        let actual: KeywordValueOutcome = parse_draft4(r#""minItems":2.0"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_from_serde_value() {
+        let value: serde_json::Value =
+            serde_json::json!({"$schema": DRAFT4_SCHEMA, "items": {"minLength": 2.0}});
+        let expected: KeywordValueOutcome = invalid_value("minLength", "/items", "2.0");
+        let actual: KeywordValueOutcome = keyword_value_outcome(JsonSchema::try_from(&value));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_accepts_decimal_count_with_numeric_integer_override() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .integer_semantics(IntegerSemantics::Numeric)
+            .build();
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = parse_draft4(r#""minLength":2.0"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn lexical_integer_override_rejects_decimal_count_in_2020_12() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .integer_semantics(IntegerSemantics::Lexical)
+            .build();
+        let expected: KeywordValueOutcome = invalid_value("minLength", "", "2.0");
+        let actual: KeywordValueOutcome =
+            keyword_value_outcome(JsonSchema::new_from_str(r#"{"minLength":2.0}"#, &settings));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft6_accepts_integer_valued_decimal_count() {
+        let expected: KeywordValueOutcome = Ok(());
+        let actual: KeywordValueOutcome = keyword_value_outcome(JsonSchema::try_from(
+            r#"{"$schema":"http://json-schema.org/draft-06/schema#","minLength":2.0}"#,
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_prefilter_finds_quoted_name() {
+        let expected: bool = true;
+        let actual: bool = super::contains_count_key(r#"{"minimum":1,"maxLength":2}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn count_keyword_prefilter_ignores_other_min_max_keys() {
+        let expected: bool = false;
+        let actual: bool =
+            super::contains_count_key(r#"{"minimum":1,"maximum":2,"maxLengthy":3,"x":"min"}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn value_pass_assumes_escaped_key_may_match_in_draft4() {
+        let expected: bool = true;
+        let actual: bool = super::needs_value_pass(
+            super::RawSchema::Str(r#"{"\u006dinLength":2}"#),
+            Dialect::for_spec_version(SpecVersion::Draft04),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn value_pass_not_needed_in_2020_12() {
+        let expected: bool = false;
+        let actual: bool = super::needs_value_pass(
+            super::RawSchema::Str(r#"{"\u0069d":"x","minLength":2.0}"#),
+            Dialect::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn value_pass_not_needed_in_draft4_without_id_or_count_keys() {
+        let expected: bool = false;
+        let actual: bool = super::needs_value_pass(
+            super::RawSchema::Str(r#"{"type":"string","minimum":1}"#),
+            Dialect::for_spec_version(SpecVersion::Draft04),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_rejects_decimal_count_spelled_with_escape() {
+        let expected: KeywordValueOutcome = invalid_value("minLength", "", "2.0");
+        let actual: KeywordValueOutcome =
+            parse_draft4(r#""\u006dinLength":2.0"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn invalid_keyword_value_display() {
+        let expected: &str = "invalid \"maxLength\" value 3.0 at /properties/a: expected a non-negative integer written without a fraction or exponent";
+        let json: String =
+            format!(r#"{{"$schema":"{DRAFT4_SCHEMA}","properties":{{"a":{{"maxLength":3.0}}}}}}"#);
+        let actual: String = JsonSchema::try_from(json.as_str())
+            .expect_err("draft 4 rejects 3.0")
+            .to_string();
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -2364,12 +2929,9 @@ mod tests {
     #[test]
     fn draft6_id_rejected_when_strict() {
         let json = r#"{"$schema":"http://json-schema.org/draft-06/schema#","id":"http://example.com/x.json"}"#;
-        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .disallow_unknown_fields(true)
-            .build();
-        let actual: Result<JsonSchema, JsonSchemaParseError> =
-            JsonSchema::new_from_str(json, &settings);
-        assert!(actual.is_err());
+        let expected: StrictOutcome = Err(("id".to_string(), String::new()));
+        let actual: StrictOutcome = strict_parse(json);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -2827,7 +3389,7 @@ mod tests {
     fn invalid_schema_mentioning_exclusive_bound_keeps_direct_parse_error() {
         let json = "{\"exclusiveMinimum\":1,\n\"minLength\":\"x\"}";
         let expected: String =
-            "invalid type: string \"x\", expected u64 at line 2 column 15".to_string();
+            "invalid type: string \"x\", expected a JSON number at line 2 column 15".to_string();
         let actual: String = match JsonSchema::try_from(json) {
             Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
             other => format!("{other:?}"),
@@ -2880,9 +3442,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        let result: Result<JsonSchema, JsonSchemaParseError> =
-            JsonSchema::new_from_serde_value(&value, &settings);
-        assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+        let expected: StrictOutcome = Err(("unknown".to_string(), String::new()));
+        let actual: StrictOutcome =
+            strict_outcome(JsonSchema::new_from_serde_value(&value, &settings));
+        assert_eq!(expected, actual);
     }
 
     #[test]

@@ -25,8 +25,12 @@ pub enum UnknownSchemaUri {
 /// settings below override one piece of it and are `None` (follow the draft) by default.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonSchemaSettings {
-    /// When `true`, schema ingestion fails if any schema object contains keys
-    /// other than the known keywords we model (including `$schema`, `type`, `properties`, `required`, `title`, `description`, `examples`, etc.).
+    /// When `true` (strict), schema ingestion fails with
+    /// [`JsonSchemaParseError::UnknownField`](super::JsonSchemaParseError::UnknownField) if any
+    /// schema object has a key that the document's draft does not define as a keyword (its
+    /// keyword table, [`Dialect::keywords`]): `$defs` is unknown in draft 7, `id` is known only in
+    /// draft 4. Keywords the draft defines are accepted even when this library does not act on
+    /// them. When `false` (the default), unknown keys are ignored.
     pub disallow_unknown_fields: bool,
 
     /// Explicit spec version to use. When `Some(v)`, that version is used and `$schema` is not used for draft selection.
@@ -61,7 +65,8 @@ pub struct JsonSchemaSettingsBuilder {
 }
 
 impl JsonSchemaSettingsBuilder {
-    /// Set whether unknown fields in the schema definition are disallowed.
+    /// Set whether keys the document's draft does not define as keywords are rejected
+    /// (see [`JsonSchemaSettings::disallow_unknown_fields`]).
     #[must_use]
     pub fn disallow_unknown_fields(mut self, value: bool) -> Self {
         self.disallow_unknown_fields = Some(value);

@@ -8,7 +8,8 @@
 //! Classification of each case and test (the differential report builder depends on these exact
 //! skip messages):
 //!
-//! - Strict parsing rejects a keyword → whole-case skip `unsupported keyword "<key>" at <path>`.
+//! - Strict parsing rejects a key the draft does not define → whole-case skip
+//!   `unsupported keyword "<key>" at <path>`.
 //! - Any other parse failure → whole-case skip `unsupported schema: <error>`.
 //! - Validation reports an unresolvable `$ref` → test skip `unsupported $ref: <detail>`.
 //! - Validation reports another capability gap (e.g. a pattern our regex engine cannot compile)
@@ -21,13 +22,12 @@
 //! sign of trouble.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
-    JsonPointer, JsonSchema, JsonSchemaParseError, JsonSchemaSettings, SpecVersion,
-    ValidationError, ValidationResult, validate,
+    JsonSchema, JsonSchemaParseError, JsonSchemaSettings, SpecVersion, ValidationError,
+    ValidationResult, validate,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -192,8 +192,8 @@ fn case_spec_version(schema: &Value, dialect: SpecVersion) -> SpecVersion {
         .unwrap_or(dialect)
 }
 
-/// Strict ingestion settings for a spec version: the version's defaults with unknown keywords
-/// rejected, so unsupported keywords surface as skips rather than silently ignored constraints.
+/// Strict ingestion settings for a spec version: the version's defaults with keys the draft does
+/// not define rejected, so they surface as skips rather than silently ignored keys.
 fn strict_settings(spec_version: SpecVersion) -> JsonSchemaSettings {
     let mut settings: JsonSchemaSettings = spec_version.default_schema_settings();
     settings.disallow_unknown_fields = true;
@@ -201,80 +201,19 @@ fn strict_settings(spec_version: SpecVersion) -> JsonSchemaSettings {
 }
 
 /// Skip message for a schema that strict parsing rejected.
-///
-/// Strict ingestion reports an unknown keyword either as [`JsonSchemaParseError::UnknownField`]
-/// or as a serde `unknown field` error (which carries no location); the latter is located in
-/// `schema` so both produce the same `unsupported keyword "<key>" at <path>` message.
-fn parse_skip_message(schema: &Value, error: &JsonSchemaParseError) -> String {
+fn parse_skip_message(error: &JsonSchemaParseError) -> String {
     match error {
-        JsonSchemaParseError::UnknownField { key, path } => {
-            format!("unsupported keyword \"{key}\" at {path}")
-        }
-        JsonSchemaParseError::Serde(serde_error) => {
-            let unknown: Option<(String, JsonPointer)> =
-                serde_unknown_field(serde_error).and_then(|key: String| {
-                    locate_keyword(schema, &key).map(|path: JsonPointer| (key, path))
-                });
-            match unknown {
-                Some((key, path)) => format!(
-                    "unsupported keyword \"{key}\" at {}",
-                    path.display_root_or_path()
-                ),
-                None => format!("unsupported schema: {error}"),
-            }
-        }
-        JsonSchemaParseError::Io(_) | JsonSchemaParseError::UnknownSchemaUri { .. } => {
+        JsonSchemaParseError::UnknownField { key, path } => format!(
+            "unsupported keyword \"{key}\" at {}",
+            path.display_root_or_path()
+        ),
+        JsonSchemaParseError::Serde(_)
+        | JsonSchemaParseError::InvalidKeywordValue { .. }
+        | JsonSchemaParseError::Io(_)
+        | JsonSchemaParseError::UnknownSchemaUri { .. } => {
             format!("unsupported schema: {error}")
         }
     }
-}
-
-/// The key named by a serde `unknown field` error (message shape:
-/// ``unknown field `<key>`, expected one of ...``), if `error` is one.
-fn serde_unknown_field(error: &serde_json::Error) -> Option<String> {
-    let message: String = error.to_string();
-    let rest: &str = message.strip_prefix("unknown field `")?;
-    rest.split_once('`').map(|(key, _)| key.to_string())
-}
-
-/// JSON Pointer to the shallowest schema object in `schema` that has `key` as a direct keyword.
-///
-/// Only schema positions are searched (the root and subschemas under `$defs`, `definitions`,
-/// `properties`, `additionalProperties`, `items`, `allOf`, `anyOf`, `oneOf`), so a property
-/// *named* `key` is not mistaken for the keyword. Breadth-first with an explicit queue.
-fn locate_keyword(schema: &Value, key: &str) -> Option<JsonPointer> {
-    let mut queue: VecDeque<(&Value, JsonPointer)> = VecDeque::new();
-    queue.push_back((schema, JsonPointer::root()));
-    while let Some((value, path)) = queue.pop_front() {
-        let Some(object) = value.as_object() else {
-            continue;
-        };
-        if object.contains_key(key) {
-            return Some(path);
-        }
-        for (keyword, child) in object {
-            let keyword_path: JsonPointer = path.push(keyword);
-            match keyword.as_str() {
-                "$defs" | "definitions" | "properties" => {
-                    if let Some(subschemas) = child.as_object() {
-                        for (name, subschema) in subschemas {
-                            queue.push_back((subschema, keyword_path.push(name)));
-                        }
-                    }
-                }
-                "additionalProperties" | "items" => queue.push_back((child, keyword_path)),
-                "allOf" | "anyOf" | "oneOf" => {
-                    if let Some(subschemas) = child.as_array() {
-                        for (index, subschema) in subschemas.iter().enumerate() {
-                            queue.push_back((subschema, keyword_path.push(&index.to_string())));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    None
 }
 
 /// Skip message when a validation error reflects a library capability gap rather than an
@@ -311,13 +250,12 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
         ]);
     }
     let settings: JsonSchemaSettings = strict_settings(case_spec_version(&case.schema, dialect));
-    let schema: JsonSchema = match catch_panic(|| {
-        JsonSchema::new_from_serde_value(&case.schema, &settings)
-    }) {
-        Ok(Ok(schema)) => schema,
-        Ok(Err(error)) => return CaseOutcome::Skipped(parse_skip_message(&case.schema, &error)),
-        Err(panic_message) => return CaseOutcome::Errored(panic_message),
-    };
+    let schema: JsonSchema =
+        match catch_panic(|| JsonSchema::new_from_serde_value(&case.schema, &settings)) {
+            Ok(Ok(schema)) => schema,
+            Ok(Err(error)) => return CaseOutcome::Skipped(parse_skip_message(&error)),
+            Err(panic_message) => return CaseOutcome::Errored(panic_message),
+        };
     let outcomes: Vec<TestOutcome> = case
         .tests
         .iter()
@@ -595,9 +533,9 @@ mod tests {
     #[test]
     fn unknown_root_keyword_skips_case_with_exact_message() {
         let expected: CaseOutcome =
-            CaseOutcome::Skipped("unsupported keyword \"not\" at root".to_string());
+            CaseOutcome::Skipped("unsupported keyword \"bogus\" at root".to_string());
         let actual: CaseOutcome = run_flag(&json!({
-            "schema": {"not": {"type": "string"}},
+            "schema": {"bogus": {"type": "string"}},
             "tests": [{"instance": 1}]
         }));
         assert_eq!(expected, actual);
@@ -606,13 +544,13 @@ mod tests {
     #[test]
     fn unknown_nested_keyword_skips_case_with_exact_message() {
         let expected: CaseOutcome = CaseOutcome::Skipped(
-            "unsupported keyword \"not\" at /properties/foo/allOf/1".to_string(),
+            "unsupported keyword \"bogus\" at /properties/foo/allOf/1".to_string(),
         );
         let actual: CaseOutcome = run_flag(&json!({
             "schema": {
                 "properties": {
-                    "not": {"type": "string"},
-                    "foo": {"allOf": [{"type": "integer"}, {"not": {"type": "string"}}]}
+                    "bogus": {"type": "string"},
+                    "foo": {"allOf": [{"type": "integer"}, {"bogus": {"type": "string"}}]}
                 }
             },
             "tests": [{"instance": {}}]
@@ -621,9 +559,19 @@ mod tests {
     }
 
     #[test]
+    fn keyword_the_draft_defines_is_parsed_not_skipped() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Verdict(true)]);
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": {"not": {"type": "string"}},
+            "tests": [{"instance": 1}]
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn boolean_schema_skips_case_as_unsupported_schema() {
         let expected: CaseOutcome = CaseOutcome::Skipped(
-            "unsupported schema: invalid JSON Schema: invalid type: boolean `true`, expected struct DenyUnknownFieldsJsonSchema"
+            "unsupported schema: invalid JSON Schema: invalid type: boolean `true`, expected struct JsonSchema"
                 .to_string(),
         );
         let actual: CaseOutcome = run_flag(&json!({"schema": true, "tests": [{"instance": 1}]}));
