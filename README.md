@@ -106,10 +106,14 @@ Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()`
 returns a `JsonSchema`). Serialize to JSON with `String::try_from(&schema)` or
 `Vec::<u8>::try_from(&schema)`. Reverse codegen emits a flat root-level `$defs`
 map with `$ref` for shared and recursive types. See [design.md](design.md) for
-reverse codegen details. The library supports **in-document `$ref`** resolving against root
-`$defs` / `definitions` containers (fragments `#`, `#/$defs/Name`,
-`#/definitions/Name`) for both validation and Rust codegen; remote refs and
-anchors are out of scope for this implementation.
+reverse codegen details. **`$ref`** resolves through a shared `Registry` for both
+validation and Rust codegen: JSON Pointer fragments into any schema location (including
+unknown keywords), `$id` / draft-4 `id` resources with RFC 3986 base-URI resolution,
+`$anchor` / `$dynamicAnchor` (as plain anchors), URNs, the embedded standard
+metaschemas, and other documents you supply (in memory or through a `Retrieve`
+implementation; nothing is fetched by default). A custom `$schema` metaschema's
+`$vocabulary` decides which keyword groups apply. `$dynamicRef` / `$recursiveRef`
+are not resolved dynamically.
 
 ## Using the library
 
@@ -247,6 +251,24 @@ if let Err(errors) = result {
         eprintln!("{}", err);
     }
 }
+```
+
+`validate` builds the schema's `$ref` registry on every call. To validate many
+instances, or to let `$ref` reach other documents, build the registry once:
+
+```rust
+use json_schema_rs::{validate_with_registry, JsonSchema, Registry};
+use std::collections::HashMap;
+
+let remotes: HashMap<String, Value> = HashMap::from([(
+    "https://example.com/address.json".to_string(),
+    serde_json::from_str(address_json)?,
+)]);
+let registry: Registry<'_> = Registry::builder()
+    .base_uri("https://example.com/person.json")
+    .retriever(remotes)
+    .build(&schema)?;
+let result = validate_with_registry(&registry, &instance);
 ```
 
 ## Running the binary

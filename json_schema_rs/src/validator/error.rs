@@ -80,6 +80,15 @@ pub enum ValidationError {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
     },
+    /// The schema cannot be used: its `$ref` registry could not be built for a reason other
+    /// than one `$ref` (a duplicate `$id` or anchor, a metaschema requiring an unsupported
+    /// vocabulary, ...). Reported once, at the instance root.
+    InvalidSchema {
+        /// JSON Pointer to the instance (the root).
+        instance_path: JsonPointer,
+        /// Why the schema cannot be used.
+        reason: String,
+    },
     /// Schema had `uniqueItems: true` but the array contained duplicate elements.
     DuplicateArrayItems {
         /// JSON Pointer to the array instance that failed.
@@ -258,6 +267,7 @@ impl ValidationError {
             | ValidationError::ExpectedNull { instance_path, .. }
             | ValidationError::ExpectedType { instance_path, .. }
             | ValidationError::FalseSchema { instance_path }
+            | ValidationError::InvalidSchema { instance_path, .. }
             | ValidationError::DuplicateArrayItems { instance_path, .. }
             | ValidationError::TooFewItems { instance_path, .. }
             | ValidationError::TooManyItems { instance_path, .. }
@@ -321,6 +331,9 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::FalseSchema { .. } => {
                 write!(f, "{location}: no value is allowed here (schema is false)")
+            }
+            ValidationError::InvalidSchema { reason, .. } => {
+                write!(f, "{location}: the schema cannot be used: {reason}")
             }
             ValidationError::DuplicateArrayItems {
                 duplicate_value, ..

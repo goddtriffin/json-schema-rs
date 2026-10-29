@@ -5,8 +5,7 @@ use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
-use crate::json_schema::ref_resolver;
-use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
+use crate::json_schema::{JsonSchema, JsonType, Registry, RegistryError, Schema, TypeSet};
 use crate::number;
 use crate::sanitizers::{
     enum_variant_names_with_collision_resolution, sanitize_field_name, sanitize_struct_name,
@@ -988,7 +987,7 @@ pub(crate) fn resolve_all_of_for_codegen(schema: &JsonSchema) -> CodeGenResult<J
 /// Returns the Rust type string for a schema (used for array item type and nested types).
 /// Unsupported types yield `serde_json::Value`.
 fn rust_type_for_item_schema(
-    root: &JsonSchema,
+    root: &Registry<'_>,
     schema: &JsonSchema,
     from_key: Option<&str>,
     enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
@@ -996,30 +995,8 @@ fn rust_type_for_item_schema(
     settings: &CodeGenSettings,
     mode: DedupeMode,
 ) -> CodeGenResult<String> {
-    let mut def_key: Option<String> = None;
-    let schema: &JsonSchema = if let Some(ref_str) = schema.ref_.as_deref() {
-        match ref_resolver::parse_ref(ref_str) {
-            Ok(
-                ref_resolver::ParsedRef::Defs(name) | ref_resolver::ParsedRef::Definitions(name),
-            ) => def_key = Some(name),
-            Ok(ref_resolver::ParsedRef::Root) => {}
-            Err(e) => {
-                return Err(CodeGenError::RefResolution {
-                    ref_str: ref_str.to_string(),
-                    reason: format!("{e:?}"),
-                });
-            }
-        }
-
-        ref_resolver::resolve_schema_ref_transitive(root, schema.into())
-            .map_err(|e| CodeGenError::RefResolution {
-                ref_str: ref_str.to_string(),
-                reason: format!("{e:?}"),
-            })?
-            .object_or_empty()
-    } else {
-        schema
-    };
+    let (schema, def_key): (&JsonSchema, Option<String>) =
+        resolve_ref_for_codegen(root, schema, None)?;
     if let Some(values) = string_enum_or_const_values(schema)
         && let Some(m) = enum_values_to_name
         && let Some(name) = m.get(&values)
@@ -1088,7 +1065,7 @@ fn rust_type_for_item_schema(
 
 /// Collect all string enums from a schema (and nested properties). Dedupe by value list; first occurrence wins the name, description, and examples.
 fn collect_enums(
-    root: &JsonSchema,
+    root: &Registry<'_>,
     schema: &JsonSchema,
     settings: &CodeGenSettings,
 ) -> CodeGenResult<Vec<EnumToEmit>> {
@@ -1176,7 +1153,7 @@ fn collect_enums(
 
 /// Collect all anyOf enums from a schema (root and nested). Each node with non-empty anyOf produces one enum.
 fn collect_anyof_enums(
-    root: &JsonSchema,
+    root: &Registry<'_>,
     schema: &JsonSchema,
     settings: &CodeGenSettings,
     enum_values_to_name: &BTreeMap<Vec<String>, String>,
@@ -1227,7 +1204,7 @@ fn collect_anyof_enums(
 
 /// Collect all oneOf enums from a schema (root and nested). Each node with non-empty oneOf produces one enum.
 fn collect_oneof_enums(
-    root: &JsonSchema,
+    root: &Registry<'_>,
     schema: &JsonSchema,
     settings: &CodeGenSettings,
     enum_values_to_name: &BTreeMap<Vec<String>, String>,
@@ -1279,41 +1256,58 @@ fn collect_oneof_enums(
 /// Collect all object schemas that need a struct in topological order (children before parents).
 /// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
 /// Resolves allOf for each node before use (merge on-the-fly).
+///
+/// Follows `schema`'s `$ref` chain through `root`'s registry to a schema without `$ref`. The
+/// returned key is the `$defs` / `definitions` entry name of the first hop's target (the
+/// struct name for it), or `fallback_from_key`. A boolean target reads as `{}`. Codegen walks
+/// copies and merges of subschemas, so it resolves each `$ref` without a scope
+/// ([`Registry::resolve_anywhere`]).
 fn resolve_ref_for_codegen<'a>(
-    root: &'a JsonSchema,
+    root: &'a Registry<'_>,
     schema: &'a JsonSchema,
     fallback_from_key: Option<&str>,
 ) -> CodeGenResult<(&'a JsonSchema, Option<String>)> {
     let mut from_key: Option<String> = fallback_from_key.map(String::from);
-    let Some(ref_str) = schema.ref_.as_deref() else {
-        return Ok((schema, from_key));
-    };
-
-    match ref_resolver::parse_ref(ref_str) {
-        Ok(ref_resolver::ParsedRef::Defs(name) | ref_resolver::ParsedRef::Definitions(name)) => {
-            from_key = Some(name);
-        }
-        Ok(ref_resolver::ParsedRef::Root) => {}
-        Err(e) => {
+    let mut current: &'a JsonSchema = schema;
+    let mut visited: Vec<&'a str> = Vec::new();
+    while let Some(ref_str) = current.ref_.as_deref() {
+        if visited.contains(&ref_str) {
             return Err(CodeGenError::RefResolution {
                 ref_str: ref_str.to_string(),
-                reason: format!("{e:?}"),
+                reason: "the $ref chain loops back to itself".to_string(),
             });
         }
+        let resolved = root
+            .resolve_anywhere(ref_str)
+            .map_err(|e| CodeGenError::RefResolution {
+                ref_str: ref_str.to_string(),
+                reason: e.to_string(),
+            })?;
+        if visited.is_empty()
+            && let Some(name) = resolved.definition_name()
+        {
+            from_key = Some(name.to_string());
+        }
+        visited.push(ref_str);
+        current = resolved.schema.object_or_empty();
     }
+    Ok((current, from_key))
+}
 
-    let resolved: &JsonSchema = ref_resolver::resolve_schema_ref_transitive(root, schema.into())
-        .map_err(|e| CodeGenError::RefResolution {
+/// Builds the registry codegen resolves `$ref` through for one root schema.
+fn codegen_registry(schema: &JsonSchema) -> CodeGenResult<Registry<'_>> {
+    Registry::new(schema).map_err(|e: RegistryError| match e.ref_str() {
+        Some(ref_str) => CodeGenError::RefResolution {
             ref_str: ref_str.to_string(),
-            reason: format!("{e:?}"),
-        })?
-        .object_or_empty();
-    Ok((resolved, from_key))
+            reason: e.to_string(),
+        },
+        None => CodeGenError::Registry(e),
+    })
 }
 
 #[expect(clippy::too_many_lines)]
 fn collect_structs(
-    root: &JsonSchema,
+    root: &Registry<'_>,
     schema: &JsonSchema,
     from_key: Option<&str>,
     out: &mut Vec<StructToEmit>,
@@ -1441,12 +1435,12 @@ fn collect_structs(
 #[expect(clippy::too_many_lines)]
 fn collect_structs_all_schemas(
     schemas: &[JsonSchema],
+    registries: &[Registry<'_>],
     settings: &CodeGenSettings,
 ) -> CodeGenResult<Vec<(usize, String, JsonSchema)>> {
     let mut out: Vec<(usize, String, JsonSchema)> = Vec::new();
-    for (schema_idx, schema_root) in schemas.iter().enumerate() {
-        let (effective_root, root_from_key) =
-            resolve_ref_for_codegen(schema_root, schema_root, None)?;
+    for (schema_idx, (schema, schema_root)) in schemas.iter().zip(registries).enumerate() {
+        let (effective_root, root_from_key) = resolve_ref_for_codegen(schema_root, schema, None)?;
         if !effective_root.is_object_with_properties() {
             continue;
         }
@@ -1583,10 +1577,20 @@ fn generate_rust_with_dedupe(
             })
         })
         .collect::<CodeGenResult<Vec<_>>>()?;
+    let registries: Vec<Registry<'_>> = resolved_schemas
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            codegen_registry(s).map_err(|e| CodeGenError::Batch {
+                index: i,
+                source: Box::new(e),
+            })
+        })
+        .collect::<CodeGenResult<Vec<_>>>()?;
 
     let mut enum_values_to_name: EnumValuesToNameMap = BTreeMap::new();
-    for schema in &resolved_schemas {
-        for e in collect_enums(schema, schema, settings)? {
+    for (schema, registry) in resolved_schemas.iter().zip(&registries) {
+        for e in collect_enums(registry, schema, settings)? {
             enum_values_to_name
                 .entry(e.values.clone())
                 .or_insert_with(|| (e.name.clone(), e.description.clone(), e.examples.clone()));
@@ -1603,7 +1607,7 @@ fn generate_rust_with_dedupe(
         .collect();
 
     let collected: Vec<(usize, String, JsonSchema)> =
-        collect_structs_all_schemas(&resolved_schemas, settings)?;
+        collect_structs_all_schemas(&resolved_schemas, &registries, settings)?;
 
     // Build BTreeMap: DedupeKey -> (canonical_name, schema, occurrences)
     let mut map: BTreeMap<DedupeKey, (String, JsonSchema, Vec<(usize, String)>)> = BTreeMap::new();
@@ -1727,7 +1731,7 @@ fn generate_rust_with_dedupe(
             let root_idx: usize = *canonical_name_to_first_schema_idx
                 .get(name)
                 .expect("root schema index for shared struct");
-            let root_schema: &JsonSchema = resolved_schemas.get(root_idx).expect("root schema");
+            let root_schema: &Registry<'_> = registries.get(root_idx).expect("root schema");
             emit_default_functions_for_struct(&mut out, name, schema)?;
             emit_struct_derive_and_attrs(&mut out, name, schema)?;
             emit_struct_fields_with_resolver(
@@ -1851,7 +1855,7 @@ fn generate_rust_with_dedupe(
             if !used_shared.is_empty() {
                 writeln!(buf).ok();
             }
-            let root_schema: &JsonSchema = resolved_schemas
+            let root_schema: &Registry<'_> = registries
                 .get(schema_idx)
                 .expect("root schema for local emission");
             for (name, schema) in &local_structs {
@@ -2063,7 +2067,7 @@ fn emit_default_functions_for_struct(
 /// Emit struct fields; when resolver is Some (dedupe mode), use canonical type names for nested objects.
 #[expect(clippy::too_many_lines, clippy::too_many_arguments)]
 fn emit_struct_fields_with_resolver(
-    root: &JsonSchema,
+    root: &Registry<'_>,
     struct_name: &str,
     schema: &JsonSchema,
     out: &mut impl Write,
@@ -2271,7 +2275,7 @@ fn emit_struct_fields_with_resolver(
 /// Emit a single struct's fields to `out`.
 #[expect(clippy::too_many_lines, clippy::too_many_arguments)]
 fn emit_struct_fields(
-    root: &JsonSchema,
+    root: &Registry<'_>,
     struct_name: &str,
     schema: &JsonSchema,
     out: &mut impl Write,
@@ -2493,8 +2497,9 @@ fn emit_rust(
     out: &mut impl Write,
     settings: &CodeGenSettings,
 ) -> CodeGenResult<()> {
+    let registry: Registry<'_> = codegen_registry(schema)?;
     let root_unresolved = resolve_all_of_for_codegen(schema)?;
-    let (root, root_from_key) = resolve_ref_for_codegen(schema, &root_unresolved, None)?;
+    let (root, root_from_key) = resolve_ref_for_codegen(&registry, &root_unresolved, None)?;
     if root.any_of.as_ref().is_some_and(std::vec::Vec::is_empty) {
         return Err(CodeGenError::AnyOfEmpty);
     }
@@ -2523,16 +2528,16 @@ fn emit_rust(
         vec![root.clone()]
     };
 
-    let enums: Vec<EnumToEmit> = collect_enums(schema, root, settings)?;
+    let enums: Vec<EnumToEmit> = collect_enums(&registry, root, settings)?;
     let enum_values_to_name: BTreeMap<Vec<String>, String> = enums
         .iter()
         .map(|e| (e.values.clone(), e.name.clone()))
         .collect();
 
     let anyof_enums: Vec<AnyOfEnumToEmit> =
-        collect_anyof_enums(schema, root, settings, &enum_values_to_name)?;
+        collect_anyof_enums(&registry, root, settings, &enum_values_to_name)?;
     let oneof_enums: Vec<OneOfEnumToEmit> =
-        collect_oneof_enums(schema, root, settings, &enum_values_to_name)?;
+        collect_oneof_enums(&registry, root, settings, &enum_values_to_name)?;
 
     let mut structs: Vec<StructToEmit> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -2545,7 +2550,7 @@ fn emit_rust(
             root_from_key.clone()
         };
         collect_structs(
-            schema,
+            &registry,
             r,
             from_key.as_deref(),
             &mut structs,
@@ -2585,7 +2590,7 @@ fn emit_rust(
         emit_default_functions_for_struct(out, &st.name, &st.schema)?;
         emit_struct_derive_and_attrs(out, &st.name, &st.schema)?;
         emit_struct_fields(
-            schema,
+            &registry,
             &st.name,
             &st.schema,
             out,
@@ -3027,10 +3032,15 @@ pub struct Root {
         assert!(
             matches!(
                 actual,
-                Err(CodeGenError::RefResolution { ref ref_str, ref reason })
-                if ref_str == "#/$defs/Missing" && reason.contains("DefsMissing")
+                Err(CodeGenError::Batch { index: 0, ref source })
+                if matches!(
+                    source.as_ref(),
+                    CodeGenError::RefResolution { ref_str, reason }
+                    if ref_str == "#/$defs/Missing"
+                    && *reason == "$ref \"#/$defs/Missing\" (\"json-schema:///#/$defs/Missing\") does not resolve: no such location"
+                )
             ),
-            "expected RefResolution with DefsMissing, got: {actual:?}"
+            "expected RefResolution for the missing definition, got: {actual:?}"
         );
     }
 
@@ -3052,9 +3062,9 @@ pub struct Root {
             matches!(
                 actual,
                 Err(CodeGenError::RefResolution { ref ref_str, ref reason })
-                if ref_str == "#/$defs/A" && reason.contains("RefCycle")
+                if ref_str == "#/$defs/A" && reason == "the $ref chain loops back to itself"
             ),
-            "expected RefResolution with RefCycle, got: {actual:?}"
+            "expected RefResolution for the $ref loop, got: {actual:?}"
         );
     }
 
