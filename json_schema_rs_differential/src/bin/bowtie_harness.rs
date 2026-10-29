@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn unresolvable_ref_skips_case() {
         let expected: CaseOutcome = CaseOutcome::Skipped(
-            "unsupported $ref: \"#/$defs/missing\": $ref \"#/$defs/missing\" \
+            "unsupported $ref: \"#/$defs/missing\": $ref \"#/$defs/missing\" at root \
              (\"json-schema:///#/$defs/missing\") does not resolve: no such location"
                 .to_string(),
         );

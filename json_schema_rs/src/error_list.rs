@@ -30,6 +30,11 @@ impl<E> ErrorList<E> {
         (!errors.is_empty()).then_some(ErrorList { errors })
     }
 
+    /// Appends an error found after the others.
+    pub fn push(&mut self, error: E) {
+        self.errors.push(error);
+    }
+
     /// The first error found.
     #[must_use]
     pub fn first(&self) -> &E {
@@ -106,6 +111,15 @@ mod tests {
         let actual: Vec<String> = ErrorList::from_vec(vec!["b".to_string(), "a".to_string()])
             .unwrap()
             .into_vec();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn push_appends_after_the_others() {
+        let mut list: ErrorList<String> = ErrorList::new("a".to_string());
+        list.push("b".to_string());
+        let expected: Vec<String> = vec!["a".to_string(), "b".to_string()];
+        let actual: Vec<String> = list.into_vec();
         assert_eq!(expected, actual);
     }
 
