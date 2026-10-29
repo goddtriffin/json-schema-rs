@@ -19,6 +19,18 @@ pub enum JsonSchemaParseError {
         /// JSON Pointer to the schema object that has the key (the root is the empty pointer).
         path: JsonPointer,
     },
+    /// A keyword's value is not one the document's dialect allows, e.g. `"minLength": 2.0` under
+    /// [`IntegerSemantics::Lexical`](super::IntegerSemantics::Lexical) (draft 4).
+    InvalidKeywordValue {
+        /// The keyword.
+        keyword: String,
+        /// JSON Pointer to the schema object that has the keyword (the root is the empty pointer).
+        path: JsonPointer,
+        /// The value as written.
+        value: serde_json::Value,
+        /// What the dialect allows.
+        expected: &'static str,
+    },
     /// I/O error when reading from a reader or file.
     Io(std::io::Error),
     /// `$schema` is not a recognised metaschema URI and
@@ -40,6 +52,16 @@ impl fmt::Display for JsonSchemaParseError {
                     path.display_root_or_path()
                 )
             }
+            JsonSchemaParseError::InvalidKeywordValue {
+                keyword,
+                path,
+                value,
+                expected,
+            } => write!(
+                f,
+                "invalid \"{keyword}\" value {value} at {}: expected {expected}",
+                path.display_root_or_path()
+            ),
             JsonSchemaParseError::Io(e) => write!(f, "io error: {e}"),
             JsonSchemaParseError::UnknownSchemaUri { uri } => {
                 write!(f, "unknown $schema \"{uri}\"")
@@ -53,6 +75,7 @@ impl std::error::Error for JsonSchemaParseError {
         match self {
             JsonSchemaParseError::Serde(e) => Some(e),
             JsonSchemaParseError::UnknownField { .. }
+            | JsonSchemaParseError::InvalidKeywordValue { .. }
             | JsonSchemaParseError::UnknownSchemaUri { .. } => None,
             JsonSchemaParseError::Io(e) => Some(e),
         }
