@@ -3,7 +3,7 @@
 use super::dialect::{
     Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, ResolvedDialect,
 };
-use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
+use super::error::JsonSchemaParseError;
 use super::json_schema::JsonSchema;
 use super::spec_version::SpecVersion;
 
@@ -217,7 +217,7 @@ impl JsonSchemaSettings {
 pub fn resolve_dialect(
     schema: &JsonSchema,
     settings: &JsonSchemaSettings,
-) -> JsonSchemaParseResult<ResolvedDialect> {
+) -> Result<ResolvedDialect, JsonSchemaParseError> {
     resolve_dialect_for_uri(schema.schema.as_deref(), settings)
 }
 
@@ -225,7 +225,7 @@ pub fn resolve_dialect(
 pub(crate) fn resolve_dialect_for_uri(
     schema_uri: Option<&str>,
     settings: &JsonSchemaSettings,
-) -> JsonSchemaParseResult<ResolvedDialect> {
+) -> Result<ResolvedDialect, JsonSchemaParseError> {
     let mut warnings: Vec<DialectWarning> = Vec::new();
     let fallback: SpecVersion = settings
         .default_spec_version

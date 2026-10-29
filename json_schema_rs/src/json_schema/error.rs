@@ -4,8 +4,8 @@ use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use std::fmt;
 
-/// Result type for JSON Schema parsing operations.
-pub type JsonSchemaParseResult<T> = Result<T, JsonSchemaParseError>;
+/// Result type for JSON Schema parsing operations: on failure, every problem found.
+pub type JsonSchemaParseResult<T> = Result<T, JsonSchemaParseErrors>;
 
 /// Every problem parsing one schema document found, one [`JsonSchemaParseError`] each.
 pub type JsonSchemaParseErrors = ErrorList<JsonSchemaParseError>;
@@ -106,5 +106,17 @@ impl From<serde_json::Error> for JsonSchemaParseError {
 impl From<std::io::Error> for JsonSchemaParseError {
     fn from(e: std::io::Error) -> Self {
         JsonSchemaParseError::Io(e)
+    }
+}
+
+impl From<serde_json::Error> for JsonSchemaParseErrors {
+    fn from(e: serde_json::Error) -> Self {
+        ErrorList::new(JsonSchemaParseError::Serde(e))
+    }
+}
+
+impl From<std::io::Error> for JsonSchemaParseErrors {
+    fn from(e: std::io::Error) -> Self {
+        ErrorList::new(JsonSchemaParseError::Io(e))
     }
 }
