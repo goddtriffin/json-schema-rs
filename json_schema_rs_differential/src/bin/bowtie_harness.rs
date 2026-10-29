@@ -26,8 +26,8 @@ use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
-    JsonSchemaParseError, JsonSchemaSettings, Schema, SpecVersion, ValidationError,
-    ValidationResult, validate,
+    JsonSchemaParseError, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidationError,
+    ValidationResult, validate_with_registry,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -102,12 +102,13 @@ enum OutputFormat {
     Annotations,
 }
 
-/// A test case: one schema and the instances to validate against it. The `registry` of remote
-/// schemas is deliberately not read: remote references are unsupported, so cases needing them
-/// surface as skips or disagreements.
+/// A test case: one schema, the remote documents it may reference (by URI), and the instances
+/// to validate against it.
 #[derive(Debug, Deserialize)]
 struct Case {
     schema: Value,
+    #[serde(default)]
+    registry: Map<String, Value>,
     tests: Vec<Test>,
 }
 
@@ -183,21 +184,14 @@ fn dialect_spec_version(uri: &str) -> Option<SpecVersion> {
         .map(|(_, spec_version)| *spec_version)
 }
 
-/// Spec version for one schema: its own `$schema` when recognized, otherwise the current dialect.
-fn case_spec_version(schema: &Value, dialect: SpecVersion) -> SpecVersion {
-    schema
-        .get("$schema")
-        .and_then(Value::as_str)
-        .and_then(SpecVersion::from_schema_uri)
-        .unwrap_or(dialect)
-}
-
-/// Strict ingestion settings for a spec version: the version's defaults with keys the draft does
-/// not define rejected, so they surface as skips rather than silently ignored keys.
-fn strict_settings(spec_version: SpecVersion) -> JsonSchemaSettings {
-    let mut settings: JsonSchemaSettings = spec_version.default_schema_settings();
-    settings.disallow_unknown_fields = true;
-    settings
+/// Strict ingestion settings for a case: Bowtie's current dialect is the default draft (a schema
+/// with its own `$schema` follows that, a custom metaschema through the registry), and keys the
+/// draft does not define are rejected, so they surface as skips rather than ignored keys.
+fn strict_settings(dialect: SpecVersion) -> JsonSchemaSettings {
+    JsonSchemaSettings::builder()
+        .default_spec_version(dialect)
+        .disallow_unknown_fields(true)
+        .build()
 }
 
 /// Skip message for a schema that strict parsing rejected.
@@ -224,7 +218,9 @@ fn capability_gap_message(error: &ValidationError) -> Option<String> {
         ValidationError::InvalidRef {
             ref_str, reason, ..
         } => Some(format!("unsupported $ref: \"{ref_str}\": {reason}")),
-        ValidationError::InvalidPatternInSchema { .. } => Some(format!("unsupported: {error}")),
+        ValidationError::InvalidPatternInSchema { .. } | ValidationError::InvalidSchema { .. } => {
+            Some(format!("unsupported: {error}"))
+        }
         _ => None,
     }
 }
@@ -250,22 +246,38 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
             case.tests.len()
         ]);
     }
-    let settings: JsonSchemaSettings = strict_settings(case_spec_version(&case.schema, dialect));
+    let settings: JsonSchemaSettings = strict_settings(dialect);
     let schema: Schema = match catch_panic(|| Schema::new_from_serde_value(&case.schema, &settings))
     {
         Ok(Ok(schema)) => schema,
         Ok(Err(error)) => return CaseOutcome::Skipped(parse_skip_message(&error)),
         Err(panic_message) => return CaseOutcome::Errored(panic_message),
     };
+    let registry: Registry<'_> = match catch_panic(|| {
+        let mut builder = Registry::builder().settings(settings.clone());
+        for (uri, document) in &case.registry {
+            builder = builder.document(uri.clone(), document.clone());
+        }
+        builder.build(&schema)
+    }) {
+        Ok(Ok(registry)) => registry,
+        Ok(Err(error)) => {
+            return CaseOutcome::Skipped(match error.ref_str() {
+                Some(ref_str) => format!("unsupported $ref: \"{ref_str}\": {error}"),
+                None => format!("unsupported schema: {error}"),
+            });
+        }
+        Err(panic_message) => return CaseOutcome::Errored(panic_message),
+    };
     let outcomes: Vec<TestOutcome> = case
         .tests
         .iter()
-        .map(
-            |test: &Test| match catch_panic(|| validate(&schema, &test.instance)) {
+        .map(|test: &Test| {
+            match catch_panic(|| validate_with_registry(&registry, &test.instance)) {
                 Ok(result) => classify(&result),
                 Err(panic_message) => TestOutcome::Errored(panic_message),
-            },
-        )
+            }
+        })
         .collect();
     CaseOutcome::Results(outcomes)
 }
@@ -385,8 +397,8 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::{
         Case, CaseOutcome, Command, Harness, OutputFormat, SpecVersion, TestOutcome,
-        ValidationError, ValidationResult, case_spec_version, catch_panic, classify,
-        dialect_spec_version, run_case, run_response,
+        ValidationError, ValidationResult, catch_panic, classify, dialect_spec_version, run_case,
+        run_response,
     };
     use json_schema_rs::JsonPointer;
     use serde::Deserialize;
@@ -499,18 +511,23 @@ mod tests {
     }
 
     #[test]
-    fn case_spec_version_honors_schema_keyword() {
-        let schema: Value = json!({"$schema": "http://json-schema.org/draft-06/schema#"});
-        let expected: SpecVersion = SpecVersion::Draft06;
-        let actual: SpecVersion = case_spec_version(&schema, SpecVersion::Draft202012);
+    fn schema_keyword_overrides_session_dialect() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Verdict(false)]);
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": {"$schema": "http://json-schema.org/draft-04/schema#", "type": "integer"},
+            "tests": [{"instance": 1.0}]
+        }));
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn case_spec_version_falls_back_to_dialect() {
-        let schema: Value = json!({"type": "string"});
-        let expected: SpecVersion = SpecVersion::Draft07;
-        let actual: SpecVersion = case_spec_version(&schema, SpecVersion::Draft07);
+    fn session_dialect_applies_without_schema_keyword() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Verdict(false)]);
+        let actual: CaseOutcome = run_case(
+            &case(&json!({"schema": {"type": "integer"}, "tests": [{"instance": 1.0}]})),
+            SpecVersion::Draft04,
+            OutputFormat::Flag,
+        );
         assert_eq!(expected, actual);
     }
 
@@ -594,14 +611,31 @@ mod tests {
     }
 
     #[test]
-    fn unresolvable_ref_skips_test() {
-        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Skipped(
-            "unsupported $ref: \"#/$defs/missing\": DefsMissing { ref_str: \"#/$defs/missing\" }"
+    fn unresolvable_ref_skips_case() {
+        let expected: CaseOutcome = CaseOutcome::Skipped(
+            "unsupported $ref: \"#/$defs/missing\": $ref \"#/$defs/missing\" \
+             (\"json-schema:///#/$defs/missing\") does not resolve: no such location"
                 .to_string(),
-        )]);
+        );
         let actual: CaseOutcome = run_flag(&json!({
             "schema": {"$ref": "#/$defs/missing"},
             "tests": [{"instance": 1}]
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn registry_document_resolves_remote_ref() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![
+            TestOutcome::Verdict(true),
+            TestOutcome::Verdict(false),
+        ]);
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": {"$ref": "http://localhost:1234/integer.json"},
+            "registry": {
+                "http://localhost:1234/integer.json": {"type": "integer"}
+            },
+            "tests": [{"instance": 1}, {"instance": "a"}]
         }));
         assert_eq!(expected, actual);
     }

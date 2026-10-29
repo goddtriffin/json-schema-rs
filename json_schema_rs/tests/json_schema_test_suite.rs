@@ -9,16 +9,22 @@
 //! - an **unexpected pass**: a test in the manifest now passes, so its entry must be removed;
 //! - a **stale entry**: the manifest names a test that does not exist in the suite.
 //!
+//! Each group's schema gets a [`Registry`] whose retriever serves the suite's `remotes/` folder
+//! under `http://localhost:1234/`, as the suite specifies. Each directory's draft is the default
+//! draft: a schema without `$schema` uses it, one with `$schema` follows that (so a custom
+//! metaschema is found through the registry).
+//!
 //! The suite must be cloned at `research/json-schema-test-suite/` (`make vendor_test_suite`);
 //! the run hard-fails when it is missing. `make update_suite_xfail` rewrites the manifest from
 //! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`).
 
 use json_schema_rs::{
-    FormatMode, JsonSchemaSettings, Schema, SpecVersion, ValidationError, validate,
+    FormatMode, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidationError, validate,
+    validate_with_registry,
 };
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
@@ -133,9 +139,33 @@ fn describe_errors(errors: &[ValidationError]) -> String {
     messages.join("; ")
 }
 
-/// Runs one suite test; a panic in our library is a failure, not a crash of the run.
-fn run_test(schema: &Schema, test: &SuiteTest) -> Outcome {
-    let result = catch_unwind(AssertUnwindSafe(|| validate(schema, &test.data)));
+/// The base URI the suite serves its `remotes/` folder under.
+const REMOTES_BASE: &str = "http://localhost:1234/";
+
+/// Every document under `remotes/`, keyed by its URI under [`REMOTES_BASE`].
+fn load_remotes(root: &Path) -> Result<HashMap<String, serde_json::Value>, String> {
+    let remotes_dir: PathBuf = root.join("remotes");
+    let files: Vec<PathBuf> = collect_json_files(&remotes_dir)
+        .map_err(|e| format!("failed to walk {}: {e}", remotes_dir.display()))?;
+    let mut remotes: HashMap<String, serde_json::Value> = HashMap::new();
+    for file in files {
+        let contents: String = std::fs::read_to_string(&file)
+            .map_err(|e| format!("failed to read {}: {e}", file.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&contents)
+            .map_err(|e| format!("failed to parse {}: {e}", file.display()))?;
+        let uri: String = format!("{REMOTES_BASE}{}", relative_file_name(&remotes_dir, &file));
+        remotes.insert(uri, value);
+    }
+    Ok(remotes)
+}
+
+/// Runs one suite test; a panic in our library is a failure, not a crash of the run. A schema
+/// whose registry could not be built is validated with [`validate`], which reports why.
+fn run_test(schema: &Schema, registry: Option<&Registry<'_>>, test: &SuiteTest) -> Outcome {
+    let result = catch_unwind(AssertUnwindSafe(|| match registry {
+        Some(registry) => validate_with_registry(registry, &test.data),
+        None => validate(schema, &test.data),
+    }));
     match (result, test.valid) {
         (Err(_), _) => Outcome::Failed("validator panicked".to_string()),
         (Ok(Ok(())), true) | (Ok(Err(_)), false) => Outcome::Passed,
@@ -156,6 +186,7 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
             tests_dir.display()
         ));
     }
+    let remotes: HashMap<String, serde_json::Value> = load_remotes(root)?;
     let mut cases: Vec<Case> = Vec::new();
     for (draft, spec_version) in DRAFTS {
         let draft_dir: PathBuf = tests_dir.join(draft);
@@ -166,7 +197,7 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
         }
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
-            .spec_version(spec_version)
+            .default_spec_version(spec_version)
             .build();
         // The suite's `optional/format/` tests are written for implementations that assert
         // `format`, which 2019-09 and 2020-12 do not by default.
@@ -194,9 +225,20 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
                     Ok(Err(e)) => Err(format!("schema not supported: {e}")),
                     Err(_) => Err("schema parser panicked".to_string()),
                 };
+                let registry: Option<Registry<'_>> = schema.as_ref().ok().and_then(|schema| {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        Registry::builder()
+                            .retriever(&remotes)
+                            .settings(settings.clone())
+                            .build(schema)
+                            .ok()
+                    }))
+                    .ok()
+                    .flatten()
+                });
                 for test in group.tests {
                     let outcome: Outcome = match &schema {
-                        Ok(schema) => run_test(schema, &test),
+                        Ok(schema) => run_test(schema, registry.as_ref(), &test),
                         Err(reason) => Outcome::Failed(reason.clone()),
                     };
                     cases.push(Case {

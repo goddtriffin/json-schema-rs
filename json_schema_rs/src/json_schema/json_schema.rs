@@ -4,7 +4,7 @@ use super::dialect::{
     Dialect, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
 };
 use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
-use super::settings::{JsonSchemaSettings, resolve_dialect_for_uri};
+use super::settings::{DialectSettings, JsonSchemaSettings, resolve_dialect_for_uri};
 use super::type_set::{JsonType, TypeSet};
 use crate::json_pointer::JsonPointer;
 use memchr::memmem;
@@ -497,12 +497,13 @@ pub struct JsonSchema {
     #[serde(flatten)]
     pub extensions: BTreeMap<String, Value>,
 
-    /// The effective dialect when the parsing settings chose one other than what `$schema` alone
-    /// selects (a pinned spec version or a per-flag override). `None` follows `$schema` (Draft
-    /// 2020-12 when absent). Read the effective dialect with [`JsonSchema::dialect`]. Not
-    /// serialized.
+    /// The dialect settings this root was parsed with, when any is set (a forced or default
+    /// draft, a per-flag override); `None` means the defaults (follow `$schema`, Draft 2020-12
+    /// when absent). [`JsonSchema::dialect`] and the [`Registry`](super::Registry) read them;
+    /// the registry applies them to every schema resource of the document. `None` on every
+    /// subschema. Not serialized.
     #[serde(skip)]
-    pub dialect: Option<Dialect>,
+    pub dialect_settings: Option<DialectSettings>,
 }
 
 /// Generates the [`Field`] enum of the keys [`JsonSchema`] holds, its lookup from a key, and the
@@ -754,7 +755,7 @@ fn parse_raw(raw: RawSchema<'_>, settings: &JsonSchemaSettings) -> JsonSchemaPar
                 let schema_uri: Option<&str> = schema.as_object().and_then(|s| s.schema.as_deref());
                 let resolved: ResolvedDialect = resolve_dialect_for_uri(schema_uri, settings)?;
                 if !needs_value_pass(raw, resolved.dialect) {
-                    return Ok(finish_parse(schema, &resolved));
+                    return Ok(finish_parse(schema, &resolved, settings));
                 }
             }
             Err(error) => {
@@ -819,7 +820,7 @@ fn parse_value_in_dialect(
         Cow::Owned(value) => serde_json::from_value(value)?,
         Cow::Borrowed(value) => Schema::deserialize(value)?,
     };
-    Ok(finish_parse(schema, resolved))
+    Ok(finish_parse(schema, resolved, settings))
 }
 
 /// The count keywords: their value is a non-negative integer.
@@ -963,16 +964,21 @@ fn path_to(steps: &[PathStep<'_>], at: Option<usize>) -> JsonPointer {
     JsonPointer::from(segments)
 }
 
-/// Logs the dialect warnings and records the dialect on a root schema object when the settings
-/// changed it (a boolean schema means the same in every dialect).
-fn finish_parse(mut schema: Schema, resolved: &ResolvedDialect) -> Schema {
+/// Logs the dialect warnings and records the dialect settings on a root schema object when any
+/// is set (a boolean schema means the same in every dialect).
+fn finish_parse(
+    mut schema: Schema,
+    resolved: &ResolvedDialect,
+    settings: &JsonSchemaSettings,
+) -> Schema {
     for warning in &resolved.warnings {
         log::debug!("json-schema-rs: {warning}");
     }
+    let dialect_settings: DialectSettings = settings.dialect_settings();
     if let Some(object) = schema.as_object_mut()
-        && resolved.dialect != object.dialect()
+        && dialect_settings != DialectSettings::default()
     {
-        object.dialect = Some(resolved.dialect);
+        object.dialect_settings = Some(dialect_settings);
     }
     schema
 }
@@ -1112,16 +1118,24 @@ fn require_object(schema: Schema) -> JsonSchemaParseResult<JsonSchema> {
 }
 
 impl JsonSchema {
-    /// The effective [`Dialect`] of this schema as a document root: the one recorded at parse
-    /// time when the settings chose it, otherwise the one its `$schema` selects (Draft 2020-12
-    /// when absent or unrecognised).
+    /// The effective [`Dialect`] of this schema as a document root, from its `$schema` and the
+    /// [`dialect_settings`](JsonSchema::dialect_settings) it was parsed with (Draft 2020-12, or
+    /// the default draft, when `$schema` is absent or unrecognised). A custom metaschema's
+    /// `$vocabulary` and embedded resources' `$schema` are the [`Registry`](super::Registry)'s.
     #[must_use]
     pub fn dialect(&self) -> Dialect {
-        self.dialect.unwrap_or_else(|| {
-            resolve_dialect_for_uri(self.schema.as_deref(), &JsonSchemaSettings::default())
-                .map(|resolved| resolved.dialect)
-                .unwrap_or_default()
-        })
+        let dialect_settings: DialectSettings = self.dialect_settings.unwrap_or_default();
+        let settings: JsonSchemaSettings = JsonSchemaSettings {
+            forced_spec_version: dialect_settings.forced_spec_version,
+            default_spec_version: dialect_settings.default_spec_version,
+            format_mode: dialect_settings.format_mode,
+            integer_semantics: dialect_settings.integer_semantics,
+            exclusive_bounds: dialect_settings.exclusive_bounds,
+            ..JsonSchemaSettings::default()
+        };
+        resolve_dialect_for_uri(self.schema.as_deref(), &settings)
+            .map(|resolved| resolved.dialect)
+            .unwrap_or_default()
     }
 
     /// The JSON type codegen builds this schema's Rust type from: the one type of its `type`
@@ -1438,8 +1452,8 @@ impl TryFrom<JsonSchema> for Vec<u8> {
 mod tests {
     use super::{JsonSchema, Schema};
     use crate::json_schema::{
-        Dialect, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaParseError,
-        JsonSchemaSettings, JsonType, SpecVersion, TypeSet, UnknownSchemaUri,
+        Dialect, DialectSettings, ExclusiveBounds, FormatMode, IntegerSemantics,
+        JsonSchemaParseError, JsonSchemaSettings, JsonType, SpecVersion, TypeSet, UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -2519,7 +2533,7 @@ mod tests {
     fn strict_rejects_defs_when_settings_pin_draft7() {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
-            .spec_version(SpecVersion::Draft07)
+            .forced_spec_version(SpecVersion::Draft07)
             .build();
         let expected: StrictOutcome = unknown("$defs", "");
         let actual: StrictOutcome =
@@ -2784,14 +2798,17 @@ mod tests {
     }
 
     #[test]
-    fn schema_document_records_pinned_dialect() {
+    fn schema_document_records_forced_spec_version() {
         let settings: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
-        let expected: Option<Dialect> = Some(Dialect::for_spec_version(SpecVersion::Draft07));
-        let actual: Option<Dialect> = Schema::new_from_str("{}", &settings)
+        let expected: Option<DialectSettings> = Some(DialectSettings {
+            forced_spec_version: Some(SpecVersion::Draft07),
+            ..DialectSettings::default()
+        });
+        let actual: Option<DialectSettings> = Schema::new_from_str("{}", &settings)
             .expect("parse")
             .as_object()
             .expect("object")
-            .dialect;
+            .dialect_settings;
         assert_eq!(expected, actual);
     }
 
@@ -3406,35 +3423,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_without_settings_overrides_records_no_dialect() {
+    fn parse_without_dialect_settings_records_none() {
         let json = r#"{"$schema":"http://json-schema.org/draft-07/schema#"}"#;
         let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Dialect> = None;
-        let actual: Option<Dialect> = schema.dialect;
+        let expected: Option<DialectSettings> = None;
+        let actual: Option<DialectSettings> = schema.dialect_settings;
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn parse_with_pinned_spec_version_records_dialect() {
+    fn parse_with_forced_spec_version_uses_it_over_schema_uri() {
         let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema"}"#;
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .spec_version(SpecVersion::Draft07)
+            .forced_spec_version(SpecVersion::Draft07)
             .build();
         let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
-        let expected: Option<Dialect> = Some(Dialect::for_spec_version(SpecVersion::Draft07));
-        let actual: Option<Dialect> = schema.dialect;
+        let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft07);
+        let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn parse_with_pinned_spec_version_matching_schema_uri_records_no_dialect() {
+    fn parse_with_forced_spec_version_matching_schema_uri_still_records_it() {
         let json = r#"{"$schema":"http://json-schema.org/draft-07/schema#"}"#;
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .spec_version(SpecVersion::Draft07)
+            .forced_spec_version(SpecVersion::Draft07)
             .build();
         let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
-        let expected: Option<Dialect> = None;
-        let actual: Option<Dialect> = schema.dialect;
+        let expected: Option<DialectSettings> = Some(DialectSettings {
+            forced_spec_version: Some(SpecVersion::Draft07),
+            ..DialectSettings::default()
+        });
+        let actual: Option<DialectSettings> = schema.dialect_settings;
         assert_eq!(expected, actual);
     }
 

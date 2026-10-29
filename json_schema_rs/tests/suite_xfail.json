@@ -48,20 +48,6 @@
         "mismatch base schema"
       ]
     },
-    "anchor.json": {
-      "Location-independent identifier": [
-        "match"
-      ],
-      "Location-independent identifier with absolute URI": [
-        "match"
-      ],
-      "Location-independent identifier with base URI change in subschema": [
-        "match"
-      ],
-      "same $anchor with different base uri": [
-        "$ref resolves to /$defs/A/allOf/1"
-      ]
-    },
     "anyOf.json": {
       "anyOf with base schema": [
         "mismatch base schema"
@@ -91,7 +77,7 @@
     },
     "defs.json": {
       "validate definition against metaschema": [
-        "valid definition schema"
+        "invalid definition schema"
       ]
     },
     "dependentRequired.json": {
@@ -283,14 +269,9 @@
         "other mismatch"
       ]
     },
-    "optional/anchor.json": {
-      "$anchor inside an enum is not a real identifier": [
-        "match $ref to $anchor"
-      ]
-    },
     "optional/cross-draft.json": {
       "refs to future drafts are processed as future drafts": [
-        "first item is a string is valid"
+        "first item not a string is invalid"
       ],
       "refs to historic drafts are processed as historic drafts": [
         "missing bar is valid"
@@ -669,11 +650,6 @@
         "no dashes"
       ]
     },
-    "optional/id.json": {
-      "$id inside an enum is not a real identifier": [
-        "match $ref to $id"
-      ]
-    },
     "optional/non-bmp-regex.json": {
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
@@ -681,9 +657,6 @@
       ]
     },
     "optional/refOfUnknownKeyword.json": {
-      "reference internals of known non-applicator": [
-        "match"
-      ],
       "reference of a root arbitrary keyword ": [
         "match",
         "mismatch"
@@ -781,39 +754,9 @@
       ]
     },
     "ref.json": {
-      "$id must be resolved against nearest parent, not just immediate parent": [
-        "number is valid"
-      ],
       "$ref with $recursiveAnchor": [
         "extra items allowed for inner arrays",
         "extra items disallowed for root"
-      ],
-      "Recursive references between schemas": [
-        "valid tree"
-      ],
-      "URN base URI with URN and JSON pointer ref": [
-        "a string is valid"
-      ],
-      "URN base URI with URN and anchor ref": [
-        "a string is valid"
-      ],
-      "URN ref with nested pointer ref": [
-        "a string is valid"
-      ],
-      "empty tokens in $ref json-pointer": [
-        "number is valid"
-      ],
-      "escaped pointer ref": [
-        "percent valid"
-      ],
-      "order of evaluation: $id and $anchor and $ref": [
-        "data is valid against first definition"
-      ],
-      "order of evaluation: $id and $ref": [
-        "data is valid against first definition"
-      ],
-      "order of evaluation: $id and $ref on nested schema": [
-        "data is valid against nested sibling"
       ],
       "ref applies alongside sibling keywords": [
         "ref valid, maxItems invalid"
@@ -821,87 +764,15 @@
       "ref creates new scope when adjacent to keywords": [
         "referenced subschema doesn't see annotations from properties"
       ],
-      "ref to else": [
-        "an integer is valid"
-      ],
-      "ref to if": [
-        "an integer is valid"
-      ],
-      "ref to then": [
-        "an integer is valid"
-      ],
-      "ref with absolute-path-reference": [
-        "a string is valid"
-      ],
-      "refs with quote": [
-        "object with numbers is valid"
-      ],
       "refs with relative uris and defs": [
-        "valid on both fields"
+        "invalid on inner field"
       ],
       "relative pointer ref to array": [
         "match array",
         "mismatch array"
       ],
-      "relative pointer ref to object": [
-        "match"
-      ],
       "relative refs with absolute uris and defs": [
-        "valid on both fields"
-      ],
-      "remote ref, containing refs itself": [
-        "remote ref valid"
-      ],
-      "simple URN base URI with $ref via the URN": [
-        "valid under the URN IDed schema"
-      ]
-    },
-    "refRemote.json": {
-      "$ref to $ref finds detached $anchor": [
-        "number is valid"
-      ],
-      "Location-independent identifier in remote ref": [
-        "integer is valid"
-      ],
-      "anchor within remote ref": [
-        "remote anchor valid"
-      ],
-      "base URI change": [
-        "base URI change ref valid"
-      ],
-      "base URI change - change folder": [
-        "number is valid"
-      ],
-      "base URI change - change folder in subschema": [
-        "number is valid"
-      ],
-      "fragment within remote ref": [
-        "remote fragment valid"
-      ],
-      "ref within remote ref": [
-        "ref within ref valid"
-      ],
-      "remote HTTP ref with different $id": [
-        "string is valid"
-      ],
-      "remote HTTP ref with different URN $id": [
-        "string is valid"
-      ],
-      "remote HTTP ref with nested absolute ref": [
-        "string is valid"
-      ],
-      "remote ref": [
-        "remote ref valid"
-      ],
-      "remote ref with ref to defs": [
-        "valid"
-      ],
-      "retrieved nested refs resolve relative to their URI not $id": [
-        "string is valid"
-      ],
-      "root ref in remote ref": [
-        "null is valid",
-        "string is valid"
+        "invalid on inner field"
       ]
     },
     "unevaluatedItems.json": {
@@ -1050,7 +921,7 @@
         "with invalid unevaluated properties"
       ],
       "unevaluatedProperties with $recursiveRef": [
-        "with no unevaluated properties"
+        "with unevaluated properties"
       ],
       "unevaluatedProperties with $ref": [
         "with unevaluated properties"
@@ -1132,11 +1003,6 @@
         "[true, true] from items array is valid",
         "extra items are invalid even if unique"
       ]
-    },
-    "vocabulary.json": {
-      "schema that uses custom metaschema with with no validation vocabulary": [
-        "no validation: invalid number, but it still validates"
-      ]
     }
   },
   "draft2020-12": {
@@ -1159,20 +1025,6 @@
       ],
       "allOf with base schema": [
         "mismatch base schema"
-      ]
-    },
-    "anchor.json": {
-      "Location-independent identifier": [
-        "match"
-      ],
-      "Location-independent identifier with absolute URI": [
-        "match"
-      ],
-      "Location-independent identifier with base URI change in subschema": [
-        "match"
-      ],
-      "same $anchor with different base uri": [
-        "$ref resolves to /$defs/A/allOf/1"
       ]
     },
     "anyOf.json": {
@@ -1204,7 +1056,7 @@
     },
     "defs.json": {
       "validate definition against metaschema": [
-        "valid definition schema"
+        "invalid definition schema"
       ]
     },
     "dependentRequired.json": {
@@ -1243,31 +1095,28 @@
     },
     "dynamicRef.json": {
       "$dynamicRef avoids the root of each schema, but scopes are still registered": [
-        "data is sufficient for schema at second#/$defs/length"
+        "data is not sufficient for schema at second#/$defs/length"
       ],
       "$dynamicRef points to a boolean schema": [
         "follow $dynamicRef to a false schema"
       ],
       "$dynamicRef skips over intermediate resources - direct reference": [
-        "integer property passes"
+        "string property fails"
       ],
       "$ref and $dynamicAnchor are independent of order - $defs first": [
-        "correct extended schema"
+        "incorrect extended schema"
       ],
       "$ref and $dynamicAnchor are independent of order - $ref first": [
-        "correct extended schema"
+        "incorrect extended schema"
       ],
       "$ref to $dynamicRef finds detached $dynamicAnchor": [
-        "number is valid"
+        "non-number is invalid"
       ],
       "A $dynamicRef resolves to the first $dynamicAnchor still in scope that is encountered when the schema is evaluated": [
-        "An array of strings is valid"
+        "An array containing non-strings is invalid"
       ],
       "A $dynamicRef that initially resolves to a schema with a matching $dynamicAnchor resolves to the first $dynamicAnchor in the dynamic scope": [
-        "The recursive part is valid against the root"
-      ],
-      "A $dynamicRef that initially resolves to a schema without a matching $dynamicAnchor behaves like a normal $ref to $anchor": [
-        "The recursive part doesn't need to validate against the root"
+        "The recursive part is not valid against the root"
       ],
       "A $dynamicRef to a $dynamicAnchor in the same schema resource behaves like a normal $ref to an $anchor": [
         "An array containing non-strings is invalid"
@@ -1275,23 +1124,11 @@
       "A $dynamicRef to an $anchor in the same schema resource behaves like a normal $ref to an $anchor": [
         "An array containing non-strings is invalid"
       ],
-      "A $dynamicRef with a non-matching $dynamicAnchor in the same schema resource behaves like a normal $ref to $anchor": [
-        "Any array is valid"
-      ],
       "A $dynamicRef with intermediate scopes that don't include a matching $dynamicAnchor does not affect dynamic scope resolution": [
-        "An array of strings is valid"
-      ],
-      "A $dynamicRef without a matching $dynamicAnchor in the same schema resource behaves like a normal $ref to $anchor": [
-        "Any array is valid"
+        "An array containing non-strings is invalid"
       ],
       "A $dynamicRef without anchor in fragment behaves identical to $ref": [
-        "An array of numbers is valid"
-      ],
-      "A $ref to a $dynamicAnchor in the same schema resource behaves like a normal $ref to an $anchor": [
-        "An array of strings is valid"
-      ],
-      "An $anchor with the same name as a $dynamicAnchor is not used for dynamic scope resolution": [
-        "Any array is valid"
+        "An array of strings is invalid"
       ],
       "after leaving a dynamic scope, it is not used by a $dynamicRef": [
         "first_scope is not in dynamic scope for the $dynamicRef",
@@ -1302,10 +1139,10 @@
         "string list with number values"
       ],
       "strict-tree schema, guards against misspelled properties": [
-        "instance with correct field"
+        "instance with misspelled field"
       ],
       "tests for implementation dynamic anchor and reference link": [
-        "correct extended schema"
+        "incorrect extended schema"
       ]
     },
     "if-then-else.json": {
@@ -1457,11 +1294,6 @@
         "other mismatch"
       ]
     },
-    "optional/anchor.json": {
-      "$anchor inside an enum is not a real identifier": [
-        "match $ref to $anchor"
-      ]
-    },
     "optional/cross-draft.json": {
       "refs to historic drafts are processed as historic drafts": [
         "first item not a string is valid"
@@ -1497,7 +1329,7 @@
     },
     "optional/dynamicRef.json": {
       "$dynamicRef skips over intermediate resources - pointer reference across resource boundary": [
-        "integer property passes"
+        "string property fails"
       ]
     },
     "optional/ecmascript-regex.json": {
@@ -1860,11 +1692,6 @@
         "no dashes"
       ]
     },
-    "optional/id.json": {
-      "$id inside an enum is not a real identifier": [
-        "match $ref to $id"
-      ]
-    },
     "optional/non-bmp-regex.json": {
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
@@ -1872,9 +1699,6 @@
       ]
     },
     "optional/refOfUnknownKeyword.json": {
-      "reference internals of known non-applicator": [
-        "match"
-      ],
       "reference of a root arbitrary keyword ": [
         "match",
         "mismatch"
@@ -1951,122 +1775,20 @@
       ]
     },
     "ref.json": {
-      "$id must be resolved against nearest parent, not just immediate parent": [
-        "number is valid"
-      ],
-      "Recursive references between schemas": [
-        "valid tree"
-      ],
-      "URN base URI with URN and JSON pointer ref": [
-        "a string is valid"
-      ],
-      "URN base URI with URN and anchor ref": [
-        "a string is valid"
-      ],
-      "URN ref with nested pointer ref": [
-        "a string is valid"
-      ],
-      "empty tokens in $ref json-pointer": [
-        "number is valid"
-      ],
-      "escaped pointer ref": [
-        "percent valid"
-      ],
-      "order of evaluation: $id and $anchor and $ref": [
-        "data is valid against first definition"
-      ],
-      "order of evaluation: $id and $ref": [
-        "data is valid against first definition"
-      ],
-      "order of evaluation: $id and $ref on nested schema": [
-        "data is valid against nested sibling"
-      ],
       "ref applies alongside sibling keywords": [
         "ref valid, maxItems invalid"
       ],
       "ref creates new scope when adjacent to keywords": [
         "referenced subschema doesn't see annotations from properties"
       ],
-      "ref to else": [
-        "an integer is valid"
-      ],
-      "ref to if": [
-        "an integer is valid"
-      ],
-      "ref to then": [
-        "an integer is valid"
-      ],
-      "ref with absolute-path-reference": [
-        "a string is valid"
-      ],
-      "refs with quote": [
-        "object with numbers is valid"
-      ],
       "refs with relative uris and defs": [
-        "valid on both fields"
+        "invalid on inner field"
       ],
       "relative pointer ref to array": [
         "mismatch array"
       ],
-      "relative pointer ref to object": [
-        "match"
-      ],
       "relative refs with absolute uris and defs": [
-        "valid on both fields"
-      ],
-      "remote ref, containing refs itself": [
-        "remote ref valid"
-      ],
-      "simple URN base URI with $ref via the URN": [
-        "valid under the URN IDed schema"
-      ]
-    },
-    "refRemote.json": {
-      "$ref to $ref finds detached $anchor": [
-        "number is valid"
-      ],
-      "Location-independent identifier in remote ref": [
-        "integer is valid"
-      ],
-      "anchor within remote ref": [
-        "remote anchor valid"
-      ],
-      "base URI change": [
-        "base URI change ref valid"
-      ],
-      "base URI change - change folder": [
-        "number is valid"
-      ],
-      "base URI change - change folder in subschema": [
-        "number is valid"
-      ],
-      "fragment within remote ref": [
-        "remote fragment valid"
-      ],
-      "ref within remote ref": [
-        "ref within ref valid"
-      ],
-      "remote HTTP ref with different $id": [
-        "string is valid"
-      ],
-      "remote HTTP ref with different URN $id": [
-        "string is valid"
-      ],
-      "remote HTTP ref with nested absolute ref": [
-        "string is valid"
-      ],
-      "remote ref": [
-        "remote ref valid"
-      ],
-      "remote ref with ref to defs": [
-        "valid"
-      ],
-      "retrieved nested refs resolve relative to their URI not $id": [
-        "string is valid"
-      ],
-      "root ref in remote ref": [
-        "null is valid",
-        "string is valid"
+        "invalid on inner field"
       ]
     },
     "unevaluatedItems.json": {
@@ -2105,7 +1827,7 @@
         "with unevaluated items"
       ],
       "unevaluatedItems with $dynamicRef": [
-        "with no unevaluated items"
+        "with unevaluated items"
       ],
       "unevaluatedItems with $ref": [
         "with unevaluated items"
@@ -2204,7 +1926,7 @@
         "with invalid unevaluated properties"
       ],
       "unevaluatedProperties with $dynamicRef": [
-        "with no unevaluated properties"
+        "with unevaluated properties"
       ],
       "unevaluatedProperties with $ref": [
         "with unevaluated properties"
@@ -2262,11 +1984,6 @@
         "[true, false] from items array is valid",
         "[true, true] from items array is valid"
       ]
-    },
-    "vocabulary.json": {
-      "schema that uses custom metaschema with with no validation vocabulary": [
-        "no validation: invalid number, but it still validates"
-      ]
     }
   },
   "draft4": {
@@ -2321,11 +2038,6 @@
     "anyOf.json": {
       "anyOf with base schema": [
         "mismatch base schema"
-      ]
-    },
-    "definitions.json": {
-      "validate definition against metaschema": [
-        "valid definition schema"
       ]
     },
     "dependencies.json": {
@@ -2596,63 +2308,9 @@
         "$ref resolves to /definitions/base_foo, data does not validate",
         "$ref resolves to /definitions/base_foo, data validates"
       ],
-      "Location-independent identifier": [
-        "match"
-      ],
-      "Location-independent identifier with base URI change in subschema": [
-        "match"
-      ],
-      "Recursive references between schemas": [
-        "valid tree"
-      ],
-      "empty tokens in $ref json-pointer": [
-        "number is valid"
-      ],
-      "escaped pointer ref": [
-        "percent valid"
-      ],
-      "id must be resolved against nearest parent, not just immediate parent": [
-        "number is valid"
-      ],
-      "refs with quote": [
-        "object with numbers is valid"
-      ],
       "relative pointer ref to array": [
         "match array",
         "mismatch array"
-      ],
-      "relative pointer ref to object": [
-        "match"
-      ],
-      "remote ref, containing refs itself": [
-        "remote ref valid"
-      ]
-    },
-    "refRemote.json": {
-      "Location-independent identifier in remote ref": [
-        "integer is valid"
-      ],
-      "base URI change": [
-        "base URI change ref valid"
-      ],
-      "base URI change - change folder": [
-        "number is valid"
-      ],
-      "base URI change - change folder in subschema": [
-        "number is valid"
-      ],
-      "fragment within remote ref": [
-        "remote fragment valid"
-      ],
-      "ref within remote ref": [
-        "ref within ref valid"
-      ],
-      "remote ref": [
-        "remote ref valid"
-      ],
-      "root ref in remote ref": [
-        "null is valid",
-        "string is valid"
       ]
     },
     "uniqueItems.json": {
@@ -2773,11 +2431,6 @@
       ],
       "items + contains": [
         "matches items, does not match contains"
-      ]
-    },
-    "definitions.json": {
-      "validate definition against metaschema": [
-        "valid definition schema"
       ]
     },
     "dependencies.json": {
@@ -3048,11 +2701,6 @@
         "unescaped non US-ASCII characters"
       ]
     },
-    "optional/id.json": {
-      "id inside an enum is not a real identifier": [
-        "match $ref to id"
-      ]
-    },
     "optional/non-bmp-regex.json": {
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
@@ -3114,26 +2762,8 @@
         "$ref resolves to /definitions/base_foo, data does not validate",
         "$ref resolves to /definitions/base_foo, data validates"
       ],
-      "Location-independent identifier": [
-        "match"
-      ],
-      "Location-independent identifier with base URI change in subschema": [
-        "match"
-      ],
-      "Recursive references between schemas": [
-        "valid tree"
-      ],
-      "Reference an anchor with a non-relative URI": [
-        "match"
-      ],
       "URN base URI with NSS": [
         "a non-string is invalid",
-        "a string is valid"
-      ],
-      "URN base URI with URN and JSON pointer ref": [
-        "a string is valid"
-      ],
-      "URN base URI with URN and anchor ref": [
         "a string is valid"
       ],
       "URN base URI with q-component": [
@@ -3144,33 +2774,15 @@
         "a non-string is invalid",
         "a string is valid"
       ],
-      "empty tokens in $ref json-pointer": [
-        "number is valid"
-      ],
-      "escaped pointer ref": [
-        "percent valid"
-      ],
-      "ref with absolute-path-reference": [
-        "a string is valid"
-      ],
-      "refs with quote": [
-        "object with numbers is valid"
-      ],
       "refs with relative uris and defs": [
-        "valid on both fields"
+        "invalid on inner field"
       ],
       "relative pointer ref to array": [
         "match array",
         "mismatch array"
       ],
-      "relative pointer ref to object": [
-        "match"
-      ],
       "relative refs with absolute uris and defs": [
-        "valid on both fields"
-      ],
-      "remote ref, containing refs itself": [
-        "remote ref valid"
+        "invalid on inner field"
       ],
       "simple URN base URI with $ref via the URN": [
         "invalid under the URN IDed schema",
@@ -3179,42 +2791,6 @@
       "simple URN base URI with JSON pointer": [
         "a non-string is invalid",
         "a string is valid"
-      ]
-    },
-    "refRemote.json": {
-      "$ref to $ref finds location-independent $id": [
-        "number is valid"
-      ],
-      "Location-independent identifier in remote ref": [
-        "integer is valid"
-      ],
-      "base URI change": [
-        "base URI change ref valid"
-      ],
-      "base URI change - change folder": [
-        "number is valid"
-      ],
-      "base URI change - change folder in subschema": [
-        "number is valid"
-      ],
-      "fragment within remote ref": [
-        "remote fragment valid"
-      ],
-      "ref within remote ref": [
-        "ref within ref valid"
-      ],
-      "remote ref": [
-        "remote ref valid"
-      ],
-      "remote ref with ref to definitions": [
-        "valid"
-      ],
-      "retrieved nested refs resolve relative to their URI not $id": [
-        "string is valid"
-      ],
-      "root ref in remote ref": [
-        "null is valid",
-        "string is valid"
       ]
     },
     "uniqueItems.json": {
@@ -3328,11 +2904,6 @@
       ],
       "items + contains": [
         "matches items, does not match contains"
-      ]
-    },
-    "definitions.json": {
-      "validate definition against metaschema": [
-        "valid definition schema"
       ]
     },
     "dependencies.json": {
@@ -3488,7 +3059,7 @@
     },
     "optional/cross-draft.json": {
       "refs to future drafts are processed as future drafts": [
-        "present bar is valid"
+        "missing bar is invalid"
       ]
     },
     "optional/ecmascript-regex.json": {
@@ -3817,9 +3388,6 @@
       ]
     },
     "optional/id.json": {
-      "id inside an enum is not a real identifier": [
-        "match $ref to id"
-      ],
       "non-schema object containing a plain-name $id property": [
         "const at const_not_anchor does not match"
       ],
@@ -3884,105 +3452,15 @@
       ]
     },
     "ref.json": {
-      "$id must be resolved against nearest parent, not just immediate parent": [
-        "number is valid"
-      ],
-      "$ref prevents a sibling $id from changing the base uri": [
-        "$ref resolves to /definitions/base_foo, data validates"
-      ],
-      "Location-independent identifier": [
-        "match"
-      ],
-      "Location-independent identifier with base URI change in subschema": [
-        "match"
-      ],
-      "Recursive references between schemas": [
-        "valid tree"
-      ],
-      "Reference an anchor with a non-relative URI": [
-        "match"
-      ],
-      "URN base URI with URN and JSON pointer ref": [
-        "a string is valid"
-      ],
-      "URN base URI with URN and anchor ref": [
-        "a string is valid"
-      ],
-      "empty tokens in $ref json-pointer": [
-        "number is valid"
-      ],
-      "escaped pointer ref": [
-        "percent valid"
-      ],
-      "ref to else": [
-        "an integer is valid"
-      ],
-      "ref to if": [
-        "an integer is valid"
-      ],
-      "ref to then": [
-        "an integer is valid"
-      ],
-      "ref with absolute-path-reference": [
-        "a string is valid"
-      ],
-      "refs with quote": [
-        "object with numbers is valid"
-      ],
       "refs with relative uris and defs": [
-        "valid on both fields"
+        "invalid on inner field"
       ],
       "relative pointer ref to array": [
         "match array",
         "mismatch array"
       ],
-      "relative pointer ref to object": [
-        "match"
-      ],
       "relative refs with absolute uris and defs": [
-        "valid on both fields"
-      ],
-      "remote ref, containing refs itself": [
-        "remote ref valid"
-      ],
-      "simple URN base URI with $ref via the URN": [
-        "valid under the URN IDed schema"
-      ]
-    },
-    "refRemote.json": {
-      "$ref to $ref finds location-independent $id": [
-        "number is valid"
-      ],
-      "Location-independent identifier in remote ref": [
-        "integer is valid"
-      ],
-      "base URI change": [
-        "base URI change ref valid"
-      ],
-      "base URI change - change folder": [
-        "number is valid"
-      ],
-      "base URI change - change folder in subschema": [
-        "number is valid"
-      ],
-      "fragment within remote ref": [
-        "remote fragment valid"
-      ],
-      "ref within remote ref": [
-        "ref within ref valid"
-      ],
-      "remote ref": [
-        "remote ref valid"
-      ],
-      "remote ref with ref to definitions": [
-        "valid"
-      ],
-      "retrieved nested refs resolve relative to their URI not $id": [
-        "string is valid"
-      ],
-      "root ref in remote ref": [
-        "null is valid",
-        "string is valid"
+        "invalid on inner field"
       ]
     },
     "uniqueItems.json": {

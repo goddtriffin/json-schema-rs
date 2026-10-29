@@ -6,8 +6,10 @@ mod error;
 pub use error::{ValidationError, ValidationResult};
 
 use crate::json_pointer::JsonPointer;
-use crate::json_schema::ref_resolver;
-use crate::json_schema::{Dialect, JsonSchema, JsonType, Schema, SchemaRef, TypeSet};
+use crate::json_schema::{
+    Dialect, JsonSchema, JsonType, Registry, RegistryError, Schema, SchemaRef, Scope, TypeSet,
+    VocabularyKind,
+};
 use crate::number::{self, JsonEqKey};
 use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
@@ -37,7 +39,13 @@ fn value_to_display_string(v: &Value) -> String {
 /// schema (`&Schema`): `true` accepts every instance and `false` none. Boolean schemas are
 /// honoured at every subschema position too. Type-specific keywords (`required`, `minLength`,
 /// `items`, `minimum`, ...) apply to instances of their kind whether or not `type` is present.
-/// Resolves fragment-only `$ref` against the root schema.
+///
+/// `$ref` is resolved through a [`Registry`] built for this call with the defaults of
+/// [`Registry::new`] (in-document references, `$id` / `$anchor` resources, the embedded
+/// standard metaschemas; no retrieval). A schema whose registry cannot be built (a dangling
+/// `$ref`, a duplicate `$id`, ...) fails every instance with one error describing why. To
+/// validate many instances, or to give the registry other documents, build the registry once
+/// and call [`validate_with_registry`].
 ///
 /// # Errors
 ///
@@ -58,14 +66,86 @@ fn value_to_display_string(v: &Value) -> String {
 /// assert!(validate(&never, &instance).is_err());
 /// ```
 pub fn validate<'a>(schema: impl Into<SchemaRef<'a>>, instance: &Value) -> ValidationResult {
-    match schema.into() {
-        SchemaRef::Bool(true) => Ok(()),
-        SchemaRef::Bool(false) => Err(vec![ValidationError::FalseSchema {
+    match Registry::new(schema) {
+        Ok(registry) => validate_with_registry(&registry, instance),
+        Err(error) => Err(vec![registry_error(&error)]),
+    }
+}
+
+/// Validates `instance` against the root schema of `registry`, resolving every `$ref` through
+/// it. See [`validate`] for what is checked.
+///
+/// # Errors
+///
+/// Returns `Err(errors)` when the instance does not conform to the schema.
+///
+/// # Example
+///
+/// ```
+/// use json_schema_rs::{JsonSchema, Registry, validate_with_registry};
+/// use serde_json::json;
+///
+/// let schema: JsonSchema = JsonSchema::try_from(
+///     r#"{"$id":"https://example.com/root.json","items":{"$ref":"item.json"},
+///        "$defs":{"item":{"$id":"item.json","type":"integer"}}}"#,
+/// )
+/// .unwrap();
+/// let registry: Registry<'_> = Registry::new(&schema).unwrap();
+/// assert!(validate_with_registry(&registry, &json!([1, 2])).is_ok());
+/// assert!(validate_with_registry(&registry, &json!(["a"])).is_err());
+/// ```
+pub fn validate_with_registry(registry: &Registry<'_>, instance: &Value) -> ValidationResult {
+    validate_in(registry, registry.root_scope(), registry.root(), instance)
+}
+
+/// The error every instance gets when the schema's registry cannot be built.
+fn registry_error(error: &RegistryError) -> ValidationError {
+    let instance_path: JsonPointer = JsonPointer::root();
+    match error.ref_str() {
+        Some(ref_str) => ValidationError::InvalidRef {
+            instance_path,
+            ref_str: ref_str.to_string(),
+            reason: error.to_string(),
+        },
+        None => ValidationError::InvalidSchema {
+            instance_path,
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// Follows `schema`'s `$ref` chain (each hop entering the target's scope) to a schema without
+/// `$ref`, returning it and the scope inside it. Keywords next to `$ref` are not evaluated.
+fn follow_refs<'r>(
+    registry: &'r Registry<'_>,
+    mut scope: Scope,
+    mut schema: SchemaRef<'r>,
+) -> Result<(SchemaRef<'r>, Scope), ValidationError> {
+    let mut visited: Vec<(Scope, &'r str)> = Vec::new();
+    loop {
+        let SchemaRef::Object(object) = schema else {
+            return Ok((schema, scope));
+        };
+        let inside: Scope = registry.enter(scope, object);
+        let Some(ref_str) = object.ref_.as_deref() else {
+            return Ok((schema, inside));
+        };
+        let invalid_ref = |reason: String| ValidationError::InvalidRef {
             instance_path: JsonPointer::root(),
-        }]),
-        SchemaRef::Object(root) => {
-            validate_with_root(root, root.dialect(), SchemaRef::Object(root), instance)
+            ref_str: ref_str.to_string(),
+            reason,
+        };
+        if visited.contains(&(inside, ref_str)) {
+            return Err(invalid_ref(
+                "the $ref chain loops back to itself without evaluating anything".to_string(),
+            ));
         }
+        visited.push((inside, ref_str));
+        let resolved = registry
+            .resolve(inside, ref_str)
+            .map_err(|e| invalid_ref(e.to_string()))?;
+        schema = resolved.schema;
+        scope = resolved.scope;
     }
 }
 
@@ -94,44 +174,48 @@ fn type_mismatch(
     }
 }
 
-/// A pending check: a schema applied to an instance at a path.
-type Work<'s, 'v> = (SchemaRef<'s>, &'v Value, JsonPointer);
+/// A pending check: a schema applied to an instance at a path, in a registry scope (the scope
+/// the schema sits in, before entering its own `$id`).
+type Work<'s, 'v> = (SchemaRef<'s>, &'v Value, JsonPointer, Scope);
 
-/// Validates `instance` against `schema`, a subschema of `root`, under the root's `dialect`.
+/// Validates `instance` against `schema`, which sits in `scope` of `registry`.
 #[expect(clippy::too_many_lines)]
-fn validate_with_root(
-    root: &JsonSchema,
-    dialect: Dialect,
+fn validate_in(
+    registry: &Registry<'_>,
+    scope: Scope,
     schema: SchemaRef<'_>,
     instance: &Value,
 ) -> ValidationResult {
     let mut errors: Vec<ValidationError> = Vec::new();
     let mut stack: Vec<Work<'_, '_>> = Vec::new();
-    stack.push((schema, instance, JsonPointer::root()));
+    stack.push((schema, instance, JsonPointer::root(), scope));
 
-    while let Some((schema, instance, instance_path)) = stack.pop() {
-        let schema: &JsonSchema = match ref_resolver::resolve_schema_ref_transitive(root, schema) {
-            Ok(SchemaRef::Object(s)) => s,
-            Ok(SchemaRef::Bool(true)) => continue,
-            Ok(SchemaRef::Bool(false)) => {
+    while let Some((schema, instance, instance_path, scope)) = stack.pop() {
+        let (schema, scope): (&JsonSchema, Scope) = match follow_refs(registry, scope, schema) {
+            Ok((SchemaRef::Object(s), scope)) => (s, scope),
+            Ok((SchemaRef::Bool(true), _)) => continue,
+            Ok((SchemaRef::Bool(false), _)) => {
                 errors.push(ValidationError::FalseSchema { instance_path });
                 continue;
             }
-            Err(e) => {
-                let ref_str: String = schema
-                    .as_object()
-                    .and_then(|s| s.ref_.clone())
-                    .unwrap_or_else(|| "<missing>".to_string());
-                errors.push(ValidationError::InvalidRef {
-                    instance_path: instance_path.clone(),
-                    ref_str,
-                    reason: format!("{e:?}"),
-                });
+            Err(mut e) => {
+                if let ValidationError::InvalidRef {
+                    instance_path: ref mut path,
+                    ..
+                } = e
+                {
+                    path.clone_from(&instance_path);
+                }
+                errors.push(e);
                 continue;
             }
         };
+        let dialect: Dialect = registry.dialect(scope);
+        let assertions: bool = dialect.vocabulary_active(VocabularyKind::Validation);
+        let applicators: bool = dialect.vocabulary_active(VocabularyKind::Applicator);
 
-        if let Some(ref expected) = schema.const_value
+        if assertions
+            && let Some(ref expected) = schema.const_value
             && !number::json_equal(instance, expected)
         {
             let expected_str: String = value_to_display_string(expected);
@@ -143,7 +227,8 @@ fn validate_with_root(
             });
             continue;
         }
-        if let Some(ref allowed) = schema.enum_values
+        if assertions
+            && let Some(ref allowed) = schema.enum_values
             && !allowed.is_empty()
             && !allowed.iter().any(|a| number::json_equal(a, instance))
         {
@@ -156,7 +241,7 @@ fn validate_with_root(
             });
             continue;
         }
-        if let Some(ref any_of) = schema.any_of {
+        if applicators && let Some(ref any_of) = schema.any_of {
             if any_of.is_empty() {
                 errors.push(ValidationError::NoSubschemaMatched {
                     instance_path: instance_path.clone(),
@@ -166,7 +251,7 @@ fn validate_with_root(
                 let mut at_least_one_passed: bool = false;
                 for subschema in any_of {
                     let sub_result: ValidationResult =
-                        validate_with_root(root, dialect, subschema.into(), instance);
+                        validate_in(registry, scope, subschema.into(), instance);
                     if sub_result.is_ok() {
                         at_least_one_passed = true;
                         break;
@@ -181,7 +266,7 @@ fn validate_with_root(
             }
             continue;
         }
-        if let Some(ref one_of) = schema.one_of {
+        if applicators && let Some(ref one_of) = schema.one_of {
             if one_of.is_empty() {
                 errors.push(ValidationError::NoSubschemaMatched {
                     instance_path: instance_path.clone(),
@@ -191,7 +276,7 @@ fn validate_with_root(
                 let mut pass_count: usize = 0;
                 for subschema in one_of {
                     let sub_result: ValidationResult =
-                        validate_with_root(root, dialect, subschema.into(), instance);
+                        validate_in(registry, scope, subschema.into(), instance);
                     if sub_result.is_ok() {
                         pass_count += 1;
                     }
@@ -211,15 +296,17 @@ fn validate_with_root(
             }
             continue;
         }
-        if let Some(ref all_of) = schema.all_of
+        if applicators
+            && let Some(ref all_of) = schema.all_of
             && !all_of.is_empty()
         {
             for subschema in all_of.iter().rev() {
-                stack.push((subschema.into(), instance, instance_path.clone()));
+                stack.push((subschema.into(), instance, instance_path.clone(), scope));
             }
             continue;
         }
-        if let Some(types) = schema.type_
+        if assertions
+            && let Some(types) = schema.type_
             && !types.matches(instance, dialect.integer_semantics)
         {
             errors.push(type_mismatch(types, instance, &instance_path));
@@ -229,12 +316,20 @@ fn validate_with_root(
         // mismatch is reported next to every other keyword the instance breaks.
         match instance {
             Value::Object(obj) => {
-                push_object_work(schema, obj, &instance_path, &mut stack, &mut errors);
+                let work = ObjectWork {
+                    assertions,
+                    applicators,
+                    scope,
+                };
+                push_object_work(schema, obj, &instance_path, work, &mut stack, &mut errors);
             }
-            Value::String(s) => push_string_errors(schema, dialect, s, &instance_path, &mut errors),
+            Value::String(s) if assertions => {
+                push_string_errors(schema, dialect, s, &instance_path, &mut errors);
+            }
             Value::Array(arr) => {
                 let actual_count: u64 = arr.len() as u64;
-                if let Some(min_items) = schema.min_items
+                if assertions
+                    && let Some(min_items) = schema.min_items
                     && arr.len() < min_items.try_into().unwrap_or(usize::MAX)
                 {
                     errors.push(ValidationError::TooFewItems {
@@ -243,7 +338,8 @@ fn validate_with_root(
                         actual_count,
                     });
                 }
-                if let Some(max_items) = schema.max_items
+                if assertions
+                    && let Some(max_items) = schema.max_items
                     && arr.len() > max_items.try_into().unwrap_or(0)
                 {
                     errors.push(ValidationError::TooManyItems {
@@ -252,14 +348,15 @@ fn validate_with_root(
                         actual_count,
                     });
                 }
-                if let Some(ref item_schema) = schema.items {
+                if applicators && let Some(ref item_schema) = schema.items {
                     // Push in reverse order so the first element is checked first.
                     for (i, elem) in arr.iter().enumerate().rev() {
                         let path = instance_path.push(&i.to_string());
-                        stack.push((item_schema.into(), elem, path));
+                        stack.push((item_schema.into(), elem, path, scope));
                     }
                 }
-                if schema.unique_items == Some(true)
+                if assertions
+                    && schema.unique_items == Some(true)
                     && let Some(duplicate) = first_duplicate(arr)
                 {
                     errors.push(ValidationError::DuplicateArrayItems {
@@ -268,8 +365,10 @@ fn validate_with_root(
                     });
                 }
             }
-            Value::Number(n) => push_numeric_errors(schema, n, &instance_path, &mut errors),
-            Value::Null | Value::Bool(_) => {}
+            Value::Number(n) if assertions => {
+                push_numeric_errors(schema, n, &instance_path, &mut errors);
+            }
+            Value::String(_) | Value::Number(_) | Value::Null | Value::Bool(_) => {}
         }
     }
 
@@ -280,6 +379,14 @@ fn validate_with_root(
     }
 }
 
+/// Which vocabularies apply to an object instance, and the scope its subschemas sit in.
+#[derive(Clone, Copy)]
+struct ObjectWork {
+    assertions: bool,
+    applicators: bool,
+    scope: Scope,
+}
+
 /// Checks `required` and queues `properties` and `additionalProperties` for the object instance
 /// `obj`. `additionalProperties: false` reports each extra key by name rather than as a
 /// [`ValidationError::FalseSchema`].
@@ -287,10 +394,14 @@ fn push_object_work<'s, 'v>(
     schema: &'s JsonSchema,
     obj: &'v Map<String, Value>,
     instance_path: &JsonPointer,
+    work: ObjectWork,
     stack: &mut Vec<Work<'s, 'v>>,
     errors: &mut Vec<ValidationError>,
 ) {
-    if let Some(ref required) = schema.required {
+    let scope: Scope = work.scope;
+    if work.assertions
+        && let Some(ref required) = schema.required
+    {
         for name in required {
             if !obj.contains_key(name) {
                 errors.push(ValidationError::MissingRequired {
@@ -300,11 +411,14 @@ fn push_object_work<'s, 'v>(
             }
         }
     }
+    if !work.applicators {
+        return;
+    }
     // Push in reverse order so we pop in schema properties order (first key first).
     let mut pending: Vec<Work<'s, 'v>> = Vec::new();
     for (key, sub_schema) in &schema.properties {
         if let Some(value) = obj.get(key) {
-            pending.push((sub_schema.into(), value, instance_path.push(key)));
+            pending.push((sub_schema.into(), value, instance_path.push(key), scope));
         }
     }
     stack.extend(pending.into_iter().rev());
@@ -322,7 +436,7 @@ fn push_object_work<'s, 'v>(
         Some(sub_schema @ Schema::Object(_)) => {
             for (key, value) in obj {
                 if !schema.properties.contains_key(key) {
-                    stack.push((sub_schema.into(), value, instance_path.push(key)));
+                    stack.push((sub_schema.into(), value, instance_path.push(key), scope));
                 }
             }
         }
@@ -468,7 +582,7 @@ mod tests {
     use super::{ValidationError, ValidationResult, validate};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
-    use crate::json_schema::ref_resolver::RefResolutionError;
+    use crate::json_schema::RegistryError;
     use crate::json_schema::{JsonType, Schema, SchemaRef};
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -527,14 +641,14 @@ mod tests {
         .expect("parse schema");
         let instance = json!({"x": "hi"});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected_reason: String = format!(
-            "{:?}",
-            RefResolutionError::DefsMissing {
-                ref_str: "#/$defs/Missing".to_string()
-            }
-        );
+        let expected_reason: String = RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/Missing".to_string(),
+            target: "json-schema:///#/$defs/Missing".to_string(),
+            reason: "no such location".to_string(),
+        }
+        .to_string();
         let expected: ValidationResult = Err(vec![ValidationError::InvalidRef {
-            instance_path: JsonPointer::root().push("x"),
+            instance_path: JsonPointer::root(),
             ref_str: "#/$defs/Missing".to_string(),
             reason: expected_reason,
         }]);
@@ -556,12 +670,8 @@ mod tests {
         .expect("parse schema");
         let instance = json!({"x": 42});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected_reason: String = format!(
-            "{:?}",
-            RefResolutionError::RefCycle {
-                ref_str: "#/$defs/A".to_string()
-            }
-        );
+        let expected_reason: String =
+            "the $ref chain loops back to itself without evaluating anything".to_string();
         let expected: ValidationResult = Err(vec![ValidationError::InvalidRef {
             instance_path: JsonPointer::root().push("x"),
             ref_str: "#/$defs/A".to_string(),
