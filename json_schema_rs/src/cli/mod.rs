@@ -31,7 +31,9 @@ fn jss_args() -> [Arg; 6] {
         Arg::new("jss-disallow-unknown-fields")
             .long("jss-disallow-unknown-fields")
             .action(clap::ArgAction::SetTrue)
-            .help("JSON Schema Settings: reject schema definitions with unknown keys"),
+            .help(
+                "JSON Schema Settings: reject schema definitions with keys the draft does not define as keywords",
+            ),
         Arg::new("jss-spec-version")
             .long("jss-spec-version")
             .value_name("VERSION")

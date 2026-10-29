@@ -4869,6 +4869,27 @@ mod tests {
     const DRAFT4: &str = "http://json-schema.org/draft-04/schema#";
 
     #[test]
+    fn min_length_integer_valued_decimal_rejects_shorter_string() {
+        let expected: bool = false;
+        let actual: bool = is_valid(r#"{"type":"string","minLength":2.0}"#, r#""a""#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_length_integer_valued_decimal_accepts_long_enough_string() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"type":"string","minLength":2.0}"#, r#""ab""#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn max_items_integer_valued_decimal_rejects_longer_array() {
+        let expected: bool = false;
+        let actual: bool = is_valid(r#"{"type":"array","maxItems":2.0}"#, "[1,2,3]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn integer_accepts_zero_fraction_float() {
         let expected: bool = true;
         let actual: bool = is_valid(r#"{"type":"integer"}"#, "1.0");
