@@ -5,7 +5,7 @@ use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
-use crate::json_schema::{JsonSchema, JsonType, Registry, RegistryError, Schema, TypeSet};
+use crate::json_schema::{JsonSchema, JsonType, Registry, Schema, TypeSet};
 use crate::number;
 use crate::sanitizers::{
     enum_variant_names_with_collision_resolution, sanitize_field_name, sanitize_struct_name,
@@ -1296,13 +1296,7 @@ fn resolve_ref_for_codegen<'a>(
 
 /// Builds the registry codegen resolves `$ref` through for one root schema.
 fn codegen_registry(schema: &JsonSchema) -> CodeGenResult<Registry<'_>> {
-    Registry::new(schema).map_err(|e: RegistryError| match e.ref_str() {
-        Some(ref_str) => CodeGenError::RefResolution {
-            ref_str: ref_str.to_string(),
-            reason: e.to_string(),
-        },
-        None => CodeGenError::Registry(e),
-    })
+    Registry::new(schema).map_err(CodeGenError::Registry)
 }
 
 #[expect(clippy::too_many_lines)]
@@ -2629,7 +2623,7 @@ mod tests {
     use super::CodeGenError;
     use super::{CodeGenBackend, RustBackend, generate_rust, merge_all_of};
     use crate::code_gen::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
-    use crate::json_schema::{JsonSchema, JsonType, Schema};
+    use crate::json_schema::{JsonSchema, JsonType, RegistryError, Schema};
 
     fn default_settings() -> CodeGenSettings {
         CodeGenSettings::builder().build()
@@ -3020,7 +3014,7 @@ pub struct Root {
     }
 
     #[test]
-    fn ref_to_missing_defs_returns_ref_resolution_error() {
+    fn ref_to_missing_defs_returns_registry_error() {
         let json = r##"{
   "type": "object",
   "properties": { "x": { "$ref": "#/$defs/Missing" } }
@@ -3035,12 +3029,16 @@ pub struct Root {
                 Err(CodeGenError::Batch { index: 0, ref source })
                 if matches!(
                     source.as_ref(),
-                    CodeGenError::RefResolution { ref_str, reason }
-                    if ref_str == "#/$defs/Missing"
-                    && *reason == "$ref \"#/$defs/Missing\" (\"json-schema:///#/$defs/Missing\") does not resolve: no such location"
+                    CodeGenError::Registry(errors)
+                    if errors.to_vec() == vec![RegistryError::UnresolvableRef {
+                        ref_str: "#/$defs/Missing".to_string(),
+                        location: "/properties/x".to_string(),
+                        target: "json-schema:///#/$defs/Missing".to_string(),
+                        reason: "no such location".to_string(),
+                    }]
                 )
             ),
-            "expected RefResolution for the missing definition, got: {actual:?}"
+            "expected a registry error for the missing definition, got: {actual:?}"
         );
     }
 

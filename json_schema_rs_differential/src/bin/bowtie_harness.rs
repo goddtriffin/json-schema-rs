@@ -26,8 +26,8 @@ use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
-    JsonSchemaParseError, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidationError,
-    ValidationResult, validate_with_registry,
+    JsonSchemaParseError, JsonSchemaSettings, Registry, RegistryError, Schema, SpecVersion,
+    ValidationError, ValidationResult, validate_with_registry,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -261,7 +261,9 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
         builder.build(&schema)
     }) {
         Ok(Ok(registry)) => registry,
-        Ok(Err(error)) => {
+        Ok(Err(errors)) => {
+            // One skip reason per case, as for parsing, so results stay comparable.
+            let error: &RegistryError = errors.first();
             return CaseOutcome::Skipped(match error.ref_str() {
                 Some(ref_str) => format!("unsupported $ref: \"{ref_str}\": {error}"),
                 None => format!("unsupported schema: {error}"),
