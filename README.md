@@ -161,8 +161,11 @@ struct per shape, emitted in a shared buffer). Use
 this off, or `DedupeMode::Functional` to compare only functional fields (see
 [design.md](design.md)). Use
 `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject
-schema definitions with keys their draft does not define (the error names the key
-and a JSON Pointer to the schema object that has it). By default such keys, and
+schema definitions with keys their draft does not define (each such key is its
+own error, naming the key and a JSON Pointer to the schema object that has it).
+Parsing and `$ref` registry building report every problem they find, not just the
+first (`JsonSchemaParseErrors`, `RegistryErrors`: one error per problem, one per
+line when displayed). By default such keys, and
 keywords this library does not implement, are kept in `JsonSchema::extensions`
 and written back on serialization. Use
 `CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()`
