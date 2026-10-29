@@ -25,34 +25,17 @@
       "items validation adjusts the starting index for additionalItems": [
         "valid items",
         "wrong type of second item"
-      ],
-      "when items is schema, additionalItems does nothing": [
-        "invalid with a array of mixed types"
       ]
     },
     "additionalProperties.json": {
       "additionalProperties being false does not allow other properties": [
-        "an additional property is invalid"
-      ],
-      "additionalProperties can exist by itself": [
-        "an additional invalid property is invalid"
+        "patternProperties are not additional properties"
       ],
       "additionalProperties does not look in applicators": [
         "properties defined in allOf are not examined"
       ],
-      "additionalProperties with propertyNames": [
-        "Valid against propertyNames, but not additionalProperties"
-      ],
-      "additionalProperties with schema": [
-        "an additional invalid property is invalid"
-      ],
-      "dependentSchemas with additionalProperties": [
-        "additionalProperties can't see bar",
-        "additionalProperties can't see bar even when foo2 is present",
-        "additionalProperties doesn't consider dependentSchemas"
-      ],
       "non-ASCII pattern with additionalProperties": [
-        "not matching the pattern is invalid"
+        "matching the pattern is valid"
       ]
     },
     "allOf.json": {
@@ -63,18 +46,6 @@
       ],
       "allOf with base schema": [
         "mismatch base schema"
-      ],
-      "allOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "allOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "allOf with boolean schemas, some false": [
-        "any value is invalid"
-      ],
-      "nested allOf, to check validation semantics": [
-        "anything non-null is invalid"
       ]
     },
     "anchor.json": {
@@ -93,44 +64,7 @@
     },
     "anyOf.json": {
       "anyOf with base schema": [
-        "both anyOf invalid",
         "mismatch base schema"
-      ],
-      "anyOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "anyOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "anyOf with boolean schemas, some true": [
-        "any value is valid"
-      ],
-      "nested anyOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ]
-    },
-    "boolean_schema.json": {
-      "boolean schema 'false'": [
-        "array is invalid",
-        "boolean false is invalid",
-        "boolean true is invalid",
-        "empty array is invalid",
-        "empty object is invalid",
-        "null is invalid",
-        "number is invalid",
-        "object is invalid",
-        "string is invalid"
-      ],
-      "boolean schema 'true'": [
-        "array is valid",
-        "boolean false is valid",
-        "boolean true is valid",
-        "empty array is valid",
-        "empty object is valid",
-        "null is valid",
-        "number is valid",
-        "object is valid",
-        "string is valid"
       ]
     },
     "contains.json": {
@@ -152,9 +86,7 @@
         "empty array is invalid"
       ],
       "items + contains": [
-        "does not match items, matches contains",
-        "matches items, does not match contains",
-        "matches neither items nor contains"
+        "matches items, does not match contains"
       ]
     },
     "defs.json": {
@@ -225,9 +157,6 @@
       ]
     },
     "items.json": {
-      "a schema given for items": [
-        "wrong type of items"
-      ],
       "an array of schemas for items": [
         "JavaScript pseudo-array is valid",
         "array with additional items",
@@ -247,14 +176,6 @@
         "wrong item",
         "wrong sub-item"
       ],
-      "items with boolean schema (false)": [
-        "any non-empty array is invalid",
-        "empty array is valid"
-      ],
-      "items with boolean schema (true)": [
-        "any array is valid",
-        "empty array is valid"
-      ],
       "items with boolean schemas": [
         "array with one item is valid",
         "array with two items is invalid",
@@ -273,22 +194,6 @@
       "minContains < maxContains": [
         "actual < minContains < maxContains",
         "minContains < maxContains < actual"
-      ]
-    },
-    "maxItems.json": {
-      "maxItems validation": [
-        "too long is invalid"
-      ],
-      "maxItems validation with a decimal": [
-        "too long is invalid"
-      ]
-    },
-    "maxLength.json": {
-      "maxLength validation": [
-        "too long is invalid"
-      ],
-      "maxLength validation with a decimal": [
-        "too long is invalid"
       ]
     },
     "maxProperties.json": {
@@ -328,23 +233,6 @@
       ],
       "minContains=2 with contains with a decimal value": [
         "one element matches, invalid minContains"
-      ]
-    },
-    "minItems.json": {
-      "minItems validation": [
-        "too short is invalid"
-      ],
-      "minItems validation with a decimal": [
-        "too short is invalid"
-      ]
-    },
-    "minLength.json": {
-      "minLength validation": [
-        "one grapheme is not long enough",
-        "too short is invalid"
-      ],
-      "minLength validation with a decimal": [
-        "too short is invalid"
       ]
     },
     "minProperties.json": {
@@ -395,32 +283,6 @@
         "other mismatch"
       ]
     },
-    "oneOf.json": {
-      "nested oneOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ],
-      "oneOf with base schema": [
-        "one oneOf valid"
-      ],
-      "oneOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, all true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, more than one true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, one true": [
-        "any value is valid"
-      ],
-      "oneOf with missing optional property": [
-        "both oneOf valid",
-        "first oneOf valid",
-        "neither oneOf valid",
-        "second oneOf valid"
-      ]
-    },
     "optional/anchor.json": {
       "$anchor inside an enum is not a real identifier": [
         "match $ref to $anchor"
@@ -463,27 +325,11 @@
       ]
     },
     "optional/ecmascript-regex.json": {
-      "\\d in pattern matches [0-9], not unicode digits": [
-        "ascii non-digits",
-        "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
       "\\d in patternProperties matches [0-9], not unicode digits": [
         "ascii digits"
       ],
       "\\w in patternProperties matches [A-Za-z0-9_], not unicode letters": [
         "ascii character in json string"
-      ],
-      "\\w in patterns matches [A-Za-z0-9_], not unicode letters": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string",
-        "unicode matching is case-sensitive"
-      ],
-      "pattern with ASCII ranges": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string"
-      ],
-      "pattern with non-ASCII digits": [
-        "ascii non-digits"
       ],
       "patternProperties with ASCII ranges": [
         "ascii characters match"
@@ -491,9 +337,6 @@
       "patternProperties with non-ASCII digits": [
         "ascii digits",
         "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
-      "patterns always use unicode semantics with pattern": [
-        "unicode matching is case-sensitive"
       ],
       "patterns always use unicode semantics with patternProperties": [
         "ascii character in json string",
@@ -823,14 +666,7 @@
     },
     "optional/format/uuid.json": {
       "uuid format": [
-        "bad characters (not hex)",
-        "dashes in the wrong spot",
-        "missing section",
-        "no dashes",
-        "shifted dashes",
-        "too few dashes",
-        "too many dashes",
-        "wrong length"
+        "no dashes"
       ]
     },
     "optional/id.json": {
@@ -838,18 +674,7 @@
         "match $ref to $id"
       ]
     },
-    "optional/no-schema.json": {
-      "validation without $schema": [
-        "a 1-character string is not valid"
-      ]
-    },
     "optional/non-bmp-regex.json": {
-      "Proper UTF-16 surrogate pair handling: pattern": [
-        "doesn't match one",
-        "doesn't match one ASCII",
-        "doesn't match two",
-        "doesn't match two ASCII"
-      ],
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
         "doesn't match two"
@@ -883,11 +708,6 @@
         "type matches second anyOf, which has a real schema in it"
       ]
     },
-    "pattern.json": {
-      "pattern validation": [
-        "a non-matching pattern is invalid"
-      ]
-    },
     "patternProperties.json": {
       "multiple simultaneous patternProperties are validated": [
         "an invalid due to both is invalid",
@@ -909,16 +729,9 @@
       ]
     },
     "properties.json": {
-      "properties with boolean schema": [
-        "both properties present is invalid",
-        "no property present is valid",
-        "only 'false' property present is invalid",
-        "only 'true' property present is valid"
-      ],
       "properties, patternProperties, additionalProperties interaction": [
-        "additionalProperty invalidates others",
-        "patternProperty invalidates nonproperty",
-        "patternProperty invalidates property"
+        "patternProperty invalidates property",
+        "patternProperty validates nonproperty"
       ]
     },
     "propertyNames.json": {
@@ -954,7 +767,6 @@
         "two levels, integer does not match as a property value"
       ],
       "$recursiveRef without $recursiveAnchor works like $ref": [
-        "mismatch",
         "recursive mismatch"
       ],
       "$recursiveRef without using nesting": [
@@ -971,12 +783,6 @@
     "ref.json": {
       "$id must be resolved against nearest parent, not just immediate parent": [
         "number is valid"
-      ],
-      "$ref to boolean schema false": [
-        "any value is invalid"
-      ],
-      "$ref to boolean schema true": [
-        "any value is valid"
       ],
       "$ref with $recursiveAnchor": [
         "extra items allowed for inner arrays",
@@ -1046,10 +852,6 @@
       "remote ref, containing refs itself": [
         "remote ref valid"
       ],
-      "root pointer ref": [
-        "mismatch",
-        "recursive mismatch"
-      ],
       "simple URN base URI with $ref via the URN": [
         "valid under the URN IDed schema"
       ]
@@ -1065,7 +867,7 @@
         "remote anchor valid"
       ],
       "base URI change": [
-        "base URI change ref invalid"
+        "base URI change ref valid"
       ],
       "base URI change - change folder": [
         "number is valid"
@@ -1100,29 +902,6 @@
       "root ref in remote ref": [
         "null is valid",
         "string is valid"
-      ]
-    },
-    "type.json": {
-      "multiple types can be specified in an array": [
-        "a string is valid"
-      ],
-      "null type matches only the null object": [
-        "a float is not null",
-        "a string is not null",
-        "an array is not null",
-        "an empty string is not null",
-        "an integer is not null",
-        "an object is not null",
-        "false is not null",
-        "true is not null",
-        "zero is not null"
-      ],
-      "type: array or object": [
-        "object is valid"
-      ],
-      "type: array, object or null": [
-        "null is valid",
-        "object is valid"
       ]
     },
     "unevaluatedItems.json": {
@@ -1164,7 +943,6 @@
         "when two schemas match and has unevaluated items"
       ],
       "unevaluatedItems with boolean schemas": [
-        "with no unevaluated items",
         "with unevaluated items"
       ],
       "unevaluatedItems with if/then/else": [
@@ -1183,9 +961,7 @@
         "unevaluatedItems doesn't apply"
       ],
       "unevaluatedItems with nested items": [
-        "with invalid additional item",
-        "with no additional items",
-        "with only (valid) additional items"
+        "with invalid additional item"
       ],
       "unevaluatedItems with nested items and additionalItems": [
         "with additional items",
@@ -1227,37 +1003,15 @@
         "unevaluatedProperties doesn't see bar when foo2 is absent"
       ],
       "dynamic evalation inside nested refs": [
-        "Empty is invalid",
-        "a + b is invalid",
-        "a + c is invalid",
-        "a + d is invalid",
-        "a is valid",
-        "all + a is invalid",
-        "all + foo is valid",
-        "all is valid",
-        "b + c is invalid",
-        "b + d is invalid",
-        "b is valid",
-        "c + d is invalid",
-        "c is valid",
-        "d is valid",
-        "xx + a is invalid",
-        "xx + b is invalid",
-        "xx + c is invalid",
-        "xx + d is invalid",
-        "xx + foo is invalid",
-        "xx + foox is valid",
-        "xx is valid"
+        "xx + foo is invalid"
       ],
       "in-place applicator siblings, allOf has unevaluated": [
         "base case: both properties present",
-        "in place applicator siblings, bar is missing",
         "in place applicator siblings, foo is missing"
       ],
       "in-place applicator siblings, anyOf has unevaluated": [
         "base case: both properties present",
-        "in place applicator siblings, bar is missing",
-        "in place applicator siblings, foo is missing"
+        "in place applicator siblings, bar is missing"
       ],
       "nested unevaluatedProperties, outer true, inner false, properties inside": [
         "with nested unevaluated properties"
@@ -1268,16 +1022,6 @@
       ],
       "property is evaluated in an uncle schema to unevaluatedProperties": [
         "uncle keyword evaluation is not significant"
-      ],
-      "unevaluatedProperties + ref inside allOf / oneOf": [
-        "Empty is invalid (no x or y)",
-        "a and b and x and y are invalid",
-        "a and b and x are valid",
-        "a and b and y are valid",
-        "a and b are invalid (no x or y)",
-        "a and x are valid",
-        "a and y are valid",
-        "x and y are invalid"
       ],
       "unevaluatedProperties + single cyclic ref": [
         "Unevaluated on 1st level is invalid",
@@ -1306,8 +1050,7 @@
         "with invalid unevaluated properties"
       ],
       "unevaluatedProperties with $recursiveRef": [
-        "with no unevaluated properties",
-        "with unevaluated properties"
+        "with no unevaluated properties"
       ],
       "unevaluatedProperties with $ref": [
         "with unevaluated properties"
@@ -1323,7 +1066,6 @@
         "when two match and has unevaluated properties"
       ],
       "unevaluatedProperties with boolean schemas": [
-        "with no unevaluated properties",
         "with unevaluated properties"
       ],
       "unevaluatedProperties with dependentSchemas": [
@@ -1393,36 +1135,20 @@
     },
     "vocabulary.json": {
       "schema that uses custom metaschema with with no validation vocabulary": [
-        "applicator vocabulary still works",
-        "no validation: invalid number, but it still validates",
-        "no validation: valid number"
+        "no validation: invalid number, but it still validates"
       ]
     }
   },
   "draft2020-12": {
     "additionalProperties.json": {
       "additionalProperties being false does not allow other properties": [
-        "an additional property is invalid"
-      ],
-      "additionalProperties can exist by itself": [
-        "an additional invalid property is invalid"
+        "patternProperties are not additional properties"
       ],
       "additionalProperties does not look in applicators": [
         "properties defined in allOf are not examined"
       ],
-      "additionalProperties with propertyNames": [
-        "Valid against propertyNames, but not additionalProperties"
-      ],
-      "additionalProperties with schema": [
-        "an additional invalid property is invalid"
-      ],
-      "dependentSchemas with additionalProperties": [
-        "additionalProperties can't see bar",
-        "additionalProperties can't see bar even when foo2 is present",
-        "additionalProperties doesn't consider dependentSchemas"
-      ],
       "non-ASCII pattern with additionalProperties": [
-        "not matching the pattern is invalid"
+        "matching the pattern is valid"
       ]
     },
     "allOf.json": {
@@ -1433,18 +1159,6 @@
       ],
       "allOf with base schema": [
         "mismatch base schema"
-      ],
-      "allOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "allOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "allOf with boolean schemas, some false": [
-        "any value is invalid"
-      ],
-      "nested allOf, to check validation semantics": [
-        "anything non-null is invalid"
       ]
     },
     "anchor.json": {
@@ -1463,44 +1177,7 @@
     },
     "anyOf.json": {
       "anyOf with base schema": [
-        "both anyOf invalid",
         "mismatch base schema"
-      ],
-      "anyOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "anyOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "anyOf with boolean schemas, some true": [
-        "any value is valid"
-      ],
-      "nested anyOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ]
-    },
-    "boolean_schema.json": {
-      "boolean schema 'false'": [
-        "array is invalid",
-        "boolean false is invalid",
-        "boolean true is invalid",
-        "empty array is invalid",
-        "empty object is invalid",
-        "null is invalid",
-        "number is invalid",
-        "object is invalid",
-        "string is invalid"
-      ],
-      "boolean schema 'true'": [
-        "array is valid",
-        "boolean false is valid",
-        "boolean true is valid",
-        "empty array is valid",
-        "empty object is valid",
-        "null is valid",
-        "number is valid",
-        "object is valid",
-        "string is valid"
       ]
     },
     "contains.json": {
@@ -1522,9 +1199,7 @@
         "empty array is invalid"
       ],
       "items + contains": [
-        "does not match items, matches contains",
-        "matches items, does not match contains",
-        "matches neither items nor contains"
+        "matches items, does not match contains"
       ]
     },
     "defs.json": {
@@ -1571,21 +1246,16 @@
         "data is sufficient for schema at second#/$defs/length"
       ],
       "$dynamicRef points to a boolean schema": [
-        "follow $dynamicRef to a false schema",
-        "follow $dynamicRef to a true schema"
+        "follow $dynamicRef to a false schema"
       ],
       "$dynamicRef skips over intermediate resources - direct reference": [
         "integer property passes"
       ],
       "$ref and $dynamicAnchor are independent of order - $defs first": [
-        "correct extended schema",
-        "incorrect extended schema",
-        "incorrect parent schema"
+        "correct extended schema"
       ],
       "$ref and $dynamicAnchor are independent of order - $ref first": [
-        "correct extended schema",
-        "incorrect extended schema",
-        "incorrect parent schema"
+        "correct extended schema"
       ],
       "$ref to $dynamicRef finds detached $dynamicAnchor": [
         "number is valid"
@@ -1635,9 +1305,7 @@
         "instance with correct field"
       ],
       "tests for implementation dynamic anchor and reference link": [
-        "correct extended schema",
-        "incorrect extended schema",
-        "incorrect parent schema"
+        "correct extended schema"
       ]
     },
     "if-then-else.json": {
@@ -1669,38 +1337,20 @@
       ]
     },
     "items.json": {
-      "a schema given for items": [
-        "wrong type of items"
-      ],
       "items and subitems": [
         "fewer items is valid",
-        "too many items",
-        "too many sub-items",
-        "valid items",
-        "wrong item",
-        "wrong sub-item"
+        "valid items"
       ],
       "items does not look in applicators, valid case": [
         "prefixItems in allOf does not constrain items, invalid case"
       ],
-      "items with boolean schema (false)": [
-        "any non-empty array is invalid",
-        "empty array is valid"
-      ],
-      "items with boolean schema (true)": [
-        "any array is valid",
-        "empty array is valid"
-      ],
       "items with heterogeneous array": [
-        "heterogeneous invalid instance",
         "valid instance"
       ],
       "prefixItems validation adjusts the starting index for items": [
-        "wrong type of second item"
+        "valid items"
       ],
       "prefixItems with no additional items allowed": [
-        "additional items are not permitted",
-        "empty array",
         "equal number of items present",
         "fewer number of items present (1)",
         "fewer number of items present (2)"
@@ -1718,22 +1368,6 @@
       "minContains < maxContains": [
         "actual < minContains < maxContains",
         "minContains < maxContains < actual"
-      ]
-    },
-    "maxItems.json": {
-      "maxItems validation": [
-        "too long is invalid"
-      ],
-      "maxItems validation with a decimal": [
-        "too long is invalid"
-      ]
-    },
-    "maxLength.json": {
-      "maxLength validation": [
-        "too long is invalid"
-      ],
-      "maxLength validation with a decimal": [
-        "too long is invalid"
       ]
     },
     "maxProperties.json": {
@@ -1773,23 +1407,6 @@
       ],
       "minContains=2 with contains with a decimal value": [
         "one element matches, invalid minContains"
-      ]
-    },
-    "minItems.json": {
-      "minItems validation": [
-        "too short is invalid"
-      ],
-      "minItems validation with a decimal": [
-        "too short is invalid"
-      ]
-    },
-    "minLength.json": {
-      "minLength validation": [
-        "one grapheme is not long enough",
-        "too short is invalid"
-      ],
-      "minLength validation with a decimal": [
-        "too short is invalid"
       ]
     },
     "minProperties.json": {
@@ -1840,32 +1457,6 @@
         "other mismatch"
       ]
     },
-    "oneOf.json": {
-      "nested oneOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ],
-      "oneOf with base schema": [
-        "one oneOf valid"
-      ],
-      "oneOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, all true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, more than one true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, one true": [
-        "any value is valid"
-      ],
-      "oneOf with missing optional property": [
-        "both oneOf valid",
-        "first oneOf valid",
-        "neither oneOf valid",
-        "second oneOf valid"
-      ]
-    },
     "optional/anchor.json": {
       "$anchor inside an enum is not a real identifier": [
         "match $ref to $anchor"
@@ -1910,27 +1501,11 @@
       ]
     },
     "optional/ecmascript-regex.json": {
-      "\\d in pattern matches [0-9], not unicode digits": [
-        "ascii non-digits",
-        "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
       "\\d in patternProperties matches [0-9], not unicode digits": [
         "ascii digits"
       ],
       "\\w in patternProperties matches [A-Za-z0-9_], not unicode letters": [
         "ascii character in json string"
-      ],
-      "\\w in patterns matches [A-Za-z0-9_], not unicode letters": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string",
-        "unicode matching is case-sensitive"
-      ],
-      "pattern with ASCII ranges": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string"
-      ],
-      "pattern with non-ASCII digits": [
-        "ascii non-digits"
       ],
       "patternProperties with ASCII ranges": [
         "ascii characters match"
@@ -1938,9 +1513,6 @@
       "patternProperties with non-ASCII digits": [
         "ascii digits",
         "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
-      "patterns always use unicode semantics with pattern": [
-        "unicode matching is case-sensitive"
       ],
       "patterns always use unicode semantics with patternProperties": [
         "ascii character in json string",
@@ -2285,14 +1857,7 @@
     },
     "optional/format/uuid.json": {
       "uuid format": [
-        "bad characters (not hex)",
-        "dashes in the wrong spot",
-        "missing section",
-        "no dashes",
-        "shifted dashes",
-        "too few dashes",
-        "too many dashes",
-        "wrong length"
+        "no dashes"
       ]
     },
     "optional/id.json": {
@@ -2300,18 +1865,7 @@
         "match $ref to $id"
       ]
     },
-    "optional/no-schema.json": {
-      "validation without $schema": [
-        "a 1-character string is not valid"
-      ]
-    },
     "optional/non-bmp-regex.json": {
-      "Proper UTF-16 surrogate pair handling: pattern": [
-        "doesn't match one",
-        "doesn't match one ASCII",
-        "doesn't match two",
-        "doesn't match two ASCII"
-      ],
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
         "doesn't match two"
@@ -2345,11 +1899,6 @@
         "type matches second anyOf, which has a real schema in it"
       ]
     },
-    "pattern.json": {
-      "pattern validation": [
-        "a non-matching pattern is invalid"
-      ]
-    },
     "patternProperties.json": {
       "multiple simultaneous patternProperties are validated": [
         "an invalid due to both is invalid",
@@ -2379,16 +1928,9 @@
       ]
     },
     "properties.json": {
-      "properties with boolean schema": [
-        "both properties present is invalid",
-        "no property present is valid",
-        "only 'false' property present is invalid",
-        "only 'true' property present is valid"
-      ],
       "properties, patternProperties, additionalProperties interaction": [
-        "additionalProperty invalidates others",
-        "patternProperty invalidates nonproperty",
-        "patternProperty invalidates property"
+        "patternProperty invalidates property",
+        "patternProperty validates nonproperty"
       ]
     },
     "propertyNames.json": {
@@ -2411,12 +1953,6 @@
     "ref.json": {
       "$id must be resolved against nearest parent, not just immediate parent": [
         "number is valid"
-      ],
-      "$ref to boolean schema false": [
-        "any value is invalid"
-      ],
-      "$ref to boolean schema true": [
-        "any value is valid"
       ],
       "Recursive references between schemas": [
         "valid tree"
@@ -2481,10 +2017,6 @@
       "remote ref, containing refs itself": [
         "remote ref valid"
       ],
-      "root pointer ref": [
-        "mismatch",
-        "recursive mismatch"
-      ],
       "simple URN base URI with $ref via the URN": [
         "valid under the URN IDed schema"
       ]
@@ -2500,7 +2032,7 @@
         "remote anchor valid"
       ],
       "base URI change": [
-        "base URI change ref invalid"
+        "base URI change ref valid"
       ],
       "base URI change - change folder": [
         "number is valid"
@@ -2535,29 +2067,6 @@
       "root ref in remote ref": [
         "null is valid",
         "string is valid"
-      ]
-    },
-    "type.json": {
-      "multiple types can be specified in an array": [
-        "a string is valid"
-      ],
-      "null type matches only the null object": [
-        "a float is not null",
-        "a string is not null",
-        "an array is not null",
-        "an empty string is not null",
-        "an integer is not null",
-        "an object is not null",
-        "false is not null",
-        "true is not null",
-        "zero is not null"
-      ],
-      "type: array or object": [
-        "object is valid"
-      ],
-      "type: array, object or null": [
-        "null is valid",
-        "object is valid"
       ]
     },
     "unevaluatedItems.json": {
@@ -2606,31 +2115,18 @@
         "when two schemas match and has unevaluated items"
       ],
       "unevaluatedItems with boolean schemas": [
-        "with no unevaluated items",
         "with unevaluated items"
       ],
       "unevaluatedItems with if/then/else": [
         "when if doesn't match and it has unevaluated items",
         "when if matches and it has unevaluated items"
       ],
-      "unevaluatedItems with items": [
-        "invalid under items"
-      ],
-      "unevaluatedItems with items and prefixItems": [
-        "unevaluatedItems doesn't apply"
-      ],
       "unevaluatedItems with minContains = 0": [
         "no items evaluated by contains",
         "some but not all items evaluated by contains"
       ],
       "unevaluatedItems with nested items": [
-        "with invalid additional item",
-        "with no additional items",
-        "with only (valid) additional items"
-      ],
-      "unevaluatedItems with nested prefixItems and items": [
-        "with additional items",
-        "with no additional items"
+        "with invalid additional item"
       ],
       "unevaluatedItems with nested tuple": [
         "with unevaluated items"
@@ -2661,37 +2157,15 @@
         "unevaluatedProperties doesn't see bar when foo2 is absent"
       ],
       "dynamic evalation inside nested refs": [
-        "Empty is invalid",
-        "a + b is invalid",
-        "a + c is invalid",
-        "a + d is invalid",
-        "a is valid",
-        "all + a is invalid",
-        "all + foo is valid",
-        "all is valid",
-        "b + c is invalid",
-        "b + d is invalid",
-        "b is valid",
-        "c + d is invalid",
-        "c is valid",
-        "d is valid",
-        "xx + a is invalid",
-        "xx + b is invalid",
-        "xx + c is invalid",
-        "xx + d is invalid",
-        "xx + foo is invalid",
-        "xx + foox is valid",
-        "xx is valid"
+        "xx + foo is invalid"
       ],
       "in-place applicator siblings, allOf has unevaluated": [
         "base case: both properties present",
-        "in place applicator siblings, bar is missing",
         "in place applicator siblings, foo is missing"
       ],
       "in-place applicator siblings, anyOf has unevaluated": [
         "base case: both properties present",
-        "in place applicator siblings, bar is missing",
-        "in place applicator siblings, foo is missing"
+        "in place applicator siblings, bar is missing"
       ],
       "nested unevaluatedProperties, outer true, inner false, properties inside": [
         "with nested unevaluated properties"
@@ -2702,16 +2176,6 @@
       ],
       "property is evaluated in an uncle schema to unevaluatedProperties": [
         "uncle keyword evaluation is not significant"
-      ],
-      "unevaluatedProperties + ref inside allOf / oneOf": [
-        "Empty is invalid (no x or y)",
-        "a and b and x and y are invalid",
-        "a and b and x are valid",
-        "a and b and y are valid",
-        "a and b are invalid (no x or y)",
-        "a and x are valid",
-        "a and y are valid",
-        "x and y are invalid"
       ],
       "unevaluatedProperties + single cyclic ref": [
         "Unevaluated on 1st level is invalid",
@@ -2756,7 +2220,6 @@
         "when two match and has unevaluated properties"
       ],
       "unevaluatedProperties with boolean schemas": [
-        "with no unevaluated properties",
         "with unevaluated properties"
       ],
       "unevaluatedProperties with dependentSchemas": [
@@ -2790,25 +2253,19 @@
     },
     "uniqueItems.json": {
       "uniqueItems with an array of items and additionalItems=false": [
-        "[false, false] from items array is not valid",
         "[false, true] from items array is valid",
-        "[true, false] from items array is valid",
-        "[true, true] from items array is not valid",
-        "extra items are invalid even if unique"
+        "[true, false] from items array is valid"
       ],
       "uniqueItems=false with an array of items and additionalItems=false": [
         "[false, false] from items array is valid",
         "[false, true] from items array is valid",
         "[true, false] from items array is valid",
-        "[true, true] from items array is valid",
-        "extra items are invalid even if unique"
+        "[true, true] from items array is valid"
       ]
     },
     "vocabulary.json": {
       "schema that uses custom metaschema with with no validation vocabulary": [
-        "applicator vocabulary still works",
-        "no validation: invalid number, but it still validates",
-        "no validation: valid number"
+        "no validation: invalid number, but it still validates"
       ]
     }
   },
@@ -2842,19 +2299,13 @@
     },
     "additionalProperties.json": {
       "additionalProperties being false does not allow other properties": [
-        "an additional property is invalid"
-      ],
-      "additionalProperties can exist by itself": [
-        "an additional invalid property is invalid"
+        "patternProperties are not additional properties"
       ],
       "additionalProperties does not look in applicators": [
         "properties defined in allOf are not examined"
       ],
-      "additionalProperties with schema": [
-        "an additional invalid property is invalid"
-      ],
       "non-ASCII pattern with additionalProperties": [
-        "not matching the pattern is invalid"
+        "matching the pattern is valid"
       ]
     },
     "allOf.json": {
@@ -2865,18 +2316,11 @@
       ],
       "allOf with base schema": [
         "mismatch base schema"
-      ],
-      "nested allOf, to check validation semantics": [
-        "anything non-null is invalid"
       ]
     },
     "anyOf.json": {
       "anyOf with base schema": [
-        "both anyOf invalid",
         "mismatch base schema"
-      ],
-      "nested anyOf, to check validation semantics": [
-        "anything non-null is invalid"
       ]
     },
     "definitions.json": {
@@ -2920,9 +2364,6 @@
       ]
     },
     "items.json": {
-      "a schema given for items": [
-        "wrong type of items"
-      ],
       "an array of schemas for items": [
         "JavaScript pseudo-array is valid",
         "array with additional items",
@@ -2943,33 +2384,12 @@
         "wrong sub-item"
       ]
     },
-    "maxItems.json": {
-      "maxItems validation": [
-        "too long is invalid"
-      ]
-    },
-    "maxLength.json": {
-      "maxLength validation": [
-        "too long is invalid"
-      ]
-    },
     "maxProperties.json": {
       "maxProperties = 0 means the object is empty": [
         "one property is invalid"
       ],
       "maxProperties validation": [
         "too long is invalid"
-      ]
-    },
-    "minItems.json": {
-      "minItems validation": [
-        "too short is invalid"
-      ]
-    },
-    "minLength.json": {
-      "minLength validation": [
-        "one grapheme is not long enough",
-        "too short is invalid"
       ]
     },
     "minProperties.json": {
@@ -3003,14 +2423,6 @@
         "other mismatch"
       ]
     },
-    "oneOf.json": {
-      "nested oneOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ],
-      "oneOf with base schema": [
-        "one oneOf valid"
-      ]
-    },
     "optional/bignum.json": {
       "integer": [
         "a bignum is an integer",
@@ -3018,27 +2430,11 @@
       ]
     },
     "optional/ecmascript-regex.json": {
-      "\\d in pattern matches [0-9], not unicode digits": [
-        "ascii non-digits",
-        "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
       "\\d in patternProperties matches [0-9], not unicode digits": [
         "ascii digits"
       ],
       "\\w in patternProperties matches [A-Za-z0-9_], not unicode letters": [
         "ascii character in json string"
-      ],
-      "\\w in patterns matches [A-Za-z0-9_], not unicode letters": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string",
-        "unicode matching is case-sensitive"
-      ],
-      "pattern with ASCII ranges": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string"
-      ],
-      "pattern with non-ASCII digits": [
-        "ascii non-digits"
       ],
       "patternProperties with ASCII ranges": [
         "ascii characters match"
@@ -3046,9 +2442,6 @@
       "patternProperties with non-ASCII digits": [
         "ascii digits",
         "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
-      "patterns always use unicode semantics with pattern": [
-        "unicode matching is case-sensitive"
       ],
       "patterns always use unicode semantics with patternProperties": [
         "ascii character in json string",
@@ -3172,20 +2565,9 @@
       ]
     },
     "optional/non-bmp-regex.json": {
-      "Proper UTF-16 surrogate pair handling: pattern": [
-        "doesn't match one",
-        "doesn't match one ASCII",
-        "doesn't match two",
-        "doesn't match two ASCII"
-      ],
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
         "doesn't match two"
-      ]
-    },
-    "pattern.json": {
-      "pattern validation": [
-        "a non-matching pattern is invalid"
       ]
     },
     "patternProperties.json": {
@@ -3205,9 +2587,8 @@
     },
     "properties.json": {
       "properties, patternProperties, additionalProperties interaction": [
-        "additionalProperty invalidates others",
-        "patternProperty invalidates nonproperty",
-        "patternProperty invalidates property"
+        "patternProperty invalidates property",
+        "patternProperty validates nonproperty"
       ]
     },
     "ref.json": {
@@ -3245,10 +2626,6 @@
       ],
       "remote ref, containing refs itself": [
         "remote ref valid"
-      ],
-      "root pointer ref": [
-        "mismatch",
-        "recursive mismatch"
       ]
     },
     "refRemote.json": {
@@ -3256,7 +2633,7 @@
         "integer is valid"
       ],
       "base URI change": [
-        "base URI change ref invalid"
+        "base URI change ref valid"
       ],
       "base URI change - change folder": [
         "number is valid"
@@ -3276,29 +2653,6 @@
       "root ref in remote ref": [
         "null is valid",
         "string is valid"
-      ]
-    },
-    "type.json": {
-      "multiple types can be specified in an array": [
-        "a string is valid"
-      ],
-      "null type matches only the null object": [
-        "a float is not null",
-        "a string is not null",
-        "an array is not null",
-        "an empty string is not null",
-        "an integer is not null",
-        "an object is not null",
-        "false is not null",
-        "true is not null",
-        "zero is not null"
-      ],
-      "type: array or object": [
-        "object is valid"
-      ],
-      "type: array, object or null": [
-        "null is valid",
-        "object is valid"
       ]
     },
     "uniqueItems.json": {
@@ -3364,26 +2718,17 @@
       "items validation adjusts the starting index for additionalItems": [
         "valid items",
         "wrong type of second item"
-      ],
-      "when items is schema, additionalItems does nothing": [
-        "invalid with a array of mixed types"
       ]
     },
     "additionalProperties.json": {
       "additionalProperties being false does not allow other properties": [
-        "an additional property is invalid"
-      ],
-      "additionalProperties can exist by itself": [
-        "an additional invalid property is invalid"
+        "patternProperties are not additional properties"
       ],
       "additionalProperties does not look in applicators": [
         "properties defined in allOf are not examined"
       ],
-      "additionalProperties with schema": [
-        "an additional invalid property is invalid"
-      ],
       "non-ASCII pattern with additionalProperties": [
-        "not matching the pattern is invalid"
+        "matching the pattern is valid"
       ]
     },
     "allOf.json": {
@@ -3394,60 +2739,11 @@
       ],
       "allOf with base schema": [
         "mismatch base schema"
-      ],
-      "allOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "allOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "allOf with boolean schemas, some false": [
-        "any value is invalid"
-      ],
-      "nested allOf, to check validation semantics": [
-        "anything non-null is invalid"
       ]
     },
     "anyOf.json": {
       "anyOf with base schema": [
-        "both anyOf invalid",
         "mismatch base schema"
-      ],
-      "anyOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "anyOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "anyOf with boolean schemas, some true": [
-        "any value is valid"
-      ],
-      "nested anyOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ]
-    },
-    "boolean_schema.json": {
-      "boolean schema 'false'": [
-        "array is invalid",
-        "boolean false is invalid",
-        "boolean true is invalid",
-        "empty array is invalid",
-        "empty object is invalid",
-        "null is invalid",
-        "number is invalid",
-        "object is invalid",
-        "string is invalid"
-      ],
-      "boolean schema 'true'": [
-        "array is valid",
-        "boolean false is valid",
-        "boolean true is valid",
-        "empty array is valid",
-        "empty object is valid",
-        "null is valid",
-        "number is valid",
-        "object is valid",
-        "string is valid"
       ]
     },
     "const.json": {
@@ -3476,9 +2772,7 @@
         "array without item 5 is invalid"
       ],
       "items + contains": [
-        "does not match items, matches contains",
-        "matches items, does not match contains",
-        "matches neither items nor contains"
+        "matches items, does not match contains"
       ]
     },
     "definitions.json": {
@@ -3516,9 +2810,6 @@
       ]
     },
     "items.json": {
-      "a schema given for items": [
-        "wrong type of items"
-      ],
       "an array of schemas for items": [
         "JavaScript pseudo-array is valid",
         "array with additional items",
@@ -3538,34 +2829,10 @@
         "wrong item",
         "wrong sub-item"
       ],
-      "items with boolean schema (false)": [
-        "any non-empty array is invalid",
-        "empty array is valid"
-      ],
-      "items with boolean schema (true)": [
-        "any array is valid",
-        "empty array is valid"
-      ],
       "items with boolean schemas": [
         "array with one item is valid",
         "array with two items is invalid",
         "empty array is valid"
-      ]
-    },
-    "maxItems.json": {
-      "maxItems validation": [
-        "too long is invalid"
-      ],
-      "maxItems validation with a decimal": [
-        "too long is invalid"
-      ]
-    },
-    "maxLength.json": {
-      "maxLength validation": [
-        "too long is invalid"
-      ],
-      "maxLength validation with a decimal": [
-        "too long is invalid"
       ]
     },
     "maxProperties.json": {
@@ -3577,23 +2844,6 @@
       ],
       "maxProperties validation with a decimal": [
         "too long is invalid"
-      ]
-    },
-    "minItems.json": {
-      "minItems validation": [
-        "too short is invalid"
-      ],
-      "minItems validation with a decimal": [
-        "too short is invalid"
-      ]
-    },
-    "minLength.json": {
-      "minLength validation": [
-        "one grapheme is not long enough",
-        "too short is invalid"
-      ],
-      "minLength validation with a decimal": [
-        "too short is invalid"
       ]
     },
     "minProperties.json": {
@@ -3641,54 +2891,12 @@
         "other mismatch"
       ]
     },
-    "oneOf.json": {
-      "nested oneOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ],
-      "oneOf with base schema": [
-        "one oneOf valid"
-      ],
-      "oneOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, all true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, more than one true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, one true": [
-        "any value is valid"
-      ],
-      "oneOf with missing optional property": [
-        "both oneOf valid",
-        "first oneOf valid",
-        "neither oneOf valid",
-        "second oneOf valid"
-      ]
-    },
     "optional/ecmascript-regex.json": {
-      "\\d in pattern matches [0-9], not unicode digits": [
-        "ascii non-digits",
-        "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
       "\\d in patternProperties matches [0-9], not unicode digits": [
         "ascii digits"
       ],
       "\\w in patternProperties matches [A-Za-z0-9_], not unicode letters": [
         "ascii character in json string"
-      ],
-      "\\w in patterns matches [A-Za-z0-9_], not unicode letters": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string",
-        "unicode matching is case-sensitive"
-      ],
-      "pattern with ASCII ranges": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string"
-      ],
-      "pattern with non-ASCII digits": [
-        "ascii non-digits"
       ],
       "patternProperties with ASCII ranges": [
         "ascii characters match"
@@ -3696,9 +2904,6 @@
       "patternProperties with non-ASCII digits": [
         "ascii digits",
         "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
-      "patterns always use unicode semantics with pattern": [
-        "unicode matching is case-sensitive"
       ],
       "patterns always use unicode semantics with patternProperties": [
         "ascii character in json string",
@@ -3849,12 +3054,6 @@
       ]
     },
     "optional/non-bmp-regex.json": {
-      "Proper UTF-16 surrogate pair handling: pattern": [
-        "doesn't match one",
-        "doesn't match one ASCII",
-        "doesn't match two",
-        "doesn't match two ASCII"
-      ],
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
         "doesn't match two"
@@ -3865,11 +3064,6 @@
         "type matches non-schema in first anyOf",
         "type matches non-schema in third anyOf",
         "type matches second anyOf, which has a real schema in it"
-      ]
-    },
-    "pattern.json": {
-      "pattern validation": [
-        "a non-matching pattern is invalid"
       ]
     },
     "patternProperties.json": {
@@ -3893,16 +3087,9 @@
       ]
     },
     "properties.json": {
-      "properties with boolean schema": [
-        "both properties present is invalid",
-        "no property present is valid",
-        "only 'false' property present is invalid",
-        "only 'true' property present is valid"
-      ],
       "properties, patternProperties, additionalProperties interaction": [
-        "additionalProperty invalidates others",
-        "patternProperty invalidates nonproperty",
-        "patternProperty invalidates property"
+        "patternProperty invalidates property",
+        "patternProperty validates nonproperty"
       ]
     },
     "propertyNames.json": {
@@ -3926,12 +3113,6 @@
       "$ref prevents a sibling $id from changing the base uri": [
         "$ref resolves to /definitions/base_foo, data does not validate",
         "$ref resolves to /definitions/base_foo, data validates"
-      ],
-      "$ref to boolean schema false": [
-        "any value is invalid"
-      ],
-      "$ref to boolean schema true": [
-        "any value is valid"
       ],
       "Location-independent identifier": [
         "match"
@@ -3991,10 +3172,6 @@
       "remote ref, containing refs itself": [
         "remote ref valid"
       ],
-      "root pointer ref": [
-        "mismatch",
-        "recursive mismatch"
-      ],
       "simple URN base URI with $ref via the URN": [
         "invalid under the URN IDed schema",
         "valid under the URN IDed schema"
@@ -4012,7 +3189,7 @@
         "integer is valid"
       ],
       "base URI change": [
-        "base URI change ref invalid"
+        "base URI change ref valid"
       ],
       "base URI change - change folder": [
         "number is valid"
@@ -4038,29 +3215,6 @@
       "root ref in remote ref": [
         "null is valid",
         "string is valid"
-      ]
-    },
-    "type.json": {
-      "multiple types can be specified in an array": [
-        "a string is valid"
-      ],
-      "null type matches only the null object": [
-        "a float is not null",
-        "a string is not null",
-        "an array is not null",
-        "an empty string is not null",
-        "an integer is not null",
-        "an object is not null",
-        "false is not null",
-        "true is not null",
-        "zero is not null"
-      ],
-      "type: array or object": [
-        "object is valid"
-      ],
-      "type: array, object or null": [
-        "null is valid",
-        "object is valid"
       ]
     },
     "uniqueItems.json": {
@@ -4126,26 +3280,17 @@
       "items validation adjusts the starting index for additionalItems": [
         "valid items",
         "wrong type of second item"
-      ],
-      "when items is schema, additionalItems does nothing": [
-        "invalid with a array of mixed types"
       ]
     },
     "additionalProperties.json": {
       "additionalProperties being false does not allow other properties": [
-        "an additional property is invalid"
-      ],
-      "additionalProperties can exist by itself": [
-        "an additional invalid property is invalid"
+        "patternProperties are not additional properties"
       ],
       "additionalProperties does not look in applicators": [
         "properties defined in allOf are not examined"
       ],
-      "additionalProperties with schema": [
-        "an additional invalid property is invalid"
-      ],
       "non-ASCII pattern with additionalProperties": [
-        "not matching the pattern is invalid"
+        "matching the pattern is valid"
       ]
     },
     "allOf.json": {
@@ -4156,60 +3301,11 @@
       ],
       "allOf with base schema": [
         "mismatch base schema"
-      ],
-      "allOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "allOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "allOf with boolean schemas, some false": [
-        "any value is invalid"
-      ],
-      "nested allOf, to check validation semantics": [
-        "anything non-null is invalid"
       ]
     },
     "anyOf.json": {
       "anyOf with base schema": [
-        "both anyOf invalid",
         "mismatch base schema"
-      ],
-      "anyOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "anyOf with boolean schemas, all true": [
-        "any value is valid"
-      ],
-      "anyOf with boolean schemas, some true": [
-        "any value is valid"
-      ],
-      "nested anyOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ]
-    },
-    "boolean_schema.json": {
-      "boolean schema 'false'": [
-        "array is invalid",
-        "boolean false is invalid",
-        "boolean true is invalid",
-        "empty array is invalid",
-        "empty object is invalid",
-        "null is invalid",
-        "number is invalid",
-        "object is invalid",
-        "string is invalid"
-      ],
-      "boolean schema 'true'": [
-        "array is valid",
-        "boolean false is valid",
-        "boolean true is valid",
-        "empty array is valid",
-        "empty object is valid",
-        "null is valid",
-        "number is valid",
-        "object is valid",
-        "string is valid"
       ]
     },
     "contains.json": {
@@ -4231,9 +3327,7 @@
         "empty array is invalid"
       ],
       "items + contains": [
-        "does not match items, matches contains",
-        "matches items, does not match contains",
-        "matches neither items nor contains"
+        "matches items, does not match contains"
       ]
     },
     "definitions.json": {
@@ -4299,9 +3393,6 @@
       ]
     },
     "items.json": {
-      "a schema given for items": [
-        "wrong type of items"
-      ],
       "an array of schemas for items": [
         "JavaScript pseudo-array is valid",
         "array with additional items",
@@ -4321,34 +3412,10 @@
         "wrong item",
         "wrong sub-item"
       ],
-      "items with boolean schema (false)": [
-        "any non-empty array is invalid",
-        "empty array is valid"
-      ],
-      "items with boolean schema (true)": [
-        "any array is valid",
-        "empty array is valid"
-      ],
       "items with boolean schemas": [
         "array with one item is valid",
         "array with two items is invalid",
         "empty array is valid"
-      ]
-    },
-    "maxItems.json": {
-      "maxItems validation": [
-        "too long is invalid"
-      ],
-      "maxItems validation with a decimal": [
-        "too long is invalid"
-      ]
-    },
-    "maxLength.json": {
-      "maxLength validation": [
-        "too long is invalid"
-      ],
-      "maxLength validation with a decimal": [
-        "too long is invalid"
       ]
     },
     "maxProperties.json": {
@@ -4360,23 +3427,6 @@
       ],
       "maxProperties validation with a decimal": [
         "too long is invalid"
-      ]
-    },
-    "minItems.json": {
-      "minItems validation": [
-        "too short is invalid"
-      ],
-      "minItems validation with a decimal": [
-        "too short is invalid"
-      ]
-    },
-    "minLength.json": {
-      "minLength validation": [
-        "one grapheme is not long enough",
-        "too short is invalid"
-      ],
-      "minLength validation with a decimal": [
-        "too short is invalid"
       ]
     },
     "minProperties.json": {
@@ -4424,32 +3474,6 @@
         "other mismatch"
       ]
     },
-    "oneOf.json": {
-      "nested oneOf, to check validation semantics": [
-        "anything non-null is invalid"
-      ],
-      "oneOf with base schema": [
-        "one oneOf valid"
-      ],
-      "oneOf with boolean schemas, all false": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, all true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, more than one true": [
-        "any value is invalid"
-      ],
-      "oneOf with boolean schemas, one true": [
-        "any value is valid"
-      ],
-      "oneOf with missing optional property": [
-        "both oneOf valid",
-        "first oneOf valid",
-        "neither oneOf valid",
-        "second oneOf valid"
-      ]
-    },
     "optional/content.json": {
       "validation of binary string-encoding": [
         "an invalid base64 string (% is not a valid character)"
@@ -4464,32 +3488,15 @@
     },
     "optional/cross-draft.json": {
       "refs to future drafts are processed as future drafts": [
-        "missing bar is invalid",
         "present bar is valid"
       ]
     },
     "optional/ecmascript-regex.json": {
-      "\\d in pattern matches [0-9], not unicode digits": [
-        "ascii non-digits",
-        "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
       "\\d in patternProperties matches [0-9], not unicode digits": [
         "ascii digits"
       ],
       "\\w in patternProperties matches [A-Za-z0-9_], not unicode letters": [
         "ascii character in json string"
-      ],
-      "\\w in patterns matches [A-Za-z0-9_], not unicode letters": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string",
-        "unicode matching is case-sensitive"
-      ],
-      "pattern with ASCII ranges": [
-        "literal unicode character in json string",
-        "unicode character in hex format in string"
-      ],
-      "pattern with non-ASCII digits": [
-        "ascii non-digits"
       ],
       "patternProperties with ASCII ranges": [
         "ascii characters match"
@@ -4497,9 +3504,6 @@
       "patternProperties with non-ASCII digits": [
         "ascii digits",
         "non-ascii digits (BENGALI DIGIT FOUR, BENGALI DIGIT TWO)"
-      ],
-      "patterns always use unicode semantics with pattern": [
-        "unicode matching is case-sensitive"
       ],
       "patterns always use unicode semantics with patternProperties": [
         "ascii character in json string",
@@ -4824,12 +3828,6 @@
       ]
     },
     "optional/non-bmp-regex.json": {
-      "Proper UTF-16 surrogate pair handling: pattern": [
-        "doesn't match one",
-        "doesn't match one ASCII",
-        "doesn't match two",
-        "doesn't match two ASCII"
-      ],
       "Proper UTF-16 surrogate pair handling: patternProperties": [
         "doesn't match one",
         "doesn't match two"
@@ -4840,11 +3838,6 @@
         "type matches non-schema in first anyOf",
         "type matches non-schema in third anyOf",
         "type matches second anyOf, which has a real schema in it"
-      ]
-    },
-    "pattern.json": {
-      "pattern validation": [
-        "a non-matching pattern is invalid"
       ]
     },
     "patternProperties.json": {
@@ -4868,16 +3861,9 @@
       ]
     },
     "properties.json": {
-      "properties with boolean schema": [
-        "both properties present is invalid",
-        "no property present is valid",
-        "only 'false' property present is invalid",
-        "only 'true' property present is valid"
-      ],
       "properties, patternProperties, additionalProperties interaction": [
-        "additionalProperty invalidates others",
-        "patternProperty invalidates nonproperty",
-        "patternProperty invalidates property"
+        "patternProperty invalidates property",
+        "patternProperty validates nonproperty"
       ]
     },
     "propertyNames.json": {
@@ -4903,12 +3889,6 @@
       ],
       "$ref prevents a sibling $id from changing the base uri": [
         "$ref resolves to /definitions/base_foo, data validates"
-      ],
-      "$ref to boolean schema false": [
-        "any value is invalid"
-      ],
-      "$ref to boolean schema true": [
-        "any value is valid"
       ],
       "Location-independent identifier": [
         "match"
@@ -4965,10 +3945,6 @@
       "remote ref, containing refs itself": [
         "remote ref valid"
       ],
-      "root pointer ref": [
-        "mismatch",
-        "recursive mismatch"
-      ],
       "simple URN base URI with $ref via the URN": [
         "valid under the URN IDed schema"
       ]
@@ -4981,7 +3957,7 @@
         "integer is valid"
       ],
       "base URI change": [
-        "base URI change ref invalid"
+        "base URI change ref valid"
       ],
       "base URI change - change folder": [
         "number is valid"
@@ -5007,29 +3983,6 @@
       "root ref in remote ref": [
         "null is valid",
         "string is valid"
-      ]
-    },
-    "type.json": {
-      "multiple types can be specified in an array": [
-        "a string is valid"
-      ],
-      "null type matches only the null object": [
-        "a float is not null",
-        "a string is not null",
-        "an array is not null",
-        "an empty string is not null",
-        "an integer is not null",
-        "an object is not null",
-        "false is not null",
-        "true is not null",
-        "zero is not null"
-      ],
-      "type: array or object": [
-        "object is valid"
-      ],
-      "type: array, object or null": [
-        "null is valid",
-        "object is valid"
       ]
     },
     "uniqueItems.json": {

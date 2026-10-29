@@ -1,7 +1,7 @@
 //! `jsonschemars generate` subcommand: generate Rust from JSON Schema files.
 
 use super::utils::{
-    collect_schema_entries, display_schema_path, read_schema_from_path,
+    collect_schema_entries, display_schema_path, read_json_schema_from_path,
     shared_import_prefix_for_output_relative, write_mod_rs_files,
 };
 use json_schema_rs::{
@@ -54,7 +54,7 @@ pub(crate) fn run_generate(
     let mut successful: Vec<(JsonSchema, PathBuf)> = Vec::with_capacity(entries.len());
     let mut had_errors = false;
     for (input_path, output_relative) in &entries {
-        match read_schema_from_path(input_path, schema_settings) {
+        match read_json_schema_from_path(input_path, schema_settings) {
             Ok(schema) => successful.push((schema, output_relative.clone())),
             Err(e) => {
                 eprintln!("error: {}: {e}", display_schema_path(input_path));

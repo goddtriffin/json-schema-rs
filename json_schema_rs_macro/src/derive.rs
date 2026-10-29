@@ -669,7 +669,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 schema.pattern = #pattern_expr.or(schema.pattern);
                 schema.deprecated = #deprecated_expr.or(schema.deprecated);
                 #set_default_value
-                properties.insert(#key_lit.to_string(), schema);
+                properties.insert(#key_lit.to_string(), ::json_schema_rs::Schema::from(schema));
             }
         });
     }
@@ -699,9 +699,9 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         #(#property_inserts)*
         ::json_schema_rs::JsonSchema {
             id: #id_expr,
-            type_: Some("object".to_string()),
+            type_: Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::Object)),
             properties,
-            additional_properties: Some(::json_schema_rs::json_schema::json_schema::AdditionalProperties::Forbid),
+            additional_properties: Some(::json_schema_rs::Schema::Bool(false)),
             required: #required_expr,
             title: #title_expr,
             description: #description_expr,
@@ -875,7 +875,7 @@ fn expand_enum_to_json_schema(
     let body: TokenStream2 = quote! {
         ::json_schema_rs::JsonSchema {
             id: #id_expr,
-            type_: Some("string".to_string()),
+            type_: Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::String)),
             title: #title_expr,
             description: #description_expr,
             comment: #comment_expr,
