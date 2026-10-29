@@ -8,7 +8,6 @@ pub mod registry;
 pub mod settings;
 pub mod spec_version;
 pub mod type_set;
-pub mod uri;
 
 pub use dialect::{
     Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, Keyword, RefSiblings,
@@ -25,4 +24,3 @@ pub use settings::{
 };
 pub use spec_version::SpecVersion;
 pub use type_set::{JsonType, TypeSet, UnknownJsonType};
-pub use uri::{NotAbsoluteUri, Uri};

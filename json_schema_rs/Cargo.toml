@@ -28,6 +28,8 @@ uuid = ["dep:uuid"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+# RFC 3986 / 3987 URI parsing, reference resolution and normalisation for `$id` / `$ref`.
+fluent-uri = "0.4"
 heck = "0.5"
 log.workspace = true
 # SIMD substring search for the draft-4 parse prefilter (already in the tree via serde_json).

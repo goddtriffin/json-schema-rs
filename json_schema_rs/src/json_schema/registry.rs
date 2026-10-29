@@ -34,8 +34,8 @@ use super::dialect::{Dialect, FormatMode, RefSiblings, SubschemaPosition, Vocabu
 use super::json_schema::{JsonSchema, Schema, SchemaRef};
 use super::settings::JsonSchemaSettings;
 use super::spec_version::SpecVersion;
-use super::uri::{NotAbsoluteUri, Uri, percent_decode, split_fragment};
 use crate::json_pointer::JsonPointer;
+use fluent_uri::{Iri, IriRef};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -44,6 +44,39 @@ use std::sync::Arc;
 
 /// The base URI of a root document that has no retrieval URI and no absolute `$id`.
 pub const DEFAULT_BASE_URI: &str = "json-schema:///";
+
+/// An absolute URI in normal form (RFC 3986 §6.2.2, via `fluent-uri`): two spellings of one
+/// identifier are equal.
+type Uri = Iri<String>;
+
+/// Parses and normalises an absolute URI (an IRI: non-ASCII characters are allowed), or says why
+/// `text` is not one.
+fn parse_uri(text: &str) -> Result<Uri, String> {
+    match Iri::parse(text) {
+        Ok(iri) => Ok(iri.normalize()),
+        Err(_) if IriRef::parse(text).is_ok() => {
+            Err("it has no scheme (it is a relative reference)".to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Resolves the URI reference `reference` against `base` (RFC 3986 §5.2.2, ignoring `base`'s
+/// fragment) and normalises the result, which keeps the reference's fragment. Fails when
+/// `reference` is not a URI reference, or is a relative path against a base without a
+/// hierarchical path (a `urn:`; a fragment-only reference always resolves).
+fn resolve_uri(base: &Uri, reference: &str) -> Result<Uri, String> {
+    let reference: IriRef<&str> = IriRef::parse(reference).map_err(|e| e.to_string())?;
+    reference
+        .resolve_against(&base.strip_fragment())
+        .map(|resolved| resolved.normalize())
+        .map_err(|e| e.to_string())
+}
+
+/// `uri` without its fragment.
+fn without_fragment(uri: &Uri) -> Uri {
+    uri.strip_fragment().normalize()
+}
 
 /// The standard metaschemas, embedded so that `$ref` and `$schema` to them never need the
 /// network: `(URI without fragment, document text)`.
@@ -152,11 +185,11 @@ pub trait Retrieve {
     /// # Errors
     ///
     /// Returns [`RetrieveError`] when the document is not available.
-    fn retrieve(&self, uri: &Uri) -> Result<Value, RetrieveError>;
+    fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError>;
 }
 
 impl<T: Retrieve + ?Sized> Retrieve for &T {
-    fn retrieve(&self, uri: &Uri) -> Result<Value, RetrieveError> {
+    fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError> {
         (**self).retrieve(uri)
     }
 }
@@ -167,41 +200,43 @@ impl<T: Retrieve + ?Sized> Retrieve for &T {
 pub struct OfflineRetriever;
 
 impl Retrieve for OfflineRetriever {
-    fn retrieve(&self, uri: &Uri) -> Result<Value, RetrieveError> {
+    fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError> {
         Err(RetrieveError {
             reason: format!("retrieval is disabled; no document was given for \"{uri}\""),
         })
     }
 }
 
-/// An in-memory retriever keyed by absolute URI (without fragment), for tests and callers that
-/// load documents themselves.
+/// An in-memory retriever keyed by absolute URI (without fragment, in normalised form: lower-case
+/// scheme and host, no default port), for tests and callers that load documents themselves.
 impl<S: BuildHasher> Retrieve for HashMap<String, Value, S> {
-    fn retrieve(&self, uri: &Uri) -> Result<Value, RetrieveError> {
-        self.get(uri.as_str())
-            .cloned()
-            .ok_or_else(|| RetrieveError {
-                reason: format!("no in-memory document for \"{uri}\""),
-            })
+    fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError> {
+        self.get(uri).cloned().ok_or_else(|| RetrieveError {
+            reason: format!("no in-memory document for \"{uri}\""),
+        })
     }
 }
 
 /// An in-memory retriever keyed by absolute URI (without fragment).
 impl Retrieve for BTreeMap<String, Value> {
-    fn retrieve(&self, uri: &Uri) -> Result<Value, RetrieveError> {
-        self.get(uri.as_str())
-            .cloned()
-            .ok_or_else(|| RetrieveError {
-                reason: format!("no in-memory document for \"{uri}\""),
-            })
+    fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError> {
+        self.get(uri).cloned().ok_or_else(|| RetrieveError {
+            reason: format!("no in-memory document for \"{uri}\""),
+        })
     }
 }
 
 /// Why a [`Registry`] could not be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {
-    /// A URI that must be absolute is not (the base URI given to the builder).
-    NotAbsoluteUri(NotAbsoluteUri),
+    /// A URI is not valid: the builder's base URI or a document URI given to it is not an
+    /// absolute URI, or a `$id` is not a valid URI reference.
+    InvalidUri {
+        /// The string as written.
+        value: String,
+        /// Why it is not valid.
+        reason: String,
+    },
     /// Two different schemas declare the same resource URI.
     DuplicateId {
         /// The resource URI.
@@ -265,7 +300,7 @@ impl RegistryError {
         match self {
             RegistryError::UnresolvableRef { ref_str, .. }
             | RegistryError::RefTargetNotSchema { ref_str, .. } => Some(ref_str),
-            RegistryError::NotAbsoluteUri(_)
+            RegistryError::InvalidUri { .. }
             | RegistryError::DuplicateId { .. }
             | RegistryError::DuplicateAnchor { .. }
             | RegistryError::Retrieve { .. }
@@ -278,7 +313,9 @@ impl RegistryError {
 impl fmt::Display for RegistryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RegistryError::NotAbsoluteUri(e) => write!(f, "{e}"),
+            RegistryError::InvalidUri { value, reason } => {
+                write!(f, "\"{value}\" is not a valid URI: {reason}")
+            }
             RegistryError::DuplicateId { uri, first, second } => write!(
                 f,
                 "duplicate schema resource \"{uri}\": declared at \"{first}\" and at \"{second}\""
@@ -319,12 +356,6 @@ impl fmt::Display for RegistryError {
 }
 
 impl std::error::Error for RegistryError {}
-
-impl From<NotAbsoluteUri> for RegistryError {
-    fn from(e: NotAbsoluteUri) -> Self {
-        RegistryError::NotAbsoluteUri(e)
-    }
-}
 
 /// A schema resource a consumer is evaluating in: the base URI for relative `$ref`s and the
 /// dialect that applies. Obtained from [`Registry::root_scope`] and carried through
@@ -637,8 +668,9 @@ impl<'b> RegistryBuilder<'b> {
         self
     }
 
-    /// Adds a document the root may reference, identified by `uri` (absolute, without
-    /// fragment). It is parsed and discovered only if a `$ref` or `$schema` reaches it.
+    /// Adds a document the root may reference, identified by `uri` (absolute; normalised, and a
+    /// fragment ignored). It is parsed and discovered only if a `$ref` or `$schema` reaches it.
+    /// A `uri` that is not an absolute URI makes [`RegistryBuilder::build`] fail.
     #[must_use]
     pub fn document(mut self, uri: impl Into<String>, document: Value) -> Self {
         self.documents.insert(uri.into(), document);
@@ -715,8 +747,18 @@ struct Builder<'a, 'b> {
 
 impl<'a, 'b> Builder<'a, 'b> {
     fn new(options: RegistryBuilder<'b>) -> Result<Self, RegistryError> {
+        let invalid = |value: &str, reason: String| RegistryError::InvalidUri {
+            value: value.to_string(),
+            reason,
+        };
+        let base_text: &str = options.base_uri.as_deref().unwrap_or(DEFAULT_BASE_URI);
         let root_base: Uri =
-            Uri::parse(options.base_uri.as_deref().unwrap_or(DEFAULT_BASE_URI))?.without_fragment();
+            without_fragment(&parse_uri(base_text).map_err(|e| invalid(base_text, e))?);
+        let mut documents: HashMap<String, Value> = HashMap::new();
+        for (uri, document) in options.documents {
+            let parsed: Uri = parse_uri(&uri).map_err(|e| invalid(&uri, e))?;
+            documents.insert(without_fragment(&parsed).to_string(), document);
+        }
         Ok(Builder {
             registry: Registry {
                 documents: Vec::new(),
@@ -725,7 +767,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             },
             by_uri: HashMap::new(),
             root_base,
-            documents: options.documents,
+            documents,
             retriever: options.retriever,
             settings: options.settings,
             fetched: HashMap::new(),
@@ -795,7 +837,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         if let Some(version) = SpecVersion::from_schema_uri(uri) {
             return Ok(Dialect::for_spec_version(version));
         }
-        let Ok(meta_uri) = Uri::parse(uri).map(|u| u.without_fragment()) else {
+        let Ok(meta_uri) = parse_uri(uri).map(|u| without_fragment(&u)) else {
             return Ok(fallback);
         };
         let metaschema: Arc<Schema> = match self.fetch(&meta_uri, None) {
@@ -820,7 +862,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 base = Some(version);
                 break;
             }
-            let Ok(parsed) = Uri::parse(&next_uri).map(|u| u.without_fragment()) else {
+            let Ok(parsed) = parse_uri(&next_uri).map(|u| without_fragment(&u)) else {
                 break;
             };
             if seen.contains(&parsed) {
@@ -876,7 +918,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 value.clone()
             } else {
                 self.retriever
-                    .retrieve(uri)
+                    .retrieve(uri.as_str())
                     .map_err(|e| RegistryError::Retrieve {
                         uri: uri.to_string(),
                         reason: e.reason,
@@ -992,12 +1034,18 @@ impl<'a, 'b> Builder<'a, 'b> {
             let dialect: Dialect = self.registry.resources[parent_scope.0].dialect;
             let mut scope: Scope = parent_scope;
             if let Some(id) = node.effective_id(dialect) {
-                let (resource_part, fragment) = split_fragment(id);
+                let (resource_part, fragment): (&str, Option<&str>) = match id.split_once('#') {
+                    Some((resource_part, fragment)) => (resource_part, Some(fragment)),
+                    None => (id, None),
+                };
                 if !resource_part.is_empty() {
-                    let uri: Uri = self.registry.resources[parent_scope.0]
-                        .uri
-                        .resolve(resource_part)
-                        .without_fragment();
+                    let base: &Uri = &self.registry.resources[parent_scope.0].uri;
+                    let uri: Uri = resolve_uri(base, resource_part)
+                        .map(|u| without_fragment(&u))
+                        .map_err(|reason| RegistryError::InvalidUri {
+                            value: id.to_string(),
+                            reason,
+                        })?;
                     let node_dialect: Dialect = if self.pinned(document) {
                         dialect
                     } else {
@@ -1083,10 +1131,13 @@ impl<'a, 'b> Builder<'a, 'b> {
             return Ok(());
         }
         let ref_str: &str = &pending.ref_str;
-        let target_uri: Uri = self.registry.resources[pending.scope.0]
-            .uri
-            .resolve(ref_str);
-        let resource_uri: Uri = target_uri.without_fragment();
+        let target_uri: Uri = resolve_uri(&self.registry.resources[pending.scope.0].uri, ref_str)
+            .map_err(|reason| RegistryError::UnresolvableRef {
+            ref_str: ref_str.to_string(),
+            target: ref_str.to_string(),
+            reason: format!("it is not a valid URI reference: {reason}"),
+        })?;
+        let resource_uri: Uri = without_fragment(&target_uri);
         let unresolvable = |reason: String| RegistryError::UnresolvableRef {
             ref_str: ref_str.to_string(),
             target: target_uri.to_string(),
@@ -1112,10 +1163,14 @@ impl<'a, 'b> Builder<'a, 'b> {
                     .ok_or_else(|| unresolvable("no schema resource has this URI".to_string()))?
             }
         };
-        let fragment: String =
-            percent_decode(target_uri.fragment().unwrap_or("")).ok_or_else(|| {
-                unresolvable("the fragment has a malformed percent escape".to_string())
-            })?;
+        let fragment: String = match target_uri.fragment() {
+            Some(fragment) => fragment
+                .decode()
+                .to_string()
+                .map_err(|_| unresolvable("the decoded fragment is not UTF-8".to_string()))?
+                .into_owned(),
+            None => String::new(),
+        };
         let resource_data: &Resource = &self.registry.resources[resource.0];
         let document: usize = resource_data.document;
         let pointer: Vec<String> = if fragment.is_empty() {
@@ -1385,8 +1440,8 @@ impl<'a> Registry<'a> {
 
     /// The base URI of the resource `scope` is in.
     #[must_use]
-    pub fn base_uri(&self, scope: Scope) -> &Uri {
-        &self.resources[scope.0].uri
+    pub fn base_uri(&self, scope: Scope) -> &str {
+        self.resources[scope.0].uri.as_str()
     }
 
     /// The target of `ref_str`, a `$ref` written in a schema whose scope (after
@@ -1466,7 +1521,6 @@ mod tests {
     use crate::json_schema::json_schema::{JsonSchema, Schema, SchemaRef};
     use crate::json_schema::settings::JsonSchemaSettings;
     use crate::json_schema::spec_version::SpecVersion;
-    use crate::json_schema::uri::NotAbsoluteUri;
     use crate::validator::{ValidationError, ValidationResult, validate_with_registry};
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -1547,10 +1601,10 @@ mod tests {
             .base_uri("relative/schema.json")
             .build(&schema)
             .map(|_| ());
-        let expected: Result<(), RegistryError> =
-            Err(RegistryError::NotAbsoluteUri(NotAbsoluteUri {
-                value: "relative/schema.json".to_string(),
-            }));
+        let expected: Result<(), RegistryError> = Err(RegistryError::InvalidUri {
+            value: "relative/schema.json".to_string(),
+            reason: "it has no scheme (it is a relative reference)".to_string(),
+        });
         assert_eq!(expected, actual);
     }
 
@@ -1640,8 +1694,9 @@ mod tests {
         let actual: Result<(), RegistryError> = build_error(&schema);
         let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
             ref_str: "#/$defs/a%zz".to_string(),
-            target: "json-schema:///#/$defs/a%zz".to_string(),
-            reason: "the fragment has a malformed percent escape".to_string(),
+            target: "#/$defs/a%zz".to_string(),
+            reason: "it is not a valid URI reference: invalid percent-encoded octet at index 9"
+                .to_string(),
         });
         assert_eq!(expected, actual);
     }
@@ -1820,6 +1875,73 @@ mod tests {
             instance_path: JsonPointer::root(),
             got: "number".to_string(),
         }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn differently_spelled_ref_reaches_normalised_resource() {
+        let root: JsonSchema = parse(&json!({
+            "$defs": {"a": {"$id": "https://example.com/a.json", "type": "string"}},
+            "$ref": "HTTPS://EXAMPLE.com:443/./a.json"
+        }));
+        let registry: Registry<'_> = Registry::new(&root).expect("build registry");
+        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+            got: "number".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn document_uri_is_normalised_when_given_to_builder() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/remote.json"}));
+        let registry: Registry<'_> = Registry::builder()
+            .document("HTTPS://Example.com/remote.json", json!({"type": "string"}))
+            .build(&root)
+            .expect("build registry");
+        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+            got: "number".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn relative_path_ref_against_urn_base_is_unresolvable() {
+        let root: JsonSchema = parse(&json!({"$id": "urn:example:root", "$ref": "other.json"}));
+        let actual: Result<(), RegistryError> = build_error(&root);
+        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+            ref_str: "other.json".to_string(),
+            target: "other.json".to_string(),
+            reason: "it is not a valid URI reference: when base has a rootless path and no \
+                     authority, reference should either have scheme, be empty or start with '#'"
+                .to_string(),
+        });
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn id_with_invalid_syntax_is_a_build_error() {
+        let root: JsonSchema = parse(&json!({"$defs": {"a": {"$id": "a b.json"}}}));
+        let actual: Result<(), RegistryError> = build_error(&root);
+        let expected: Result<(), RegistryError> = Err(RegistryError::InvalidUri {
+            value: "a b.json".to_string(),
+            reason: "unexpected character at index 1".to_string(),
+        });
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn base_uri_is_normalised() {
+        let root: JsonSchema = parse(&json!({}));
+        let registry: Registry<'_> = Registry::builder()
+            .base_uri("HTTP://Example.COM:80/a/../root.json")
+            .build(&root)
+            .expect("build registry");
+        let expected: &str = "http://example.com/root.json";
+        let actual: &str = registry.base_uri(registry.root_scope());
         assert_eq!(expected, actual);
     }
 
