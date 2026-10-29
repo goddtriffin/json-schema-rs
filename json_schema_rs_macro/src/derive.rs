@@ -741,6 +741,7 @@ fn named_type_impl(
             quote! {
                 .into_resource_root_schema(
                     <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    #name_lit,
                     #id_lit,
                     Self::__json_schema_rs_body,
                 )
@@ -783,11 +784,11 @@ fn named_type_impl(
         }
 
         impl ::json_schema_rs::ToJsonSchema for #name {
-            fn json_schema() -> ::json_schema_rs::JsonSchema {
+            fn json_schema() -> ::json_schema_rs::ReverseCodeGenResult {
                 let mut schema: ::json_schema_rs::JsonSchema = ::json_schema_rs::SchemaGenerator::new()
-                    #root_call;
+                    #root_call?;
                 schema.schema = Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string());
-                schema
+                ::core::result::Result::Ok(schema)
             }
 
             fn json_schema_with(

@@ -299,6 +299,8 @@ Analysis is from code only; nothing was built or run.
 - **`ref_template`** (`#/$defs/{model}` by default) controls ref strings; defs are always collected in one flat `$defs` at the root (no nested `$defs`, no `$id`-scoped subschemas).
 - **Garbage collection**: unreachable defs are dropped (`_garbage_collect_definitions`).
 
+**Colliding identities (researched for json-schema-rs #50).** `$defs` name collisions are renamed, not raised. `get_defs_ref` builds ranked candidates: short name, then with mode, then module qualname, then a `__N` index (`pydantic/json_schema.py:2432-2480`). `_DefinitionsRemapping` picks the first candidate that maps to one distinct schema, merging identical ones (`json_schema.py:143-192`). `$id` from `json_schema_extra` is merged in as data, so duplicate `$id`s pass through unreported. `PydanticJsonSchemaWarning` (`json_schema.py:101`) covers only skipped choices, non-serializable defaults and skipped discriminators.
+
 ## Validation (schema + JSON → errors)
 
 - **No** dedicated API. Pydantic validates data against Python models (or TypeAdapter types), not against a raw JSON Schema. The flow is: define model → validate with `model.model_validate(json_data)` or `TypeAdapter(T).validate_json(json_str)` → get validated instance or `ValidationError`. To validate arbitrary JSON against a schema, use a separate library (e.g. `jsonschema`) with the schema produced by `model_json_schema()`. Pydantic does not provide schema + JSON → errors directly.
