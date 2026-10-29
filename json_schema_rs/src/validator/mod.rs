@@ -6,11 +6,10 @@ mod error;
 pub use error::{ValidationError, ValidationResult};
 
 use crate::json_pointer::JsonPointer;
-use crate::json_schema::json_schema::AdditionalProperties;
 use crate::json_schema::ref_resolver;
-use crate::json_schema::{Dialect, JsonSchema};
+use crate::json_schema::{Dialect, JsonSchema, JsonType, Schema, SchemaRef, TypeSet};
 use crate::number::{self, JsonEqKey};
-use serde_json::{Number, Value};
+use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -34,8 +33,11 @@ fn value_to_display_string(v: &Value) -> String {
 /// Validates a JSON instance against a schema. Collects **all** validation errors
 /// and returns them in a single result (no fail-fast).
 ///
-/// Validates using the `type` (object, string, integer, number), `required`, and `properties`
-/// keywords. Resolves fragment-only `$ref` against the root schema; additional properties are allowed.
+/// The schema is a schema object (`&JsonSchema`) or a whole document that may be a boolean
+/// schema (`&Schema`): `true` accepts every instance and `false` none. Boolean schemas are
+/// honoured at every subschema position too. Type-specific keywords (`required`, `minLength`,
+/// `items`, `minimum`, ...) apply to instances of their kind whether or not `type` is present.
+/// Resolves fragment-only `$ref` against the root schema.
 ///
 /// # Errors
 ///
@@ -45,37 +47,80 @@ fn value_to_display_string(v: &Value) -> String {
 /// # Example
 ///
 /// ```
-/// use json_schema_rs::{JsonSchema, validate};
+/// use json_schema_rs::{JsonSchema, Schema, validate};
 /// use serde_json::json;
 ///
 /// let schema: JsonSchema = serde_json::from_str(r#"{"type":"object","properties":{"name":{"type":"string"}}}"#).unwrap();
 /// let instance = json!({"name": "Alice"});
-/// let result = validate(&schema, &instance);
-/// assert!(result.is_ok());
+/// assert!(validate(&schema, &instance).is_ok());
+///
+/// let never: Schema = Schema::try_from("false").unwrap();
+/// assert!(validate(&never, &instance).is_err());
 /// ```
-pub fn validate(schema: &JsonSchema, instance: &Value) -> ValidationResult {
-    validate_with_root(schema, schema.dialect(), schema, instance)
+pub fn validate<'a>(schema: impl Into<SchemaRef<'a>>, instance: &Value) -> ValidationResult {
+    match schema.into() {
+        SchemaRef::Bool(true) => Ok(()),
+        SchemaRef::Bool(false) => Err(vec![ValidationError::FalseSchema {
+            instance_path: JsonPointer::root(),
+        }]),
+        SchemaRef::Object(root) => {
+            validate_with_root(root, root.dialect(), SchemaRef::Object(root), instance)
+        }
+    }
 }
+
+/// The error for an instance that `type` rejects: the single-type variant for a set of one,
+/// [`ValidationError::ExpectedType`] otherwise.
+fn type_mismatch(
+    expected: TypeSet,
+    instance: &Value,
+    instance_path: &JsonPointer,
+) -> ValidationError {
+    let instance_path: JsonPointer = instance_path.clone();
+    let got: String = json_type_name(instance).to_string();
+    match expected.single() {
+        Some(JsonType::Object) => ValidationError::ExpectedObject { instance_path, got },
+        Some(JsonType::String) => ValidationError::ExpectedString { instance_path, got },
+        Some(JsonType::Integer) => ValidationError::ExpectedInteger { instance_path, got },
+        Some(JsonType::Number) => ValidationError::ExpectedNumber { instance_path, got },
+        Some(JsonType::Array) => ValidationError::ExpectedArray { instance_path, got },
+        Some(JsonType::Boolean) => ValidationError::ExpectedBoolean { instance_path, got },
+        Some(JsonType::Null) => ValidationError::ExpectedNull { instance_path, got },
+        None => ValidationError::ExpectedType {
+            instance_path,
+            expected,
+            got,
+        },
+    }
+}
+
+/// A pending check: a schema applied to an instance at a path.
+type Work<'s, 'v> = (SchemaRef<'s>, &'v Value, JsonPointer);
 
 /// Validates `instance` against `schema`, a subschema of `root`, under the root's `dialect`.
 #[expect(clippy::too_many_lines)]
 fn validate_with_root(
     root: &JsonSchema,
     dialect: Dialect,
-    schema: &JsonSchema,
+    schema: SchemaRef<'_>,
     instance: &Value,
 ) -> ValidationResult {
     let mut errors: Vec<ValidationError> = Vec::new();
-    let mut stack: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
+    let mut stack: Vec<Work<'_, '_>> = Vec::new();
     stack.push((schema, instance, JsonPointer::root()));
 
     while let Some((schema, instance, instance_path)) = stack.pop() {
         let schema: &JsonSchema = match ref_resolver::resolve_schema_ref_transitive(root, schema) {
-            Ok(s) => s,
+            Ok(SchemaRef::Object(s)) => s,
+            Ok(SchemaRef::Bool(true)) => continue,
+            Ok(SchemaRef::Bool(false)) => {
+                errors.push(ValidationError::FalseSchema { instance_path });
+                continue;
+            }
             Err(e) => {
                 let ref_str: String = schema
-                    .ref_
-                    .clone()
+                    .as_object()
+                    .and_then(|s| s.ref_.clone())
                     .unwrap_or_else(|| "<missing>".to_string());
                 errors.push(ValidationError::InvalidRef {
                     instance_path: instance_path.clone(),
@@ -121,7 +166,7 @@ fn validate_with_root(
                 let mut at_least_one_passed: bool = false;
                 for subschema in any_of {
                     let sub_result: ValidationResult =
-                        validate_with_root(root, dialect, subschema, instance);
+                        validate_with_root(root, dialect, subschema.into(), instance);
                     if sub_result.is_ok() {
                         at_least_one_passed = true;
                         break;
@@ -146,7 +191,7 @@ fn validate_with_root(
                 let mut pass_count: usize = 0;
                 for subschema in one_of {
                     let sub_result: ValidationResult =
-                        validate_with_root(root, dialect, subschema, instance);
+                        validate_with_root(root, dialect, subschema.into(), instance);
                     if sub_result.is_ok() {
                         pass_count += 1;
                     }
@@ -170,156 +215,24 @@ fn validate_with_root(
             && !all_of.is_empty()
         {
             for subschema in all_of.iter().rev() {
-                stack.push((subschema, instance, instance_path.clone()));
+                stack.push((subschema.into(), instance, instance_path.clone()));
             }
             continue;
         }
-        let expected_type: Option<&str> = schema.type_.as_deref();
-        match expected_type {
-            Some("object") => {
-                let Some(obj) = instance.as_object() else {
-                    errors.push(ValidationError::ExpectedObject {
-                        instance_path: instance_path.clone(),
-                        got: json_type_name(instance).to_string(),
-                    });
-                    continue;
-                };
-                if let Some(ref required) = schema.required {
-                    for name in required {
-                        if !obj.contains_key(name) {
-                            errors.push(ValidationError::MissingRequired {
-                                instance_path: instance_path.push(name),
-                                property: name.clone(),
-                            });
-                        }
-                    }
-                }
-                // Push in reverse order so we pop in schema properties order (first key first).
-                let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
-                for (key, sub_schema) in &schema.properties {
-                    if let Some(value) = obj.get(key) {
-                        let path = instance_path.push(key);
-                        pending.push((sub_schema, value, path));
-                    }
-                }
-                for item in pending.into_iter().rev() {
-                    stack.push(item);
-                }
-                // additionalProperties: keys not in properties are "additional"
-                let additional_keys: Vec<&str> = obj
-                    .keys()
-                    .filter(|k| !schema.properties.contains_key(*k))
-                    .map(String::as_str)
-                    .collect();
-                if !additional_keys.is_empty() {
-                    match schema.additional_properties.as_ref() {
-                        None | Some(AdditionalProperties::Allow) => {}
-                        Some(AdditionalProperties::Forbid) => {
-                            for key in additional_keys {
-                                errors.push(ValidationError::DisallowedAdditionalProperty {
-                                    instance_path: instance_path.push(key),
-                                    property: key.to_string(),
-                                });
-                            }
-                        }
-                        Some(AdditionalProperties::Schema(sub_schema)) => {
-                            for key in additional_keys {
-                                if let Some(value) = obj.get(key) {
-                                    let path = instance_path.push(key);
-                                    stack.push((sub_schema, value, path));
-                                }
-                            }
-                        }
-                    }
-                }
+        if let Some(types) = schema.type_
+            && !types.matches(instance, dialect.integer_semantics)
+        {
+            errors.push(type_mismatch(types, instance, &instance_path));
+        }
+        // Type-specific keywords apply to every instance of their kind, whatever `type` says (a
+        // schema without `type` still bounds strings, numbers, arrays and objects), so a type
+        // mismatch is reported next to every other keyword the instance breaks.
+        match instance {
+            Value::Object(obj) => {
+                push_object_work(schema, obj, &instance_path, &mut stack, &mut errors);
             }
-            Some("string") => {
-                if !instance.is_string() {
-                    errors.push(ValidationError::ExpectedString {
-                        instance_path: instance_path.clone(),
-                        got: json_type_name(instance).to_string(),
-                    });
-                }
-                // minLength / maxLength: count Unicode code points (chars), not bytes.
-                if let Some(s) = instance.as_str() {
-                    let char_count: u64 = s.chars().count() as u64;
-                    if let Some(min_length) = schema.min_length
-                        && char_count < min_length
-                    {
-                        errors.push(ValidationError::TooShort {
-                            instance_path: instance_path.clone(),
-                            min_length,
-                            actual_length: char_count,
-                        });
-                    }
-                    if let Some(max_length) = schema.max_length
-                        && char_count > max_length
-                    {
-                        errors.push(ValidationError::TooLong {
-                            instance_path: instance_path.clone(),
-                            max_length,
-                            actual_length: char_count,
-                        });
-                    }
-                    if let Some(ref pattern) = schema.pattern {
-                        match regress::Regex::new(pattern) {
-                            Ok(re) => {
-                                if re.find(s).is_none() {
-                                    errors.push(ValidationError::PatternMismatch {
-                                        instance_path: instance_path.clone(),
-                                        pattern: pattern.clone(),
-                                        value: s.to_string(),
-                                    });
-                                }
-                            }
-                            Err(_) => {
-                                errors.push(ValidationError::InvalidPatternInSchema {
-                                    instance_path: instance_path.clone(),
-                                    pattern: pattern.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                #[cfg(feature = "uuid")]
-                if dialect.format_mode == crate::json_schema::FormatMode::Assertion
-                    && schema.format.as_deref() == Some("uuid")
-                    && let Some(s) = instance.as_str()
-                    && uuid::Uuid::parse_str(s).is_err()
-                {
-                    errors.push(ValidationError::InvalidUuidFormat {
-                        instance_path: instance_path.clone(),
-                        value: s.to_string(),
-                    });
-                }
-            }
-            Some("integer") => {
-                let valid: bool = instance
-                    .as_number()
-                    .is_some_and(|n| number::is_integer(n, dialect.integer_semantics));
-                if !valid {
-                    errors.push(ValidationError::ExpectedInteger {
-                        instance_path: instance_path.clone(),
-                        got: json_type_name(instance).to_string(),
-                    });
-                }
-            }
-            Some("number") => {
-                if !instance.is_number() {
-                    errors.push(ValidationError::ExpectedNumber {
-                        instance_path: instance_path.clone(),
-                        got: json_type_name(instance).to_string(),
-                    });
-                }
-            }
-            Some("array") => {
-                let Some(arr) = instance.as_array() else {
-                    errors.push(ValidationError::ExpectedArray {
-                        instance_path: instance_path.clone(),
-                        got: json_type_name(instance).to_string(),
-                    });
-                    continue;
-                };
+            Value::String(s) => push_string_errors(schema, dialect, s, &instance_path, &mut errors),
+            Value::Array(arr) => {
                 let actual_count: u64 = arr.len() as u64;
                 if let Some(min_items) = schema.min_items
                     && arr.len() < min_items.try_into().unwrap_or(usize::MAX)
@@ -340,63 +253,23 @@ fn validate_with_root(
                     });
                 }
                 if let Some(ref item_schema) = schema.items {
-                    let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
-                    for (i, elem) in arr.iter().enumerate() {
+                    // Push in reverse order so the first element is checked first.
+                    for (i, elem) in arr.iter().enumerate().rev() {
                         let path = instance_path.push(&i.to_string());
-                        pending.push((item_schema, elem, path));
-                    }
-                    for item in pending.into_iter().rev() {
-                        stack.push(item);
+                        stack.push((item_schema.into(), elem, path));
                     }
                 }
-            }
-            Some("boolean") => {
-                if !instance.is_boolean() {
-                    errors.push(ValidationError::ExpectedBoolean {
+                if schema.unique_items == Some(true)
+                    && let Some(duplicate) = first_duplicate(arr)
+                {
+                    errors.push(ValidationError::DuplicateArrayItems {
                         instance_path: instance_path.clone(),
-                        got: json_type_name(instance).to_string(),
+                        duplicate_value: value_to_display_string(duplicate),
                     });
                 }
             }
-            None | Some(_) => {
-                // Type absent or not enforced: validate required/properties when instance is object
-                if let Some(obj) = instance.as_object() {
-                    if let Some(ref required) = schema.required {
-                        for name in required {
-                            if !obj.contains_key(name) {
-                                errors.push(ValidationError::MissingRequired {
-                                    instance_path: instance_path.push(name),
-                                    property: name.clone(),
-                                });
-                            }
-                        }
-                    }
-                    let mut pending: Vec<(&JsonSchema, &Value, JsonPointer)> = Vec::new();
-                    for (key, sub_schema) in &schema.properties {
-                        if let Some(value) = obj.get(key) {
-                            let path = instance_path.push(key);
-                            pending.push((sub_schema, value, path));
-                        }
-                    }
-                    for item in pending.into_iter().rev() {
-                        stack.push(item);
-                    }
-                }
-            }
-        }
-        // Numeric and uniqueness keywords apply to every instance of their kind, whatever `type`
-        // says (a schema without `type` still bounds numbers).
-        if let Some(n) = instance.as_number() {
-            push_numeric_errors(schema, n, &instance_path, &mut errors);
-        }
-        if schema.unique_items == Some(true)
-            && let Some(items) = instance.as_array()
-            && let Some(duplicate) = first_duplicate(items)
-        {
-            errors.push(ValidationError::DuplicateArrayItems {
-                instance_path: instance_path.clone(),
-                duplicate_value: value_to_display_string(duplicate),
-            });
+            Value::Number(n) => push_numeric_errors(schema, n, &instance_path, &mut errors),
+            Value::Null | Value::Bool(_) => {}
         }
     }
 
@@ -404,6 +277,115 @@ fn validate_with_root(
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+/// Checks `required` and queues `properties` and `additionalProperties` for the object instance
+/// `obj`. `additionalProperties: false` reports each extra key by name rather than as a
+/// [`ValidationError::FalseSchema`].
+fn push_object_work<'s, 'v>(
+    schema: &'s JsonSchema,
+    obj: &'v Map<String, Value>,
+    instance_path: &JsonPointer,
+    stack: &mut Vec<Work<'s, 'v>>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(ref required) = schema.required {
+        for name in required {
+            if !obj.contains_key(name) {
+                errors.push(ValidationError::MissingRequired {
+                    instance_path: instance_path.push(name),
+                    property: name.clone(),
+                });
+            }
+        }
+    }
+    // Push in reverse order so we pop in schema properties order (first key first).
+    let mut pending: Vec<Work<'s, 'v>> = Vec::new();
+    for (key, sub_schema) in &schema.properties {
+        if let Some(value) = obj.get(key) {
+            pending.push((sub_schema.into(), value, instance_path.push(key)));
+        }
+    }
+    stack.extend(pending.into_iter().rev());
+    // additionalProperties: keys not in properties are "additional".
+    match schema.additional_properties.as_ref() {
+        None | Some(Schema::Bool(true)) => {}
+        Some(Schema::Bool(false)) => {
+            for key in obj.keys().filter(|k| !schema.properties.contains_key(*k)) {
+                errors.push(ValidationError::DisallowedAdditionalProperty {
+                    instance_path: instance_path.push(key),
+                    property: key.clone(),
+                });
+            }
+        }
+        Some(sub_schema @ Schema::Object(_)) => {
+            for (key, value) in obj {
+                if !schema.properties.contains_key(key) {
+                    stack.push((sub_schema.into(), value, instance_path.push(key)));
+                }
+            }
+        }
+    }
+}
+
+/// Checks `minLength`, `maxLength`, `pattern` and (with the `uuid` feature, when the dialect
+/// asserts formats) `format: "uuid"` against the string instance `s`.
+fn push_string_errors(
+    schema: &JsonSchema,
+    #[cfg_attr(not(feature = "uuid"), expect(unused_variables))] dialect: Dialect,
+    s: &str,
+    instance_path: &JsonPointer,
+    errors: &mut Vec<ValidationError>,
+) {
+    // minLength / maxLength: count Unicode code points (chars), not bytes.
+    let char_count: u64 = s.chars().count() as u64;
+    if let Some(min_length) = schema.min_length
+        && char_count < min_length
+    {
+        errors.push(ValidationError::TooShort {
+            instance_path: instance_path.clone(),
+            min_length,
+            actual_length: char_count,
+        });
+    }
+    if let Some(max_length) = schema.max_length
+        && char_count > max_length
+    {
+        errors.push(ValidationError::TooLong {
+            instance_path: instance_path.clone(),
+            max_length,
+            actual_length: char_count,
+        });
+    }
+    if let Some(ref pattern) = schema.pattern {
+        match regress::Regex::with_flags(pattern, "u") {
+            Ok(re) => {
+                if re.find(s).is_none() {
+                    errors.push(ValidationError::PatternMismatch {
+                        instance_path: instance_path.clone(),
+                        pattern: pattern.clone(),
+                        value: s.to_string(),
+                    });
+                }
+            }
+            Err(_) => {
+                errors.push(ValidationError::InvalidPatternInSchema {
+                    instance_path: instance_path.clone(),
+                    pattern: pattern.clone(),
+                });
+            }
+        }
+    }
+    #[cfg(feature = "uuid")]
+    if dialect.format_mode == crate::json_schema::FormatMode::Assertion
+        && schema.format.as_deref() == Some("uuid")
+        && uuid::Uuid::parse_str(s).is_err()
+    {
+        errors.push(ValidationError::InvalidUuidFormat {
+            instance_path: instance_path.clone(),
+            value: s.to_string(),
+        });
     }
 }
 
@@ -486,8 +468,8 @@ mod tests {
     use super::{ValidationError, ValidationResult, validate};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
-    use crate::json_schema::json_schema::AdditionalProperties;
     use crate::json_schema::ref_resolver::RefResolutionError;
+    use crate::json_schema::{JsonType, Schema, SchemaRef};
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -501,8 +483,11 @@ mod tests {
         properties: BTreeMap<String, JsonSchema>,
     ) -> JsonSchema {
         JsonSchema {
-            type_: Some("object".to_string()),
-            properties,
+            type_: Some(JsonType::Object.into()),
+            properties: properties
+                .into_iter()
+                .map(|(key, schema)| (key, Schema::from(schema)))
+                .collect(),
             required: Some(required.into_iter().map(String::from).collect()),
             ..Default::default()
         }
@@ -592,14 +577,14 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "b".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
@@ -618,7 +603,7 @@ mod tests {
             m.insert(
                 "name".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
@@ -640,7 +625,7 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
@@ -659,13 +644,13 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m
         });
-        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({"a": "x", "extra": 1});
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::DisallowedAdditionalProperty {
@@ -682,13 +667,13 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m
         });
-        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({"a": "x", "extra1": 1, "extra2": 2});
         let actual_result: ValidationResult = validate(&schema, &instance);
         let expected_errors: Vec<ValidationError> = vec![
@@ -725,13 +710,13 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m
         });
-        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Ok(());
@@ -745,13 +730,13 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m
         });
-        schema.additional_properties = Some(AdditionalProperties::Forbid);
+        schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({"a": "x"});
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Ok(());
@@ -761,23 +746,24 @@ mod tests {
     #[test]
     fn additional_properties_schema_valid_when_value_passes() {
         let sub = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         let schema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
                     JsonSchema {
-                        type_: Some("string".to_string()),
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m
             },
-            additional_properties: Some(AdditionalProperties::Schema(Box::new(sub))),
+            additional_properties: Some(Schema::from(sub)),
             ..Default::default()
         };
         let instance = json!({"a": "x", "extra": "allowed"});
@@ -789,23 +775,24 @@ mod tests {
     #[test]
     fn additional_properties_schema_invalid_when_value_fails() {
         let sub = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             ..Default::default()
         };
         let schema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
                     JsonSchema {
-                        type_: Some("string".to_string()),
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m
             },
-            additional_properties: Some(AdditionalProperties::Schema(Box::new(sub))),
+            additional_properties: Some(Schema::from(sub)),
             ..Default::default()
         };
         let instance = json!({"a": "x", "extra": "not_an_integer"});
@@ -822,35 +809,39 @@ mod tests {
         let schema = JsonSchema {
             all_of: Some(vec![
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     properties: {
                         let mut m = BTreeMap::new();
                         m.insert(
                             "a".to_string(),
                             JsonSchema {
-                                type_: Some("string".to_string()),
+                                type_: Some(JsonType::String.into()),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         m
                     },
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     properties: {
                         let mut m = BTreeMap::new();
                         m.insert(
                             "b".to_string(),
                             JsonSchema {
-                                type_: Some("integer".to_string()),
+                                type_: Some(JsonType::Integer.into()),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         m
                     },
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -865,26 +856,29 @@ mod tests {
         let schema = JsonSchema {
             all_of: Some(vec![
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     properties: BTreeMap::new(),
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     required: Some(vec!["b".to_string()]),
                     properties: {
                         let mut m = BTreeMap::new();
                         m.insert(
                             "b".to_string(),
                             JsonSchema {
-                                type_: Some("integer".to_string()),
+                                type_: Some(JsonType::Integer.into()),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         m
                     },
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -901,37 +895,41 @@ mod tests {
         let schema = JsonSchema {
             all_of: Some(vec![
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     required: Some(vec!["a".to_string()]),
                     properties: {
                         let mut m = BTreeMap::new();
                         m.insert(
                             "a".to_string(),
                             JsonSchema {
-                                type_: Some("string".to_string()),
+                                type_: Some(JsonType::String.into()),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         m
                     },
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     required: Some(vec!["b".to_string()]),
                     properties: {
                         let mut m = BTreeMap::new();
                         m.insert(
                             "b".to_string(),
                             JsonSchema {
-                                type_: Some("integer".to_string()),
+                                type_: Some(JsonType::Integer.into()),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         m
                     },
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -960,12 +958,13 @@ mod tests {
         let schema = JsonSchema {
             all_of: Some(vec![
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     properties: BTreeMap::new(),
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     properties: {
                         let mut m = BTreeMap::new();
                         m.insert(
@@ -976,12 +975,14 @@ mod tests {
                                     serde_json::Value::String("b".to_string()),
                                 ]),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         m
                     },
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -1000,13 +1001,15 @@ mod tests {
         let schema = JsonSchema {
             any_of: Some(vec![
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("integer".to_string()),
+                    type_: Some(JsonType::Integer.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -1025,13 +1028,15 @@ mod tests {
         let schema = JsonSchema {
             any_of: Some(vec![
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("integer".to_string()),
+                    type_: Some(JsonType::Integer.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -1074,10 +1079,13 @@ mod tests {
     #[test]
     fn any_of_single_subschema_passes() {
         let schema = JsonSchema {
-            any_of: Some(vec![JsonSchema {
-                type_: Some("number".to_string()),
-                ..Default::default()
-            }]),
+            any_of: Some(vec![
+                JsonSchema {
+                    type_: Some(JsonType::Number.into()),
+                    ..Default::default()
+                }
+                .into(),
+            ]),
             ..Default::default()
         };
         let instance = json!(std::f64::consts::PI);
@@ -1089,10 +1097,13 @@ mod tests {
     #[test]
     fn any_of_single_subschema_fails() {
         let schema = JsonSchema {
-            any_of: Some(vec![JsonSchema {
-                type_: Some("string".to_string()),
-                ..Default::default()
-            }]),
+            any_of: Some(vec![
+                JsonSchema {
+                    type_: Some(JsonType::String.into()),
+                    ..Default::default()
+                }
+                .into(),
+            ]),
             ..Default::default()
         };
         let instance = json!(42);
@@ -1113,13 +1124,15 @@ mod tests {
         let schema = JsonSchema {
             one_of: Some(vec![
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("integer".to_string()),
+                    type_: Some(JsonType::Integer.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -1134,13 +1147,15 @@ mod tests {
         let schema = JsonSchema {
             one_of: Some(vec![
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
                 JsonSchema {
-                    type_: Some("integer".to_string()),
+                    type_: Some(JsonType::Integer.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -1161,11 +1176,12 @@ mod tests {
     fn one_of_multiple_subschemas_pass() {
         let schema = JsonSchema {
             one_of: Some(vec![
-                JsonSchema::default(),
+                JsonSchema::default().into(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
-                },
+                }
+                .into(),
             ]),
             ..Default::default()
         };
@@ -1205,10 +1221,13 @@ mod tests {
     #[test]
     fn one_of_single_subschema_passes() {
         let schema = JsonSchema {
-            one_of: Some(vec![JsonSchema {
-                type_: Some("number".to_string()),
-                ..Default::default()
-            }]),
+            one_of: Some(vec![
+                JsonSchema {
+                    type_: Some(JsonType::Number.into()),
+                    ..Default::default()
+                }
+                .into(),
+            ]),
             ..Default::default()
         };
         let instance = json!(std::f64::consts::PI);
@@ -1220,10 +1239,13 @@ mod tests {
     #[test]
     fn one_of_single_subschema_fails() {
         let schema = JsonSchema {
-            one_of: Some(vec![JsonSchema {
-                type_: Some("string".to_string()),
-                ..Default::default()
-            }]),
+            one_of: Some(vec![
+                JsonSchema {
+                    type_: Some(JsonType::String.into()),
+                    ..Default::default()
+                }
+                .into(),
+            ]),
             ..Default::default()
         };
         let instance = json!(42);
@@ -1242,7 +1264,7 @@ mod tests {
     #[test]
     fn wrong_type_string_instead_of_object() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             ..Default::default()
         };
         let instance = json!("not an object");
@@ -1257,13 +1279,13 @@ mod tests {
     #[test]
     fn schema_with_description_validates_as_before() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "name".to_string(),
                     JsonSchema {
-                        type_: Some("string".to_string()),
+                        type_: Some(JsonType::String.into()),
                         properties: BTreeMap::new(),
                         additional_properties: None,
                         required: None,
@@ -1287,7 +1309,8 @@ mod tests {
                         any_of: None,
                         one_of: None,
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m
             },
@@ -1364,7 +1387,7 @@ mod tests {
     #[test]
     fn schema_with_comment_validates_same_as_without() {
         let schema_without: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1390,7 +1413,7 @@ mod tests {
             ..Default::default()
         };
         let schema_with_comment: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1428,11 +1451,11 @@ mod tests {
     #[test]
     #[expect(clippy::too_many_lines)]
     fn schema_with_default_validates_same_as_without() {
-        let mut properties_without: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut properties_without: BTreeMap<String, Schema> = BTreeMap::new();
         properties_without.insert(
             "opt".to_string(),
             JsonSchema {
-                type_: Some("string".to_string()),
+                type_: Some(JsonType::String.into()),
                 properties: BTreeMap::new(),
                 additional_properties: None,
                 required: None,
@@ -1456,13 +1479,14 @@ mod tests {
                 any_of: None,
                 one_of: None,
                 ..Default::default()
-            },
+            }
+            .into(),
         );
-        let mut properties_with_default: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut properties_with_default: BTreeMap<String, Schema> = BTreeMap::new();
         properties_with_default.insert(
             "opt".to_string(),
             JsonSchema {
-                type_: Some("string".to_string()),
+                type_: Some(JsonType::String.into()),
                 properties: BTreeMap::new(),
                 additional_properties: None,
                 required: None,
@@ -1486,10 +1510,11 @@ mod tests {
                 any_of: None,
                 one_of: None,
                 ..Default::default()
-            },
+            }
+            .into(),
         );
         let schema_without: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: properties_without,
             additional_properties: None,
             required: None,
@@ -1515,7 +1540,7 @@ mod tests {
             ..Default::default()
         };
         let schema_with_default: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: properties_with_default,
             additional_properties: None,
             required: None,
@@ -1549,7 +1574,7 @@ mod tests {
     #[test]
     fn root_type_string_valid_nonempty() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1583,7 +1608,7 @@ mod tests {
     #[test]
     fn root_type_string_valid_empty() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1617,7 +1642,7 @@ mod tests {
     #[test]
     fn wrong_type_object_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1654,7 +1679,7 @@ mod tests {
     #[test]
     fn wrong_type_number_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1691,7 +1716,7 @@ mod tests {
     #[test]
     fn wrong_type_null_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1728,7 +1753,7 @@ mod tests {
     #[test]
     fn wrong_type_boolean_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1765,7 +1790,7 @@ mod tests {
     #[test]
     fn root_type_boolean_valid_true() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("boolean".to_string()),
+            type_: Some(JsonType::Boolean.into()),
             ..Default::default()
         };
         let instance = json!(true);
@@ -1777,7 +1802,7 @@ mod tests {
     #[test]
     fn root_type_boolean_valid_false() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("boolean".to_string()),
+            type_: Some(JsonType::Boolean.into()),
             ..Default::default()
         };
         let instance = json!(false);
@@ -1789,7 +1814,7 @@ mod tests {
     #[test]
     fn wrong_type_string_instead_of_boolean() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("boolean".to_string()),
+            type_: Some(JsonType::Boolean.into()),
             ..Default::default()
         };
         let instance = json!("hello");
@@ -1804,7 +1829,7 @@ mod tests {
     #[test]
     fn wrong_type_array_instead_of_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -1875,7 +1900,7 @@ mod tests {
     #[test]
     fn enum_with_type_string_valid() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -1891,7 +1916,7 @@ mod tests {
     #[test]
     fn enum_with_type_string_invalid_not_in_enum() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             enum_values: Some(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -2043,7 +2068,7 @@ mod tests {
     #[test]
     fn root_type_integer_valid_42() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2077,7 +2102,7 @@ mod tests {
     #[test]
     fn root_type_integer_valid_0() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2111,7 +2136,7 @@ mod tests {
     #[test]
     fn root_type_integer_valid_negative() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2145,7 +2170,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_float() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2182,7 +2207,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2219,7 +2244,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_null() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2256,7 +2281,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_object() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2293,7 +2318,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_array() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2330,7 +2355,7 @@ mod tests {
     #[test]
     fn root_type_integer_invalid_bool() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2371,7 +2396,7 @@ mod tests {
             m.insert(
                 "count".to_string(),
                 JsonSchema {
-                    type_: Some("integer".to_string()),
+                    type_: Some(JsonType::Integer.into()),
                     ..Default::default()
                 },
             );
@@ -2390,7 +2415,7 @@ mod tests {
             m.insert(
                 "count".to_string(),
                 JsonSchema {
-                    type_: Some("integer".to_string()),
+                    type_: Some(JsonType::Integer.into()),
                     ..Default::default()
                 },
             );
@@ -2412,7 +2437,7 @@ mod tests {
             m.insert(
                 "count".to_string(),
                 JsonSchema {
-                    type_: Some("integer".to_string()),
+                    type_: Some(JsonType::Integer.into()),
                     ..Default::default()
                 },
             );
@@ -2430,7 +2455,7 @@ mod tests {
     #[test]
     fn root_type_number_valid_float() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2464,7 +2489,7 @@ mod tests {
     #[test]
     fn root_type_number_valid_integer() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2498,7 +2523,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2535,7 +2560,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_null() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2572,7 +2597,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_object() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2609,7 +2634,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_array() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2646,7 +2671,7 @@ mod tests {
     #[test]
     fn root_type_number_invalid_bool() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2683,7 +2708,7 @@ mod tests {
     #[test]
     fn integer_with_minimum_maximum_valid_in_range() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2717,7 +2742,7 @@ mod tests {
     #[test]
     fn integer_below_minimum() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2755,7 +2780,7 @@ mod tests {
     #[test]
     fn integer_above_maximum() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2793,7 +2818,7 @@ mod tests {
     #[test]
     fn integer_no_minimum_maximum_no_extra_errors() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2827,7 +2852,7 @@ mod tests {
     #[test]
     fn number_with_minimum_maximum_valid_in_range() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2861,7 +2886,7 @@ mod tests {
     #[test]
     fn number_below_minimum() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2899,7 +2924,7 @@ mod tests {
     #[test]
     fn number_above_maximum() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -2938,13 +2963,13 @@ mod tests {
     #[expect(clippy::too_many_lines)]
     fn integer_and_number_min_max_violations_collected_from_multiple_properties() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "low".to_string(),
                     JsonSchema {
-                        type_: Some("integer".to_string()),
+                        type_: Some(JsonType::Integer.into()),
                         properties: BTreeMap::new(),
                         additional_properties: None,
                         required: None,
@@ -2968,12 +2993,13 @@ mod tests {
                         any_of: None,
                         one_of: None,
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m.insert(
                     "high".to_string(),
                     JsonSchema {
-                        type_: Some("integer".to_string()),
+                        type_: Some(JsonType::Integer.into()),
                         properties: BTreeMap::new(),
                         additional_properties: None,
                         required: None,
@@ -2997,7 +3023,8 @@ mod tests {
                         any_of: None,
                         one_of: None,
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m
             },
@@ -3044,7 +3071,7 @@ mod tests {
     #[test]
     fn root_type_array_valid_empty() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3078,7 +3105,7 @@ mod tests {
     #[test]
     fn root_type_array_valid_non_empty() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3112,7 +3139,7 @@ mod tests {
     #[test]
     fn root_type_array_invalid_not_array() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3149,7 +3176,7 @@ mod tests {
     #[test]
     fn root_type_array_with_items_valid() {
         let item_schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3175,7 +3202,7 @@ mod tests {
             ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3184,7 +3211,7 @@ mod tests {
             comment: None,
             enum_values: None,
             const_value: None,
-            items: Some(Box::new(item_schema)),
+            items: Some(Schema::from(item_schema)),
             unique_items: None,
             min_items: None,
             max_items: None,
@@ -3209,7 +3236,7 @@ mod tests {
     #[test]
     fn root_type_array_with_items_invalid_element() {
         let item_schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3235,7 +3262,7 @@ mod tests {
             ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3244,7 +3271,7 @@ mod tests {
             comment: None,
             enum_values: None,
             const_value: None,
-            items: Some(Box::new(item_schema)),
+            items: Some(Schema::from(item_schema)),
             unique_items: None,
             min_items: None,
             max_items: None,
@@ -3272,7 +3299,7 @@ mod tests {
     #[test]
     fn unique_items_true_no_duplicates_valid() {
         let item_schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3298,7 +3325,7 @@ mod tests {
             ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3307,7 +3334,7 @@ mod tests {
             comment: None,
             enum_values: None,
             const_value: None,
-            items: Some(Box::new(item_schema)),
+            items: Some(Schema::from(item_schema)),
             unique_items: Some(true),
             min_items: None,
             max_items: None,
@@ -3332,7 +3359,7 @@ mod tests {
     #[test]
     fn unique_items_true_duplicates_invalid() {
         let item_schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3358,7 +3385,7 @@ mod tests {
             ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3367,7 +3394,7 @@ mod tests {
             comment: None,
             enum_values: None,
             const_value: None,
-            items: Some(Box::new(item_schema)),
+            items: Some(Schema::from(item_schema)),
             unique_items: Some(true),
             min_items: None,
             max_items: None,
@@ -3398,7 +3425,7 @@ mod tests {
     #[test]
     fn unique_items_false_duplicates_valid() {
         let item_schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3424,7 +3451,7 @@ mod tests {
             ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3433,7 +3460,7 @@ mod tests {
             comment: None,
             enum_values: None,
             const_value: None,
-            items: Some(Box::new(item_schema)),
+            items: Some(Schema::from(item_schema)),
             unique_items: Some(false),
             min_items: None,
             max_items: None,
@@ -3458,7 +3485,7 @@ mod tests {
     #[test]
     fn unique_items_absent_duplicates_valid() {
         let item_schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3484,7 +3511,7 @@ mod tests {
             ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3493,7 +3520,7 @@ mod tests {
             comment: None,
             enum_values: None,
             const_value: None,
-            items: Some(Box::new(item_schema)),
+            items: Some(Schema::from(item_schema)),
             unique_items: None,
             min_items: None,
             max_items: None,
@@ -3518,7 +3545,7 @@ mod tests {
     #[test]
     fn unique_items_true_empty_array_valid() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3552,7 +3579,7 @@ mod tests {
     #[test]
     fn min_items_only_pass() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3586,7 +3613,7 @@ mod tests {
     #[test]
     fn min_items_only_fail() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3624,7 +3651,7 @@ mod tests {
     #[test]
     fn min_items_only_edge_len_equals_min() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3658,7 +3685,7 @@ mod tests {
     #[test]
     fn max_items_only_pass() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3692,7 +3719,7 @@ mod tests {
     #[test]
     fn max_items_only_fail() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3730,7 +3757,7 @@ mod tests {
     #[test]
     fn max_items_only_edge_len_equals_max() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3764,7 +3791,7 @@ mod tests {
     #[test]
     fn min_items_max_items_both_pass() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3798,7 +3825,7 @@ mod tests {
     #[test]
     fn min_items_max_items_fail_too_few() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3836,7 +3863,7 @@ mod tests {
     #[test]
     fn min_items_max_items_fail_too_many() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3874,7 +3901,7 @@ mod tests {
     #[test]
     fn min_items_max_items_absent_unchanged() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3908,7 +3935,7 @@ mod tests {
     #[test]
     fn min_items_max_items_not_array_expected_array_only() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
+            type_: Some(JsonType::Array.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -3949,7 +3976,7 @@ mod tests {
             m.insert(
                 "value".to_string(),
                 JsonSchema {
-                    type_: Some("number".to_string()),
+                    type_: Some(JsonType::Number.into()),
                     ..Default::default()
                 },
             );
@@ -3968,7 +3995,7 @@ mod tests {
             m.insert(
                 "value".to_string(),
                 JsonSchema {
-                    type_: Some("number".to_string()),
+                    type_: Some(JsonType::Number.into()),
                     ..Default::default()
                 },
             );
@@ -3990,7 +4017,7 @@ mod tests {
             m.insert(
                 "value".to_string(),
                 JsonSchema {
-                    type_: Some("number".to_string()),
+                    type_: Some(JsonType::Number.into()),
                     ..Default::default()
                 },
             );
@@ -4008,7 +4035,7 @@ mod tests {
     #[test]
     fn wrong_type_object_with_number() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -4045,7 +4072,7 @@ mod tests {
     #[test]
     fn wrong_type_object_with_null() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -4082,7 +4109,7 @@ mod tests {
     #[test]
     fn wrong_type_object_with_array() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
             additional_properties: None,
             required: None,
@@ -4125,9 +4152,10 @@ mod tests {
                 m.insert(
                     "name".to_string(),
                     JsonSchema {
-                        type_: Some("string".to_string()),
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m
             },
@@ -4167,15 +4195,16 @@ mod tests {
             m.insert(
                 "address".to_string(),
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     properties: {
                         let mut inner = BTreeMap::new();
                         inner.insert(
                             "city".to_string(),
                             JsonSchema {
-                                type_: Some("string".to_string()),
+                                type_: Some(JsonType::String.into()),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         inner
                     },
@@ -4221,7 +4250,7 @@ mod tests {
             m.insert(
                 "opt".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
@@ -4240,21 +4269,21 @@ mod tests {
             m.insert(
                 "a".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "b".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "c".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
@@ -4286,22 +4315,23 @@ mod tests {
             m.insert(
                 "x".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
             m.insert(
                 "nested".to_string(),
                 JsonSchema {
-                    type_: Some("object".to_string()),
+                    type_: Some(JsonType::Object.into()),
                     properties: {
                         let mut inner = BTreeMap::new();
                         inner.insert(
                             "y".to_string(),
                             JsonSchema {
-                                type_: Some("string".to_string()),
+                                type_: Some(JsonType::String.into()),
                                 ..Default::default()
-                            },
+                            }
+                            .into(),
                         );
                         inner
                     },
@@ -4350,15 +4380,16 @@ mod tests {
     fn deeply_nested_instance_does_not_stack_overflow() {
         const DEPTH: usize = 200;
         let mut inner: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "value".to_string(),
                     JsonSchema {
-                        type_: Some("string".to_string()),
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m
             },
@@ -4367,12 +4398,12 @@ mod tests {
         };
         for _ in 0..DEPTH {
             let mut wrap: JsonSchema = JsonSchema {
-                type_: Some("object".to_string()),
+                type_: Some(JsonType::Object.into()),
                 properties: BTreeMap::new(),
                 required: Some(vec!["child".to_string()]),
                 ..Default::default()
             };
-            wrap.properties.insert("child".to_string(), inner);
+            wrap.properties.insert("child".to_string(), inner.into());
             inner = wrap;
         }
         let mut instance_value: serde_json::Value = {
@@ -4400,7 +4431,7 @@ mod tests {
             m.insert(
                 "a/b".to_string(),
                 JsonSchema {
-                    type_: Some("string".to_string()),
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 },
             );
@@ -4418,7 +4449,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_exact_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(3),
             ..Default::default()
         };
@@ -4429,7 +4460,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_below_fails() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(5),
             ..Default::default()
         };
@@ -4446,7 +4477,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_above_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(2),
             ..Default::default()
         };
@@ -4457,7 +4488,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_absent_any_length_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         let instance = json!("");
@@ -4467,7 +4498,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_exact_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             max_length: Some(5),
             ..Default::default()
         };
@@ -4478,7 +4509,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_above_fails() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             max_length: Some(3),
             ..Default::default()
         };
@@ -4495,7 +4526,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_below_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             max_length: Some(10),
             ..Default::default()
         };
@@ -4506,7 +4537,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_absent_any_length_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         let instance = json!("this is a very long string with no max length constraint");
@@ -4516,7 +4547,7 @@ mod tests {
     #[test]
     fn validate_string_min_length_zero_allows_empty() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(0),
             ..Default::default()
         };
@@ -4527,7 +4558,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_zero_requires_empty() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             max_length: Some(0),
             ..Default::default()
         };
@@ -4544,7 +4575,7 @@ mod tests {
     #[test]
     fn validate_string_max_length_zero_empty_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             max_length: Some(0),
             ..Default::default()
         };
@@ -4555,7 +4586,7 @@ mod tests {
     #[test]
     fn validate_string_both_constraints_within_range_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(2),
             max_length: Some(10),
             ..Default::default()
@@ -4567,7 +4598,7 @@ mod tests {
     #[test]
     fn validate_string_below_min_length_with_max_also_set() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(5),
             max_length: Some(10),
             ..Default::default()
@@ -4585,7 +4616,7 @@ mod tests {
     #[test]
     fn validate_string_above_max_length_with_min_also_set() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(2),
             max_length: Some(4),
             ..Default::default()
@@ -4604,7 +4635,7 @@ mod tests {
     fn validate_string_min_length_unicode_code_points() {
         // "日本語" has 3 Unicode code points but 9 UTF-8 bytes.
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             min_length: Some(3),
             max_length: Some(3),
             ..Default::default()
@@ -4616,7 +4647,7 @@ mod tests {
     #[test]
     fn validate_string_pattern_partial_match_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             pattern: Some("a".to_string()),
             ..Default::default()
         };
@@ -4627,9 +4658,37 @@ mod tests {
     }
 
     #[test]
+    fn validate_string_pattern_uses_unicode_property_escapes() {
+        let schema = JsonSchema {
+            pattern: Some(r"\p{Letter}cole".to_string()),
+            ..Default::default()
+        };
+        let instance = json!("l'école");
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_string_pattern_unicode_property_escape_rejects_non_letter() {
+        let schema = JsonSchema {
+            pattern: Some(r"^\p{Letter}$".to_string()),
+            ..Default::default()
+        };
+        let instance = json!("1");
+        let expected: ValidationResult = Err(vec![ValidationError::PatternMismatch {
+            instance_path: JsonPointer::root(),
+            pattern: r"^\p{Letter}$".to_string(),
+            value: "1".to_string(),
+        }]);
+        let actual: ValidationResult = validate(&schema, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn validate_string_pattern_full_match_passes() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             pattern: Some("^[0-9]+$".to_string()),
             ..Default::default()
         };
@@ -4642,7 +4701,7 @@ mod tests {
     #[test]
     fn validate_string_pattern_mismatch_fails() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             pattern: Some("^[0-9]+$".to_string()),
             ..Default::default()
         };
@@ -4659,7 +4718,7 @@ mod tests {
     #[test]
     fn validate_string_pattern_non_string_instance_only_expected_string() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             pattern: Some("^[0-9]+$".to_string()),
             ..Default::default()
         };
@@ -4675,7 +4734,7 @@ mod tests {
     #[test]
     fn validate_string_pattern_invalid_regex_in_schema() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             pattern: Some("[".to_string()),
             ..Default::default()
         };
@@ -4691,7 +4750,7 @@ mod tests {
     #[test]
     fn validate_string_pattern_and_max_length_multiple_errors() {
         let schema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             pattern: Some("^[0-9]+$".to_string()),
             max_length: Some(2),
             ..Default::default()
@@ -5274,6 +5333,354 @@ mod tests {
             "root: value 9007199254740991 is not a multiple of 2".to_string(),
         ];
         let actual: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// Validates `instance_json` against the schema document `schema_json` (which may be a
+    /// boolean schema) under default settings.
+    fn validate_document(schema_json: &str, instance_json: &str) -> ValidationResult {
+        let schema: Schema = Schema::try_from(schema_json).expect("schema");
+        let instance: serde_json::Value = serde_json::from_str(instance_json).expect("instance");
+        validate(&schema, &instance)
+    }
+
+    /// `type: ["integer", "string"]`.
+    fn integer_or_string() -> crate::json_schema::TypeSet {
+        [JsonType::Integer, JsonType::String].into_iter().collect()
+    }
+
+    #[test]
+    fn type_array_accepts_listed_integer() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(r#"{"type":["integer","string"]}"#, "1");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_array_accepts_listed_string() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult =
+            validate_document(r#"{"type":["integer","string"]}"#, r#""x""#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_array_rejects_unlisted_type() {
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
+            instance_path: JsonPointer::root(),
+            expected: integer_or_string(),
+            got: "boolean".to_string(),
+        }]);
+        let actual: ValidationResult =
+            validate_document(r#"{"type":["integer","string"]}"#, "true");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_null_accepts_null() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(r#"{"type":"null"}"#, "null");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_null_rejects_string() {
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNull {
+            instance_path: JsonPointer::root(),
+            got: "string".to_string(),
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"type":"null"}"#, r#""x""#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_null_rejects_number() {
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNull {
+            instance_path: JsonPointer::root(),
+            got: "number".to_string(),
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"type":"null"}"#, "1");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn empty_type_set_rejects_null() {
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
+            instance_path: JsonPointer::root(),
+            expected: crate::json_schema::TypeSet::empty(),
+            got: "null".to_string(),
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"type":[]}"#, "null");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn empty_type_set_rejects_object() {
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
+            instance_path: JsonPointer::root(),
+            expected: crate::json_schema::TypeSet::empty(),
+            got: "object".to_string(),
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"type":[]}"#, "{}");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_array_with_integer_rejects_zero_fraction_float_under_draft4() {
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
+            instance_path: JsonPointer::root(),
+            expected: integer_or_string(),
+            got: "number".to_string(),
+        }]);
+        let actual: ValidationResult = validate_document(
+            &format!(r#"{{"$schema":"{DRAFT4}","type":["integer","string"]}}"#),
+            "1.0",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_array_with_integer_accepts_zero_fraction_float_under_2020_12() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(
+            r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":["integer","string"]}"#,
+            "1.0",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_true_schema_accepts_anything() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document("true", r#"{"a":[1,null]}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_false_schema_rejects_at_root() {
+        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
+            instance_path: JsonPointer::root(),
+        }]);
+        let actual: ValidationResult = validate_document("false", "null");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_true_schema_ref_accepts_anything() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate(SchemaRef::Bool(true), &json!("x"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_false_schema_ref_rejects_at_root() {
+        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
+            instance_path: JsonPointer::root(),
+        }]);
+        let actual: ValidationResult = validate(SchemaRef::Bool(false), &json!("x"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn false_property_schema_rejects_present_property() {
+        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
+            instance_path: JsonPointer::root().push("a"),
+        }]);
+        let actual: ValidationResult =
+            validate_document(r#"{"properties":{"a":false}}"#, r#"{"a":1}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn false_property_schema_accepts_absent_property() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult =
+            validate_document(r#"{"properties":{"a":false}}"#, r#"{"b":1}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn false_items_rejects_each_element() {
+        let expected: ValidationResult = Err(vec![
+            ValidationError::FalseSchema {
+                instance_path: JsonPointer::root().push("0"),
+            },
+            ValidationError::FalseSchema {
+                instance_path: JsonPointer::root().push("1"),
+            },
+        ]);
+        let actual: ValidationResult = validate_document(r#"{"items":false}"#, "[1,2]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn false_items_accepts_empty_array() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(r#"{"items":false}"#, "[]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn true_items_accepts_any_elements() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(r#"{"items":true}"#, r#"[1,"a",null]"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_true_allows_extra_key() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(
+            r#"{"properties":{"a":{"type":"string"}},"additionalProperties":true}"#,
+            r#"{"a":"x","b":1}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ref_to_false_def_rejects() {
+        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
+            instance_path: JsonPointer::root().push("a"),
+        }]);
+        let actual: ValidationResult = validate_document(
+            r##"{"$defs":{"never":false},"properties":{"a":{"$ref":"#/$defs/never"}}}"##,
+            r#"{"a":1}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ref_to_true_def_accepts() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(
+            r##"{"$defs":{"any":true},"properties":{"a":{"$ref":"#/$defs/any"}}}"##,
+            r#"{"a":1}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn any_of_false_then_true_passes() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(r#"{"anyOf":[false,true]}"#, "1");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn all_of_true_and_false_fails() {
+        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
+            instance_path: JsonPointer::root(),
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"allOf":[true,false]}"#, "1");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn one_of_two_true_schemas_fails() {
+        let expected: ValidationResult = Err(vec![ValidationError::MultipleSubschemasMatched {
+            instance_path: JsonPointer::root(),
+            subschema_count: 2,
+            match_count: 2,
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"oneOf":[true,true]}"#, "1");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_length_applies_without_type() {
+        let expected: ValidationResult = Err(vec![ValidationError::TooShort {
+            instance_path: JsonPointer::root(),
+            min_length: 2,
+            actual_length: 1,
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"minLength":2}"#, r#""a""#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_length_ignores_non_string_without_type() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_document(r#"{"minLength":2}"#, "1");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn min_items_applies_without_type() {
+        let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
+            instance_path: JsonPointer::root(),
+            min_items: 2,
+            actual_count: 1,
+        }]);
+        let actual: ValidationResult = validate_document(r#"{"minItems":2}"#, "[1]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn required_applies_with_object_or_null_type() {
+        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
+            instance_path: JsonPointer::root().push("a"),
+            property: "a".to_string(),
+        }]);
+        let actual: ValidationResult =
+            validate_document(r#"{"type":["object","null"],"required":["a"]}"#, "{}");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn required_ignores_null_with_object_or_null_type() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult =
+            validate_document(r#"{"type":["object","null"],"required":["a"]}"#, "null");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_mismatch_reports_other_keywords_too() {
+        let expected: ValidationResult = Err(vec![
+            ValidationError::ExpectedString {
+                instance_path: JsonPointer::root(),
+                got: "number".to_string(),
+            },
+            ValidationError::BelowMinimum {
+                instance_path: JsonPointer::root(),
+                minimum: num("5"),
+                actual: num("1"),
+            },
+        ]);
+        let actual: ValidationResult = validate_document(r#"{"type":"string","minimum":5}"#, "1");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validation_error_false_schema_display() {
+        let err: ValidationError = ValidationError::FalseSchema {
+            instance_path: JsonPointer::root().push("a"),
+        };
+        let expected: String = "/a: no value is allowed here (schema is false)".to_string();
+        let actual: String = err.to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validation_error_expected_null_display() {
+        let err: ValidationError = ValidationError::ExpectedNull {
+            instance_path: JsonPointer::root(),
+            got: "string".to_string(),
+        };
+        let expected: String = "root: expected null, got string".to_string();
+        let actual: String = err.to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validation_error_expected_type_display() {
+        let err: ValidationError = ValidationError::ExpectedType {
+            instance_path: JsonPointer::root(),
+            expected: integer_or_string(),
+            got: "boolean".to_string(),
+        };
+        let expected: String = "root: expected one of [integer, string], got boolean".to_string();
+        let actual: String = err.to_string();
         assert_eq!(expected, actual);
     }
 }

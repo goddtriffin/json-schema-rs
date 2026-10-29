@@ -162,6 +162,47 @@ fn generated_struct_names(output: &GenerateRustOutput) -> Vec<String> {
     names
 }
 
+#[test]
+fn type_array_accepts_second_entry_string() {
+    let expected: bool = true;
+    let actual: bool = is_valid(r#"{"type":["integer","string"]}"#, r#""x""#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn type_array_accepts_second_entry_object() {
+    let expected: bool = true;
+    let actual: bool = is_valid(r#"{"type":["string","object"]}"#, "{}");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn type_null_rejects_string() {
+    let expected: bool = false;
+    let actual: bool = is_valid(r#"{"type":"null"}"#, r#""x""#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn type_null_rejects_integer() {
+    let expected: bool = false;
+    let actual: bool = is_valid(r#"{"type":"null"}"#, "1");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn unknown_type_name_fails_to_parse() {
+    let expected: String = "invalid JSON Schema: unknown type \"strng\", expected one of \
+                            \"array\", \"boolean\", \"integer\", \"null\", \"number\", \
+                            \"object\", \"string\" at line 1 column 15"
+        .to_string();
+    let actual: String =
+        JsonSchema::new_from_str(r#"{"type":"strng"}"#, &JsonSchemaSettings::default())
+            .expect_err("unknown type name is a parse error")
+            .to_string();
+    assert_eq!(expected, actual);
+}
+
 // --- #18: codegen rejects allOf containing a $ref (fixed in #9) ---
 
 #[test]
@@ -214,46 +255,6 @@ fn ref_siblings_apply_in_2020_12() {
             r##"{"type":"array","$defs":{"a":{"type":"array"}},"$ref":"#/$defs/a","maxItems":1}"##,
             "[1, 2]",
         );
-        assert_eq!(expected, actual);
-    });
-}
-
-// --- #31: "type" arrays truncated to their first entry (fixed in #6) ---
-
-#[test]
-fn type_array_accepts_second_entry_string() {
-    known_failure(31, || {
-        let expected: bool = true;
-        let actual: bool = is_valid(r#"{"type":["integer","string"]}"#, r#""x""#);
-        assert_eq!(expected, actual);
-    });
-}
-
-#[test]
-fn type_array_accepts_second_entry_object() {
-    known_failure(31, || {
-        let expected: bool = true;
-        let actual: bool = is_valid(r#"{"type":["string","object"]}"#, "{}");
-        assert_eq!(expected, actual);
-    });
-}
-
-// --- #32: type "null" accepts every instance (fixed in #6) ---
-
-#[test]
-fn type_null_rejects_string() {
-    known_failure(32, || {
-        let expected: bool = false;
-        let actual: bool = is_valid(r#"{"type":"null"}"#, r#""x""#);
-        assert_eq!(expected, actual);
-    });
-}
-
-#[test]
-fn type_null_rejects_integer() {
-    known_failure(32, || {
-        let expected: bool = false;
-        let actual: bool = is_valid(r#"{"type":"null"}"#, "1");
         assert_eq!(expected, actual);
     });
 }

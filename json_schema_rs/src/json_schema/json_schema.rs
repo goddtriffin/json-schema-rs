@@ -4,15 +4,18 @@ use super::dialect::{
     Dialect, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
 };
 use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
-use super::settings::{JsonSchemaSettings, resolve_dialect, resolve_dialect_for_uri};
+use super::settings::{JsonSchemaSettings, resolve_dialect_for_uri};
+use super::type_set::{JsonType, TypeSet};
 use crate::json_pointer::JsonPointer;
 use memchr::memmem;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io::Read;
+use std::sync::LazyLock;
 
 /// Returns true when `required` should be omitted from serialized output (None or empty).
 #[expect(clippy::ref_option)]
@@ -22,7 +25,7 @@ fn skip_required(v: &Option<Vec<String>>) -> bool {
 
 /// Returns true when a defs/definitions map should be omitted from serialized output (None or empty).
 #[expect(clippy::ref_option)]
-fn skip_defs_map(v: &Option<BTreeMap<String, JsonSchema>>) -> bool {
+fn skip_defs_map(v: &Option<BTreeMap<String, Schema>>) -> bool {
     v.as_ref().is_none_or(BTreeMap::is_empty)
 }
 
@@ -32,98 +35,261 @@ fn skip_enum_values(v: &Option<Vec<serde_json::Value>>) -> bool {
     v.as_ref().is_none_or(Vec::is_empty)
 }
 
-/// Returns true when `all_of` should be omitted from serialized output (None or empty).
+/// Returns true when an `allOf` / `anyOf` / `oneOf` list should be omitted from serialized
+/// output (None or empty).
 #[expect(clippy::ref_option)]
-fn skip_all_of(v: &Option<Vec<JsonSchema>>) -> bool {
+fn skip_schema_list(v: &Option<Vec<Schema>>) -> bool {
     v.as_ref().is_none_or(Vec::is_empty)
 }
 
-/// Returns true when `any_of` should be omitted from serialized output (None or empty).
-#[expect(clippy::ref_option)]
-fn skip_any_of(v: &Option<Vec<JsonSchema>>) -> bool {
-    v.as_ref().is_none_or(Vec::is_empty)
-}
-
-/// Returns true when `one_of` should be omitted from serialized output (None or empty).
-#[expect(clippy::ref_option)]
-fn skip_one_of(v: &Option<Vec<JsonSchema>>) -> bool {
-    v.as_ref().is_none_or(Vec::is_empty)
-}
-
-/// Returns true when `additional_properties` should be omitted from serialized output (None).
-#[expect(clippy::ref_option)]
-fn skip_additional_properties(v: &Option<AdditionalProperties>) -> bool {
-    v.is_none()
-}
-
-/// Value of the JSON Schema `additionalProperties` keyword: allow (true), forbid (false), or a schema for additional property values.
+/// A JSON Schema at any schema position: a boolean schema or a schema object.
+///
+/// `true` accepts every instance (like `{}`) and `false` accepts none. Every subschema position
+/// of [`JsonSchema`] (`properties` values, `items`, `additionalProperties`, `$defs`, `allOf`,
+/// ...) holds a `Schema`, and so does a whole document: parse one with
+/// [`Schema::new_from_str`] and friends. A boolean schema is accepted in every draft, draft 4
+/// included (which only defines it for `additionalProperties`), since its meaning is the same.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AdditionalProperties {
-    /// Additional properties are allowed (keyword `true` or absent).
-    Allow,
-    /// No additional properties allowed (keyword `false`).
-    Forbid,
-    /// Each additional property's value must validate against this schema.
-    Schema(Box<JsonSchema>),
+pub enum Schema {
+    /// A boolean schema: `true` accepts everything, `false` nothing.
+    Bool(bool),
+    /// A schema object.
+    Object(Box<JsonSchema>),
 }
 
-impl Serialize for AdditionalProperties {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
+impl Default for Schema {
+    /// The schema that accepts everything (`true`).
+    fn default() -> Self {
+        Schema::Bool(true)
+    }
+}
+
+impl From<JsonSchema> for Schema {
+    fn from(schema: JsonSchema) -> Self {
+        Schema::Object(Box::new(schema))
+    }
+}
+
+impl From<bool> for Schema {
+    fn from(value: bool) -> Self {
+        Schema::Bool(value)
+    }
+}
+
+/// The empty schema object, which stands in for a boolean schema where a consumer needs a
+/// [`JsonSchema`] (see [`Schema::object_or_empty`]).
+static EMPTY_SCHEMA: LazyLock<JsonSchema> = LazyLock::new(JsonSchema::default);
+
+impl Schema {
+    /// The schema object, or `None` for a boolean schema.
+    #[must_use]
+    pub fn as_object(&self) -> Option<&JsonSchema> {
         match self {
-            AdditionalProperties::Allow => serializer.serialize_bool(true),
-            AdditionalProperties::Forbid => serializer.serialize_bool(false),
-            AdditionalProperties::Schema(s) => s.serialize(serializer),
+            Schema::Bool(_) => None,
+            Schema::Object(schema) => Some(schema),
+        }
+    }
+
+    /// The schema object, or `None` for a boolean schema.
+    #[must_use]
+    pub fn as_object_mut(&mut self) -> Option<&mut JsonSchema> {
+        match self {
+            Schema::Bool(_) => None,
+            Schema::Object(schema) => Some(schema),
+        }
+    }
+
+    /// The schema object; for a boolean schema, the empty schema object `{}`. For consumers
+    /// that describe a value's shape rather than decide validity (codegen): `true` and `{}`
+    /// mean the same, and `false` (no value is valid) has no shape of its own.
+    #[must_use]
+    pub fn object_or_empty(&self) -> &JsonSchema {
+        self.as_object().unwrap_or(&EMPTY_SCHEMA)
+    }
+
+    /// Borrows this schema as a [`SchemaRef`].
+    #[must_use]
+    pub fn as_schema_ref(&self) -> SchemaRef<'_> {
+        match self {
+            Schema::Bool(value) => SchemaRef::Bool(*value),
+            Schema::Object(schema) => SchemaRef::Object(schema),
+        }
+    }
+
+    /// Parses a JSON Schema document (a schema object or a boolean schema) from a string with
+    /// the given settings. See [`JsonSchema::new_from_str`] for the parsing rules.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`JsonSchema::new_from_str`], except that a boolean document is accepted.
+    pub fn new_from_str(json: &str, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Self> {
+        parse_raw(RawSchema::Str(json), settings)
+    }
+
+    /// Parses a JSON Schema document from a byte slice with the given settings.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Schema::new_from_str`].
+    pub fn new_from_slice(
+        slice: &[u8],
+        settings: &JsonSchemaSettings,
+    ) -> JsonSchemaParseResult<Self> {
+        parse_raw(RawSchema::Slice(slice), settings)
+    }
+
+    /// Parses a JSON Schema document from an already-parsed [`serde_json::Value`] with the given
+    /// settings. The value is borrowed and never modified.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Schema::new_from_str`].
+    pub fn new_from_serde_value(
+        value: &serde_json::Value,
+        settings: &JsonSchemaSettings,
+    ) -> JsonSchemaParseResult<Self> {
+        parse_value(Cow::Borrowed(value), settings)
+    }
+
+    /// Parses a JSON Schema document from a reader with the given settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JsonSchemaParseError::Io`] on read failure; otherwise same as
+    /// [`Schema::new_from_str`].
+    pub fn new_from_reader<R: Read>(
+        mut reader: R,
+        settings: &JsonSchemaSettings,
+    ) -> JsonSchemaParseResult<Self> {
+        let mut buf: Vec<u8> = Vec::new();
+        reader
+            .read_to_end(&mut buf)
+            .map_err(JsonSchemaParseError::Io)?;
+        Self::new_from_slice(&buf, settings)
+    }
+
+    /// Parses a JSON Schema document from a file path with the given settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JsonSchemaParseError::Io`] on open or read failure; otherwise same as
+    /// [`Schema::new_from_str`].
+    pub fn new_from_path<P: AsRef<std::path::Path>>(
+        path: P,
+        settings: &JsonSchemaSettings,
+    ) -> JsonSchemaParseResult<Self> {
+        let f: std::fs::File = std::fs::File::open(path.as_ref())?;
+        Self::new_from_reader(f, settings)
+    }
+}
+
+impl Serialize for Schema {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Schema::Bool(value) => serializer.serialize_bool(*value),
+            Schema::Object(schema) => schema.serialize(serializer),
         }
     }
 }
 
-impl<'de> Deserialize<'de> for AdditionalProperties {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
-        match value {
-            serde_json::Value::Bool(true) => Ok(AdditionalProperties::Allow),
-            serde_json::Value::Bool(false) => Ok(AdditionalProperties::Forbid),
-            serde_json::Value::Object(_) => {
-                let schema: JsonSchema =
-                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-                Ok(AdditionalProperties::Schema(Box::new(schema)))
-            }
-            _ => Err(serde::de::Error::custom(
-                "additionalProperties must be a boolean or a schema object",
-            )),
+impl<'de> Deserialize<'de> for Schema {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(SchemaVisitor)
+    }
+}
+
+/// Reads a schema position: a boolean or a schema object; anything else names that shape.
+struct SchemaVisitor;
+
+impl<'de> Visitor<'de> for SchemaVisitor {
+    type Value = Schema;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a schema (an object or a boolean)")
+    }
+
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Schema, E> {
+        Ok(Schema::Bool(v))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Schema, A::Error> {
+        JsonSchemaVisitor
+            .visit_map(map)
+            .map(|schema| Schema::Object(Box::new(schema)))
+    }
+}
+
+/// A borrowed [`Schema`]: a boolean schema or a reference to a schema object. What the validator
+/// takes, so it accepts a `&Schema` and a `&JsonSchema` alike.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SchemaRef<'a> {
+    /// A boolean schema.
+    Bool(bool),
+    /// A schema object.
+    Object(&'a JsonSchema),
+}
+
+impl<'a> SchemaRef<'a> {
+    /// The schema object, or `None` for a boolean schema.
+    #[must_use]
+    pub fn as_object(self) -> Option<&'a JsonSchema> {
+        match self {
+            SchemaRef::Bool(_) => None,
+            SchemaRef::Object(schema) => Some(schema),
         }
+    }
+
+    /// The schema object; for a boolean schema, the empty schema object (see
+    /// [`Schema::object_or_empty`]).
+    #[must_use]
+    pub fn object_or_empty(self) -> &'a JsonSchema {
+        self.as_object().unwrap_or(&EMPTY_SCHEMA)
+    }
+}
+
+impl<'a> From<&'a Schema> for SchemaRef<'a> {
+    fn from(schema: &'a Schema) -> Self {
+        schema.as_schema_ref()
+    }
+}
+
+impl<'a> From<&'a JsonSchema> for SchemaRef<'a> {
+    fn from(schema: &'a JsonSchema) -> Self {
+        SchemaRef::Object(schema)
     }
 }
 
 /// Deserializes a keyword whose presence matters even when its value is `null` (`"const": null`):
 /// a present key is always `Some`, so `null` becomes `Some(Value::Null)` rather than `None`.
-fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Value::deserialize(deserializer).map(Some)
+struct Present;
+
+impl<'de> DeserializeSeed<'de> for Present {
+    type Value = Option<Value>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Option<Value>, D::Error> {
+        Value::deserialize(deserializer).map(Some)
+    }
 }
 
 /// Deserializes `multipleOf`, which every draft requires to be strictly greater than 0 (draft 4
 /// validation §5.1.1.1; draft 6+ "MUST be a number, strictly greater than 0"). Zero or a negative
 /// value makes the schema invalid, so it is a parse error, like `"minLength": -1`.
-fn deserialize_multiple_of<'de, D>(deserializer: D) -> Result<Option<serde_json::Number>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let n: serde_json::Number = serde_json::Number::deserialize(deserializer)?;
-    if n.as_f64().is_some_and(|f| f > 0.0) {
-        Ok(Some(n))
-    } else {
-        Err(serde::de::Error::custom(format!(
-            "multipleOf must be strictly greater than 0, got {n}"
-        )))
+struct MultipleOf;
+
+impl<'de> DeserializeSeed<'de> for MultipleOf {
+    type Value = Option<serde_json::Number>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        let Some(n) = Option::<serde_json::Number>::deserialize(deserializer)? else {
+            return Ok(None);
+        };
+        if n.as_f64().is_some_and(|f| f > 0.0) {
+            Ok(Some(n))
+        } else {
+            Err(de::Error::custom(format!(
+                "multipleOf must be strictly greater than 0, got {n}"
+            )))
+        }
     }
 }
 
@@ -132,14 +298,19 @@ where
 /// a `u64` is accepted (`2`, `2.0`, `2e0`); a negative, fractional or out-of-range value makes
 /// the schema invalid. Draft 4 asks for an integer too; its value-based reading is accepted in
 /// every draft (design.md, *minLength / maxLength*).
-fn deserialize_non_negative_integer<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let n: serde_json::Number = serde_json::Number::deserialize(deserializer)?;
-    non_negative_integer(&n).map(Some).ok_or_else(|| {
-        serde::de::Error::custom(format!("expected a non-negative integer, got {n}"))
-    })
+struct NonNegativeInteger;
+
+impl<'de> DeserializeSeed<'de> for NonNegativeInteger {
+    type Value = Option<u64>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        let Some(n) = Option::<serde_json::Number>::deserialize(deserializer)? else {
+            return Ok(None);
+        };
+        non_negative_integer(&n)
+            .map(Some)
+            .ok_or_else(|| de::Error::custom(format!("expected a non-negative integer, got {n}")))
+    }
 }
 
 /// The value of `n` as a `u64` when it is a non-negative integer by value: an unsigned integer,
@@ -164,36 +335,12 @@ fn non_negative_integer(n: &serde_json::Number) -> Option<u64> {
     }
 }
 
-/// Deserializes `properties`; `null` reads as no properties, like an absent key.
-fn deserialize_properties<'de, D>(deserializer: D) -> Result<BTreeMap<String, JsonSchema>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<BTreeMap<String, JsonSchema>>::deserialize(deserializer).map(Option::unwrap_or_default)
-}
-
-/// JSON Schema type keyword: either a single type string or an array of types (draft 2020-12).
-/// First type in the array is used; codegen uses `object` and `string`.
-fn deserialize_type_optional<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum TypeOrArray {
-        Single(String),
-        Array(Vec<String>),
-    }
-    let value: TypeOrArray = Deserialize::deserialize(deserializer)?;
-    let first = match value {
-        TypeOrArray::Single(s) => Some(s),
-        TypeOrArray::Array(a) => a.into_iter().next(),
-    };
-    Ok(first)
-}
-
-/// Schema model used for code generation.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Schema model used for code generation and validation: one schema object.
+///
+/// Every keyword the model holds is a field; every other key of the object (a keyword this
+/// model does not hold, such as `not` or `if`, an `x-` extension, or any unknown key) is kept
+/// in [`extensions`](Self::extensions), so parsing then serializing loses nothing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct JsonSchema {
     /// Declares the JSON Schema dialect (meta-schema URI). When present, stored and round-tripped; used for draft inference when no explicit spec version is set.
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
@@ -207,37 +354,31 @@ pub struct JsonSchema {
     #[serde(rename = "$ref", skip_serializing_if = "Option::is_none")]
     pub ref_: Option<String>,
 
-    /// Schema type; `object`, `string`, `integer`, and `number` drive codegen; others are ignored.
-    #[serde(
-        rename = "type",
-        default,
-        deserialize_with = "deserialize_type_optional",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub type_: Option<String>,
+    /// The `type` keyword: the set of JSON types an instance may have. `None` when absent (any
+    /// type). Read with [`TypeSet`] queries; codegen uses [`JsonSchema::primary_type`].
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub type_: Option<TypeSet>,
 
     /// Reusable subschemas (draft 2019-09+). Stored and round-tripped.
     #[serde(rename = "$defs", skip_serializing_if = "skip_defs_map")]
-    pub defs: Option<BTreeMap<String, JsonSchema>>,
+    pub defs: Option<BTreeMap<String, Schema>>,
 
     /// Reusable subschemas (legacy drafts). Stored and round-tripped.
     #[serde(skip_serializing_if = "skip_defs_map")]
-    pub definitions: Option<BTreeMap<String, JsonSchema>>,
+    pub definitions: Option<BTreeMap<String, Schema>>,
 
-    /// Object properties (only when type is "object"). Default empty; use `BTreeMap` for stable ordering.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_properties",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub properties: BTreeMap<String, JsonSchema>,
+    /// Object properties. Default empty; `null` reads as empty. Use `BTreeMap` for stable ordering.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, Schema>,
 
-    /// When set, controls whether properties not in `properties` are allowed (Allow/absent), forbidden (Forbid), or must validate against a schema (Schema). We do not implement `patternProperties` yet, so "additional" means any key not in `properties`.
+    /// Schema for the values of properties not in `properties` (we do not implement
+    /// `patternProperties`, so "additional" means any key not in `properties`). `None` when
+    /// absent, which allows them like `true`; `false` forbids them.
     #[serde(
         rename = "additionalProperties",
-        skip_serializing_if = "skip_additional_properties"
+        skip_serializing_if = "Option::is_none"
     )]
-    pub additional_properties: Option<AdditionalProperties>,
+    pub additional_properties: Option<Schema>,
 
     /// Required property names at this object level. When absent, all properties are optional.
     #[serde(skip_serializing_if = "skip_required")]
@@ -260,38 +401,24 @@ pub struct JsonSchema {
     pub enum_values: Option<Vec<serde_json::Value>>,
 
     /// Single allowed value for the instance (JSON Schema `const`, draft-06+). When present, instance must equal this value (numbers by value: `1` equals `1.0`). `"const": null` is `Some(Value::Null)`. Codegen uses only string const (single-variant enum).
-    #[serde(
-        rename = "const",
-        default,
-        deserialize_with = "deserialize_present",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "const", skip_serializing_if = "Option::is_none")]
     pub const_value: Option<serde_json::Value>,
 
-    /// Schema for all array elements (when type is "array"). Single-schema form only; tuple-typing (array of schemas) not supported.
+    /// Schema for all array elements. Single-schema form only; the array form (tuple typing,
+    /// drafts 4 to 2019-09) is a parse error.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Box<JsonSchema>>,
+    pub items: Option<Schema>,
 
     /// When true, all array elements must be unique (JSON equality). Array-only; used by validator and codegen (`HashSet` when applicable).
     #[serde(rename = "uniqueItems", skip_serializing_if = "Option::is_none")]
     pub unique_items: Option<bool>,
 
     /// Minimum number of array elements. Array-only; used by validator and codegen (emitted as field attribute).
-    #[serde(
-        rename = "minItems",
-        default,
-        deserialize_with = "deserialize_non_negative_integer",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "minItems", skip_serializing_if = "Option::is_none")]
     pub min_items: Option<u64>,
 
     /// Maximum number of array elements. Array-only; used by validator and codegen (emitted as field attribute).
-    #[serde(
-        rename = "maxItems",
-        default,
-        deserialize_with = "deserialize_non_negative_integer",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "maxItems", skip_serializing_if = "Option::is_none")]
     pub max_items: Option<u64>,
 
     /// Inclusive lower bound for numeric instances, held exactly as written (an integer stays an
@@ -319,30 +446,15 @@ pub struct JsonSchema {
     /// A numeric instance must be an integer multiple of this value (decided exactly; see
     /// design.md, *multipleOf*). Parsing rejects zero and negative values, which every draft
     /// forbids. Used for validation.
-    #[serde(
-        rename = "multipleOf",
-        default,
-        deserialize_with = "deserialize_multiple_of",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "multipleOf", skip_serializing_if = "Option::is_none")]
     pub multiple_of: Option<serde_json::Number>,
 
     /// Minimum string length in Unicode code points. String-only; used by validator and codegen.
-    #[serde(
-        rename = "minLength",
-        default,
-        deserialize_with = "deserialize_non_negative_integer",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "minLength", skip_serializing_if = "Option::is_none")]
     pub min_length: Option<u64>,
 
     /// Maximum string length in Unicode code points. String-only; used by validator and codegen.
-    #[serde(
-        rename = "maxLength",
-        default,
-        deserialize_with = "deserialize_non_negative_integer",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
     pub max_length: Option<u64>,
 
     /// ECMA 262 regex pattern; string instance is valid if the pattern matches anywhere in the string. String-only; used by validator and codegen.
@@ -366,17 +478,24 @@ pub struct JsonSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub examples: Option<Vec<serde_json::Value>>,
 
-    /// allOf: instance must validate against every subschema. Stored as-is at ingestion; validator validates each; codegen merges on-the-fly. Not preserved on round-trip or reverse codegen.
-    #[serde(rename = "allOf", skip_serializing_if = "skip_all_of")]
-    pub all_of: Option<Vec<JsonSchema>>,
+    /// allOf: instance must validate against every subschema. Stored as-is at ingestion; validator validates each; codegen merges on-the-fly.
+    #[serde(rename = "allOf", skip_serializing_if = "skip_schema_list")]
+    pub all_of: Option<Vec<Schema>>,
 
     /// anyOf: instance must validate against at least one subschema. Stored as-is at ingestion; validator and codegen (union enum) use it. Not emitted by reverse codegen.
-    #[serde(rename = "anyOf", skip_serializing_if = "skip_any_of")]
-    pub any_of: Option<Vec<JsonSchema>>,
+    #[serde(rename = "anyOf", skip_serializing_if = "skip_schema_list")]
+    pub any_of: Option<Vec<Schema>>,
 
     /// oneOf: instance must validate against exactly one subschema. Stored as-is at ingestion; validator and codegen (union enum) use it. Not emitted by reverse codegen.
-    #[serde(rename = "oneOf", skip_serializing_if = "skip_one_of")]
-    pub one_of: Option<Vec<JsonSchema>>,
+    #[serde(rename = "oneOf", skip_serializing_if = "skip_schema_list")]
+    pub one_of: Option<Vec<Schema>>,
+
+    /// Every key of the schema object that no field above holds, with its value as written:
+    /// keywords this model does not hold (`not`, `if`, `patternProperties`, ...), `x-`
+    /// extensions and unknown keys. Serialized after the fields, in key order. A key that a
+    /// field holds never appears here when parsed; one inserted by hand would be written twice.
+    #[serde(flatten)]
+    pub extensions: BTreeMap<String, Value>,
 
     /// The effective dialect when the parsing settings chose one other than what `$schema` alone
     /// selects (a pinned spec version or a per-flag override). `None` follows `$schema` (Draft
@@ -384,6 +503,226 @@ pub struct JsonSchema {
     /// serialized.
     #[serde(skip)]
     pub dialect: Option<Dialect>,
+}
+
+/// Generates the [`Field`] enum of the keys [`JsonSchema`] holds, its lookup from a key, and the
+/// key of each field, from one list so they cannot drift apart.
+macro_rules! schema_fields {
+    ($($variant:ident => $key:literal),* $(,)?) => {
+        /// A key of a schema object: one of the fields of [`JsonSchema`], or an extension.
+        enum Field {
+            $($variant,)*
+            Extension(String),
+        }
+
+        impl Field {
+            /// The field holding `key`, or [`Field::Extension`].
+            fn from_key(key: &str) -> Field {
+                match key {
+                    $($key => Field::$variant,)*
+                    _ => Field::Extension(key.to_string()),
+                }
+            }
+        }
+    };
+}
+
+schema_fields! {
+    Schema => "$schema",
+    Id => "$id",
+    Ref => "$ref",
+    Type => "type",
+    Defs => "$defs",
+    Definitions => "definitions",
+    Properties => "properties",
+    AdditionalProperties => "additionalProperties",
+    Required => "required",
+    Title => "title",
+    Description => "description",
+    Comment => "$comment",
+    Enum => "enum",
+    Const => "const",
+    Items => "items",
+    UniqueItems => "uniqueItems",
+    MinItems => "minItems",
+    MaxItems => "maxItems",
+    Minimum => "minimum",
+    Maximum => "maximum",
+    ExclusiveMinimum => "exclusiveMinimum",
+    ExclusiveMaximum => "exclusiveMaximum",
+    MultipleOf => "multipleOf",
+    MinLength => "minLength",
+    MaxLength => "maxLength",
+    Pattern => "pattern",
+    Format => "format",
+    Default => "default",
+    Deprecated => "deprecated",
+    Examples => "examples",
+    AllOf => "allOf",
+    AnyOf => "anyOf",
+    OneOf => "oneOf",
+}
+
+impl<'de> Deserialize<'de> for Field {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct FieldVisitor;
+        impl Visitor<'_> for FieldVisitor {
+            type Value = Field;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a keyword")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Field, E> {
+                Ok(Field::from_key(v))
+            }
+        }
+        deserializer.deserialize_identifier(FieldVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for JsonSchema {
+    /// Reads a schema object. Accepts only a JSON object; anything else (a boolean schema
+    /// included: use [`Schema`] for a position that may hold one) is an error naming that shape.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(JsonSchemaVisitor)
+    }
+}
+
+/// Reads a schema object key by key into [`JsonSchema`].
+struct JsonSchemaVisitor;
+
+impl<'de> Visitor<'de> for JsonSchemaVisitor {
+    type Value = JsonSchema;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a schema object")
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per field of JsonSchema; splitting it would scatter the field list"
+    )]
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<JsonSchema, A::Error> {
+        let mut schema: JsonSchema = JsonSchema::default();
+        // Which fields have been read, by their index in `set!` below.
+        let mut seen: [bool; 33] = [false; 33];
+        /// Stores `$read` in `$field`, rejecting a key read before (as a derived `Deserialize`
+        /// does, even when the first value was `null`).
+        macro_rules! set {
+            ($index:literal, $field:expr, $key:literal, $read:expr) => {{
+                if std::mem::replace(&mut seen[$index], true) {
+                    return Err(de::Error::duplicate_field($key));
+                }
+                $field = $read;
+            }};
+        }
+        while let Some(field) = map.next_key::<Field>()? {
+            match field {
+                Field::Schema => set!(0, schema.schema, "$schema", map.next_value()?),
+                Field::Id => set!(1, schema.id, "$id", map.next_value()?),
+                Field::Ref => set!(2, schema.ref_, "$ref", map.next_value()?),
+                Field::Type => set!(3, schema.type_, "type", map.next_value()?),
+                Field::Defs => set!(4, schema.defs, "$defs", map.next_value()?),
+                Field::Definitions => {
+                    set!(5, schema.definitions, "definitions", map.next_value()?);
+                }
+                Field::Properties => set!(
+                    6,
+                    schema.properties,
+                    "properties",
+                    map.next_value::<Option<BTreeMap<String, Schema>>>()?
+                        .unwrap_or_default()
+                ),
+                Field::AdditionalProperties => set!(
+                    7,
+                    schema.additional_properties,
+                    "additionalProperties",
+                    map.next_value()?
+                ),
+                Field::Required => set!(8, schema.required, "required", map.next_value()?),
+                Field::Title => set!(9, schema.title, "title", map.next_value()?),
+                Field::Description => {
+                    set!(10, schema.description, "description", map.next_value()?);
+                }
+                Field::Comment => set!(11, schema.comment, "$comment", map.next_value()?),
+                Field::Enum => set!(12, schema.enum_values, "enum", map.next_value()?),
+                Field::Const => set!(
+                    13,
+                    schema.const_value,
+                    "const",
+                    map.next_value_seed(Present)?
+                ),
+                Field::Items => set!(14, schema.items, "items", map.next_value()?),
+                Field::UniqueItems => {
+                    set!(15, schema.unique_items, "uniqueItems", map.next_value()?);
+                }
+                Field::MinItems => set!(
+                    16,
+                    schema.min_items,
+                    "minItems",
+                    map.next_value_seed(NonNegativeInteger)?
+                ),
+                Field::MaxItems => set!(
+                    17,
+                    schema.max_items,
+                    "maxItems",
+                    map.next_value_seed(NonNegativeInteger)?
+                ),
+                Field::Minimum => set!(18, schema.minimum, "minimum", map.next_value()?),
+                Field::Maximum => set!(19, schema.maximum, "maximum", map.next_value()?),
+                Field::ExclusiveMinimum => set!(
+                    20,
+                    schema.exclusive_minimum,
+                    "exclusiveMinimum",
+                    map.next_value()?
+                ),
+                Field::ExclusiveMaximum => set!(
+                    21,
+                    schema.exclusive_maximum,
+                    "exclusiveMaximum",
+                    map.next_value()?
+                ),
+                Field::MultipleOf => set!(
+                    22,
+                    schema.multiple_of,
+                    "multipleOf",
+                    map.next_value_seed(MultipleOf)?
+                ),
+                Field::MinLength => set!(
+                    23,
+                    schema.min_length,
+                    "minLength",
+                    map.next_value_seed(NonNegativeInteger)?
+                ),
+                Field::MaxLength => set!(
+                    24,
+                    schema.max_length,
+                    "maxLength",
+                    map.next_value_seed(NonNegativeInteger)?
+                ),
+                Field::Pattern => set!(25, schema.pattern, "pattern", map.next_value()?),
+                Field::Format => set!(26, schema.format, "format", map.next_value()?),
+                Field::Default => {
+                    set!(27, schema.default_value, "default", map.next_value()?);
+                }
+                Field::Deprecated => {
+                    set!(28, schema.deprecated, "deprecated", map.next_value()?);
+                }
+                Field::Examples => set!(29, schema.examples, "examples", map.next_value()?),
+                Field::AllOf => set!(30, schema.all_of, "allOf", map.next_value()?),
+                Field::AnyOf => set!(31, schema.any_of, "anyOf", map.next_value()?),
+                Field::OneOf => set!(32, schema.one_of, "oneOf", map.next_value()?),
+                Field::Extension(key) => {
+                    let value: Value = map.next_value()?;
+                    if schema.extensions.insert(key.clone(), value).is_some() {
+                        return Err(de::Error::custom(format!("duplicate field `{key}`")));
+                    }
+                }
+            }
+        }
+        Ok(schema)
+    }
 }
 
 /// Raw schema text, parsed with the matching `serde_json` entry point.
@@ -408,14 +747,12 @@ impl RawSchema<'_> {
 /// [`IntegerSemantics::Lexical`] (the model stores `2.0` as `2`, so the written form is gone);
 /// strict parsing, and those cases, go through a [`Value`] so the dialect is known before the
 /// model is built.
-fn parse_raw(
-    raw: RawSchema<'_>,
-    settings: &JsonSchemaSettings,
-) -> JsonSchemaParseResult<JsonSchema> {
+fn parse_raw(raw: RawSchema<'_>, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Schema> {
     if !settings.disallow_unknown_fields {
-        match raw.parse::<JsonSchema>() {
+        match raw.parse::<Schema>() {
             Ok(schema) => {
-                let resolved: ResolvedDialect = resolve_dialect(&schema, settings)?;
+                let schema_uri: Option<&str> = schema.as_object().and_then(|s| s.schema.as_deref());
+                let resolved: ResolvedDialect = resolve_dialect_for_uri(schema_uri, settings)?;
                 if !needs_value_pass(raw, resolved.dialect) {
                     return Ok(finish_parse(schema, &resolved));
                 }
@@ -445,7 +782,7 @@ fn parse_raw(
 fn parse_value(
     value: Cow<'_, Value>,
     settings: &JsonSchemaSettings,
-) -> JsonSchemaParseResult<JsonSchema> {
+) -> JsonSchemaParseResult<Schema> {
     let resolved: ResolvedDialect = resolve_dialect_for_value(&value, settings)?;
     parse_value_in_dialect(value, &resolved, settings)
 }
@@ -467,7 +804,7 @@ fn parse_value_in_dialect(
     mut value: Cow<'_, Value>,
     resolved: &ResolvedDialect,
     settings: &JsonSchemaSettings,
-) -> JsonSchemaParseResult<JsonSchema> {
+) -> JsonSchemaParseResult<Schema> {
     let checks: KeywordChecks = KeywordChecks {
         reject_unknown: settings.disallow_unknown_fields,
         lexical_counts: resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
@@ -478,9 +815,9 @@ fn parse_value_in_dialect(
     if needs_draft4_normalization(resolved.dialect) {
         normalize_draft4_shapes(value.to_mut(), resolved.dialect);
     }
-    let schema: JsonSchema = match value {
+    let schema: Schema = match value {
         Cow::Owned(value) => serde_json::from_value(value)?,
-        Cow::Borrowed(value) => JsonSchema::deserialize(value)?,
+        Cow::Borrowed(value) => Schema::deserialize(value)?,
     };
     Ok(finish_parse(schema, resolved))
 }
@@ -626,13 +963,16 @@ fn path_to(steps: &[PathStep<'_>], at: Option<usize>) -> JsonPointer {
     JsonPointer::from(segments)
 }
 
-/// Logs the dialect warnings and records the dialect on the root when the settings changed it.
-fn finish_parse(mut schema: JsonSchema, resolved: &ResolvedDialect) -> JsonSchema {
+/// Logs the dialect warnings and records the dialect on a root schema object when the settings
+/// changed it (a boolean schema means the same in every dialect).
+fn finish_parse(mut schema: Schema, resolved: &ResolvedDialect) -> Schema {
     for warning in &resolved.warnings {
         log::debug!("json-schema-rs: {warning}");
     }
-    if resolved.dialect != schema.dialect() {
-        schema.dialect = Some(resolved.dialect);
+    if let Some(object) = schema.as_object_mut()
+        && resolved.dialect != object.dialect()
+    {
+        object.dialect = Some(resolved.dialect);
     }
     schema
 }
@@ -763,6 +1103,14 @@ fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect) {
     }
 }
 
+/// The schema object of a parsed document root, or [`JsonSchemaParseError::BooleanRoot`].
+fn require_object(schema: Schema) -> JsonSchemaParseResult<JsonSchema> {
+    match schema {
+        Schema::Object(schema) => Ok(*schema),
+        Schema::Bool(value) => Err(JsonSchemaParseError::BooleanRoot { value }),
+    }
+}
+
 impl JsonSchema {
     /// The effective [`Dialect`] of this schema as a document root: the one recorded at parse
     /// time when the settings chose it, otherwise the one its `$schema` selects (Draft 2020-12
@@ -776,46 +1124,25 @@ impl JsonSchema {
         })
     }
 
-    /// Returns true if this schema is an object with properties (for codegen).
+    /// The JSON type codegen builds this schema's Rust type from: the one type of its `type`
+    /// set besides `null`. `None` when `type` is absent, empty, `null` alone, or names two or
+    /// more non-null types (no single Rust type holds those; codegen uses `serde_json::Value`).
+    /// `["string", "null"]` is `String`: making it optional is codegen's nullable handling.
+    #[must_use]
+    pub(crate) fn primary_type(&self) -> Option<JsonType> {
+        self.type_?.without(JsonType::Null).single()
+    }
+
+    /// Returns true if this schema's primary type is `object` and it has properties (for codegen).
     #[must_use]
     pub(crate) fn is_object_with_properties(&self) -> bool {
-        self.type_.as_deref() == Some("object") && !self.properties.is_empty()
+        self.primary_type() == Some(JsonType::Object) && !self.properties.is_empty()
     }
 
-    /// Returns true if this schema is type "string".
-    #[must_use]
-    pub(crate) fn is_string(&self) -> bool {
-        self.type_.as_deref() == Some("string")
-    }
-
-    /// Returns true if this schema is type "integer".
-    #[must_use]
-    pub(crate) fn is_integer(&self) -> bool {
-        self.type_.as_deref() == Some("integer")
-    }
-
-    /// Returns true if this schema is type "number".
-    #[must_use]
-    pub(crate) fn is_number(&self) -> bool {
-        self.type_.as_deref() == Some("number")
-    }
-
-    /// Returns true if this schema is type "boolean".
-    #[must_use]
-    pub(crate) fn is_boolean(&self) -> bool {
-        self.type_.as_deref() == Some("boolean")
-    }
-
-    /// Returns true if this schema is type "array".
-    #[must_use]
-    pub(crate) fn is_array(&self) -> bool {
-        self.type_.as_deref() == Some("array")
-    }
-
-    /// Returns true if this schema is type "array" and has an items schema (single-schema form).
+    /// Returns true if this schema's primary type is `array` and it has an `items` schema.
     #[must_use]
     pub(crate) fn is_array_with_items(&self) -> bool {
-        self.is_array() && self.items.is_some()
+        self.primary_type() == Some(JsonType::Array) && self.items.is_some()
     }
 
     /// Returns true if the given property name is required at this object level.
@@ -842,11 +1169,12 @@ impl JsonSchema {
             .is_some_and(serde_json::Value::is_string)
     }
 
-    /// Returns mutable references to this schema's direct subschemas, in a fixed order:
-    /// `$defs`, `definitions`, `properties`, `additionalProperties`, `items`, `allOf`, `anyOf`,
-    /// `oneOf`. Walk the whole tree with an explicit stack over this.
+    /// Returns mutable references to this schema's direct subschema objects (boolean schemas
+    /// have none), in a fixed order: `$defs`, `definitions`, `properties`,
+    /// `additionalProperties`, `items`, `allOf`, `anyOf`, `oneOf`. Walk the whole tree with an
+    /// explicit stack over this.
     pub(crate) fn subschemas_mut(&mut self) -> Vec<&mut JsonSchema> {
-        let mut children: Vec<&mut JsonSchema> = Vec::new();
+        let mut children: Vec<&mut Schema> = Vec::new();
         if let Some(defs) = self.defs.as_mut() {
             children.extend(defs.values_mut());
         }
@@ -854,12 +1182,8 @@ impl JsonSchema {
             children.extend(definitions.values_mut());
         }
         children.extend(self.properties.values_mut());
-        if let Some(AdditionalProperties::Schema(schema)) = self.additional_properties.as_mut() {
-            children.push(schema.as_mut());
-        }
-        if let Some(items) = self.items.as_mut() {
-            children.push(items.as_mut());
-        }
+        children.extend(self.additional_properties.as_mut());
+        children.extend(self.items.as_mut());
         for list in [
             self.all_of.as_mut(),
             self.any_of.as_mut(),
@@ -871,6 +1195,9 @@ impl JsonSchema {
             children.extend(list.iter_mut());
         }
         children
+            .into_iter()
+            .filter_map(Schema::as_object_mut)
+            .collect()
     }
 
     /// Parse a JSON Schema from a string with the given settings.
@@ -884,8 +1211,11 @@ impl JsonSchema {
     /// Returns [`JsonSchemaParseError::Serde`] on invalid JSON, a type mismatch, or an invalid
     /// keyword value (e.g. `"minLength": 2.5`).
     /// Returns [`JsonSchemaParseError::UnknownField`] when strict and an unknown key is present.
+    /// Returns [`JsonSchemaParseError::BooleanRoot`] when the document is a boolean schema
+    /// (`true` / `false`), which a [`JsonSchema`] cannot hold; parse it with
+    /// [`Schema::new_from_str`] instead.
     pub fn new_from_str(json: &str, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Self> {
-        parse_raw(RawSchema::Str(json), settings)
+        parse_raw(RawSchema::Str(json), settings).and_then(require_object)
     }
 
     /// Parse a JSON Schema from a byte slice with the given settings.
@@ -899,7 +1229,7 @@ impl JsonSchema {
         slice: &[u8],
         settings: &JsonSchemaSettings,
     ) -> JsonSchemaParseResult<Self> {
-        parse_raw(RawSchema::Slice(slice), settings)
+        parse_raw(RawSchema::Slice(slice), settings).and_then(require_object)
     }
 
     /// Parse a JSON Schema from an already-parsed [`serde_json::Value`] with the given settings.
@@ -914,7 +1244,7 @@ impl JsonSchema {
         value: &serde_json::Value,
         settings: &JsonSchemaSettings,
     ) -> JsonSchemaParseResult<Self> {
-        parse_value(Cow::Borrowed(value), settings)
+        parse_value(Cow::Borrowed(value), settings).and_then(require_object)
     }
 
     /// Parse a JSON Schema from a reader with the given settings.
@@ -1035,6 +1365,43 @@ impl TryFrom<std::path::PathBuf> for JsonSchema {
     }
 }
 
+/// Parses a JSON Schema document (object or boolean) from a string using default settings.
+impl TryFrom<&str> for Schema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Schema::new_from_str(value, &JsonSchemaSettings::default())
+    }
+}
+
+/// Parses a JSON Schema document (object or boolean) from a byte slice using default settings.
+impl TryFrom<&[u8]> for Schema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        Schema::new_from_slice(value, &JsonSchemaSettings::default())
+    }
+}
+
+/// Parses a JSON Schema document (object or boolean) from a [`serde_json::Value`] using default
+/// settings.
+impl TryFrom<&serde_json::Value> for Schema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
+        Schema::new_from_serde_value(value, &JsonSchemaSettings::default())
+    }
+}
+
+/// Parses a JSON Schema document (object or boolean) from a file path using default settings.
+impl TryFrom<&std::path::Path> for Schema {
+    type Error = JsonSchemaParseError;
+
+    fn try_from(value: &std::path::Path) -> Result<Self, Self::Error> {
+        Schema::new_from_path(value, &JsonSchemaSettings::default())
+    }
+}
+
 impl TryFrom<&JsonSchema> for String {
     type Error = JsonSchemaParseError;
 
@@ -1069,10 +1436,10 @@ impl TryFrom<JsonSchema> for Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::JsonSchema;
+    use super::{JsonSchema, Schema};
     use crate::json_schema::{
         Dialect, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaParseError,
-        JsonSchemaSettings, SpecVersion, UnknownSchemaUri,
+        JsonSchemaSettings, JsonType, SpecVersion, TypeSet, UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -1080,7 +1447,7 @@ mod tests {
     #[test]
     fn try_from_schema_to_string() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             title: Some("Root".to_string()),
             ..Default::default()
         };
@@ -1092,7 +1459,7 @@ mod tests {
     #[test]
     fn try_from_schema_with_comment_serializes_dollar_comment() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             comment: Some("Created by John Doe".to_string()),
             ..Default::default()
         };
@@ -1107,7 +1474,7 @@ mod tests {
     #[test]
     fn try_from_schema_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
@@ -1140,7 +1507,7 @@ mod tests {
         let json = r#"{"type":"string","examples":[1,"a",{"b":true}]}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             examples: Some(vec![
                 serde_json::json!(1),
                 serde_json::json!("a"),
@@ -1156,7 +1523,7 @@ mod tests {
         let json = r#"{"type":"string"}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         assert_eq!(expected, actual);
@@ -1167,7 +1534,7 @@ mod tests {
         let json = r#"{"type":"string","examples":[]}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             examples: Some(vec![]),
             ..Default::default()
         };
@@ -1194,7 +1561,7 @@ mod tests {
         let actual: JsonSchema =
             JsonSchema::new_from_str(json, &settings).expect("parse with strict");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
             examples: Some(vec![serde_json::json!(1)]),
             ..Default::default()
@@ -1209,7 +1576,7 @@ mod tests {
         let json = r#"{"type":"string","deprecated":true}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             deprecated: Some(true),
             ..Default::default()
         };
@@ -1221,7 +1588,7 @@ mod tests {
         let json = r#"{"type":"string","deprecated":false}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             deprecated: Some(false),
             ..Default::default()
         };
@@ -1233,7 +1600,7 @@ mod tests {
         let json = r#"{"type":"string"}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         assert_eq!(expected, actual);
@@ -1258,17 +1625,17 @@ mod tests {
             .build();
         let actual: JsonSchema =
             JsonSchema::new_from_str(json, &settings).expect("parse with strict");
-        let mut properties: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut properties: BTreeMap<String, Schema> = BTreeMap::new();
         properties.insert(
             "x".to_string(),
-            JsonSchema {
-                type_: Some("string".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 deprecated: Some(true),
                 ..Default::default()
-            },
+            }),
         );
         let expected: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties,
             ..Default::default()
         };
@@ -1281,8 +1648,8 @@ mod tests {
     fn try_from_str_success() {
         let json: &str = r#"{"type":"object","properties":{}}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("try_from");
-        let expected_type: Option<&str> = Some("object");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -1296,16 +1663,16 @@ mod tests {
     fn try_from_string_success() {
         let json: String = r#"{"type":"string"}"#.to_string();
         let actual: JsonSchema = JsonSchema::try_from(json).expect("try_from");
-        let expected_type: Option<&str> = Some("string");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::String.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
     fn try_from_slice_success() {
         let bytes: &[u8] = r#"{"type":"array","items":{"type":"string"}}"#.as_bytes();
         let actual: JsonSchema = JsonSchema::try_from(bytes).expect("try_from");
-        let expected_type: Option<&str> = Some("array");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Array.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -1313,8 +1680,8 @@ mod tests {
         let value: serde_json::Value =
             serde_json::json!({"type": "object", "properties": {"a": {"type": "integer"}}});
         let actual: JsonSchema = JsonSchema::try_from(&value).expect("try_from");
-        let expected_type: Option<&str> = Some("object");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -1332,8 +1699,8 @@ mod tests {
         std::fs::write(&schema_path, schema_json).expect("write temp file");
         let f: std::fs::File = std::fs::File::open(&schema_path).expect("open");
         let actual: JsonSchema = JsonSchema::try_from(f).expect("try_from");
-        let expected_type: Option<&str> = Some("object");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -1353,8 +1720,8 @@ mod tests {
         let schema_json = r#"{"type":"array","items":{"type":"string"}}"#;
         std::fs::write(&schema_path, schema_json).expect("write temp file");
         let actual: JsonSchema = JsonSchema::try_from(schema_path.as_path()).expect("try_from");
-        let expected_type: Option<&str> = Some("array");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Array.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -1373,8 +1740,8 @@ mod tests {
         let schema_json = r#"{"type":"number"}"#;
         std::fs::write(&schema_path, schema_json).expect("write temp file");
         let actual: JsonSchema = JsonSchema::try_from(schema_path).expect("try_from");
-        let expected_type: Option<&str> = Some("number");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Number.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -1383,41 +1750,12 @@ mod tests {
         let actual = [
             s.is_object_with_properties(),
             {
-                s.type_ = Some("object".to_string());
+                s.type_ = Some(JsonType::Object.into());
                 s.is_object_with_properties()
             },
             {
-                s.properties.insert("x".to_string(), JsonSchema::default());
+                s.properties.insert("x".to_string(), Schema::Bool(true));
                 s.is_object_with_properties()
-            },
-        ];
-        let expected = [false, false, true];
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn is_string() {
-        let mut s = JsonSchema::default();
-        let actual = [s.is_string(), {
-            s.type_ = Some("string".to_string());
-            s.is_string()
-        }];
-        let expected = [false, true];
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn is_integer() {
-        let mut s = JsonSchema::default();
-        let actual = [
-            s.is_integer(),
-            {
-                s.type_ = Some("string".to_string());
-                s.is_integer()
-            },
-            {
-                s.type_ = Some("integer".to_string());
-                s.is_integer()
             },
         ];
         let expected = [false, false, true];
@@ -1427,7 +1765,7 @@ mod tests {
     #[test]
     fn try_from_schema_integer_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             ..Default::default()
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
@@ -1436,35 +1774,9 @@ mod tests {
     }
 
     #[test]
-    fn is_number() {
-        let mut s = JsonSchema::default();
-        let actual = [
-            s.is_number(),
-            {
-                s.type_ = Some("string".to_string());
-                s.is_number()
-            },
-            {
-                s.type_ = Some("integer".to_string());
-                s.is_number()
-            },
-            {
-                s.type_ = Some("object".to_string());
-                s.is_number()
-            },
-            {
-                s.type_ = Some("number".to_string());
-                s.is_number()
-            },
-        ];
-        let expected = [false, false, false, false, true];
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn try_from_schema_number_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("number".to_string()),
+            type_: Some(JsonType::Number.into()),
             ..Default::default()
         };
         let actual: Vec<u8> = schema.try_into().expect("serialize");
@@ -1472,10 +1784,71 @@ mod tests {
         assert_eq!(expected, actual.as_slice());
     }
 
+    /// The primary type of a schema whose `type` is `type_json` (`null` = keyword absent).
+    fn primary_type_of(type_json: &str) -> Option<JsonType> {
+        let json: String = if type_json == "null" {
+            "{}".to_string()
+        } else {
+            format!(r#"{{"type":{type_json}}}"#)
+        };
+        JsonSchema::try_from(json.as_str())
+            .expect("parse")
+            .primary_type()
+    }
+
+    #[test]
+    fn primary_type_absent_is_none() {
+        let expected: Option<JsonType> = None;
+        let actual: Option<JsonType> = primary_type_of("null");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn primary_type_single() {
+        let expected: Option<JsonType> = Some(JsonType::Integer);
+        let actual: Option<JsonType> = primary_type_of(r#""integer""#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn primary_type_ignores_null_after() {
+        let expected: Option<JsonType> = Some(JsonType::String);
+        let actual: Option<JsonType> = primary_type_of(r#"["string","null"]"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn primary_type_ignores_null_before() {
+        let expected: Option<JsonType> = Some(JsonType::String);
+        let actual: Option<JsonType> = primary_type_of(r#"["null","string"]"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn primary_type_null_alone_is_none() {
+        let expected: Option<JsonType> = None;
+        let actual: Option<JsonType> = primary_type_of(r#""null""#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn primary_type_two_non_null_types_is_none() {
+        let expected: Option<JsonType> = None;
+        let actual: Option<JsonType> = primary_type_of(r#"["integer","string"]"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn primary_type_empty_set_is_none() {
+        let expected: Option<JsonType> = None;
+        let actual: Option<JsonType> = primary_type_of("[]");
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn is_string_enum() {
         let no_enum: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         assert!(!no_enum.is_string_enum());
@@ -1503,35 +1876,17 @@ mod tests {
     }
 
     #[test]
-    fn is_array() {
-        let mut s = JsonSchema::default();
-        let actual = [
-            s.is_array(),
-            {
-                s.type_ = Some("string".to_string());
-                s.is_array()
-            },
-            {
-                s.type_ = Some("array".to_string());
-                s.is_array()
-            },
-        ];
-        let expected = [false, false, true];
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn is_array_with_items() {
         let mut s = JsonSchema::default();
         let actual = [
             s.is_array_with_items(),
             {
-                s.type_ = Some("array".to_string());
+                s.type_ = Some(JsonType::Array.into());
                 s.is_array_with_items()
             },
             {
-                s.items = Some(Box::new(JsonSchema {
-                    type_: Some("string".to_string()),
+                s.items = Some(Schema::from(JsonSchema {
+                    type_: Some(JsonType::String.into()),
                     ..Default::default()
                 }));
                 s.is_array_with_items()
@@ -1544,12 +1899,12 @@ mod tests {
     #[test]
     fn try_from_schema_array_with_items_to_string() {
         let item_schema: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         let schema: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(item_schema)),
+            type_: Some(JsonType::Array.into()),
+            items: Some(Schema::from(item_schema)),
             ..Default::default()
         };
         let actual: String = schema.try_into().expect("serialize");
@@ -1709,15 +2064,15 @@ mod tests {
     fn deserialize_simple_object_schema() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
         let expected: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "a".to_string(),
-                    JsonSchema {
-                        type_: Some("string".to_string()),
+                    Schema::from(JsonSchema {
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }),
                 );
                 m
             },
@@ -1734,30 +2089,30 @@ mod tests {
         let mut props_a = BTreeMap::new();
         props_a.insert(
             "a".to_string(),
-            JsonSchema {
-                type_: Some("string".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
+            }),
         );
         let mut props_b = BTreeMap::new();
         props_b.insert(
             "b".to_string(),
-            JsonSchema {
-                type_: Some("integer".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::Integer.into()),
                 ..Default::default()
-            },
+            }),
         );
-        let expected: Option<Vec<JsonSchema>> = Some(vec![
-            JsonSchema {
-                type_: Some("object".to_string()),
+        let expected: Option<Vec<Schema>> = Some(vec![
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::Object.into()),
                 properties: props_a,
                 ..Default::default()
-            },
-            JsonSchema {
-                type_: Some("object".to_string()),
+            }),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::Object.into()),
                 properties: props_b,
                 ..Default::default()
-            },
+            }),
         ]);
         let actual = parsed.all_of.clone();
         assert_eq!(expected, actual);
@@ -1767,7 +2122,7 @@ mod tests {
     fn parse_all_of_absent() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = None;
+        let expected: Option<Vec<Schema>> = None;
         let actual = parsed.all_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1776,7 +2131,7 @@ mod tests {
     fn parse_all_of_empty_array() {
         let json = r#"{"allOf":[]}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = Some(vec![]);
+        let expected: Option<Vec<Schema>> = Some(vec![]);
         let actual = parsed.all_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1788,16 +2143,16 @@ mod tests {
         let mut props = BTreeMap::new();
         props.insert(
             "x".to_string(),
-            JsonSchema {
-                type_: Some("string".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
+            }),
         );
-        let expected: Option<Vec<JsonSchema>> = Some(vec![JsonSchema {
-            type_: Some("object".to_string()),
+        let expected: Option<Vec<Schema>> = Some(vec![Schema::from(JsonSchema {
+            type_: Some(JsonType::Object.into()),
             properties: props,
             ..Default::default()
-        }]);
+        })]);
         let actual = parsed.all_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1806,15 +2161,15 @@ mod tests {
     fn parse_any_of_present() {
         let json = r#"{"anyOf":[{"type":"string"},{"type":"integer"}]}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = Some(vec![
-            JsonSchema {
-                type_: Some("string".to_string()),
+        let expected: Option<Vec<Schema>> = Some(vec![
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
-            JsonSchema {
-                type_: Some("integer".to_string()),
+            }),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::Integer.into()),
                 ..Default::default()
-            },
+            }),
         ]);
         let actual = parsed.any_of.clone();
         assert_eq!(expected, actual);
@@ -1824,7 +2179,7 @@ mod tests {
     fn parse_any_of_absent() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = None;
+        let expected: Option<Vec<Schema>> = None;
         let actual = parsed.any_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1833,7 +2188,7 @@ mod tests {
     fn parse_any_of_empty_array() {
         let json = r#"{"anyOf":[]}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = Some(vec![]);
+        let expected: Option<Vec<Schema>> = Some(vec![]);
         let actual = parsed.any_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1845,16 +2200,16 @@ mod tests {
         let mut props = BTreeMap::new();
         props.insert(
             "x".to_string(),
-            JsonSchema {
-                type_: Some("string".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
+            }),
         );
-        let expected: Option<Vec<JsonSchema>> = Some(vec![JsonSchema {
-            type_: Some("object".to_string()),
+        let expected: Option<Vec<Schema>> = Some(vec![Schema::from(JsonSchema {
+            type_: Some(JsonType::Object.into()),
             properties: props,
             ..Default::default()
-        }]);
+        })]);
         let actual = parsed.any_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1863,15 +2218,15 @@ mod tests {
     fn parse_one_of_present() {
         let json = r#"{"oneOf":[{"type":"string"},{"type":"integer"}]}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = Some(vec![
-            JsonSchema {
-                type_: Some("string".to_string()),
+        let expected: Option<Vec<Schema>> = Some(vec![
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
-            JsonSchema {
-                type_: Some("integer".to_string()),
+            }),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::Integer.into()),
                 ..Default::default()
-            },
+            }),
         ]);
         let actual = parsed.one_of.clone();
         assert_eq!(expected, actual);
@@ -1881,7 +2236,7 @@ mod tests {
     fn parse_one_of_absent() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = None;
+        let expected: Option<Vec<Schema>> = None;
         let actual = parsed.one_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1890,7 +2245,7 @@ mod tests {
     fn parse_one_of_empty_array() {
         let json = r#"{"oneOf":[]}"#;
         let parsed = JsonSchema::try_from(json).expect("parse");
-        let expected: Option<Vec<JsonSchema>> = Some(vec![]);
+        let expected: Option<Vec<Schema>> = Some(vec![]);
         let actual = parsed.one_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1902,16 +2257,16 @@ mod tests {
         let mut props = BTreeMap::new();
         props.insert(
             "x".to_string(),
-            JsonSchema {
-                type_: Some("string".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
+            }),
         );
-        let expected: Option<Vec<JsonSchema>> = Some(vec![JsonSchema {
-            type_: Some("object".to_string()),
+        let expected: Option<Vec<Schema>> = Some(vec![Schema::from(JsonSchema {
+            type_: Some(JsonType::Object.into()),
             properties: props,
             ..Default::default()
-        }]);
+        })]);
         let actual = parsed.one_of.clone();
         assert_eq!(expected, actual);
     }
@@ -1920,22 +2275,22 @@ mod tests {
     fn deserialize_with_required() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}},"required":["x"]}"#;
         let expected: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "x".to_string(),
-                    JsonSchema {
-                        type_: Some("string".to_string()),
+                    Schema::from(JsonSchema {
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }),
                 );
                 m.insert(
                     "y".to_string(),
-                    JsonSchema {
-                        type_: Some("string".to_string()),
+                    Schema::from(JsonSchema {
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }),
                 );
                 m
             },
@@ -1947,12 +2302,13 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_ignores_unknown_keys() {
+    fn deserialize_keeps_unknown_keys_in_extensions() {
         let json =
             r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
         let expected: JsonSchema = JsonSchema {
             schema: Some("https://example.com".to_string()),
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
+            extensions: BTreeMap::from([("unknown".to_string(), serde_json::json!(42))]),
             ..Default::default()
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
@@ -1960,10 +2316,10 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_type_array_takes_first() {
+    fn deserialize_type_array_keeps_every_entry() {
         let json = r#"{"type":["string", "null"],"properties":{}}"#;
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some([JsonType::String, JsonType::Null].into_iter().collect()),
             ..Default::default()
         };
         let actual: JsonSchema = serde_json::from_str(json).expect("parse");
@@ -1974,9 +2330,15 @@ mod tests {
     fn deserialize_array_with_items() {
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        assert_eq!(actual.type_.as_deref(), Some("array"));
-        let items: &JsonSchema = actual.items.as_ref().expect("items present").as_ref();
-        assert_eq!(items.type_.as_deref(), Some("string"));
+        let expected: JsonSchema = JsonSchema {
+            type_: Some(JsonType::Array.into()),
+            items: Some(Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -2203,12 +2565,352 @@ mod tests {
     }
 
     #[test]
-    fn lenient_ignores_unknown_keys_everywhere() {
-        let expected: JsonSchema =
-            JsonSchema::try_from(r#"{"properties":{"a":{"type":"string"}}}"#).expect("parse");
-        let actual: JsonSchema =
-            JsonSchema::try_from(r#"{"bogus":1,"properties":{"a":{"type":"string","bogus":1}}}"#)
-                .expect("parse");
+    fn lenient_keeps_unknown_keys_everywhere() {
+        let expected: serde_json::Value =
+            serde_json::json!({"bogus": 1, "properties": {"a": {"type": "string", "bogus": 1}}});
+        let parsed: JsonSchema = JsonSchema::try_from(&expected).expect("parse");
+        let actual: serde_json::Value = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(expected, actual);
+    }
+
+    // --- extensions: every key the model does not hold ---
+
+    /// Parses `json` with default settings and serializes the result back to a `Value`.
+    fn round_trip(json: &str) -> serde_json::Value {
+        let schema: Schema = Schema::try_from(json).expect("parse");
+        serde_json::to_value(&schema).expect("serialize")
+    }
+
+    #[test]
+    fn extensions_hold_keywords_the_model_does_not() {
+        let expected: BTreeMap<String, serde_json::Value> = BTreeMap::from([
+            ("if".to_string(), serde_json::json!({"type": "string"})),
+            ("not".to_string(), serde_json::json!({"type": "null"})),
+            ("x-rust-type".to_string(), serde_json::json!({"crate": "a"})),
+        ]);
+        let actual: BTreeMap<String, serde_json::Value> = JsonSchema::try_from(
+            r#"{"type":"string","not":{"type":"null"},"if":{"type":"string"},"x-rust-type":{"crate":"a"}}"#,
+        )
+        .expect("parse")
+        .extensions;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn extensions_round_trip_unknown_and_x_keywords() {
+        let expected: serde_json::Value = serde_json::json!({
+            "type": "object",
+            "properties": {"a": {"x-foo": [1, 2], "minLength": 1}},
+            "patternProperties": {"^x": {"type": "string"}},
+            "not": {"type": "null"},
+            "x-bar": null
+        });
+        let actual: serde_json::Value = round_trip(&expected.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn extensions_serialize_after_fields_in_key_order() {
+        let expected: &str = r#"{"type":"string","a":1,"z":2}"#;
+        let schema: JsonSchema =
+            JsonSchema::try_from(r#"{"z":2,"type":"string","a":1}"#).expect("parse");
+        let actual: String = String::try_from(&schema).expect("serialize");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_parse_keeps_known_keywords_in_extensions() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("not".to_string(), serde_json::json!({"type": "null"}))]);
+        let actual: BTreeMap<String, serde_json::Value> =
+            JsonSchema::new_from_str(r#"{"not":{"type":"null"}}"#, &settings)
+                .expect("parse")
+                .extensions;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_non_string_id_stays_in_extensions() {
+        let expected: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("id".to_string(), serde_json::json!(5))]);
+        let actual: BTreeMap<String, serde_json::Value> =
+            JsonSchema::try_from(r#"{"$schema":"http://json-schema.org/draft-04/schema#","id":5}"#)
+                .expect("parse")
+                .extensions;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft7_id_stays_in_extensions() {
+        let expected: BTreeMap<String, serde_json::Value> =
+            BTreeMap::from([("id".to_string(), serde_json::json!("x"))]);
+        let actual: BTreeMap<String, serde_json::Value> = JsonSchema::try_from(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","id":"x"}"#,
+        )
+        .expect("parse")
+        .extensions;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn duplicate_field_is_an_error() {
+        let expected: String =
+            "invalid JSON Schema: duplicate field `title` at line 1 column 20".to_string();
+        let actual: String = JsonSchema::try_from(r#"{"title":"a","title":"b"}"#)
+            .expect_err("duplicate")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn duplicate_field_after_null_is_an_error() {
+        let expected: String =
+            "invalid JSON Schema: duplicate field `title` at line 1 column 21".to_string();
+        let actual: String = JsonSchema::try_from(r#"{"title":null,"title":"b"}"#)
+            .expect_err("duplicate")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn duplicate_extension_is_an_error() {
+        let expected: String =
+            "invalid JSON Schema: duplicate field `x-a` at line 1 column 17".to_string();
+        let actual: String = JsonSchema::try_from(r#"{"x-a":1,"x-a":2}"#)
+            .expect_err("duplicate")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    // --- type: a set of JSON types ---
+
+    #[test]
+    fn parse_type_array_round_trips_in_name_order() {
+        let expected: serde_json::Value =
+            serde_json::json!({"type": ["integer", "null", "string"]});
+        let actual: serde_json::Value = round_trip(r#"{"type":["string","null","integer"]}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_type_null() {
+        let expected: Option<TypeSet> = Some(JsonType::Null.into());
+        let actual: Option<TypeSet> = JsonSchema::try_from(r#"{"type":"null"}"#)
+            .expect("parse")
+            .type_;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_type_empty_array_is_empty_set() {
+        let expected: Option<TypeSet> = Some(TypeSet::empty());
+        let actual: Option<TypeSet> = JsonSchema::try_from(r#"{"type":[]}"#).expect("parse").type_;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_unknown_type_name_is_an_error() {
+        let expected: String = "invalid JSON Schema: unknown type \"strng\", expected one of \
+                                \"array\", \"boolean\", \"integer\", \"null\", \"number\", \
+                                \"object\", \"string\" at line 1 column 15"
+            .to_string();
+        let actual: String = JsonSchema::try_from(r#"{"type":"strng"}"#)
+            .expect_err("unknown type")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_unknown_type_name_in_nested_schema_is_an_error() {
+        let expected: String = "invalid JSON Schema: unknown type \"any\", expected one of \
+                                \"array\", \"boolean\", \"integer\", \"null\", \"number\", \
+                                \"object\", \"string\" at line 1 column 33"
+            .to_string();
+        let actual: String = JsonSchema::try_from(r#"{"properties":{"a":{"type":["any"]}}}"#)
+            .expect_err("unknown type")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_unknown_type_name_from_value_is_an_error() {
+        let expected: String = "invalid JSON Schema: unknown type \"strng\", expected one of \
+                                \"array\", \"boolean\", \"integer\", \"null\", \"number\", \
+                                \"object\", \"string\""
+            .to_string();
+        let actual: String = JsonSchema::try_from(&serde_json::json!({"type": "strng"}))
+            .expect_err("unknown type")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    // --- boolean schemas ---
+
+    #[test]
+    fn schema_document_true() {
+        let expected: Schema = Schema::Bool(true);
+        let actual: Schema = Schema::try_from("true").expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_document_false_from_value() {
+        let expected: Schema = Schema::Bool(false);
+        let actual: Schema = Schema::try_from(&serde_json::json!(false)).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_document_false_strict() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: Schema = Schema::Bool(false);
+        let actual: Schema = Schema::new_from_str("false", &settings).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_document_object() {
+        let expected: Schema = Schema::from(JsonSchema {
+            type_: Some(JsonType::String.into()),
+            ..Default::default()
+        });
+        let actual: Schema = Schema::try_from(r#"{"type":"string"}"#).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_document_records_pinned_dialect() {
+        let settings: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
+        let expected: Option<Dialect> = Some(Dialect::for_spec_version(SpecVersion::Draft07));
+        let actual: Option<Dialect> = Schema::new_from_str("{}", &settings)
+            .expect("parse")
+            .as_object()
+            .expect("object")
+            .dialect;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn json_schema_document_boolean_is_an_error() {
+        let expected: String =
+            "the document is the boolean schema `true`, not a schema object".to_string();
+        let actual: String = JsonSchema::try_from("true")
+            .expect_err("boolean root")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_document_number_is_an_error() {
+        let expected: String = "invalid JSON Schema: invalid type: integer `1`, expected a schema \
+                                (an object or a boolean) at line 1 column 1"
+            .to_string();
+        let actual: String = Schema::try_from("1").expect_err("number").to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn boolean_schemas_at_every_position_round_trip() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$defs": {"t": true, "f": false},
+            "definitions": {"t": true},
+            "properties": {"a": true, "b": false},
+            "additionalProperties": false,
+            "items": true,
+            "allOf": [true],
+            "anyOf": [false, {"type": "string"}],
+            "oneOf": [true, false]
+        });
+        let actual: serde_json::Value = round_trip(&expected.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn boolean_property_schema_parses_as_bool() {
+        let expected: BTreeMap<String, Schema> = BTreeMap::from([
+            ("a".to_string(), Schema::Bool(true)),
+            ("b".to_string(), Schema::Bool(false)),
+        ]);
+        let actual: BTreeMap<String, Schema> =
+            JsonSchema::try_from(r#"{"properties":{"a":true,"b":false}}"#)
+                .expect("parse")
+                .properties;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn boolean_items_parses_as_bool() {
+        let expected: Option<Schema> = Some(Schema::Bool(false));
+        let actual: Option<Schema> = JsonSchema::try_from(r#"{"items":false}"#)
+            .expect("parse")
+            .items;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_null_is_absent() {
+        let expected: Option<Schema> = None;
+        let actual: Option<Schema> = JsonSchema::try_from(r#"{"additionalProperties":null}"#)
+            .expect("parse")
+            .additional_properties;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn array_where_schema_expected_names_the_shape() {
+        let expected: String = "invalid JSON Schema: invalid type: sequence, expected a schema \
+                                (an object or a boolean) at line 1 column 10"
+            .to_string();
+        let actual: String = JsonSchema::try_from(r#"{"items":[{}]}"#)
+            .expect_err("array items")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn string_where_schema_expected_names_the_shape() {
+        let expected: String = "invalid JSON Schema: invalid type: string \"x\", expected a \
+                                schema (an object or a boolean) at line 1 column 22"
+            .to_string();
+        let actual: String = JsonSchema::try_from(r#"{"properties":{"a":"x"}}"#)
+            .expect_err("string schema")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn json_schema_deserialize_rejects_boolean() {
+        let expected: String = "invalid type: boolean `true`, expected a schema object".to_string();
+        let actual: String = serde_json::from_value::<JsonSchema>(serde_json::json!(true))
+            .expect_err("boolean")
+            .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn subschemas_mut_skips_boolean_schemas() {
+        let mut schema: JsonSchema = JsonSchema::try_from(
+            r#"{"properties":{"a":true,"b":{"title":"B"}},"items":false,"allOf":[{"title":"C"}]}"#,
+        )
+        .expect("parse");
+        let expected: Vec<Option<String>> = vec![Some("B".to_string()), Some("C".to_string())];
+        let actual: Vec<Option<String>> = schema
+            .subschemas_mut()
+            .into_iter()
+            .map(|s| s.title.clone())
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn object_or_empty_reads_boolean_as_empty_object() {
+        let expected: &JsonSchema = &JsonSchema::default();
+        let actual: &JsonSchema = Schema::Bool(false).object_or_empty();
         assert_eq!(expected, actual);
     }
 
@@ -2801,8 +3503,11 @@ mod tests {
             .definitions
             .as_ref()
             .and_then(|d| d.get("a"))
-            .and_then(|a| a.id.clone());
-        let property: Option<String> = schema.properties.get("id").and_then(|p| p.id.clone());
+            .and_then(|a| a.as_object()?.id.clone());
+        let property: Option<String> = schema
+            .properties
+            .get("id")
+            .and_then(|p| p.as_object()?.id.clone());
         vec![schema.id.clone(), property, definition]
     }
 
@@ -2956,7 +3661,11 @@ mod tests {
         let serialized: String = (&parsed).try_into().expect("serialize");
         let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
         assert_eq!(parsed.comment, reparsed.comment);
-        let country_schema: &JsonSchema = reparsed.properties.get("country").expect("country");
+        let country_schema: &JsonSchema = reparsed
+            .properties
+            .get("country")
+            .and_then(Schema::as_object)
+            .expect("country");
         assert_eq!(Some("TODO: add enum".to_string()), country_schema.comment);
     }
 
@@ -2976,7 +3685,11 @@ mod tests {
     fn deserialize_schema_with_enum() {
         let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}}}"#;
         let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let status_schema: &JsonSchema = parsed.properties.get("status").expect("status property");
+        let status_schema: &JsonSchema = parsed
+            .properties
+            .get("status")
+            .and_then(Schema::as_object)
+            .expect("status property");
         let expected_enum: Vec<serde_json::Value> = vec![
             serde_json::Value::String("open".to_string()),
             serde_json::Value::String("closed".to_string()),
@@ -3108,6 +3821,7 @@ mod tests {
         let actual: Option<&serde_json::Value> = one_str
             .properties
             .get("name")
+            .and_then(Schema::as_object)
             .unwrap()
             .default_value
             .as_ref();
@@ -3472,8 +4186,8 @@ mod tests {
         let reader: std::io::Cursor<&[u8]> = std::io::Cursor::new(bytes);
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         let actual: JsonSchema = JsonSchema::new_from_reader(reader, &settings).expect("parse");
-        let expected_type: Option<&str> = Some("object");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -3509,8 +4223,8 @@ mod tests {
         let schema_json = r#"{"type":"array","items":{"type":"string"}}"#;
         std::fs::write(&schema_path, schema_json).expect("write temp file");
         let actual: JsonSchema = JsonSchema::try_from(schema_path.as_path()).expect("parse");
-        let expected_type: Option<&str> = Some("array");
-        assert_eq!(expected_type, actual.type_.as_deref());
+        let expected_type: Option<TypeSet> = Some(JsonType::Array.into());
+        assert_eq!(expected_type, actual.type_);
     }
 
     #[test]
@@ -3536,13 +4250,13 @@ mod tests {
     fn parse_defs_present() {
         let json = r#"{"$defs":{"Foo":{"type":"string"}}}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let mut expected_defs: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut expected_defs: BTreeMap<String, Schema> = BTreeMap::new();
         expected_defs.insert(
             "Foo".to_string(),
-            JsonSchema {
-                type_: Some("string".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
+            }),
         );
         let expected: JsonSchema = JsonSchema {
             defs: Some(expected_defs),
@@ -3567,7 +4281,7 @@ mod tests {
         let json = r#"{"type":"object","properties":{}}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
             ..Default::default()
         };
@@ -3578,13 +4292,13 @@ mod tests {
     fn parse_definitions_present() {
         let json = r#"{"definitions":{"Bar":{"type":"integer"}}}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
-        let mut expected_definitions: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut expected_definitions: BTreeMap<String, Schema> = BTreeMap::new();
         expected_definitions.insert(
             "Bar".to_string(),
-            JsonSchema {
-                type_: Some("integer".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::Integer.into()),
                 ..Default::default()
-            },
+            }),
         );
         let expected: JsonSchema = JsonSchema {
             definitions: Some(expected_definitions),
@@ -3609,7 +4323,7 @@ mod tests {
         let json = r#"{"type":"object","properties":{}}"#;
         let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
             ..Default::default()
         };
@@ -3618,21 +4332,21 @@ mod tests {
 
     #[test]
     fn round_trip_with_defs_and_definitions() {
-        let mut defs: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut defs: BTreeMap<String, Schema> = BTreeMap::new();
         defs.insert(
             "Foo".to_string(),
-            JsonSchema {
-                type_: Some("string".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::String.into()),
                 ..Default::default()
-            },
+            }),
         );
-        let mut definitions: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut definitions: BTreeMap<String, Schema> = BTreeMap::new();
         definitions.insert(
             "Bar".to_string(),
-            JsonSchema {
-                type_: Some("integer".to_string()),
+            Schema::from(JsonSchema {
+                type_: Some(JsonType::Integer.into()),
                 ..Default::default()
-            },
+            }),
         );
         let schema: JsonSchema = JsonSchema {
             defs: Some(defs),

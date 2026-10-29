@@ -21,7 +21,7 @@
 //! cell is correct, and only correct cells are timed or profiled.
 
 use crate::fixtures::Fixture;
-use json_schema_rs::{CodeGenSettings, GenerateRustOutput, JsonSchema, generate_rust};
+use json_schema_rs::{CodeGenSettings, GenerateRustOutput, JsonSchema, Schema, generate_rust};
 use serde_json::Value;
 use std::any::Any;
 use std::fmt;
@@ -137,13 +137,9 @@ impl fmt::Display for Operation {
 ///
 /// Variants hold each tool's native compiled value unboxed so compile timings include no
 /// adapter-added allocation.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "unboxed so the adapter adds no allocation to measured compiles"
-)]
 pub enum Compiled {
-    /// `json-schema-rs` parsed schema model.
-    JsonSchemaRs(JsonSchema),
+    /// `json-schema-rs` parsed schema document (an object or a boolean schema).
+    JsonSchemaRs(Schema),
     /// `jsonschema` validator.
     Jsonschema(jsonschema::Validator),
     /// `boon` schema collection and the root schema's index.
@@ -246,7 +242,7 @@ pub fn parse_instance(text: &str) -> Result<Value, AdapterError> {
 /// the tool cannot compile the schema.
 pub fn compile(tool: Tool, schema_text: &str) -> Result<Compiled, AdapterError> {
     guarded(|| match tool {
-        Tool::JsonSchemaRs => serde_json::from_str::<JsonSchema>(schema_text)
+        Tool::JsonSchemaRs => serde_json::from_str::<Schema>(schema_text)
             .map(Compiled::JsonSchemaRs)
             .map_err(|e: serde_json::Error| AdapterError::SchemaParse(e.to_string())),
         Tool::Jsonschema => {
