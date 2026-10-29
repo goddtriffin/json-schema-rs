@@ -68,7 +68,7 @@ fn value_to_display_string(v: &Value) -> String {
 pub fn validate<'a>(schema: impl Into<SchemaRef<'a>>, instance: &Value) -> ValidationResult {
     match Registry::new(schema) {
         Ok(registry) => validate_with_registry(&registry, instance),
-        Err(error) => Err(vec![registry_error(&error)]),
+        Err(errors) => Err(errors.iter().map(registry_error).collect()),
     }
 }
 
@@ -98,7 +98,8 @@ pub fn validate_with_registry(registry: &Registry<'_>, instance: &Value) -> Vali
     validate_in(registry, registry.root_scope(), registry.root(), instance)
 }
 
-/// The error every instance gets when the schema's registry cannot be built.
+/// The error every instance gets for one problem that kept the schema's registry from being
+/// built (one per problem).
 fn registry_error(error: &RegistryError) -> ValidationError {
     let instance_path: JsonPointer = JsonPointer::root();
     match error.ref_str() {
@@ -643,6 +644,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected_reason: String = RegistryError::UnresolvableRef {
             ref_str: "#/$defs/Missing".to_string(),
+            location: "/properties/x".to_string(),
             target: "json-schema:///#/$defs/Missing".to_string(),
             reason: "no such location".to_string(),
         }
@@ -652,6 +654,58 @@ mod tests {
             ref_str: "#/$defs/Missing".to_string(),
             reason: expected_reason,
         }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_reports_every_registry_problem() {
+        let schema: JsonSchema = serde_json::from_str(
+            r##"{
+  "$defs": {
+    "a": { "$id": "https://example.com/s.json" },
+    "b": { "$id": "https://example.com/s.json" }
+  },
+  "properties": {
+    "x": { "$ref": "#/$defs/missing" },
+    "y": { "$ref": "#/$defs/gone" }
+  }
+}"##,
+        )
+        .expect("parse schema");
+        let actual: ValidationResult = validate(&schema, &json!({}));
+        let expected: ValidationResult = Err(vec![
+            ValidationError::InvalidSchema {
+                instance_path: JsonPointer::root(),
+                reason: RegistryError::DuplicateId {
+                    uri: "https://example.com/s.json".to_string(),
+                    first: "/$defs/a".to_string(),
+                    second: "/$defs/b".to_string(),
+                }
+                .to_string(),
+            },
+            ValidationError::InvalidRef {
+                instance_path: JsonPointer::root(),
+                ref_str: "#/$defs/missing".to_string(),
+                reason: RegistryError::UnresolvableRef {
+                    ref_str: "#/$defs/missing".to_string(),
+                    location: "/properties/x".to_string(),
+                    target: "json-schema:///#/$defs/missing".to_string(),
+                    reason: "no such location".to_string(),
+                }
+                .to_string(),
+            },
+            ValidationError::InvalidRef {
+                instance_path: JsonPointer::root(),
+                ref_str: "#/$defs/gone".to_string(),
+                reason: RegistryError::UnresolvableRef {
+                    ref_str: "#/$defs/gone".to_string(),
+                    location: "/properties/y".to_string(),
+                    target: "json-schema:///#/$defs/gone".to_string(),
+                    reason: "no such location".to_string(),
+                }
+                .to_string(),
+            },
+        ]);
         assert_eq!(expected, actual);
     }
 
