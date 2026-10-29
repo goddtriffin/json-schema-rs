@@ -10,9 +10,9 @@
 //! - a **stale entry**: the manifest names a test that does not exist in the suite.
 //!
 //! Each group's schema gets a [`Registry`] whose retriever serves the suite's `remotes/` folder
-//! under `http://localhost:1234/`, as the suite specifies. A schema with its own `$schema` is
-//! parsed under that dialect (so a custom metaschema is found through the registry); one without
-//! is pinned to the draft of its directory.
+//! under `http://localhost:1234/`, as the suite specifies. Each directory's draft is the default
+//! draft: a schema without `$schema` uses it, one with `$schema` follows that (so a custom
+//! metaschema is found through the registry).
 //!
 //! The suite must be cloned at `research/json-schema-test-suite/` (`make vendor_test_suite`);
 //! the run hard-fails when it is missing. `make update_suite_xfail` rewrites the manifest from
@@ -197,13 +197,8 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
         }
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
-            .spec_version(spec_version)
+            .default_spec_version(spec_version)
             .build();
-        // A schema with its own `$schema` follows it, so a custom metaschema is honoured.
-        let own_schema_settings: JsonSchemaSettings = JsonSchemaSettings {
-            spec_version: None,
-            ..settings.clone()
-        };
         // The suite's `optional/format/` tests are written for implementations that assert
         // `format`, which 2019-09 and 2020-12 do not by default.
         let format_settings: JsonSchemaSettings = JsonSchemaSettings {
@@ -222,12 +217,6 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
             let groups: Vec<SuiteGroup> = serde_json::from_str(&contents)
                 .map_err(|e| format!("failed to parse {}: {e}", file_path.display()))?;
             for group in groups {
-                let settings: &JsonSchemaSettings =
-                    if group.schema.get("$schema").is_some() && settings.format_mode.is_none() {
-                        &own_schema_settings
-                    } else {
-                        settings
-                    };
                 let parsed = catch_unwind(AssertUnwindSafe(|| {
                     Schema::new_from_serde_value(&group.schema, settings)
                 }));

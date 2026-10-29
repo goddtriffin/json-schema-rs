@@ -512,10 +512,13 @@ impl Default for Dialect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialectWarning {
     /// `$schema` names a metaschema this library does not recognise; the schema uses the
-    /// default dialect (Draft 2020-12) instead.
+    /// fallback draft instead ([`JsonSchemaSettings::default_spec_version`](super::JsonSchemaSettings::default_spec_version),
+    /// Draft 2020-12 by default).
     UnknownSchemaUri {
         /// The unrecognised `$schema` value.
         uri: String,
+        /// The draft used instead.
+        fallback: SpecVersion,
     },
     /// The draft has no rule set of its own (drafts 00–03); draft 4's rules are used.
     UnsupportedDraft {
@@ -527,10 +530,9 @@ pub enum DialectWarning {
 impl fmt::Display for DialectWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DialectWarning::UnknownSchemaUri { uri } => write!(
-                f,
-                "unknown $schema \"{uri}\"; using JSON Schema Draft 2020-12 rules"
-            ),
+            DialectWarning::UnknownSchemaUri { uri, fallback } => {
+                write!(f, "unknown $schema \"{uri}\"; using {fallback} rules")
+            }
             DialectWarning::UnsupportedDraft { spec_version } => write!(
                 f,
                 "{spec_version:?} has no rule set of its own; using JSON Schema Draft 4 rules"

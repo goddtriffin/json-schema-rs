@@ -32,7 +32,7 @@
 
 use super::dialect::{Dialect, FormatMode, RefSiblings, SubschemaPosition, VocabularyKind};
 use super::json_schema::{JsonSchema, Schema, SchemaRef};
-use super::settings::JsonSchemaSettings;
+use super::settings::{DialectSettings, JsonSchemaSettings};
 use super::spec_version::SpecVersion;
 use crate::json_pointer::JsonPointer;
 use fluent_uri::{Iri, IriRef};
@@ -807,21 +807,24 @@ impl<'a, 'b> Builder<'a, 'b> {
         Ok(())
     }
 
-    /// The dialect of a document root: the one its parse settings fixed, else its `$schema`
-    /// (a custom metaschema is loaded for its `$vocabulary`), else `inherited` for a document
-    /// without `$schema`.
+    /// The dialect of a document root: the forced draft when its parse settings force one;
+    /// else its `$schema` (a custom metaschema is loaded for its `$vocabulary`); else `inherited`
+    /// (the referencing resource's) for a loaded document without `$schema`, or the default draft
+    /// for the root document. The document's per-flag overrides apply on top.
     fn document_dialect(
         &mut self,
         schema: &JsonSchema,
         inherited: Option<Dialect>,
     ) -> Result<Dialect, RegistryError> {
-        if let Some(dialect) = schema.dialect {
-            return Ok(dialect);
+        let settings: DialectSettings = schema.dialect_settings.unwrap_or_default();
+        if settings.forced_spec_version.is_some() {
+            return Ok(schema.dialect());
         }
-        match (schema.schema.as_deref(), inherited) {
-            (None, Some(dialect)) => Ok(dialect),
-            (uri, _) => self.dialect_for_schema_uri(uri, schema.dialect()),
-        }
+        let dialect: Dialect = match (schema.schema.as_deref(), inherited) {
+            (None, Some(dialect)) => dialect,
+            (uri, _) => self.dialect_for_schema_uri(uri, schema.dialect())?,
+        };
+        Ok(settings.apply_overrides(dialect))
     }
 
     /// The dialect `$schema: uri` selects; `fallback` when absent or when a custom metaschema
@@ -924,12 +927,11 @@ impl<'a, 'b> Builder<'a, 'b> {
                         reason: e.reason,
                     })?
             };
+        // A loaded document follows its own `$schema`; without one it takes `draft` (the
+        // referencing resource's). Forcing a draft applies to the root document only.
         let mut settings: JsonSchemaSettings = self.settings.clone();
-        let has_known_schema: bool = value
-            .get("$schema")
-            .and_then(Value::as_str)
-            .is_some_and(|s| SpecVersion::from_schema_uri(s).is_some());
-        settings.spec_version = if has_known_schema { None } else { draft };
+        settings.forced_spec_version = None;
+        settings.default_spec_version = draft.or(settings.default_spec_version);
         settings.unknown_schema_uri = super::settings::UnknownSchemaUri::Fallback;
         let schema: Schema =
             Schema::new_from_serde_value(&value, &settings).map_err(|e| RegistryError::Parse {
@@ -1046,10 +1048,13 @@ impl<'a, 'b> Builder<'a, 'b> {
                             value: id.to_string(),
                             reason,
                         })?;
-                    let node_dialect: Dialect = if self.pinned(document) {
+                    let settings: DialectSettings = self.dialect_settings(document);
+                    let node_dialect: Dialect = if settings.forced_spec_version.is_some() {
                         dialect
                     } else {
-                        self.dialect_for_schema_uri(node.schema_uri(), dialect)?
+                        let own: Dialect =
+                            self.dialect_for_schema_uri(node.schema_uri(), dialect)?;
+                        settings.apply_overrides(own)
                     };
                     let pointer: Vec<String> = materialise(&paths, path);
                     scope = match self.existing_at(&uri, document, &pointer) {
@@ -1113,14 +1118,15 @@ impl<'a, 'b> Builder<'a, 'b> {
         })
     }
 
-    /// Whether the document's parse settings fixed its dialect (a pinned draft or an override),
-    /// which then applies to every resource in it.
-    fn pinned(&self, document: usize) -> bool {
+    /// The dialect settings `document`'s root was parsed with: a forced draft covers every
+    /// resource of the document, and the per-flag overrides apply to each resource's own draft.
+    fn dialect_settings(&self, document: usize) -> DialectSettings {
         self.registry.documents[document]
             .root
             .schema_ref()
             .as_object()
-            .is_some_and(|s| s.dialect.is_some())
+            .and_then(|s| s.dialect_settings)
+            .unwrap_or_default()
     }
 
     fn resolve_pending(&mut self, pending: PendingRef) -> Result<(), RegistryError> {
@@ -1311,7 +1317,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         let dialect: Dialect = self.registry.resources[scope.0].dialect;
         let mut settings: JsonSchemaSettings = self.settings.clone();
         settings.disallow_unknown_fields = false;
-        settings.spec_version = Some(dialect.spec_version);
+        settings.forced_spec_version = Some(dialect.spec_version);
         let schema: Schema =
             Schema::new_from_serde_value(value, &settings).map_err(|e| RegistryError::Parse {
                 uri: target_uri.to_string(),
@@ -2026,7 +2032,7 @@ mod tests {
     #[test]
     fn draft7_ref_sibling_id_is_ignored_for_base_uri() {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .spec_version(SpecVersion::Draft07)
+            .forced_spec_version(SpecVersion::Draft07)
             .build();
         let schema: JsonSchema = JsonSchema::new_from_serde_value(
             &json!({
@@ -2069,7 +2075,7 @@ mod tests {
     #[test]
     fn draft7_plain_name_fragment_id_is_an_anchor() {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .spec_version(SpecVersion::Draft07)
+            .forced_spec_version(SpecVersion::Draft07)
             .build();
         let schema: JsonSchema = JsonSchema::new_from_serde_value(
             &json!({
@@ -2345,6 +2351,106 @@ mod tests {
         let schema: JsonSchema = mixed_dialect_root();
         let actual: ValidationResult = validate_default(&schema, &json!({"new": 1.0}));
         let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    /// [`mixed_dialect_root`]'s schema text parsed with `settings`.
+    fn mixed_dialect_root_with(settings: &JsonSchemaSettings) -> JsonSchema {
+        let value: Value = serde_json::to_value(mixed_dialect_root()).expect("serialize");
+        JsonSchema::new_from_serde_value(&value, settings).expect("parse schema")
+    }
+
+    #[test]
+    fn forced_spec_version_overrides_embedded_schema_keyword() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .forced_spec_version(SpecVersion::Draft202012)
+            .build();
+        let schema: JsonSchema = mixed_dialect_root_with(&settings);
+        let actual: ValidationResult = validate_default(&schema, &json!({"old": 1.0}));
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn default_spec_version_yields_to_embedded_schema_keyword() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .default_spec_version(SpecVersion::Draft07)
+            .build();
+        let schema: JsonSchema = mixed_dialect_root_with(&settings);
+        let actual: ValidationResult = validate_default(&schema, &json!({"old": 1.0}));
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
+            instance_path: JsonPointer::root().push("old"),
+            got: "number".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn default_spec_version_applies_to_root_without_schema_keyword() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .default_spec_version(SpecVersion::Draft04)
+            .build();
+        let schema: JsonSchema = mixed_dialect_root_with(&settings);
+        let actual: ValidationResult = validate_default(&schema, &json!({"new": 1.0}));
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
+            instance_path: JsonPointer::root().push("new"),
+            got: "number".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn format_mode_override_applies_to_embedded_resource_with_own_schema_keyword() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .format_mode(FormatMode::Annotation)
+            .build();
+        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+            &json!({
+                "$defs": {"inner": {
+                    "$id": "inner.json",
+                    "$schema": "http://json-schema.org/draft-07/schema#"
+                }},
+                "$ref": "inner.json"
+            }),
+            &settings,
+        )
+        .expect("parse schema");
+        let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+        let resolved: Resolved<'_> = registry
+            .resolve(root_inner_scope(&registry, &schema), "inner.json")
+            .expect("resolve");
+        let inner: Scope = registry.enter(
+            resolved.scope,
+            resolved.schema.as_object().expect("schema object"),
+        );
+        let mut expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft07);
+        expected.format_mode = FormatMode::Annotation;
+        let actual: Dialect = registry.dialect(inner);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn forced_spec_version_does_not_apply_to_loaded_document() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .forced_spec_version(SpecVersion::Draft202012)
+            .build();
+        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+            &json!({"$ref": "https://example.com/old.json"}),
+            &settings,
+        )
+        .expect("parse schema");
+        let registry: Registry<'_> = Registry::builder()
+            .document(
+                "https://example.com/old.json",
+                json!({"$schema": "http://json-schema.org/draft-04/schema#", "type": "integer"}),
+            )
+            .build(&schema)
+            .expect("build registry");
+        let actual: ValidationResult = validate_with_registry(&registry, &json!(1.0));
+        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
+            instance_path: JsonPointer::root(),
+            got: "number".to_string(),
+        }]);
         assert_eq!(expected, actual);
     }
 

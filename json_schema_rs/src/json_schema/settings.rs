@@ -33,9 +33,16 @@ pub struct JsonSchemaSettings {
     /// them. When `false` (the default), unknown keys are ignored.
     pub disallow_unknown_fields: bool,
 
-    /// Explicit spec version to use. When `Some(v)`, that version is used and `$schema` is not used for draft selection.
-    /// When `None`, the spec version is inferred from the root schema's `$schema` keyword; if absent or unrecognized, **Draft 2020-12** is used.
-    pub spec_version: Option<SpecVersion>,
+    /// The draft every schema resource of the document is processed with, whatever its
+    /// `$schema` says (the root's and every embedded resource's). Documents a `$ref` loads are not
+    /// affected: they follow their own `$schema`. `None` (default): no override.
+    pub forced_spec_version: Option<SpecVersion>,
+
+    /// The draft for a document whose root has no `$schema`, or whose `$schema` names a
+    /// metaschema that cannot be loaded. `None` (default): **Draft 2020-12**. An explicit
+    /// recognised `$schema` always wins, and an embedded resource without `$schema` takes its
+    /// enclosing resource's draft, as the specification requires.
+    pub default_spec_version: Option<SpecVersion>,
 
     /// Whether `format` is checked. `None` follows the draft: drafts 4, 6 and 7 check it,
     /// 2019-09 and 2020-12 treat it as an annotation.
@@ -57,7 +64,8 @@ pub struct JsonSchemaSettings {
 #[derive(Debug, Clone, Default)]
 pub struct JsonSchemaSettingsBuilder {
     disallow_unknown_fields: Option<bool>,
-    spec_version: Option<SpecVersion>,
+    forced_spec_version: Option<SpecVersion>,
+    default_spec_version: Option<SpecVersion>,
     format_mode: Option<FormatMode>,
     integer_semantics: Option<IntegerSemantics>,
     exclusive_bounds: Option<ExclusiveBounds>,
@@ -73,11 +81,19 @@ impl JsonSchemaSettingsBuilder {
         self
     }
 
-    /// Set the JSON Schema spec version explicitly. When set, parsing uses this version and does not infer from `$schema`.
-    /// When not set (default), the version is inferred from the root schema's `$schema` with a default of Draft 2020-12.
+    /// Process every schema resource of the document with `value`'s rules, whatever its
+    /// `$schema` says (see [`JsonSchemaSettings::forced_spec_version`]).
     #[must_use]
-    pub fn spec_version(mut self, value: SpecVersion) -> Self {
-        self.spec_version = Some(value);
+    pub fn forced_spec_version(mut self, value: SpecVersion) -> Self {
+        self.forced_spec_version = Some(value);
+        self
+    }
+
+    /// Use `value`'s rules when the root has no `$schema` (or an unloadable one), instead of
+    /// Draft 2020-12 (see [`JsonSchemaSettings::default_spec_version`]).
+    #[must_use]
+    pub fn default_spec_version(mut self, value: SpecVersion) -> Self {
+        self.default_spec_version = Some(value);
         self
     }
 
@@ -120,7 +136,8 @@ impl JsonSchemaSettingsBuilder {
     pub fn build(self) -> JsonSchemaSettings {
         JsonSchemaSettings {
             disallow_unknown_fields: self.disallow_unknown_fields.unwrap_or(false),
-            spec_version: self.spec_version,
+            forced_spec_version: self.forced_spec_version,
+            default_spec_version: self.default_spec_version,
             format_mode: self.format_mode,
             integer_semantics: self.integer_semantics,
             exclusive_bounds: self.exclusive_bounds,
@@ -129,7 +146,54 @@ impl JsonSchemaSettingsBuilder {
     }
 }
 
+/// The settings that decide a document's dialects: the draft overrides and the per-flag
+/// overrides of [`JsonSchemaSettings`]. Parsing records them on the root
+/// ([`JsonSchema::dialect_settings`](super::JsonSchema::dialect_settings)) so the registry can
+/// apply them to every schema resource of the document.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct DialectSettings {
+    /// See [`JsonSchemaSettings::forced_spec_version`].
+    pub forced_spec_version: Option<SpecVersion>,
+    /// See [`JsonSchemaSettings::default_spec_version`].
+    pub default_spec_version: Option<SpecVersion>,
+    /// See [`JsonSchemaSettings::format_mode`].
+    pub format_mode: Option<FormatMode>,
+    /// See [`JsonSchemaSettings::integer_semantics`].
+    pub integer_semantics: Option<IntegerSemantics>,
+    /// See [`JsonSchemaSettings::exclusive_bounds`].
+    pub exclusive_bounds: Option<ExclusiveBounds>,
+}
+
+impl DialectSettings {
+    /// `dialect` with the per-flag overrides applied.
+    #[must_use]
+    pub fn apply_overrides(&self, mut dialect: Dialect) -> Dialect {
+        if let Some(format_mode) = self.format_mode {
+            dialect.format_mode = format_mode;
+        }
+        if let Some(integer_semantics) = self.integer_semantics {
+            dialect.integer_semantics = integer_semantics;
+        }
+        if let Some(exclusive_bounds) = self.exclusive_bounds {
+            dialect.exclusive_bounds = exclusive_bounds;
+        }
+        dialect
+    }
+}
+
 impl JsonSchemaSettings {
+    /// The settings among these that decide dialects.
+    #[must_use]
+    pub fn dialect_settings(&self) -> DialectSettings {
+        DialectSettings {
+            forced_spec_version: self.forced_spec_version,
+            default_spec_version: self.default_spec_version,
+            format_mode: self.format_mode,
+            integer_semantics: self.integer_semantics,
+            exclusive_bounds: self.exclusive_bounds,
+        }
+    }
+
     /// Start a builder with all options unset (per-option defaults will be used on [`build`](JsonSchemaSettingsBuilder::build)).
     #[must_use]
     pub fn builder() -> JsonSchemaSettingsBuilder {
@@ -139,16 +203,17 @@ impl JsonSchemaSettings {
 
 /// Returns the effective [`Dialect`] for a root schema under `settings`, with any warnings.
 ///
-/// The draft is chosen in this order: [`JsonSchemaSettings::spec_version`] when set; otherwise
-/// the schema's `$schema` when it is a recognised metaschema URI; otherwise **Draft 2020-12**.
-/// An unrecognised `$schema` falls back with a [`DialectWarning::UnknownSchemaUri`], or is an
-/// error under [`UnknownSchemaUri::Reject`]. The settings' overrides are then applied to the
+/// The draft is chosen in this order: [`JsonSchemaSettings::forced_spec_version`] when set;
+/// otherwise the schema's `$schema` when it is a recognised metaschema URI; otherwise
+/// [`JsonSchemaSettings::default_spec_version`], or **Draft 2020-12** when that is unset. An
+/// unrecognised `$schema` falls back that way with a [`DialectWarning::UnknownSchemaUri`], or is
+/// an error under [`UnknownSchemaUri::Reject`]. The settings' overrides are then applied to the
 /// draft's defaults.
 ///
 /// # Errors
 ///
-/// Returns [`JsonSchemaParseError::UnknownSchemaUri`] when `$schema` is unrecognised, no spec
-/// version is set, and [`JsonSchemaSettings::unknown_schema_uri`] is [`UnknownSchemaUri::Reject`].
+/// Returns [`JsonSchemaParseError::UnknownSchemaUri`] when `$schema` is unrecognised, no draft
+/// is forced, and [`JsonSchemaSettings::unknown_schema_uri`] is [`UnknownSchemaUri::Reject`].
 pub fn resolve_dialect(
     schema: &JsonSchema,
     settings: &JsonSchemaSettings,
@@ -162,9 +227,12 @@ pub(crate) fn resolve_dialect_for_uri(
     settings: &JsonSchemaSettings,
 ) -> JsonSchemaParseResult<ResolvedDialect> {
     let mut warnings: Vec<DialectWarning> = Vec::new();
-    let spec_version: SpecVersion = match (settings.spec_version, schema_uri) {
+    let fallback: SpecVersion = settings
+        .default_spec_version
+        .unwrap_or(SpecVersion::Draft202012);
+    let spec_version: SpecVersion = match (settings.forced_spec_version, schema_uri) {
         (Some(v), _) => v,
-        (None, None) => SpecVersion::Draft202012,
+        (None, None) => fallback,
         (None, Some(uri)) => match SpecVersion::from_schema_uri(uri) {
             Some(v) => v,
             None => match settings.unknown_schema_uri {
@@ -176,8 +244,9 @@ pub(crate) fn resolve_dialect_for_uri(
                 UnknownSchemaUri::Fallback => {
                     warnings.push(DialectWarning::UnknownSchemaUri {
                         uri: uri.to_string(),
+                        fallback,
                     });
-                    SpecVersion::Draft202012
+                    fallback
                 }
             },
         },
@@ -188,16 +257,9 @@ pub(crate) fn resolve_dialect_for_uri(
     ) {
         warnings.push(DialectWarning::UnsupportedDraft { spec_version });
     }
-    let mut dialect: Dialect = Dialect::for_spec_version(spec_version);
-    if let Some(format_mode) = settings.format_mode {
-        dialect.format_mode = format_mode;
-    }
-    if let Some(integer_semantics) = settings.integer_semantics {
-        dialect.integer_semantics = integer_semantics;
-    }
-    if let Some(exclusive_bounds) = settings.exclusive_bounds {
-        dialect.exclusive_bounds = exclusive_bounds;
-    }
+    let dialect: Dialect = settings
+        .dialect_settings()
+        .apply_overrides(Dialect::for_spec_version(spec_version));
     Ok(ResolvedDialect { dialect, warnings })
 }
 
@@ -233,11 +295,19 @@ mod tests {
     }
 
     #[test]
-    fn builder_spec_version_explicit() {
+    fn builder_forced_spec_version() {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .spec_version(SpecVersion::Draft07)
+            .forced_spec_version(SpecVersion::Draft07)
             .build();
-        assert_eq!(settings.spec_version, Some(SpecVersion::Draft07));
+        assert_eq!(settings.forced_spec_version, Some(SpecVersion::Draft07));
+    }
+
+    #[test]
+    fn builder_default_spec_version() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .default_spec_version(SpecVersion::Draft07)
+            .build();
+        assert_eq!(settings.default_spec_version, Some(SpecVersion::Draft07));
     }
 
     #[test]
@@ -251,7 +321,8 @@ mod tests {
     fn builder_sets_every_option() {
         let expected: JsonSchemaSettings = JsonSchemaSettings {
             disallow_unknown_fields: true,
-            spec_version: Some(SpecVersion::Draft06),
+            forced_spec_version: Some(SpecVersion::Draft06),
+            default_spec_version: Some(SpecVersion::Draft04),
             format_mode: Some(FormatMode::Annotation),
             integer_semantics: Some(IntegerSemantics::Lexical),
             exclusive_bounds: Some(ExclusiveBounds::BooleanModifier),
@@ -259,7 +330,8 @@ mod tests {
         };
         let actual: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
-            .spec_version(SpecVersion::Draft06)
+            .forced_spec_version(SpecVersion::Draft06)
+            .default_spec_version(SpecVersion::Draft04)
             .format_mode(FormatMode::Annotation)
             .integer_semantics(IntegerSemantics::Lexical)
             .exclusive_bounds(ExclusiveBounds::BooleanModifier)
@@ -269,10 +341,70 @@ mod tests {
     }
 
     #[test]
-    fn resolve_dialect_uses_explicit_spec_version_over_schema_uri() {
+    fn resolve_dialect_default_spec_version_applies_without_schema_uri() {
+        let schema: JsonSchema = JsonSchema::default();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .default_spec_version(SpecVersion::Draft04)
+            .build();
+        let expected: ResolvedDialect = ResolvedDialect {
+            dialect: Dialect::for_spec_version(SpecVersion::Draft04),
+            warnings: vec![],
+        };
+        let actual: ResolvedDialect = resolve_dialect(&schema, &settings).expect("resolve");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_schema_uri_overrides_default_spec_version() {
+        let schema: JsonSchema = schema_with_uri("http://json-schema.org/draft-07/schema#");
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .default_spec_version(SpecVersion::Draft04)
+            .build();
+        let expected: ResolvedDialect = ResolvedDialect {
+            dialect: Dialect::for_spec_version(SpecVersion::Draft07),
+            warnings: vec![],
+        };
+        let actual: ResolvedDialect = resolve_dialect(&schema, &settings).expect("resolve");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_unknown_schema_uri_falls_back_to_default_spec_version() {
+        let schema: JsonSchema = schema_with_uri("https://example.com/custom-meta");
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .default_spec_version(SpecVersion::Draft06)
+            .build();
+        let expected: ResolvedDialect = ResolvedDialect {
+            dialect: Dialect::for_spec_version(SpecVersion::Draft06),
+            warnings: vec![DialectWarning::UnknownSchemaUri {
+                uri: "https://example.com/custom-meta".to_string(),
+                fallback: SpecVersion::Draft06,
+            }],
+        };
+        let actual: ResolvedDialect = resolve_dialect(&schema, &settings).expect("resolve");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_forced_spec_version_wins_over_default_spec_version() {
+        let schema: JsonSchema = JsonSchema::default();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .forced_spec_version(SpecVersion::Draft07)
+            .default_spec_version(SpecVersion::Draft04)
+            .build();
+        let expected: ResolvedDialect = ResolvedDialect {
+            dialect: Dialect::for_spec_version(SpecVersion::Draft07),
+            warnings: vec![],
+        };
+        let actual: ResolvedDialect = resolve_dialect(&schema, &settings).expect("resolve");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_forced_spec_version_overrides_schema_uri() {
         let schema: JsonSchema = schema_with_uri("https://json-schema.org/draft/2020-12/schema");
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .spec_version(SpecVersion::Draft04)
+            .forced_spec_version(SpecVersion::Draft04)
             .build();
         let expected: ResolvedDialect = ResolvedDialect {
             dialect: Dialect::for_spec_version(SpecVersion::Draft04),
@@ -313,6 +445,7 @@ mod tests {
             dialect: Dialect::for_spec_version(SpecVersion::Draft202012),
             warnings: vec![DialectWarning::UnknownSchemaUri {
                 uri: "https://example.com/custom-meta".to_string(),
+                fallback: SpecVersion::Draft202012,
             }],
         };
         let actual: ResolvedDialect =
@@ -338,7 +471,7 @@ mod tests {
     fn resolve_dialect_unknown_schema_uri_ignored_when_spec_version_set() {
         let schema: JsonSchema = schema_with_uri("https://example.com/custom-meta");
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .spec_version(SpecVersion::Draft07)
+            .forced_spec_version(SpecVersion::Draft07)
             .unknown_schema_uri(UnknownSchemaUri::Reject)
             .build();
         let expected: ResolvedDialect = ResolvedDialect {
