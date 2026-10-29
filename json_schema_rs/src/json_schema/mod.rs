@@ -20,7 +20,8 @@ pub use registry::{
     Retrieve, RetrieveError, Scope, UnknownRef,
 };
 pub use settings::{
-    JsonSchemaSettings, JsonSchemaSettingsBuilder, UnknownSchemaUri, resolve_dialect,
+    DialectSettings, JsonSchemaSettings, JsonSchemaSettingsBuilder, UnknownSchemaUri,
+    resolve_dialect,
 };
 pub use spec_version::SpecVersion;
 pub use type_set::{JsonType, TypeSet, UnknownJsonType};

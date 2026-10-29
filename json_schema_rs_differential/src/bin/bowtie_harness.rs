@@ -184,21 +184,14 @@ fn dialect_spec_version(uri: &str) -> Option<SpecVersion> {
         .map(|(_, spec_version)| *spec_version)
 }
 
-/// Spec version for one schema: its own `$schema` when recognized, otherwise the current dialect.
-fn case_spec_version(schema: &Value, dialect: SpecVersion) -> SpecVersion {
-    schema
-        .get("$schema")
-        .and_then(Value::as_str)
-        .and_then(SpecVersion::from_schema_uri)
-        .unwrap_or(dialect)
-}
-
-/// Strict ingestion settings for a spec version: the version's defaults with keys the draft does
-/// not define rejected, so they surface as skips rather than silently ignored keys.
-fn strict_settings(spec_version: SpecVersion) -> JsonSchemaSettings {
-    let mut settings: JsonSchemaSettings = spec_version.default_schema_settings();
-    settings.disallow_unknown_fields = true;
-    settings
+/// Strict ingestion settings for a case: Bowtie's current dialect is the default draft (a schema
+/// with its own `$schema` follows that, a custom metaschema through the registry), and keys the
+/// draft does not define are rejected, so they surface as skips rather than ignored keys.
+fn strict_settings(dialect: SpecVersion) -> JsonSchemaSettings {
+    JsonSchemaSettings::builder()
+        .default_spec_version(dialect)
+        .disallow_unknown_fields(true)
+        .build()
 }
 
 /// Skip message for a schema that strict parsing rejected.
@@ -253,18 +246,7 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
             case.tests.len()
         ]);
     }
-    let mut settings: JsonSchemaSettings =
-        strict_settings(case_spec_version(&case.schema, dialect));
-    // An unrecognised `$schema` names a custom metaschema: follow it (through the registry)
-    // rather than pinning the current dialect.
-    if case
-        .schema
-        .get("$schema")
-        .and_then(Value::as_str)
-        .is_some_and(|uri| SpecVersion::from_schema_uri(uri).is_none())
-    {
-        settings.spec_version = None;
-    }
+    let settings: JsonSchemaSettings = strict_settings(dialect);
     let schema: Schema = match catch_panic(|| Schema::new_from_serde_value(&case.schema, &settings))
     {
         Ok(Ok(schema)) => schema,
@@ -415,8 +397,8 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::{
         Case, CaseOutcome, Command, Harness, OutputFormat, SpecVersion, TestOutcome,
-        ValidationError, ValidationResult, case_spec_version, catch_panic, classify,
-        dialect_spec_version, run_case, run_response,
+        ValidationError, ValidationResult, catch_panic, classify, dialect_spec_version, run_case,
+        run_response,
     };
     use json_schema_rs::JsonPointer;
     use serde::Deserialize;
@@ -529,18 +511,23 @@ mod tests {
     }
 
     #[test]
-    fn case_spec_version_honors_schema_keyword() {
-        let schema: Value = json!({"$schema": "http://json-schema.org/draft-06/schema#"});
-        let expected: SpecVersion = SpecVersion::Draft06;
-        let actual: SpecVersion = case_spec_version(&schema, SpecVersion::Draft202012);
+    fn schema_keyword_overrides_session_dialect() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Verdict(false)]);
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": {"$schema": "http://json-schema.org/draft-04/schema#", "type": "integer"},
+            "tests": [{"instance": 1.0}]
+        }));
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn case_spec_version_falls_back_to_dialect() {
-        let schema: Value = json!({"type": "string"});
-        let expected: SpecVersion = SpecVersion::Draft07;
-        let actual: SpecVersion = case_spec_version(&schema, SpecVersion::Draft07);
+    fn session_dialect_applies_without_schema_keyword() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Verdict(false)]);
+        let actual: CaseOutcome = run_case(
+            &case(&json!({"schema": {"type": "integer"}, "tests": [{"instance": 1.0}]})),
+            SpecVersion::Draft04,
+            OutputFormat::Flag,
+        );
         assert_eq!(expected, actual);
     }
 

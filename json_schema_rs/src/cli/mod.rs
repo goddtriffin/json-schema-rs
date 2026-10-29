@@ -11,7 +11,7 @@ use json_schema_rs::{
 };
 use std::path::PathBuf;
 
-/// `--jss-spec-version` values, paired with the spec version each selects.
+/// `--jss-forced-spec-version` / `--jss-default-spec-version` values, paired with the spec version each selects.
 const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
     ("draft-00", SpecVersion::Draft00),
     ("draft-01", SpecVersion::Draft01),
@@ -26,7 +26,7 @@ const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
 ];
 
 /// JSON Schema Settings (`jss-`) arguments shared by every subcommand that reads a schema.
-fn jss_args() -> [Arg; 6] {
+fn jss_args() -> [Arg; 7] {
     [
         Arg::new("jss-disallow-unknown-fields")
             .long("jss-disallow-unknown-fields")
@@ -34,11 +34,16 @@ fn jss_args() -> [Arg; 6] {
             .help(
                 "JSON Schema Settings: reject schema definitions with keys the draft does not define as keywords",
             ),
-        Arg::new("jss-spec-version")
-            .long("jss-spec-version")
+        Arg::new("jss-forced-spec-version")
+            .long("jss-forced-spec-version")
             .value_name("VERSION")
             .value_parser(SPEC_VERSIONS.map(|(name, _)| name))
-            .help("JSON Schema Settings: use this draft's rules and ignore $schema (default: follow $schema, else 2020-12)"),
+            .help("JSON Schema Settings: process the whole document (embedded resources included) with this draft's rules, ignoring every $schema (default: follow $schema)"),
+        Arg::new("jss-default-spec-version")
+            .long("jss-default-spec-version")
+            .value_name("VERSION")
+            .value_parser(SPEC_VERSIONS.map(|(name, _)| name))
+            .help("JSON Schema Settings: the draft for a document without $schema (or with an unloadable one) (default: 2020-12)"),
         Arg::new("jss-format-mode")
             .long("jss-format-mode")
             .value_name("MODE")
@@ -66,10 +71,19 @@ fn jss_args() -> [Arg; 6] {
 fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
     let mut builder = JsonSchemaSettings::builder()
         .disallow_unknown_fields(matches.get_flag("jss-disallow-unknown-fields"));
-    if let Some(name) = matches.get_one::<String>("jss-spec-version")
-        && let Some((_, spec_version)) = SPEC_VERSIONS.iter().find(|(n, _)| n == name)
-    {
-        builder = builder.spec_version(*spec_version);
+    let spec_version = |flag: &str| {
+        matches.get_one::<String>(flag).and_then(|name| {
+            SPEC_VERSIONS
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, spec_version)| *spec_version)
+        })
+    };
+    if let Some(spec_version) = spec_version("jss-forced-spec-version") {
+        builder = builder.forced_spec_version(spec_version);
+    }
+    if let Some(spec_version) = spec_version("jss-default-spec-version") {
+        builder = builder.default_spec_version(spec_version);
     }
     if let Some(mode) = matches.get_one::<String>("jss-format-mode") {
         builder = builder.format_mode(match mode.as_str() {
