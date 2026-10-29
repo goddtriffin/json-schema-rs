@@ -1,6 +1,8 @@
 //! Integration test: `#[derive(ToJsonSchema)]` produces the expected JSON Schema.
 
-use json_schema_rs::{JsonSchema, JsonType, Schema, ToJsonSchema, TypeSet};
+use json_schema_rs::{
+    JsonSchema, JsonType, ReverseCodeGenError, ReverseCodeGenResult, Schema, ToJsonSchema, TypeSet,
+};
 use json_schema_rs_macro::ToJsonSchema;
 use std::collections::{BTreeMap, HashSet};
 
@@ -90,47 +92,61 @@ enum SingleVariant {
 
 #[test]
 fn derive_root_json_schema() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         properties: {
             let mut m = BTreeMap::new();
-            m.insert("id".to_string(), String::json_schema().into());
-            m.insert("name".to_string(), Option::<String>::json_schema().into());
+            m.insert(
+                "id".to_string(),
+                String::json_schema().expect("schema").into(),
+            );
+            m.insert(
+                "name".to_string(),
+                Option::<String>::json_schema().expect("schema").into(),
+            );
             m
         },
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["id".to_string()]),
         title: Some("Root".to_string()),
         ..Default::default()
-    };
-    let actual: JsonSchema = Root::json_schema();
+    });
+    let actual: ReverseCodeGenResult = Root::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_address_json_schema() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         properties: {
             let mut m = BTreeMap::new();
-            m.insert("city".to_string(), String::json_schema().into());
-            m.insert("street".to_string(), String::json_schema().into());
+            m.insert(
+                "city".to_string(),
+                String::json_schema().expect("schema").into(),
+            );
+            m.insert(
+                "street".to_string(),
+                String::json_schema().expect("schema").into(),
+            );
             m
         },
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["city".to_string(), "street".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = Address::json_schema();
+    });
+    let actual: ReverseCodeGenResult = Address::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_struct_serializes_closed_shape_as_additional_properties_false() {
     let expected: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"city":{"type":"string"},"street":{"type":"string"}},"additionalProperties":false,"required":["city","street"]}"#;
-    let actual: String = (&Address::json_schema()).try_into().expect("serialize");
+    let actual: String = (&Address::json_schema().expect("schema"))
+        .try_into()
+        .expect("serialize");
     assert_eq!(expected, actual);
 }
 
@@ -139,14 +155,20 @@ fn derive_nested_struct_emits_defs_and_ref() {
     let address_schema: JsonSchema = JsonSchema {
         type_: Some(JsonType::Object.into()),
         properties: BTreeMap::from([
-            ("city".to_string(), String::json_schema().into()),
-            ("street".to_string(), String::json_schema().into()),
+            (
+                "city".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
+            (
+                "street".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
         ]),
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["city".to_string(), "street".to_string()]),
         ..Default::default()
     };
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: {
@@ -169,8 +191,8 @@ fn derive_nested_struct_emits_defs_and_ref() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["address".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = RootWithAddress::json_schema();
+    });
+    let actual: ReverseCodeGenResult = RootWithAddress::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -179,14 +201,20 @@ fn derive_two_fields_same_type_one_defs_entry() {
     let address_schema: JsonSchema = JsonSchema {
         type_: Some(JsonType::Object.into()),
         properties: BTreeMap::from([
-            ("city".to_string(), String::json_schema().into()),
-            ("street".to_string(), String::json_schema().into()),
+            (
+                "city".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
+            (
+                "street".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
         ]),
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["city".to_string(), "street".to_string()]),
         ..Default::default()
     };
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: {
@@ -217,8 +245,8 @@ fn derive_two_fields_same_type_one_defs_entry() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["addr1".to_string(), "addr2".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = TwoAddresses::json_schema();
+    });
+    let actual: ReverseCodeGenResult = TwoAddresses::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -249,7 +277,7 @@ fn derive_recursive_type_emits_defs_and_ref_no_stack_overflow() {
         required: Some(vec!["children".to_string()]),
         ..Default::default()
     };
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: {
@@ -279,8 +307,8 @@ fn derive_recursive_type_emits_defs_and_ref_no_stack_overflow() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["children".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = Tree::json_schema();
+    });
+    let actual: ReverseCodeGenResult = Tree::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -289,14 +317,20 @@ fn derive_option_nested_struct_emits_defs() {
     let address_schema: JsonSchema = JsonSchema {
         type_: Some(JsonType::Object.into()),
         properties: BTreeMap::from([
-            ("city".to_string(), String::json_schema().into()),
-            ("street".to_string(), String::json_schema().into()),
+            (
+                "city".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
+            (
+                "street".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
         ]),
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["city".to_string(), "street".to_string()]),
         ..Default::default()
     };
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: {
@@ -319,8 +353,8 @@ fn derive_option_nested_struct_emits_defs() {
         additional_properties: Some(Schema::Bool(false)),
         required: None,
         ..Default::default()
-    };
-    let actual: JsonSchema = WithOptionalAddress::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithOptionalAddress::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -329,14 +363,20 @@ fn derive_vec_nested_struct_emits_defs() {
     let address_schema: JsonSchema = JsonSchema {
         type_: Some(JsonType::Object.into()),
         properties: BTreeMap::from([
-            ("city".to_string(), String::json_schema().into()),
-            ("street".to_string(), String::json_schema().into()),
+            (
+                "city".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
+            (
+                "street".to_string(),
+                String::json_schema().expect("schema").into(),
+            ),
         ]),
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["city".to_string(), "street".to_string()]),
         ..Default::default()
     };
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: {
@@ -366,8 +406,8 @@ fn derive_vec_nested_struct_emits_defs() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["addresses".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = WithAddressList::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithAddressList::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -375,7 +415,10 @@ fn derive_vec_nested_struct_emits_defs() {
 fn derive_three_level_nested_emits_flat_defs() {
     let inner_schema: JsonSchema = JsonSchema {
         type_: Some(JsonType::Object.into()),
-        properties: BTreeMap::from([("x".to_string(), String::json_schema().into())]),
+        properties: BTreeMap::from([(
+            "x".to_string(),
+            String::json_schema().expect("schema").into(),
+        )]),
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["x".to_string()]),
         ..Default::default()
@@ -394,7 +437,7 @@ fn derive_three_level_nested_emits_flat_defs() {
         required: Some(vec!["b".to_string()]),
         ..Default::default()
     };
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: {
@@ -418,14 +461,14 @@ fn derive_three_level_nested_emits_flat_defs() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["a".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = RootWithNested::json_schema();
+    });
+    let actual: ReverseCodeGenResult = RootWithNested::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_id_attribute_emits_id_in_schema() {
-    let actual: JsonSchema = WithId::json_schema();
+    let actual: JsonSchema = WithId::json_schema().expect("schema");
     let expected_id: Option<String> = Some("http://example.com/with-id".to_string());
     assert_eq!(expected_id, actual.id);
     let json: String = (&actual).try_into().expect("serialize");
@@ -469,7 +512,7 @@ fn schema_from_json(value: serde_json::Value) -> JsonSchema {
 
 #[test]
 fn derive_id_resource_as_root_keeps_its_defs_at_its_own_root() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://example.com/with-dep",
         "type": "object",
@@ -484,14 +527,14 @@ fn derive_id_resource_as_root_keeps_its_defs_at_its_own_root() {
                 "required": ["x"]
             }
         }
-    }));
-    let actual: JsonSchema = ResourceWithDep::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = ResourceWithDep::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_nested_id_resource_without_named_dependencies() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": { "inner": { "$ref": "#/$defs/ResourceNoDep" } },
@@ -506,8 +549,8 @@ fn derive_nested_id_resource_without_named_dependencies() {
                 "required": ["x"]
             }
         }
-    }));
-    let actual: JsonSchema = HoldsResourceNoDep::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = HoldsResourceNoDep::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -519,7 +562,7 @@ struct HoldsResourceWithDep {
 
 #[test]
 fn nested_id_resource_carries_the_defs_its_refs_need() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": { "inner": { "$ref": "#/$defs/ResourceWithDep" } },
@@ -542,8 +585,8 @@ fn nested_id_resource_carries_the_defs_its_refs_need() {
                 }
             }
         }
-    }));
-    let actual: JsonSchema = HoldsResourceWithDep::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = HoldsResourceWithDep::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -563,7 +606,7 @@ struct HoldsResourceNode {
 
 #[test]
 fn nested_recursive_id_resource_refers_to_its_own_root() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": { "node": { "$ref": "#/$defs/ResourceNode" } },
@@ -581,14 +624,14 @@ fn nested_recursive_id_resource_refers_to_its_own_root() {
                 "required": ["x"]
             }
         }
-    }));
-    let actual: JsonSchema = HoldsResourceNode::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = HoldsResourceNode::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn recursive_id_resource_as_root_refers_to_itself_as_hash() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://example.com/node",
         "type": "object",
@@ -598,8 +641,8 @@ fn recursive_id_resource_as_root_refers_to_itself_as_hash() {
         },
         "additionalProperties": false,
         "required": ["x"]
-    }));
-    let actual: JsonSchema = ResourceNode::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = ResourceNode::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -626,7 +669,7 @@ struct HoldsResourceTree {
 
 #[test]
 fn nested_id_resource_dependency_refers_back_to_the_resource_as_hash() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": { "tree": { "$ref": "#/$defs/ResourceTree" } },
@@ -650,8 +693,8 @@ fn nested_id_resource_dependency_refers_back_to_the_resource_as_hash() {
                 }
             }
         }
-    }));
-    let actual: JsonSchema = HoldsResourceTree::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = HoldsResourceTree::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -659,14 +702,14 @@ fn nested_id_resource_dependency_refers_back_to_the_resource_as_hash() {
 struct HandWrittenResource;
 
 impl ToJsonSchema for HandWrittenResource {
-    fn json_schema() -> JsonSchema {
-        schema_from_json(serde_json::json!({
+    fn json_schema() -> ReverseCodeGenResult {
+        Ok(schema_from_json(serde_json::json!({
             "$id": "https://example.com/hand",
             "type": "object",
             "properties": { "x": { "$ref": "#/$defs/Str" } },
             "required": ["x"],
             "$defs": { "Str": { "type": "string" } }
-        }))
+        })))
     }
 }
 
@@ -678,14 +721,14 @@ struct HoldsHandWrittenResource {
 
 #[test]
 fn hand_written_id_resource_keeps_its_own_defs() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
-        "properties": { "hand": HandWrittenResource::json_schema() },
+        "properties": { "hand": HandWrittenResource::json_schema().expect("schema") },
         "additionalProperties": false,
         "required": ["hand"]
-    }));
-    let actual: JsonSchema = HoldsHandWrittenResource::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = HoldsHandWrittenResource::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -713,7 +756,7 @@ struct HoldsResourcePing {
 
 #[test]
 fn mutually_referencing_id_resources_refer_to_each_other_by_id() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": { "ping": { "$ref": "#/$defs/ResourcePing" } },
@@ -733,14 +776,14 @@ fn mutually_referencing_id_resources_refer_to_each_other_by_id() {
                 "additionalProperties": false
             }
         }
-    }));
-    let actual: JsonSchema = HoldsResourcePing::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = HoldsResourcePing::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn mutually_referencing_id_resource_as_root_embeds_the_other_in_its_defs() {
-    let expected: JsonSchema = schema_from_json(serde_json::json!({
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://example.com/ping",
         "type": "object",
@@ -754,8 +797,507 @@ fn mutually_referencing_id_resource_as_root_embeds_the_other_in_its_defs() {
                 "additionalProperties": false
             }
         }
-    }));
-    let actual: JsonSchema = ResourcePing::json_schema();
+    })));
+    let actual: ReverseCodeGenResult = ResourcePing::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// Relative `$id`s resolve against the base of the enclosing resource (2020-12 core §8.2.1), so
+// a cross-resource `$ref` is written to resolve from the referrer's base: the target's `$id` as
+// written when that works, else a relative path, else its absolute URI. Each expected schema
+// was checked with jsonschema-cli 0.60.2 and `json_schema_rs::validate` (both accept a valid
+// instance and reject one invalid at the recursive depth).
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "a.json")]
+#[expect(dead_code)]
+struct SameDirA {
+    b: Option<Box<SameDirB>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "b.json")]
+#[expect(dead_code)]
+struct SameDirB {
+    a: Option<Box<SameDirA>>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsSameDirA {
+    a: SameDirA,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "a/ping.json")]
+#[expect(dead_code)]
+struct NestedDirPing {
+    pong: Option<Box<NestedDirPong>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "pong.json")]
+#[expect(dead_code)]
+struct NestedDirPong {
+    ping: Option<Box<NestedDirPing>>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsNestedDirPing {
+    ping: NestedDirPing,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/ping")]
+#[expect(dead_code)]
+struct AbsolutePing {
+    pong: Option<Box<RelativePong>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "pong.json")]
+#[expect(dead_code)]
+struct RelativePong {
+    ping: Option<Box<AbsolutePing>>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsAbsolutePing {
+    ping: AbsolutePing,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsAbsolutePingAndRelativePong {
+    ping: AbsolutePing,
+    pong: RelativePong,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "rel.json")]
+#[expect(dead_code)]
+struct RelativeToAbsolute {
+    abs: Option<Box<AbsoluteFromRelative>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/abs")]
+#[expect(dead_code)]
+struct AbsoluteFromRelative {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsRelativeToAbsolute {
+    rel: RelativeToAbsolute,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/schemas/root.json")]
+#[expect(dead_code)]
+struct AbsoluteRoot {
+    ping: Option<Box<AbsoluteRootPing>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "a/ping.json")]
+#[expect(dead_code)]
+struct AbsoluteRootPing {
+    pong: Option<Box<AbsoluteRootPong>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "pong.json")]
+#[expect(dead_code)]
+struct AbsoluteRootPong {
+    ping: Option<Box<AbsoluteRootPing>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "root.json")]
+#[expect(dead_code)]
+struct RelativeRoot {
+    child: Option<Box<RelativeRootChild>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "a/child.json")]
+#[expect(dead_code)]
+struct RelativeRootChild {
+    root: Option<Box<RelativeRoot>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "users/user.json")]
+#[expect(dead_code)]
+struct ParentSegmentUser {
+    address: Option<Box<ParentSegmentAddress>>,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "../common/address.json")]
+#[expect(dead_code)]
+struct ParentSegmentAddress {
+    user: Option<Box<ParentSegmentUser>>,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsParentSegmentUser {
+    user: ParentSegmentUser,
+}
+
+mod same_id_first {
+    use json_schema_rs_macro::ToJsonSchema;
+
+    #[derive(ToJsonSchema)]
+    #[json_schema(id = "https://example.com/same")]
+    #[expect(dead_code)]
+    pub(super) struct SameIdResource {
+        x: String,
+    }
+}
+
+mod same_id_second {
+    use json_schema_rs_macro::ToJsonSchema;
+
+    #[derive(ToJsonSchema)]
+    #[json_schema(id = "https://example.com/same")]
+    #[expect(dead_code)]
+    pub(super) struct SameIdResource {
+        x: String,
+    }
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsSameIdResources {
+    first: same_id_first::SameIdResource,
+    second: same_id_second::SameIdResource,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "node.json")]
+#[expect(dead_code)]
+struct ClashingNode {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "./node.json")]
+#[expect(dead_code)]
+struct ClashingDotNode {
+    y: i64,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsClashingNodes {
+    node: ClashingNode,
+    dot_node: ClashingDotNode,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "has space.json")]
+#[expect(dead_code)]
+struct InvalidIdResource {
+    x: String,
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsInvalidIdResource {
+    inner: InvalidIdResource,
+}
+
+#[test]
+fn relative_id_resources_in_one_directory_refer_to_each_other_by_id() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "a": { "$ref": "#/$defs/SameDirA" } },
+        "additionalProperties": false,
+        "required": ["a"],
+        "$defs": {
+            "SameDirA": {
+                "$id": "a.json",
+                "type": "object",
+                "properties": { "b": { "$ref": "b.json" } },
+                "additionalProperties": false
+            },
+            "SameDirB": {
+                "$id": "b.json",
+                "type": "object",
+                "properties": { "a": { "$ref": "a.json" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsSameDirA::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn relative_id_resource_refers_to_a_relative_id_in_another_directory() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "ping": { "$ref": "#/$defs/NestedDirPing" } },
+        "additionalProperties": false,
+        "required": ["ping"],
+        "$defs": {
+            "NestedDirPing": {
+                "$id": "a/ping.json",
+                "type": "object",
+                "properties": { "pong": { "$ref": "../pong.json" } },
+                "additionalProperties": false
+            },
+            "NestedDirPong": {
+                "$id": "pong.json",
+                "type": "object",
+                "properties": { "ping": { "$ref": "a/ping.json" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsNestedDirPing::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// The document root has no `$id`, so `pong.json` at the root would depend on where the
+// document is loaded from; the absolute resource carries the copy it refers to.
+#[test]
+fn absolute_id_resource_embeds_the_relative_id_resource_it_refers_to() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "ping": { "$ref": "#/$defs/AbsolutePing" } },
+        "additionalProperties": false,
+        "required": ["ping"],
+        "$defs": {
+            "AbsolutePing": {
+                "$id": "https://example.com/ping",
+                "type": "object",
+                "properties": { "pong": { "$ref": "pong.json" } },
+                "additionalProperties": false,
+                "$defs": {
+                    "RelativePong": {
+                        "$id": "pong.json",
+                        "type": "object",
+                        "properties": { "ping": { "$ref": "https://example.com/ping" } },
+                        "additionalProperties": false
+                    }
+                }
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsAbsolutePing::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn relative_id_resource_used_from_the_root_and_an_absolute_id_resource_is_embedded_in_both() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "ping": { "$ref": "#/$defs/AbsolutePing" },
+            "pong": { "$ref": "#/$defs/RelativePong" }
+        },
+        "additionalProperties": false,
+        "required": ["ping", "pong"],
+        "$defs": {
+            "AbsolutePing": {
+                "$id": "https://example.com/ping",
+                "type": "object",
+                "properties": { "pong": { "$ref": "pong.json" } },
+                "additionalProperties": false,
+                "$defs": {
+                    "RelativePong": {
+                        "$id": "pong.json",
+                        "type": "object",
+                        "properties": { "ping": { "$ref": "https://example.com/ping" } },
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "RelativePong": {
+                "$id": "pong.json",
+                "type": "object",
+                "properties": { "ping": { "$ref": "https://example.com/ping" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsAbsolutePingAndRelativePong::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn relative_id_resource_refers_to_an_absolute_id_by_id() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "rel": { "$ref": "#/$defs/RelativeToAbsolute" } },
+        "additionalProperties": false,
+        "required": ["rel"],
+        "$defs": {
+            "AbsoluteFromRelative": {
+                "$id": "https://example.com/abs",
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "additionalProperties": false,
+                "required": ["x"]
+            },
+            "RelativeToAbsolute": {
+                "$id": "rel.json",
+                "type": "object",
+                "properties": { "abs": { "$ref": "https://example.com/abs" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsRelativeToAbsolute::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// An absolute root `$id` fixes every resource's URI, so relative ids are always reachable by a
+// relative path.
+#[test]
+fn absolute_id_root_refers_to_relative_id_resources_by_relative_path() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.com/schemas/root.json",
+        "type": "object",
+        "properties": { "ping": { "$ref": "#/$defs/AbsoluteRootPing" } },
+        "additionalProperties": false,
+        "$defs": {
+            "AbsoluteRootPing": {
+                "$id": "a/ping.json",
+                "type": "object",
+                "properties": { "pong": { "$ref": "../pong.json" } },
+                "additionalProperties": false
+            },
+            "AbsoluteRootPong": {
+                "$id": "pong.json",
+                "type": "object",
+                "properties": { "ping": { "$ref": "a/ping.json" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = AbsoluteRoot::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn relative_id_root_is_referred_to_by_relative_path() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "root.json",
+        "type": "object",
+        "properties": { "child": { "$ref": "#/$defs/RelativeRootChild" } },
+        "additionalProperties": false,
+        "$defs": {
+            "RelativeRootChild": {
+                "$id": "a/child.json",
+                "type": "object",
+                "properties": { "root": { "$ref": "../root.json" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = RelativeRoot::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// `../common/address.json` climbs out of the document's directory, so no relative path from it
+// reaches `users/user.json` without knowing that directory's name: the address carries its own
+// copy of the user, which resolves to `common/users/user.json` next to it.
+#[test]
+fn parent_segment_id_resource_embeds_the_relative_id_resource_it_refers_to() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "user": { "$ref": "#/$defs/ParentSegmentUser" } },
+        "additionalProperties": false,
+        "required": ["user"],
+        "$defs": {
+            "ParentSegmentAddress": {
+                "$id": "../common/address.json",
+                "type": "object",
+                "properties": { "user": { "$ref": "users/user.json" } },
+                "additionalProperties": false,
+                "$defs": {
+                    "ParentSegmentUser": {
+                        "$id": "users/user.json",
+                        "type": "object",
+                        "properties": { "address": { "$ref": "../address.json" } },
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "ParentSegmentUser": {
+                "$id": "users/user.json",
+                "type": "object",
+                "properties": { "address": { "$ref": "../../common/address.json" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsParentSegmentUser::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn id_resources_with_one_id_and_identical_schemas_are_merged() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "first": { "$ref": "#/$defs/SameIdResource" },
+            "second": { "$ref": "#/$defs/SameIdResource" }
+        },
+        "additionalProperties": false,
+        "required": ["first", "second"],
+        "$defs": {
+            "SameIdResource": {
+                "$id": "https://example.com/same",
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "additionalProperties": false,
+                "required": ["x"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsSameIdResources::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// `node.json` and `./node.json` resolve to one URI.
+#[test]
+fn id_resources_with_one_resolved_id_and_different_schemas_are_rejected() {
+    let expected: ReverseCodeGenResult = Err(vec![ReverseCodeGenError::DuplicateResourceId {
+        first: "derive_to_json_schema::ClashingNode".to_string(),
+        first_id: "node.json".to_string(),
+        second: "derive_to_json_schema::ClashingDotNode".to_string(),
+        second_id: "./node.json".to_string(),
+    }]);
+    let actual: ReverseCodeGenResult = HoldsClashingNodes::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn id_that_is_not_a_uri_reference_is_rejected() {
+    let expected: ReverseCodeGenResult = Err(vec![ReverseCodeGenError::InvalidResourceId {
+        schema_id: "derive_to_json_schema::InvalidIdResource".to_string(),
+        id: "has space.json".to_string(),
+        reason: "unexpected character at index 3".to_string(),
+    }]);
+    let actual: ReverseCodeGenResult = HoldsInvalidIdResource::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -819,24 +1361,24 @@ fn shared_resource_expected_schema() -> JsonSchema {
 
 #[test]
 fn id_resource_used_from_two_places_is_embedded_once_when_first_used_directly() {
-    let expected: JsonSchema = shared_resource_expected_schema();
-    let actual: JsonSchema = HoldsSharedResourceDirectFirst::json_schema();
+    let expected: ReverseCodeGenResult = Ok(shared_resource_expected_schema());
+    let actual: ReverseCodeGenResult = HoldsSharedResourceDirectFirst::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn id_resource_used_from_two_places_is_embedded_once_when_first_used_inside_a_resource() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         required: Some(vec!["via".to_string(), "direct".to_string()]),
         ..shared_resource_expected_schema()
-    };
-    let actual: JsonSchema = HoldsSharedResourceViaFirst::json_schema();
+    });
+    let actual: ReverseCodeGenResult = HoldsSharedResourceViaFirst::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_unit_enum_json_schema() {
-    let actual: JsonSchema = Status::json_schema();
+    let actual: JsonSchema = Status::json_schema().expect("schema");
     assert_eq!(actual.type_, Some(JsonType::String.into()));
     let actual_enum = actual.enum_values.as_ref().expect("enum_values");
     assert_eq!(actual_enum.len(), 2);
@@ -846,7 +1388,7 @@ fn derive_unit_enum_json_schema() {
 
 #[test]
 fn derive_single_variant_enum_emits_const() {
-    let actual: JsonSchema = SingleVariant::json_schema();
+    let actual: JsonSchema = SingleVariant::json_schema().expect("schema");
     let expected_type: Option<TypeSet> = Some(JsonType::String.into());
     let actual_type: Option<TypeSet> = actual.type_;
     assert_eq!(expected_type, actual_type);
@@ -861,7 +1403,7 @@ fn derive_single_variant_enum_emits_const() {
 
 #[test]
 fn derive_serialize_round_trip() {
-    let schema: JsonSchema = Root::json_schema();
+    let schema: JsonSchema = Root::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
     let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
@@ -876,7 +1418,7 @@ struct AttrDescription {
 
 #[test]
 fn derive_attribute_description() {
-    let actual: JsonSchema = AttrDescription::json_schema();
+    let actual: JsonSchema = AttrDescription::json_schema().expect("schema");
     let expected_desc: Option<String> = Some("From attribute".to_string());
     assert_eq!(expected_desc, actual.description);
 }
@@ -890,7 +1432,7 @@ struct WithCommentAttr {
 
 #[test]
 fn derive_attribute_comment() {
-    let actual: JsonSchema = WithCommentAttr::json_schema();
+    let actual: JsonSchema = WithCommentAttr::json_schema().expect("schema");
     let expected_comment: Option<String> = Some("Created by X".to_string());
     assert_eq!(expected_comment, actual.comment);
     let json: String = (&actual).try_into().expect("serialize");
@@ -909,7 +1451,7 @@ struct WithDocAttr {
 
 #[test]
 fn derive_struct_description_attribute() {
-    let actual: JsonSchema = WithDocAttr::json_schema();
+    let actual: JsonSchema = WithDocAttr::json_schema().expect("schema");
     let expected_desc: Option<String> = Some("Struct with description attribute".to_string());
     assert_eq!(expected_desc, actual.description);
 }
@@ -924,14 +1466,14 @@ enum EnumWithDescAttr {
 
 #[test]
 fn derive_enum_description_attribute() {
-    let actual: JsonSchema = EnumWithDescAttr::json_schema();
+    let actual: JsonSchema = EnumWithDescAttr::json_schema().expect("schema");
     let expected_desc: Option<String> = Some("Enum description".to_string());
     assert_eq!(expected_desc, actual.description);
 }
 
 #[test]
 fn derive_round_trip_with_description() {
-    let schema: JsonSchema = AttrDescription::json_schema();
+    let schema: JsonSchema = AttrDescription::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
     let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
@@ -946,10 +1488,10 @@ struct WithIntegerMinMax {
 
 #[test]
 fn derive_field_minimum_maximum_integer() {
-    let mut byte_schema: JsonSchema = i64::json_schema();
+    let mut byte_schema: JsonSchema = i64::json_schema().expect("schema");
     byte_schema.minimum = Some(0_u64.into());
     byte_schema.maximum = Some(255_u64.into());
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         properties: {
@@ -960,8 +1502,8 @@ fn derive_field_minimum_maximum_integer() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["byte".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = WithIntegerMinMax::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithIntegerMinMax::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -974,10 +1516,10 @@ struct WithFloatMinMax {
 
 #[test]
 fn derive_field_minimum_maximum_float() {
-    let mut score_schema: JsonSchema = f64::json_schema();
+    let mut score_schema: JsonSchema = f64::json_schema().expect("schema");
     score_schema.minimum = serde_json::Number::from_f64(0.0);
     score_schema.maximum = serde_json::Number::from_f64(100.0);
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         properties: {
@@ -988,14 +1530,14 @@ fn derive_field_minimum_maximum_float() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["score".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = WithFloatMinMax::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithFloatMinMax::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_minimum_maximum_round_trip() {
-    let schema: JsonSchema = WithIntegerMinMax::json_schema();
+    let schema: JsonSchema = WithIntegerMinMax::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
     let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
@@ -1003,7 +1545,7 @@ fn derive_minimum_maximum_round_trip() {
 
 #[test]
 fn derive_minimum_maximum_float_round_trip() {
-    let schema: JsonSchema = WithFloatMinMax::json_schema();
+    let schema: JsonSchema = WithFloatMinMax::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
     let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, parsed);
@@ -1018,9 +1560,9 @@ struct WithOnlyMinimum {
 
 #[test]
 fn derive_field_only_minimum() {
-    let mut value_schema: JsonSchema = i64::json_schema();
+    let mut value_schema: JsonSchema = i64::json_schema().expect("schema");
     value_schema.minimum = Some(10_u64.into());
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         properties: {
@@ -1031,8 +1573,8 @@ fn derive_field_only_minimum() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["value".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = WithOnlyMinimum::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithOnlyMinimum::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -1045,9 +1587,9 @@ struct WithOnlyMaximum {
 
 #[test]
 fn derive_field_only_maximum() {
-    let mut value_schema: JsonSchema = i64::json_schema();
+    let mut value_schema: JsonSchema = i64::json_schema().expect("schema");
     value_schema.maximum = Some(90_u64.into());
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         properties: {
@@ -1058,8 +1600,8 @@ fn derive_field_only_maximum() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["value".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = WithOnlyMaximum::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithOnlyMaximum::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -1075,7 +1617,7 @@ struct WithExactBounds {
 #[test]
 fn derive_numeric_attributes_are_exact() {
     let expected: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"fine":{"type":"number","minimum":-1.7976931348623157e+308,"maximum":1.7976931348623157e+308,"exclusiveMinimum":-1.5,"exclusiveMaximum":9007199254740993,"multipleOf":0.25},"wide":{"type":"integer","minimum":-9223372036854775808,"maximum":18446744073709551615}},"additionalProperties":false,"required":["wide","fine"]}"#;
-    let actual: String = (&WithExactBounds::json_schema())
+    let actual: String = (&WithExactBounds::json_schema().expect("schema"))
         .try_into()
         .expect("serialize");
     assert_eq!(expected, actual);
@@ -1090,7 +1632,7 @@ struct WithVecField {
 
 #[test]
 fn derive_struct_with_vec_field_emits_array_schema() {
-    let schema: JsonSchema = WithVecField::json_schema();
+    let schema: JsonSchema = WithVecField::json_schema().expect("schema");
     let tags_schema: &JsonSchema = schema
         .properties
         .get("tags")
@@ -1126,7 +1668,7 @@ struct WithHashSetField {
 
 #[test]
 fn derive_struct_with_hash_set_field_emits_unique_items_true() {
-    let schema: JsonSchema = WithHashSetField::json_schema();
+    let schema: JsonSchema = WithHashSetField::json_schema().expect("schema");
     let tags_schema: &JsonSchema = schema
         .properties
         .get("tags")
@@ -1151,7 +1693,7 @@ struct WithVecFieldMinMax {
 
 #[test]
 fn derive_struct_with_vec_field_min_items_max_items_emits_bounds() {
-    let schema: JsonSchema = WithVecFieldMinMax::json_schema();
+    let schema: JsonSchema = WithVecFieldMinMax::json_schema().expect("schema");
     let tags_schema: &JsonSchema = schema
         .properties
         .get("tags")
@@ -1174,7 +1716,7 @@ struct WithHashSetFieldMinMax {
 
 #[test]
 fn derive_struct_with_hash_set_field_min_items_max_items_emits_bounds() {
-    let schema: JsonSchema = WithHashSetFieldMinMax::json_schema();
+    let schema: JsonSchema = WithHashSetFieldMinMax::json_schema().expect("schema");
     let ids_schema: &JsonSchema = schema
         .properties
         .get("ids")
@@ -1190,7 +1732,7 @@ fn derive_struct_with_hash_set_field_min_items_max_items_emits_bounds() {
 
 #[test]
 fn vec_string_json_schema_has_min_items_max_items_none() {
-    let actual: JsonSchema = Vec::<String>::json_schema();
+    let actual: JsonSchema = Vec::<String>::json_schema().expect("schema");
     let expected_min: Option<u64> = None;
     let expected_max: Option<u64> = None;
     assert_eq!(expected_min, actual.min_items);
@@ -1199,7 +1741,7 @@ fn vec_string_json_schema_has_min_items_max_items_none() {
 
 #[test]
 fn hash_set_string_json_schema_has_min_items_max_items_none() {
-    let actual: JsonSchema = HashSet::<String>::json_schema();
+    let actual: JsonSchema = HashSet::<String>::json_schema().expect("schema");
     let expected_min: Option<u64> = None;
     let expected_max: Option<u64> = None;
     assert_eq!(expected_min, actual.min_items);
@@ -1214,7 +1756,7 @@ struct WithStringMinLength {
 
 #[test]
 fn macro_derive_to_json_schema_string_min_length() {
-    let schema: JsonSchema = WithStringMinLength::json_schema();
+    let schema: JsonSchema = WithStringMinLength::json_schema().expect("schema");
     let name_schema: &JsonSchema = schema
         .properties
         .get("name")
@@ -1233,7 +1775,7 @@ struct WithStringMaxLength {
 
 #[test]
 fn macro_derive_to_json_schema_string_max_length() {
-    let schema: JsonSchema = WithStringMaxLength::json_schema();
+    let schema: JsonSchema = WithStringMaxLength::json_schema().expect("schema");
     let name_schema: &JsonSchema = schema
         .properties
         .get("name")
@@ -1252,7 +1794,7 @@ struct WithStringBothLengths {
 
 #[test]
 fn macro_derive_to_json_schema_string_min_length_max_length() {
-    let schema: JsonSchema = WithStringBothLengths::json_schema();
+    let schema: JsonSchema = WithStringBothLengths::json_schema().expect("schema");
     let name_schema: &JsonSchema = schema
         .properties
         .get("name")
@@ -1270,7 +1812,7 @@ struct WithStringNoLengthConstraints {
 
 #[test]
 fn macro_derive_to_json_schema_string_no_length_constraints() {
-    let schema: JsonSchema = WithStringNoLengthConstraints::json_schema();
+    let schema: JsonSchema = WithStringNoLengthConstraints::json_schema().expect("schema");
     let name_schema: &JsonSchema = schema
         .properties
         .get("name")
@@ -1294,7 +1836,7 @@ struct WithStringPattern {
 
 #[test]
 fn macro_derive_to_json_schema_string_pattern() {
-    let schema: JsonSchema = WithStringPattern::json_schema();
+    let schema: JsonSchema = WithStringPattern::json_schema().expect("schema");
     let name_schema: &JsonSchema = schema
         .properties
         .get("name")
@@ -1316,7 +1858,7 @@ struct WithDefaultField {
 
 #[test]
 fn derive_field_default_count_emits_default_in_schema() {
-    let schema: JsonSchema = WithDefaultField::json_schema();
+    let schema: JsonSchema = WithDefaultField::json_schema().expect("schema");
     let count_schema: &JsonSchema = schema
         .properties
         .get("count")
@@ -1329,7 +1871,7 @@ fn derive_field_default_count_emits_default_in_schema() {
 
 #[test]
 fn derive_field_default_name_emits_default_in_schema() {
-    let schema: JsonSchema = WithDefaultField::json_schema();
+    let schema: JsonSchema = WithDefaultField::json_schema().expect("schema");
     let name_schema: &JsonSchema = schema
         .properties
         .get("name")
@@ -1342,7 +1884,7 @@ fn derive_field_default_name_emits_default_in_schema() {
 
 #[test]
 fn derive_field_default_round_trip_serializes_and_parses() {
-    let schema: JsonSchema = WithDefaultField::json_schema();
+    let schema: JsonSchema = WithDefaultField::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     let expected: JsonSchema = schema.clone();
@@ -1361,7 +1903,7 @@ struct WithUuid {
 #[cfg(feature = "uuid")]
 #[test]
 fn derive_uuid_field_json_schema() {
-    let schema: JsonSchema = WithUuid::json_schema();
+    let schema: JsonSchema = WithUuid::json_schema().expect("schema");
     let id_schema: &JsonSchema = schema
         .properties
         .get("id")
@@ -1410,6 +1952,7 @@ fn derive_uuid_vec_field_json_schema() {
         ..Default::default()
     };
     let actual: JsonSchema = WithUuidVec::json_schema()
+        .expect("schema")
         .properties
         .get("ids")
         .and_then(Schema::as_object)
@@ -1427,9 +1970,9 @@ struct WithDeprecatedField {
 
 #[test]
 fn derive_field_deprecated_emits_deprecated_in_schema() {
-    let mut legacy_schema: JsonSchema = String::json_schema();
+    let mut legacy_schema: JsonSchema = String::json_schema().expect("schema");
     legacy_schema.deprecated = Some(true);
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         properties: {
@@ -1440,14 +1983,14 @@ fn derive_field_deprecated_emits_deprecated_in_schema() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["legacy".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = WithDeprecatedField::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithDeprecatedField::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_deprecated_round_trip() {
-    let schema: JsonSchema = WithDeprecatedField::json_schema();
+    let schema: JsonSchema = WithDeprecatedField::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
     let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     let expected: JsonSchema = schema;
@@ -1535,7 +2078,7 @@ fn one_property_body(key: &str, property: JsonSchema) -> JsonSchema {
 
 #[test]
 fn derive_mutual_recursion_emits_both_defs_linked_by_ref() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([
             (
@@ -1548,14 +2091,14 @@ fn derive_mutual_recursion_emits_both_defs_linked_by_ref() {
             ),
         ])),
         ..one_property_body("bs", array_of_ref("MutualB"))
-    };
-    let actual: JsonSchema = MutualA::json_schema();
+    });
+    let actual: ReverseCodeGenResult = MutualA::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_mutual_recursion_from_other_root_emits_both_defs() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([
             (
@@ -1568,14 +2111,14 @@ fn derive_mutual_recursion_from_other_root_emits_both_defs() {
             ),
         ])),
         ..one_property_body("as_", array_of_ref("MutualA"))
-    };
-    let actual: JsonSchema = MutualB::json_schema();
+    });
+    let actual: ReverseCodeGenResult = MutualB::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_three_type_cycle_emits_all_defs() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([
             (
@@ -1592,8 +2135,8 @@ fn derive_three_type_cycle_emits_all_defs() {
             ),
         ])),
         ..one_property_body("bs", array_of_ref("CycleB"))
-    };
-    let actual: JsonSchema = CycleA::json_schema();
+    });
+    let actual: ReverseCodeGenResult = CycleA::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -1603,29 +2146,35 @@ fn derive_self_reference_with_field_override_keeps_ref_and_override() {
         min_items: Some(1),
         ..array_of_ref("OverriddenNode")
     };
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([(
             "OverriddenNode".to_string(),
             one_property_body("children", children.clone()).into(),
         )])),
         ..one_property_body("children", children)
-    };
-    let actual: JsonSchema = OverriddenNode::json_schema();
+    });
+    let actual: ReverseCodeGenResult = OverriddenNode::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_field_override_on_named_type_is_ref_sibling() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([(
             "Address".to_string(),
             JsonSchema {
                 type_: Some(JsonType::Object.into()),
                 properties: BTreeMap::from([
-                    ("city".to_string(), String::json_schema().into()),
-                    ("street".to_string(), String::json_schema().into()),
+                    (
+                        "city".to_string(),
+                        String::json_schema().expect("schema").into(),
+                    ),
+                    (
+                        "street".to_string(),
+                        String::json_schema().expect("schema").into(),
+                    ),
                 ]),
                 additional_properties: Some(Schema::Bool(false)),
                 required: Some(vec!["city".to_string(), "street".to_string()]),
@@ -1640,14 +2189,14 @@ fn derive_field_override_on_named_type_is_ref_sibling() {
                 ..ref_to("Address")
             },
         )
-    };
-    let actual: JsonSchema = DeprecatedAddress::json_schema();
+    });
+    let actual: ReverseCodeGenResult = DeprecatedAddress::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_enum_field_emits_defs_entry_without_schema_keyword() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([(
             "Status".to_string(),
@@ -1662,14 +2211,14 @@ fn derive_enum_field_emits_defs_entry_without_schema_keyword() {
             .into(),
         )])),
         ..one_property_body("status", ref_to("Status"))
-    };
-    let actual: JsonSchema = WithStatus::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithStatus::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn vec_of_derived_type_json_schema_is_standalone_with_defs() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         defs: Some(BTreeMap::from([
             (
                 "MutualA".to_string(),
@@ -1681,8 +2230,8 @@ fn vec_of_derived_type_json_schema_is_standalone_with_defs() {
             ),
         ])),
         ..array_of_ref("MutualA")
-    };
-    let actual: JsonSchema = Vec::<MutualA>::json_schema();
+    });
+    let actual: ReverseCodeGenResult = Vec::<MutualA>::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -1691,13 +2240,13 @@ struct Empty {}
 
 #[test]
 fn derive_struct_without_fields_json_schema() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         additional_properties: Some(Schema::Bool(false)),
         ..Default::default()
-    };
-    let actual: JsonSchema = Empty::json_schema();
+    });
+    let actual: ReverseCodeGenResult = Empty::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -1747,17 +2296,17 @@ fn derive_schema_id_is_module_path_and_type_name() {
 
 #[test]
 fn derive_same_name_types_get_suffixed_defs_entries() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: Some(BTreeMap::from([
             (
                 "Config0".to_string(),
-                one_property_body("name", String::json_schema()).into(),
+                one_property_body("name", String::json_schema().expect("schema")).into(),
             ),
             (
                 "Config1".to_string(),
-                one_property_body("port", i64::json_schema()).into(),
+                one_property_body("port", i64::json_schema().expect("schema")).into(),
             ),
         ])),
         properties: BTreeMap::from([
@@ -1767,24 +2316,24 @@ fn derive_same_name_types_get_suffixed_defs_entries() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["a".to_string(), "b".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = TwoConfigs::json_schema();
+    });
+    let actual: ReverseCodeGenResult = TwoConfigs::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_same_name_type_used_twice_shares_one_suffixed_entry() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: Some(BTreeMap::from([
             (
                 "Config0".to_string(),
-                one_property_body("name", String::json_schema()).into(),
+                one_property_body("name", String::json_schema().expect("schema")).into(),
             ),
             (
                 "Config1".to_string(),
-                one_property_body("port", i64::json_schema()).into(),
+                one_property_body("port", i64::json_schema().expect("schema")).into(),
             ),
         ])),
         properties: BTreeMap::from([
@@ -1795,22 +2344,22 @@ fn derive_same_name_type_used_twice_shares_one_suffixed_entry() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = RepeatedConfig::json_schema();
+    });
+    let actual: ReverseCodeGenResult = RepeatedConfig::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_unique_name_stays_unsuffixed_when_another_module_reuses_it_elsewhere() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([(
             "Config".to_string(),
-            one_property_body("name", String::json_schema()).into(),
+            one_property_body("name", String::json_schema().expect("schema")).into(),
         )])),
         ..one_property_body("config", ref_to("Config"))
-    };
-    let actual: JsonSchema = OneConfig::json_schema();
+    });
+    let actual: ReverseCodeGenResult = OneConfig::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -1842,12 +2391,12 @@ struct WithUserUuid {
 #[cfg(feature = "uuid")]
 #[test]
 fn derive_user_type_named_uuid_gets_defs_entry_beside_inlined_library_uuid() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         type_: Some(JsonType::Object.into()),
         defs: Some(BTreeMap::from([(
             "Uuid".to_string(),
-            one_property_body("value", String::json_schema()).into(),
+            one_property_body("value", String::json_schema().expect("schema")).into(),
         )])),
         properties: BTreeMap::from([
             ("id".to_string(), ref_to("Uuid").into()),
@@ -1864,8 +2413,8 @@ fn derive_user_type_named_uuid_gets_defs_entry_beside_inlined_library_uuid() {
         additional_properties: Some(Schema::Bool(false)),
         required: Some(vec!["id".to_string(), "library_id".to_string()]),
         ..Default::default()
-    };
-    let actual: JsonSchema = WithUserUuid::json_schema();
+    });
+    let actual: ReverseCodeGenResult = WithUserUuid::json_schema();
     assert_eq!(expected, actual);
 }
 
@@ -1941,42 +2490,48 @@ struct DocHiddenOnly {
 
 #[test]
 fn derive_container_doc_comment_becomes_description() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         description: Some("Struct doc.".to_string()),
-        ..one_property_body("x", String::json_schema())
-    };
-    let actual: JsonSchema = DocContainer::json_schema();
+        ..one_property_body("x", String::json_schema().expect("schema"))
+    });
+    let actual: ReverseCodeGenResult = DocContainer::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_field_doc_comment_becomes_property_description() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         ..one_property_body(
             "x",
             JsonSchema {
                 description: Some("Field doc.".to_string()),
-                ..String::json_schema()
+                ..String::json_schema().expect("schema")
             },
         )
-    };
-    let actual: JsonSchema = DocField::json_schema();
+    });
+    let actual: ReverseCodeGenResult = DocField::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_field_doc_comment_on_named_type_is_ref_sibling() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([(
             "Address".to_string(),
             JsonSchema {
                 type_: Some(JsonType::Object.into()),
                 properties: BTreeMap::from([
-                    ("city".to_string(), String::json_schema().into()),
-                    ("street".to_string(), String::json_schema().into()),
+                    (
+                        "city".to_string(),
+                        String::json_schema().expect("schema").into(),
+                    ),
+                    (
+                        "street".to_string(),
+                        String::json_schema().expect("schema").into(),
+                    ),
                 ]),
                 additional_properties: Some(Schema::Bool(false)),
                 required: Some(vec!["city".to_string(), "street".to_string()]),
@@ -1991,36 +2546,36 @@ fn derive_field_doc_comment_on_named_type_is_ref_sibling() {
                 ..ref_to("Address")
             },
         )
-    };
-    let actual: JsonSchema = DocNamedTypeField::json_schema();
+    });
+    let actual: ReverseCodeGenResult = DocNamedTypeField::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_multi_line_doc_comment_lines_are_trimmed_and_joined() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         description: Some("First line.\nIndented second line.\n\nSecond paragraph.".to_string()),
-        ..one_property_body("x", String::json_schema())
-    };
-    let actual: JsonSchema = DocMultiLine::json_schema();
+        ..one_property_body("x", String::json_schema().expect("schema"))
+    });
+    let actual: ReverseCodeGenResult = DocMultiLine::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_description_attribute_takes_precedence_over_doc_comment() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         description: Some("From attribute".to_string()),
-        ..one_property_body("x", String::json_schema())
-    };
-    let actual: JsonSchema = DocAndAttrDescription::json_schema();
+        ..one_property_body("x", String::json_schema().expect("schema"))
+    });
+    let actual: ReverseCodeGenResult = DocAndAttrDescription::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_enum_doc_comment_becomes_description() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         description: Some("Enum doc.".to_string()),
         type_: Some(JsonType::String.into()),
@@ -2029,44 +2584,44 @@ fn derive_enum_doc_comment_becomes_description() {
             serde_json::Value::String("B".to_string()),
         ]),
         ..Default::default()
-    };
-    let actual: JsonSchema = DocEnum::json_schema();
+    });
+    let actual: ReverseCodeGenResult = DocEnum::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_macro_doc_attributes_are_evaluated_into_description() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         description: Some("Concat.".to_string()),
         ..one_property_body(
             "x",
             JsonSchema {
                 description: Some("Included doc.".to_string()),
-                ..String::json_schema()
+                ..String::json_schema().expect("schema")
             },
         )
-    };
-    let actual: JsonSchema = DocConcat::json_schema();
+    });
+    let actual: ReverseCodeGenResult = DocConcat::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_empty_doc_comment_yields_no_description() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        ..one_property_body("x", String::json_schema())
-    };
-    let actual: JsonSchema = DocEmpty::json_schema();
+        ..one_property_body("x", String::json_schema().expect("schema"))
+    });
+    let actual: ReverseCodeGenResult = DocEmpty::json_schema();
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn derive_list_form_doc_attribute_yields_no_description() {
-    let expected: JsonSchema = JsonSchema {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
         schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        ..one_property_body("x", String::json_schema())
-    };
-    let actual: JsonSchema = DocHiddenOnly::json_schema();
+        ..one_property_body("x", String::json_schema().expect("schema"))
+    });
+    let actual: ReverseCodeGenResult = DocHiddenOnly::json_schema();
     assert_eq!(expected, actual);
 }

@@ -2925,37 +2925,37 @@ fn write_workspace_scenario_member(
 fn main() {
     use json_schema_rs::{JsonSchema, ToJsonSchema};
     // round_trip_basic
-    let schema = compile_test::basic::Root::json_schema();
+    let schema = compile_test::basic::Root::json_schema().expect("json schema");
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, reparsed, "round-trip basic");
     // round_trip_integer
-    let schema = compile_test::integer::Root::json_schema();
+    let schema = compile_test::integer::Root::json_schema().expect("json schema");
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, reparsed, "round-trip integer");
     // round_trip_number
-    let schema = compile_test::number::Root::json_schema();
+    let schema = compile_test::number::Root::json_schema().expect("json schema");
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, reparsed, "round-trip number");
     // round_trip_integer_min_max
-    let schema = compile_test::integer_min_max::Root::json_schema();
+    let schema = compile_test::integer_min_max::Root::json_schema().expect("json schema");
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, reparsed, "round-trip integer min max");
     // round_trip_number_min_max (f32 bounds are held exactly)
-    let schema = compile_test::number_min_max::Root::json_schema();
+    let schema = compile_test::number_min_max::Root::json_schema().expect("json schema");
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, reparsed, "round-trip number min max");
     // round_trip_string_min_length_max_length
-    let schema = compile_test::string_min_max::Root::json_schema();
+    let schema = compile_test::string_min_max::Root::json_schema().expect("json schema");
     let json: String = (&schema).try_into().expect("serialize");
     let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(schema, reparsed, "round-trip string min max");
     // round_trip_description: description -> `///` docs -> derive -> description
-    let schema = compile_test::description::Root::json_schema();
+    let schema = compile_test::description::Root::json_schema().expect("json schema");
     let expected: (Option<String>, Option<String>) = (
         Some("Root type\nSecond line".to_string()),
         Some("User name".to_string()),

@@ -18,7 +18,7 @@ fn array_property_compiles_and_deserializes() {
 fn array_property_json_schema_round_trip() {
     use json_schema_rs::{JsonSchema, ToJsonSchema};
 
-    let root_schema = schema_0::Root::json_schema();
+    let root_schema: JsonSchema = schema_0::Root::json_schema().expect("schema");
     let json: String = (&root_schema).try_into().expect("serialize");
     let reparsed: json_schema_rs::JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
     assert_eq!(root_schema, reparsed, "Root::json_schema() round-trip");

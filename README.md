@@ -103,7 +103,7 @@ pub struct Root {
 ```
 
 Every generated struct implements **ToJsonSchema** (e.g. `Root::json_schema()`
-returns a `JsonSchema`). Serialize to JSON with `String::try_from(&schema)` or
+returns a `Result<JsonSchema, Vec<ReverseCodeGenError>>`). Serialize to JSON with `String::try_from(&schema)` or
 `Vec::<u8>::try_from(&schema)`. Reverse codegen emits a flat root-level `$defs`
 map with `$ref` for shared and recursive types. See [design.md](design.md) for
 reverse codegen details. **`$ref`** resolves through a shared `Registry` for both
@@ -236,7 +236,11 @@ exact range (`u64` → `0`..`18446744073709551615`). Convert a schema to JSON wi
 `String::try_from(&schema)` or `.try_into()`. Emits `$defs` and `$ref` for shared
 and recursive types, including mutually recursive ones (`A` → `B` → `A`).
 Same-name types from different modules get separate entries (`Config0`,
-`Config1`); a unique name stays bare. A
+`Config1`); a unique name stays bare. A type with `#[json_schema(id = "...")]`
+is its own schema resource; `$ref`s between resources resolve correctly for
+absolute and relative `$id`s alike. `json_schema()` returns every problem it
+finds (an `$id` that is not a URI reference, two different types whose `$id`s
+resolve to one URI) as a `ReverseCodeGenError`. A
 hand-written `impl ToJsonSchema` only needs `json_schema()`; implement
 `json_schema_with(&mut SchemaGenerator)` to place the type in `$defs`. Add **json-schema-rs-macro** when using the derive. Details:
 [design.md](design.md).
