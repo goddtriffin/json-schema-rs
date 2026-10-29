@@ -810,7 +810,7 @@ fn parse_value_in_dialect(
         reject_unknown: settings.disallow_unknown_fields,
         lexical_counts: resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
     };
-    let mut errors: Vec<JsonSchemaParseError> = if checks.reject_unknown || checks.lexical_counts {
+    let errors: Vec<JsonSchemaParseError> = if checks.reject_unknown || checks.lexical_counts {
         check_keywords(&value, resolved.dialect, checks)
     } else {
         Vec::new()
@@ -824,17 +824,14 @@ fn parse_value_in_dialect(
         Cow::Owned(value) => serde_json::from_value(value),
         Cow::Borrowed(value) => Schema::deserialize(value),
     };
-    let schema: Option<Schema> = match built {
-        Ok(schema) => Some(schema),
-        Err(error) => {
-            errors.push(JsonSchemaParseError::Serde(error));
-            None
+    match (built, JsonSchemaParseErrors::from_vec(errors)) {
+        (Ok(schema), None) => Ok(finish_parse(schema, resolved, settings)),
+        (Ok(_), Some(found)) => Err(found),
+        (Err(error), None) => Err(JsonSchemaParseError::Serde(error).into()),
+        (Err(error), Some(mut found)) => {
+            found.push(JsonSchemaParseError::Serde(error));
+            Err(found)
         }
-    };
-    match (schema, JsonSchemaParseErrors::from_vec(errors)) {
-        (Some(schema), None) => Ok(finish_parse(schema, resolved, settings)),
-        (_, Some(found)) => Err(found),
-        (None, None) => unreachable!("a failed model build records its error"),
     }
 }
 
