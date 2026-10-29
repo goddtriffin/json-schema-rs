@@ -34,6 +34,7 @@ use super::dialect::{Dialect, FormatMode, RefSiblings, SubschemaPosition, Vocabu
 use super::json_schema::{JsonSchema, Schema, SchemaRef};
 use super::settings::{DialectSettings, JsonSchemaSettings};
 use super::spec_version::SpecVersion;
+use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use fluent_uri::{Iri, IriRef};
 use serde_json::{Map, Value};
@@ -225,6 +226,9 @@ impl Retrieve for BTreeMap<String, Value> {
         })
     }
 }
+
+/// Every problem building one [`Registry`] found, one [`RegistryError`] each.
+pub type RegistryErrors = ErrorList<RegistryError>;
 
 /// Why a [`Registry`] could not be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
