@@ -26,8 +26,8 @@ use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
-    JsonSchemaParseError, JsonSchemaSettings, Schema, SpecVersion, ValidationError,
-    ValidationResult, validate,
+    JsonSchemaParseError, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidationError,
+    ValidationResult, validate_with_registry,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -102,12 +102,13 @@ enum OutputFormat {
     Annotations,
 }
 
-/// A test case: one schema and the instances to validate against it. The `registry` of remote
-/// schemas is deliberately not read: remote references are unsupported, so cases needing them
-/// surface as skips or disagreements.
+/// A test case: one schema, the remote documents it may reference (by URI), and the instances
+/// to validate against it.
 #[derive(Debug, Deserialize)]
 struct Case {
     schema: Value,
+    #[serde(default)]
+    registry: Map<String, Value>,
     tests: Vec<Test>,
 }
 
@@ -224,7 +225,9 @@ fn capability_gap_message(error: &ValidationError) -> Option<String> {
         ValidationError::InvalidRef {
             ref_str, reason, ..
         } => Some(format!("unsupported $ref: \"{ref_str}\": {reason}")),
-        ValidationError::InvalidPatternInSchema { .. } => Some(format!("unsupported: {error}")),
+        ValidationError::InvalidPatternInSchema { .. } | ValidationError::InvalidSchema { .. } => {
+            Some(format!("unsupported: {error}"))
+        }
         _ => None,
     }
 }
@@ -250,22 +253,49 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
             case.tests.len()
         ]);
     }
-    let settings: JsonSchemaSettings = strict_settings(case_spec_version(&case.schema, dialect));
+    let mut settings: JsonSchemaSettings =
+        strict_settings(case_spec_version(&case.schema, dialect));
+    // An unrecognised `$schema` names a custom metaschema: follow it (through the registry)
+    // rather than pinning the current dialect.
+    if case
+        .schema
+        .get("$schema")
+        .and_then(Value::as_str)
+        .is_some_and(|uri| SpecVersion::from_schema_uri(uri).is_none())
+    {
+        settings.spec_version = None;
+    }
     let schema: Schema = match catch_panic(|| Schema::new_from_serde_value(&case.schema, &settings))
     {
         Ok(Ok(schema)) => schema,
         Ok(Err(error)) => return CaseOutcome::Skipped(parse_skip_message(&error)),
         Err(panic_message) => return CaseOutcome::Errored(panic_message),
     };
+    let registry: Registry<'_> = match catch_panic(|| {
+        let mut builder = Registry::builder().settings(settings.clone());
+        for (uri, document) in &case.registry {
+            builder = builder.document(uri.clone(), document.clone());
+        }
+        builder.build(&schema)
+    }) {
+        Ok(Ok(registry)) => registry,
+        Ok(Err(error)) => {
+            return CaseOutcome::Skipped(match error.ref_str() {
+                Some(ref_str) => format!("unsupported $ref: \"{ref_str}\": {error}"),
+                None => format!("unsupported schema: {error}"),
+            });
+        }
+        Err(panic_message) => return CaseOutcome::Errored(panic_message),
+    };
     let outcomes: Vec<TestOutcome> = case
         .tests
         .iter()
-        .map(
-            |test: &Test| match catch_panic(|| validate(&schema, &test.instance)) {
+        .map(|test: &Test| {
+            match catch_panic(|| validate_with_registry(&registry, &test.instance)) {
                 Ok(result) => classify(&result),
                 Err(panic_message) => TestOutcome::Errored(panic_message),
-            },
-        )
+            }
+        })
         .collect();
     CaseOutcome::Results(outcomes)
 }
@@ -594,14 +624,31 @@ mod tests {
     }
 
     #[test]
-    fn unresolvable_ref_skips_test() {
-        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Skipped(
-            "unsupported $ref: \"#/$defs/missing\": DefsMissing { ref_str: \"#/$defs/missing\" }"
+    fn unresolvable_ref_skips_case() {
+        let expected: CaseOutcome = CaseOutcome::Skipped(
+            "unsupported $ref: \"#/$defs/missing\": $ref \"#/$defs/missing\" \
+             (\"json-schema:///#/$defs/missing\") does not resolve: no such location"
                 .to_string(),
-        )]);
+        );
         let actual: CaseOutcome = run_flag(&json!({
             "schema": {"$ref": "#/$defs/missing"},
             "tests": [{"instance": 1}]
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn registry_document_resolves_remote_ref() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![
+            TestOutcome::Verdict(true),
+            TestOutcome::Verdict(false),
+        ]);
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": {"$ref": "http://localhost:1234/integer.json"},
+            "registry": {
+                "http://localhost:1234/integer.json": {"type": "integer"}
+            },
+            "tests": [{"instance": 1}, {"instance": "a"}]
         }));
         assert_eq!(expected, actual);
     }

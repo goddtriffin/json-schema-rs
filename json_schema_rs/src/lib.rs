@@ -19,8 +19,10 @@ pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::{
     Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchema,
     JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings, JsonSchemaSettingsBuilder,
-    JsonType, Keyword, RefSiblings, ResolvedDialect, Schema, SchemaRef, SpecVersion,
-    SubschemaPosition, TypeSet, UnknownJsonType, UnknownSchemaUri, Vocabulary, resolve_dialect,
+    JsonType, Keyword, NotAbsoluteUri, OfflineRetriever, RefSiblings, Registry, RegistryBuilder,
+    RegistryError, Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope,
+    SpecVersion, SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri, Uri,
+    Vocabulary, VocabularyKind, VocabularySet, resolve_dialect,
 };
 pub use reverse_code_gen::{SchemaGenerator, ToJsonSchema};
-pub use validator::{ValidationError, ValidationResult, validate};
+pub use validator::{ValidationError, ValidationResult, validate, validate_with_registry};
