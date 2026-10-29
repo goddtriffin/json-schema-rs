@@ -6,7 +6,7 @@
 //! error tree) so they can be read side by side.
 
 use crate::suite::{SuiteFile, SuiteFileCase, SuiteFileTest, is_optional_path};
-use json_schema_rs::{JsonSchema, JsonSchemaSettings, ValidationError, validate};
+use json_schema_rs::{JsonSchemaSettings, Schema, ValidationError, validate};
 use serde::Serialize;
 use serde_json::Value;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -100,8 +100,7 @@ fn output(tool: &str, outcome: ToolOutcome, messages: Vec<String>) -> ToolOutput
 #[must_use]
 pub fn run_ours(schema: &Value, instance: &Value) -> ToolOutput {
     guarded(OURS_TOOL, || {
-        let parsed: JsonSchema = match JsonSchema::new_from_serde_value(schema, &strict_settings())
-        {
+        let parsed: Schema = match Schema::new_from_serde_value(schema, &strict_settings()) {
             Ok(parsed) => parsed,
             Err(e) => {
                 return output(
@@ -223,7 +222,7 @@ pub fn select_suite_case(draft: &str, file: &SuiteFile) -> Option<MessageCase> {
     }
     let settings: JsonSchemaSettings = strict_settings();
     for case in &file.cases {
-        let Ok(parsed) = JsonSchema::new_from_serde_value(&case.schema, &settings) else {
+        let Ok(parsed) = Schema::new_from_serde_value(&case.schema, &settings) else {
             continue;
         };
         let selected: Option<&SuiteFileTest> = case.tests.iter().find(|t: &&SuiteFileTest| {
@@ -310,7 +309,7 @@ mod tests {
             tool: "json-schema-rs".to_string(),
             outcome: ToolOutcome::Invalid,
             messages: json_schema_rs::validate(
-                &json_schema_rs::JsonSchema::new_from_serde_value(
+                &json_schema_rs::Schema::new_from_serde_value(
                     &json!({"type": "string"}),
                     &super::strict_settings(),
                 )
@@ -323,6 +322,20 @@ mod tests {
             .collect(),
         };
         let actual: ToolOutput = run_ours(&json!({"type": "string"}), &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ours_true_schema_accepts_any_instance() {
+        let expected: ToolOutput = out("json-schema-rs", ToolOutcome::Valid, &[]);
+        let actual: ToolOutput = run_ours(&json!(true), &json!({"a": 1}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ours_false_schema_rejects_any_instance() {
+        let expected: ToolOutcome = ToolOutcome::Invalid;
+        let actual: ToolOutcome = run_ours(&json!(false), &json!(1)).outcome;
         assert_eq!(expected, actual);
     }
 

@@ -14,7 +14,7 @@
 //! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`).
 
 use json_schema_rs::{
-    FormatMode, JsonSchema, JsonSchemaSettings, SpecVersion, ValidationError, validate,
+    FormatMode, JsonSchemaSettings, Schema, SpecVersion, ValidationError, validate,
 };
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
@@ -134,7 +134,7 @@ fn describe_errors(errors: &[ValidationError]) -> String {
 }
 
 /// Runs one suite test; a panic in our library is a failure, not a crash of the run.
-fn run_test(schema: &JsonSchema, test: &SuiteTest) -> Outcome {
+fn run_test(schema: &Schema, test: &SuiteTest) -> Outcome {
     let result = catch_unwind(AssertUnwindSafe(|| validate(schema, &test.data)));
     match (result, test.valid) {
         (Err(_), _) => Outcome::Failed("validator panicked".to_string()),
@@ -187,9 +187,9 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
                 .map_err(|e| format!("failed to parse {}: {e}", file_path.display()))?;
             for group in groups {
                 let parsed = catch_unwind(AssertUnwindSafe(|| {
-                    JsonSchema::new_from_serde_value(&group.schema, settings)
+                    Schema::new_from_serde_value(&group.schema, settings)
                 }));
-                let schema: Result<JsonSchema, String> = match parsed {
+                let schema: Result<Schema, String> = match parsed {
                     Ok(Ok(schema)) => Ok(schema),
                     Ok(Err(e)) => Err(format!("schema not supported: {e}")),
                     Err(_) => Err("schema parser panicked".to_string()),

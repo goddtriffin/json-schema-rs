@@ -3,8 +3,7 @@
 //! Types implement [`ToJsonSchema`] to produce a [`JsonSchema`] value that can be
 //! serialized via [`TryFrom`] to String or `Vec<u8>`.
 
-use crate::json_schema::JsonSchema;
-use crate::json_schema::json_schema::AdditionalProperties;
+use crate::json_schema::{JsonSchema, JsonType, Schema};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Trait for types that can produce a JSON Schema.
@@ -58,8 +57,9 @@ struct Definition {
     identity: DefinitionIdentity,
     /// Preferred `$defs` key: the bare type name, or the hoisted key.
     name: String,
-    /// `None` while the body is being built, and for a root that nothing refers back to.
-    body: Option<JsonSchema>,
+    /// `None` while the body is being built, and for a root that nothing refers back to. A
+    /// hoisted entry may be a boolean schema.
+    body: Option<Schema>,
 }
 
 /// A standalone schema already passed to [`SchemaGenerator::inline_subschema`] and the
@@ -150,7 +150,7 @@ impl SchemaGenerator {
             let body: JsonSchema = build(self);
             let scope: &mut Scope = self.current_scope();
             scope.pending.remove(&index);
-            scope.definitions[index].body = Some(body);
+            scope.definitions[index].body = Some(body.into());
             index
         };
         ref_schema(provisional_ref(index))
@@ -200,7 +200,7 @@ impl SchemaGenerator {
         let body: JsonSchema = scope.into_root_schema(body);
 
         let index: usize = self.document.push_type_definition(schema_id, name);
-        self.document.definitions[index].body = Some(body);
+        self.document.definitions[index].body = Some(body.into());
         if let Some(resource) = self.resources.get_mut(schema_id) {
             resource.definition = Some(index);
         }
@@ -231,7 +231,7 @@ impl SchemaGenerator {
         let body: JsonSchema = build(&mut self);
         self.document.pending.remove(&index);
         if self.document.referenced_while_pending.contains(&index) {
-            self.document.definitions[index].body = Some(body.clone());
+            self.document.definitions[index].body = Some(body.clone().into());
         }
         self.into_root_schema(body)
     }
@@ -319,12 +319,14 @@ impl Scope {
         };
 
         rewrite_refs(&mut body, &resolve);
-        let mut defs: BTreeMap<String, JsonSchema> = BTreeMap::new();
+        let mut defs: BTreeMap<String, Schema> = BTreeMap::new();
         for (index, definition) in definitions.into_iter().enumerate() {
             if let (Some(name), Some(mut definition_body)) =
                 (final_names[index].clone(), definition.body)
             {
-                rewrite_refs(&mut definition_body, &resolve);
+                if let Some(object) = definition_body.as_object_mut() {
+                    rewrite_refs(object, &resolve);
+                }
                 defs.insert(name, definition_body);
             }
         }
@@ -394,8 +396,10 @@ impl Scope {
         };
         rewrite_refs_outside_resources(&mut flat, &resolve);
         for (definition, index) in hoisted.into_iter().zip(indices) {
-            let mut body: JsonSchema = definition.body;
-            rewrite_refs_outside_resources(&mut body, &resolve);
+            let mut body: Schema = definition.body;
+            if let Some(object) = body.as_object_mut() {
+                rewrite_refs_outside_resources(object, &resolve);
+            }
             self.definitions[index].body = Some(body);
         }
 
@@ -482,7 +486,7 @@ struct HoistedDefinition {
     /// JSON Pointer of the entry in the standalone schema (`#/$defs/Outer/$defs/Inner`).
     pointer: String,
     key: String,
-    body: JsonSchema,
+    body: Schema,
 }
 
 /// Removes the `$defs` of `schema` and, transitively, of every `$defs` entry that is not a
@@ -491,15 +495,16 @@ struct HoistedDefinition {
 fn flatten_defs(schema: JsonSchema) -> (JsonSchema, Vec<HoistedDefinition>) {
     let mut root: JsonSchema = schema;
     let mut hoisted: Vec<HoistedDefinition> = Vec::new();
-    let mut stack: Vec<(String, BTreeMap<String, JsonSchema>)> = Vec::new();
+    let mut stack: Vec<(String, BTreeMap<String, Schema>)> = Vec::new();
     if let Some(defs) = root.defs.take() {
         stack.push(("#".to_string(), defs));
     }
     while let Some((parent, defs)) = stack.pop() {
         for (key, mut body) in defs {
             let pointer: String = format!("{parent}/$defs/{}", escape_pointer_token(&key));
-            if body.id.is_none()
-                && let Some(nested) = body.defs.take()
+            if let Some(object) = body.as_object_mut()
+                && object.id.is_none()
+                && let Some(nested) = object.defs.take()
             {
                 stack.push((pointer.clone(), nested));
             }
@@ -564,7 +569,8 @@ fn merge_equal_hoisted_definitions(
         };
         rewrite_refs(body, &resolve);
         for definition in definitions.iter_mut() {
-            if let Some(definition_body) = definition.body.as_mut() {
+            if let Some(definition_body) = definition.body.as_mut().and_then(Schema::as_object_mut)
+            {
                 rewrite_refs(definition_body, &resolve);
             }
         }
@@ -610,16 +616,24 @@ fn assign_final_names(definitions: &[Definition], canonical: &[usize]) -> Vec<Op
 impl ToJsonSchema for String {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         }
+    }
+}
+
+/// Any JSON value: the empty schema `{}`, which accepts every instance. Codegen emits
+/// `serde_json::Value` for a schema with no single Rust type (e.g. `"items": true`).
+impl ToJsonSchema for serde_json::Value {
+    fn json_schema() -> JsonSchema {
+        JsonSchema::default()
     }
 }
 
 impl ToJsonSchema for bool {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            type_: Some("boolean".to_string()),
+            type_: Some(JsonType::Boolean.into()),
             ..Default::default()
         }
     }
@@ -632,7 +646,7 @@ fn integer_schema_with_bounds(
     max: impl Into<serde_json::Number>,
 ) -> JsonSchema {
     JsonSchema {
-        type_: Some("integer".to_string()),
+        type_: Some(JsonType::Integer.into()),
         minimum: Some(min.into()),
         maximum: Some(max.into()),
         ..Default::default()
@@ -690,7 +704,7 @@ impl ToJsonSchema for u64 {
 /// A number schema bounded by the Rust type's finite range.
 fn number_schema_with_bounds(min: f64, max: f64) -> JsonSchema {
     JsonSchema {
-        type_: Some("number".to_string()),
+        type_: Some(JsonType::Number.into()),
         minimum: serde_json::Number::from_f64(min),
         maximum: serde_json::Number::from_f64(max),
         ..Default::default()
@@ -726,8 +740,8 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
         JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(T::json_schema_with(generator))),
+            type_: Some(JsonType::Array.into()),
+            items: Some(T::json_schema_with(generator).into()),
             ..Default::default()
         }
     }
@@ -741,8 +755,8 @@ impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
         JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(T::json_schema_with(generator))),
+            type_: Some(JsonType::Array.into()),
+            items: Some(T::json_schema_with(generator).into()),
             unique_items: Some(true),
             ..Default::default()
         }
@@ -756,10 +770,8 @@ impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
         JsonSchema {
-            type_: Some("object".to_string()),
-            additional_properties: Some(AdditionalProperties::Schema(Box::new(
-                V::json_schema_with(generator),
-            ))),
+            type_: Some(JsonType::Object.into()),
+            additional_properties: Some(V::json_schema_with(generator).into()),
             ..Default::default()
         }
     }
@@ -782,7 +794,7 @@ pub struct HandWrittenExample;
 impl ToJsonSchema for HandWrittenExample {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             title: Some("HandWrittenExample".to_string()),
             ..Default::default()
         }
@@ -793,7 +805,7 @@ impl ToJsonSchema for HandWrittenExample {
 impl ToJsonSchema for uuid::Uuid {
     fn json_schema() -> JsonSchema {
         JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             format: Some("uuid".to_string()),
             ..Default::default()
         }
@@ -803,13 +815,13 @@ impl ToJsonSchema for uuid::Uuid {
 #[cfg(test)]
 mod tests {
     use super::{SchemaGenerator, ToJsonSchema, root_schema_for};
-    use crate::json_schema::JsonSchema;
+    use crate::json_schema::{JsonSchema, JsonType, Schema};
     use std::collections::BTreeMap;
 
     #[test]
     fn string_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
         let actual: JsonSchema = String::json_schema();
@@ -819,10 +831,25 @@ mod tests {
     #[test]
     fn bool_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            type_: Some("boolean".to_string()),
+            type_: Some(JsonType::Boolean.into()),
             ..Default::default()
         };
         let actual: JsonSchema = bool::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn serde_json_value_json_schema_is_empty_schema() {
+        let expected: JsonSchema = JsonSchema::default();
+        let actual: JsonSchema = serde_json::Value::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn vec_of_serde_json_value_serializes_items_as_empty_schema() {
+        let expected: &str = r#"{"type":"array","items":{}}"#;
+        let actual: String =
+            serde_json::to_string(&Vec::<serde_json::Value>::json_schema()).expect("serialize");
         assert_eq!(expected, actual);
     }
 
@@ -921,7 +948,7 @@ mod tests {
     #[test]
     fn hand_written_example_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             title: Some("HandWrittenExample".to_string()),
             ..Default::default()
         };
@@ -932,8 +959,8 @@ mod tests {
     #[test]
     fn vec_string_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(String::json_schema())),
+            type_: Some(JsonType::Array.into()),
+            items: Some(String::json_schema().into()),
             ..Default::default()
         };
         let actual: JsonSchema = Vec::<String>::json_schema();
@@ -943,8 +970,8 @@ mod tests {
     #[test]
     fn vec_i64_json_schema() {
         let expected: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(i64::json_schema())),
+            type_: Some(JsonType::Array.into()),
+            items: Some(i64::json_schema().into()),
             ..Default::default()
         };
         let actual: JsonSchema = Vec::<i64>::json_schema();
@@ -961,12 +988,22 @@ mod tests {
     #[test]
     fn hash_set_string_json_schema_has_unique_items_true() {
         use std::collections::HashSet;
+        let expected: JsonSchema = JsonSchema {
+            type_: Some(JsonType::Array.into()),
+            items: Some(String::json_schema().into()),
+            unique_items: Some(true),
+            ..Default::default()
+        };
         let actual: JsonSchema = HashSet::<String>::json_schema();
-        let expected_unique: Option<bool> = Some(true);
-        assert_eq!(expected_unique, actual.unique_items);
-        assert_eq!(actual.type_.as_deref(), Some("array"));
-        let items: &JsonSchema = actual.items.as_ref().expect("items").as_ref();
-        assert_eq!(items.type_.as_deref(), Some("string"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn btree_map_json_schema_serializes_value_schema_as_additional_properties() {
+        let expected: &str = r#"{"type":"object","additionalProperties":{"type":"string"}}"#;
+        let actual: String =
+            serde_json::to_string(&BTreeMap::<String, String>::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -979,27 +1016,27 @@ mod tests {
     #[cfg(feature = "uuid")]
     #[test]
     fn uuid_json_schema() {
-        let actual: JsonSchema = uuid::Uuid::json_schema();
-        assert_eq!(actual.type_.as_deref(), Some("string"));
-        assert_eq!(actual.format.as_deref(), Some("uuid"));
+        let expected: &str = r#"{"type":"string","format":"uuid"}"#;
+        let actual: String = serde_json::to_string(&uuid::Uuid::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[cfg(feature = "uuid")]
     #[test]
     fn option_uuid_json_schema() {
-        let actual: JsonSchema = Option::<uuid::Uuid>::json_schema();
-        assert_eq!(actual.type_.as_deref(), Some("string"));
-        assert_eq!(actual.format.as_deref(), Some("uuid"));
+        let expected: &str = r#"{"type":"string","format":"uuid"}"#;
+        let actual: String =
+            serde_json::to_string(&Option::<uuid::Uuid>::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     #[cfg(feature = "uuid")]
     #[test]
     fn vec_uuid_json_schema() {
-        let actual: JsonSchema = Vec::<uuid::Uuid>::json_schema();
-        assert_eq!(actual.type_.as_deref(), Some("array"));
-        let items: &JsonSchema = actual.items.as_ref().expect("items").as_ref();
-        assert_eq!(items.type_.as_deref(), Some("string"));
-        assert_eq!(items.format.as_deref(), Some("uuid"));
+        let expected: &str = r#"{"type":"array","items":{"type":"string","format":"uuid"}}"#;
+        let actual: String =
+            serde_json::to_string(&Vec::<uuid::Uuid>::json_schema()).expect("serialize");
+        assert_eq!(expected, actual);
     }
 
     fn ref_to(name: &str) -> JsonSchema {
@@ -1011,33 +1048,33 @@ mod tests {
 
     fn string_schema() -> JsonSchema {
         JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         }
     }
 
     fn integer_schema() -> JsonSchema {
         JsonSchema {
-            type_: Some("integer".to_string()),
+            type_: Some(JsonType::Integer.into()),
             ..Default::default()
         }
     }
 
     fn object_schema(properties: &[(&str, JsonSchema)]) -> JsonSchema {
         JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: properties
                 .iter()
-                .map(|(key, schema)| ((*key).to_string(), schema.clone()))
+                .map(|(key, schema)| ((*key).to_string(), schema.clone().into()))
                 .collect(),
             ..Default::default()
         }
     }
 
-    fn defs(entries: &[(&str, JsonSchema)]) -> BTreeMap<String, JsonSchema> {
+    fn defs(entries: &[(&str, JsonSchema)]) -> BTreeMap<String, Schema> {
         entries
             .iter()
-            .map(|(key, schema)| ((*key).to_string(), schema.clone()))
+            .map(|(key, schema)| ((*key).to_string(), schema.clone().into()))
             .collect()
     }
 
@@ -1103,11 +1140,13 @@ mod tests {
         let reference: JsonSchema =
             generator.named_subschema("a::Node", "Node", |generator: &mut SchemaGenerator| {
                 JsonSchema {
-                    items: Some(Box::new(generator.named_subschema(
-                        "a::Node",
-                        "Node",
-                        |_| panic!("a pending schema id must not be rebuilt"),
-                    ))),
+                    items: Some(
+                        generator
+                            .named_subschema("a::Node", "Node", |_| {
+                                panic!("a pending schema id must not be rebuilt")
+                            })
+                            .into(),
+                    ),
                     ..Default::default()
                 }
             });
@@ -1115,7 +1154,7 @@ mod tests {
             defs: Some(defs(&[(
                 "Node",
                 JsonSchema {
-                    items: Some(Box::new(ref_to("Node"))),
+                    items: Some(ref_to("Node").into()),
                     ..Default::default()
                 },
             )])),
@@ -1146,7 +1185,7 @@ mod tests {
     fn suffixed_names_skip_a_name_already_taken() {
         let mut generator: SchemaGenerator = SchemaGenerator::new();
         let taken: JsonSchema = generator.named_subschema("c::Name0", "Name0", |_| JsonSchema {
-            type_: Some("boolean".to_string()),
+            type_: Some(JsonType::Boolean.into()),
             ..Default::default()
         });
         let first: JsonSchema = generator.named_subschema("a::Name", "Name", |_| string_schema());
@@ -1158,7 +1197,7 @@ mod tests {
                 (
                     "Name0",
                     JsonSchema {
-                        type_: Some("boolean".to_string()),
+                        type_: Some(JsonType::Boolean.into()),
                         ..Default::default()
                     },
                 ),
@@ -1186,7 +1225,7 @@ mod tests {
     #[test]
     fn into_named_root_schema_with_back_reference_also_defines_root() {
         let body: JsonSchema = JsonSchema {
-            items: Some(Box::new(ref_to("Node"))),
+            items: Some(ref_to("Node").into()),
             ..Default::default()
         };
         let expected: JsonSchema = JsonSchema {
@@ -1197,11 +1236,13 @@ mod tests {
             "a::Node",
             "Node",
             |generator: &mut SchemaGenerator| JsonSchema {
-                items: Some(Box::new(generator.named_subschema(
-                    "a::Node",
-                    "Node",
-                    |_| panic!("a pending schema id must not be rebuilt"),
-                ))),
+                items: Some(
+                    generator
+                        .named_subschema("a::Node", "Node", |_| {
+                            panic!("a pending schema id must not be rebuilt")
+                        })
+                        .into(),
+                ),
                 ..Default::default()
             },
         );
@@ -1264,6 +1305,20 @@ mod tests {
         let inlined: JsonSchema = generator.inline_subschema(standalone);
         let expected: JsonSchema = standalone_with_def("Inner", string_schema());
         let actual: JsonSchema = generator.into_root_schema(inlined);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_hoists_boolean_def() {
+        let standalone: JsonSchema = JsonSchema {
+            defs: Some(BTreeMap::from([("Never".to_string(), Schema::Bool(false))])),
+            ..ref_to("Never")
+        };
+        let mut generator: SchemaGenerator = SchemaGenerator::new();
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let expected: &str = r##"{"$ref":"#/$defs/Never","$defs":{"Never":false}}"##;
+        let actual: String =
+            serde_json::to_string(&generator.into_root_schema(inlined)).expect("serialize");
         assert_eq!(expected, actual);
     }
 
@@ -1352,7 +1407,7 @@ mod tests {
 
     fn array_of(items: JsonSchema) -> JsonSchema {
         JsonSchema {
-            items: Some(Box::new(items)),
+            items: Some(items.into()),
             ..Default::default()
         }
     }
@@ -1643,8 +1698,8 @@ mod tests {
         let first: JsonSchema =
             generator.inline_subschema(standalone_with_def("Inner", string_schema()));
         let second: JsonSchema = generator.inline_subschema(JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(ref_to("Inner"))),
+            type_: Some(JsonType::Array.into()),
+            items: Some(ref_to("Inner").into()),
             defs: Some(defs(&[("Inner", string_schema())])),
             ..Default::default()
         });
@@ -1656,8 +1711,8 @@ mod tests {
                 (
                     "second",
                     JsonSchema {
-                        type_: Some("array".to_string()),
-                        items: Some(Box::new(ref_to("Inner"))),
+                        type_: Some(JsonType::Array.into()),
+                        items: Some(ref_to("Inner").into()),
                         ..Default::default()
                     },
                 ),
@@ -1762,8 +1817,8 @@ mod tests {
             }
         }
         let expected: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(ref_to("Named"))),
+            type_: Some(JsonType::Array.into()),
+            items: Some(ref_to("Named").into()),
             defs: Some(defs(&[("Named", string_schema())])),
             ..Default::default()
         };
@@ -1774,8 +1829,8 @@ mod tests {
     #[test]
     fn hand_written_impl_inlines_through_default_json_schema_with() {
         let expected: JsonSchema = JsonSchema {
-            type_: Some("array".to_string()),
-            items: Some(Box::new(super::HandWrittenExample::json_schema())),
+            type_: Some(JsonType::Array.into()),
+            items: Some(super::HandWrittenExample::json_schema().into()),
             ..Default::default()
         };
         let actual: JsonSchema = Vec::<super::HandWrittenExample>::json_schema();

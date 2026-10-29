@@ -1,7 +1,9 @@
 //! CLI helpers: schema/payload I/O, schema file discovery, mod.rs emission.
 
 use json_schema_rs::sanitizers::{sanitize_output_relative, sanitize_path_component};
-use json_schema_rs::{DialectWarning, JsonSchema, JsonSchemaSettings, resolve_dialect};
+use json_schema_rs::{
+    DialectWarning, JsonSchema, JsonSchemaParseError, JsonSchemaSettings, Schema, resolve_dialect,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -12,31 +14,46 @@ pub(crate) const STDIN_OUTPUT_NAME: &str = "stdin.rs";
 pub(crate) fn read_schema_from_reader<R: Read>(
     mut r: R,
     schema_settings: &JsonSchemaSettings,
-) -> Result<JsonSchema, String> {
+) -> Result<Schema, String> {
     let mut buf: Vec<u8> = Vec::new();
     r.read_to_end(&mut buf)
         .map_err(|e| format!("failed to read schema: {e}"))?;
-    JsonSchema::new_from_slice(&buf, schema_settings).map_err(|e| e.to_string())
+    Schema::new_from_slice(&buf, schema_settings).map_err(|e| e.to_string())
 }
 
-/// Reads and parses a schema file (`-` is stdin), printing its dialect warnings to stderr.
+/// Reads and parses a schema document (`-` is stdin), which may be a boolean schema, printing
+/// its dialect warnings to stderr.
 pub(crate) fn read_schema_from_path(
     path: &PathBuf,
     schema_settings: &JsonSchemaSettings,
-) -> Result<JsonSchema, String> {
-    let schema: JsonSchema = if path.as_os_str() == "-" {
+) -> Result<Schema, String> {
+    let schema: Schema = if path.as_os_str() == "-" {
         read_schema_from_reader(io::stdin(), schema_settings)?
     } else {
         let f = File::open(path).map_err(|e| format!("failed to open schema file: {e}"))?;
         read_schema_from_reader(f, schema_settings)?
     };
-    let warnings: Vec<DialectWarning> = resolve_dialect(&schema, schema_settings)
-        .map_err(|e| e.to_string())?
-        .warnings;
-    for warning in warnings {
-        eprintln!("warning: {}: {warning}", display_schema_path(path));
+    if let Some(object) = schema.as_object() {
+        let warnings: Vec<DialectWarning> = resolve_dialect(object, schema_settings)
+            .map_err(|e| e.to_string())?
+            .warnings;
+        for warning in warnings {
+            eprintln!("warning: {}: {warning}", display_schema_path(path));
+        }
     }
     Ok(schema)
+}
+
+/// Reads and parses a schema document (`-` is stdin) that must be a schema object, as codegen
+/// needs: a boolean document is a [`JsonSchemaParseError::BooleanRoot`] error.
+pub(crate) fn read_json_schema_from_path(
+    path: &PathBuf,
+    schema_settings: &JsonSchemaSettings,
+) -> Result<JsonSchema, String> {
+    match read_schema_from_path(path, schema_settings)? {
+        Schema::Object(schema) => Ok(*schema),
+        Schema::Bool(value) => Err(JsonSchemaParseError::BooleanRoot { value }.to_string()),
+    }
 }
 
 /// How a schema path is shown in messages (`stdin` for `-`).

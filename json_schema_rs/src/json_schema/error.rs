@@ -33,6 +33,12 @@ pub enum JsonSchemaParseError {
     },
     /// I/O error when reading from a reader or file.
     Io(std::io::Error),
+    /// The document is a boolean schema (`true` / `false`) but a schema object was asked for
+    /// ([`JsonSchema`](super::JsonSchema) parsing). [`Schema`](super::Schema) parsing accepts it.
+    BooleanRoot {
+        /// The boolean schema's value.
+        value: bool,
+    },
     /// `$schema` is not a recognised metaschema URI and
     /// [`UnknownSchemaUri::Reject`](super::settings::UnknownSchemaUri::Reject) is set.
     UnknownSchemaUri {
@@ -63,6 +69,10 @@ impl fmt::Display for JsonSchemaParseError {
                 path.display_root_or_path()
             ),
             JsonSchemaParseError::Io(e) => write!(f, "io error: {e}"),
+            JsonSchemaParseError::BooleanRoot { value } => write!(
+                f,
+                "the document is the boolean schema `{value}`, not a schema object"
+            ),
             JsonSchemaParseError::UnknownSchemaUri { uri } => {
                 write!(f, "unknown $schema \"{uri}\"")
             }
@@ -76,7 +86,8 @@ impl std::error::Error for JsonSchemaParseError {
             JsonSchemaParseError::Serde(e) => Some(e),
             JsonSchemaParseError::UnknownField { .. }
             | JsonSchemaParseError::InvalidKeywordValue { .. }
-            | JsonSchemaParseError::UnknownSchemaUri { .. } => None,
+            | JsonSchemaParseError::UnknownSchemaUri { .. }
+            | JsonSchemaParseError::BooleanRoot { .. } => None,
             JsonSchemaParseError::Io(e) => Some(e),
         }
     }

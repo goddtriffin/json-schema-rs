@@ -15,8 +15,8 @@ pub enum ModelNameSource {
 pub enum DedupeMode {
     /// No deduping. Identical Rust models are generated duplicately.
     Disabled,
-    /// Only pivotal/functional data is considered (type_, properties, required, title, constraints).
-    /// Excludes non-functional fields such as description. Comparison is deep.
+    /// Only pivotal/functional data is considered (the whole `type` set, properties, required,
+    /// title, constraints). Excludes non-functional fields such as description. Comparison is deep.
     Functional,
     /// Everything is considered, including non-functional fields like description. Comparison is deep.
     #[default]

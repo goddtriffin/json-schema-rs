@@ -1,4 +1,5 @@
 use crate::json_pointer::JsonPointer;
+use crate::json_schema::TypeSet;
 use serde_json::Number;
 use std::fmt;
 
@@ -57,6 +58,27 @@ pub enum ValidationError {
         instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
+    },
+    /// Schema had `type: "null"` but the instance was not null.
+    ExpectedNull {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// JSON type of the instance (for user-facing context).
+        got: String,
+    },
+    /// Schema had a `type` array (or an empty one) and the instance matched none of its types.
+    ExpectedType {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's allowed types.
+        expected: TypeSet,
+        /// JSON type of the instance (for user-facing context).
+        got: String,
+    },
+    /// The schema at this location was the boolean schema `false`, which no value satisfies.
+    FalseSchema {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
     },
     /// Schema had `uniqueItems: true` but the array contained duplicate elements.
     DuplicateArrayItems {
@@ -233,6 +255,9 @@ impl ValidationError {
             | ValidationError::ExpectedNumber { instance_path, .. }
             | ValidationError::ExpectedArray { instance_path, .. }
             | ValidationError::ExpectedBoolean { instance_path, .. }
+            | ValidationError::ExpectedNull { instance_path, .. }
+            | ValidationError::ExpectedType { instance_path, .. }
+            | ValidationError::FalseSchema { instance_path }
             | ValidationError::DuplicateArrayItems { instance_path, .. }
             | ValidationError::TooFewItems { instance_path, .. }
             | ValidationError::TooManyItems { instance_path, .. }
@@ -287,6 +312,15 @@ impl fmt::Display for ValidationError {
             }
             ValidationError::ExpectedBoolean { got, .. } => {
                 write!(f, "{location}: expected boolean, got {got}")
+            }
+            ValidationError::ExpectedNull { got, .. } => {
+                write!(f, "{location}: expected null, got {got}")
+            }
+            ValidationError::ExpectedType { expected, got, .. } => {
+                write!(f, "{location}: expected one of {expected}, got {got}")
+            }
+            ValidationError::FalseSchema { .. } => {
+                write!(f, "{location}: no value is allowed here (schema is false)")
             }
             ValidationError::DuplicateArrayItems {
                 duplicate_value, ..
