@@ -11,7 +11,11 @@ drafts 4, 6, 7, 2019-09 and 2020-12 (Draft 2020-12 when `$schema` is absent);
 `JsonSchemaSettings` can pin a draft or override one behaviour. A script downloads
 specs for every published draft (draft-00 through 2020-12); run
 `make vendor_specs` to fetch them locally—specs are not stored in the repo.
-Supported keywords include **type** (object, string, integer, number, boolean), **properties**, **required**, **const** (draft-06+;
+Supported keywords include **type** (all seven types, a single name or an array of
+names; the validator accepts any listed type and rejects unknown names at parse time; codegen
+reads `["T", "null"]` as `T` and omits a property with several non-null types, as it does a typeless one), **boolean
+schemas** (`true` / `false` anywhere a schema may appear, including a whole document; parse one
+with `Schema::new_from_str`), **properties**, **required**, **const** (draft-06+;
 validator: instance must equal const, numbers by value so `1` equals `1.0`; codegen: string const → single-value enum, non-string const → fallback; reverse: single-variant unit enum → const), **enum**
 (validator compares numbers by value; codegen emits Rust enums for string-only enums), **items** (array with single-schema
 items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
@@ -154,7 +158,9 @@ this off, or `DedupeMode::Functional` to compare only functional fields (see
 [design.md](design.md)). Use
 `JsonSchemaSettings::builder().disallow_unknown_fields(true).build()` to reject
 schema definitions with keys their draft does not define (the error names the key
-and a JSON Pointer to the schema object that has it). Use
+and a JSON Pointer to the schema object that has it). By default such keys, and
+keywords this library does not implement, are kept in `JsonSchema::extensions`
+and written back on serialization. Use
 `CodeGenSettings::builder().model_name_source(ModelNameSource::PropertyKeyFirst).build()`
 to prefer property keys over `title` for struct names. CLI:
 `--jss-disallow-unknown-fields`, `--cgs-model-name-source title-first` or

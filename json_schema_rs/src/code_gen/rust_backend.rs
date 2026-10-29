@@ -5,9 +5,8 @@ use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
-use crate::json_schema::JsonSchema;
-use crate::json_schema::json_schema::AdditionalProperties;
 use crate::json_schema::ref_resolver;
+use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
 use crate::number;
 use crate::sanitizers::{
     enum_variant_names_with_collision_resolution, sanitize_field_name, sanitize_struct_name,
@@ -199,7 +198,7 @@ fn string_enum_or_const_values(schema: &JsonSchema) -> Option<Vec<String>> {
     None
 }
 
-/// For dedupe key: additionalProperties as Forbid or Schema(sub key).
+/// For dedupe key: `additionalProperties` as `false` (Forbid) or a schema object (Schema(sub key)).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum AdditionalPropertiesDedupe {
     Forbid,
@@ -211,7 +210,7 @@ enum AdditionalPropertiesDedupe {
 #[derive(Debug, Clone)]
 struct DedupeKey {
     id: Option<String>,
-    type_: Option<String>,
+    type_: Option<TypeSet>,
     properties: BTreeMap<String, DedupeKey>,
     additional_properties: Option<AdditionalPropertiesDedupe>,
     required: Option<Vec<String>>,
@@ -508,7 +507,7 @@ fn emit_struct_derive_and_attrs(
     if schema
         .additional_properties
         .as_ref()
-        .is_some_and(|ap| matches!(ap, AdditionalProperties::Forbid))
+        .is_some_and(|ap| matches!(ap, Schema::Bool(false)))
     {
         writeln!(out, "#[serde(deny_unknown_fields)]")?;
     }
@@ -521,62 +520,62 @@ impl DedupeKey {
         let properties: BTreeMap<String, DedupeKey> = schema
             .properties
             .iter()
-            .map(|(k, v)| (k.clone(), DedupeKey::from_schema(v, mode)))
+            .map(|(k, v)| (k.clone(), DedupeKey::from_schema(v.object_or_empty(), mode)))
             .collect();
         let items: Option<Box<DedupeKey>> = schema
             .items
             .as_ref()
-            .filter(|_| schema.type_.as_deref() == Some("array"))
-            .map(|s| Box::new(DedupeKey::from_schema(s, mode)));
-        let unique_items: Option<bool> = if schema.type_.as_deref() == Some("array") {
+            .filter(|_| schema.primary_type() == Some(JsonType::Array))
+            .map(|s| Box::new(DedupeKey::from_schema(s.object_or_empty(), mode)));
+        let unique_items: Option<bool> = if schema.primary_type() == Some(JsonType::Array) {
             schema.unique_items
         } else {
             None
         };
-        let min_items: Option<u64> = if schema.type_.as_deref() == Some("array") {
+        let min_items: Option<u64> = if schema.primary_type() == Some(JsonType::Array) {
             schema.min_items
         } else {
             None
         };
-        let max_items: Option<u64> = if schema.type_.as_deref() == Some("array") {
+        let max_items: Option<u64> = if schema.primary_type() == Some(JsonType::Array) {
             schema.max_items
         } else {
             None
         };
-        let min_length: Option<u64> = if schema.type_.as_deref() == Some("string") {
+        let min_length: Option<u64> = if schema.primary_type() == Some(JsonType::String) {
             schema.min_length
         } else {
             None
         };
-        let max_length: Option<u64> = if schema.type_.as_deref() == Some("string") {
+        let max_length: Option<u64> = if schema.primary_type() == Some(JsonType::String) {
             schema.max_length
         } else {
             None
         };
-        let pattern: Option<String> = if schema.type_.as_deref() == Some("string") {
+        let pattern: Option<String> = if schema.primary_type() == Some(JsonType::String) {
             schema.pattern.clone()
         } else {
             None
         };
-        let format: Option<String> = if schema.type_.as_deref() == Some("string") {
+        let format: Option<String> = if schema.primary_type() == Some(JsonType::String) {
             schema.format.clone()
         } else {
             None
         };
         let additional_properties: Option<AdditionalPropertiesDedupe> =
             match schema.additional_properties.as_ref() {
-                None | Some(AdditionalProperties::Allow) => None,
-                Some(AdditionalProperties::Forbid) => Some(AdditionalPropertiesDedupe::Forbid),
-                Some(AdditionalProperties::Schema(s)) => Some(AdditionalPropertiesDedupe::Schema(
-                    Box::new(DedupeKey::from_schema(s, mode)),
-                )),
+                None | Some(Schema::Bool(true)) => None,
+                Some(Schema::Bool(false)) => Some(AdditionalPropertiesDedupe::Forbid),
+                Some(Schema::Object(s)) => Some(AdditionalPropertiesDedupe::Schema(Box::new(
+                    DedupeKey::from_schema(s, mode),
+                ))),
             };
         DedupeKey {
             id: match mode {
                 DedupeMode::Full => schema.id.clone(),
                 DedupeMode::Functional | DedupeMode::Disabled => None,
             },
-            type_: schema.type_.clone(),
+            type_: schema.type_,
             properties,
             additional_properties,
             required: schema.required.clone(),
@@ -677,7 +676,8 @@ fn tighter_bound<T: Ord>(a: Option<T>, b: Option<T>, keep: Ordering) -> Option<T
 /// range starts at zero or above. A number schema is `f32` when both sides are bounded within
 /// `f32::MIN..=f32::MAX`.
 fn rust_numeric_type_for_schema(schema: &JsonSchema) -> String {
-    if schema.is_integer() {
+    let primary: Option<JsonType> = schema.primary_type();
+    if primary == Some(JsonType::Integer) {
         let lower: Option<i128> = tighter_bound(
             schema
                 .minimum
@@ -706,7 +706,7 @@ fn rust_numeric_type_for_schema(schema: &JsonSchema) -> String {
         };
         return narrow.unwrap_or("i64").to_string();
     }
-    if schema.is_number() {
+    if primary == Some(JsonType::Number) {
         let lower: Option<&serde_json::Number> = [&schema.minimum, &schema.exclusive_minimum]
             .into_iter()
             .flatten()
@@ -737,27 +737,28 @@ fn item_schema_is_hashable(schema: &JsonSchema) -> bool {
     !schema.is_object_with_properties() && !schema.is_array_with_items()
 }
 
-/// True if schema is object-like for allOf merge: type "object" or non-empty properties.
+/// True if schema is object-like for allOf merge: primary type "object" or non-empty properties.
 fn is_object_like_for_merge(schema: &JsonSchema) -> bool {
-    schema.type_.as_deref() == Some("object") || !schema.properties.is_empty()
+    schema.primary_type() == Some(JsonType::Object) || !schema.properties.is_empty()
 }
 
 /// Merge an array of object-like schemas (allOf) into a single schema. Errors on empty array,
-/// non-object-like subschema, or conflicting property types/bounds/enums.
-pub(crate) fn merge_all_of(schemas: &[JsonSchema]) -> CodeGenResult<JsonSchema> {
+/// non-object-like subschema (a boolean schema reads as `{}`, which is not object-like), or
+/// conflicting property types/bounds/enums.
+pub(crate) fn merge_all_of(schemas: &[Schema]) -> CodeGenResult<JsonSchema> {
     if schemas.is_empty() {
         return Err(CodeGenError::AllOfMergeEmpty);
     }
     for (index, s) in schemas.iter().enumerate() {
-        if !is_object_like_for_merge(s) {
+        if !is_object_like_for_merge(s.object_or_empty()) {
             return Err(CodeGenError::AllOfMergeNonObjectSubschema { index });
         }
     }
     let mut merged = JsonSchema::default();
     for s in schemas {
-        merge_object_schema_into(&mut merged, s, "")?;
+        merge_object_schema_into(&mut merged, s.object_or_empty(), "")?;
     }
-    merged.type_ = Some("object".to_string());
+    merged.type_ = Some(JsonType::Object.into());
     Ok(merged)
 }
 
@@ -774,8 +775,12 @@ fn merge_object_schema_into(
             format!("{parent_key}.{k}")
         };
         if let Some(target_prop) = target.properties.get_mut(k) {
-            let merged_prop = merge_property_schemas(target_prop, other_prop, &key_for_errors)?;
-            *target_prop = merged_prop;
+            let merged_prop = merge_property_schemas(
+                target_prop.object_or_empty(),
+                other_prop.object_or_empty(),
+                &key_for_errors,
+            )?;
+            *target_prop = Schema::from(merged_prop);
         } else {
             target.properties.insert(k.clone(), other_prop.clone());
         }
@@ -827,22 +832,30 @@ fn merge_property_schemas(
         return Ok(merged);
     }
     if a.is_array_with_items() && b.is_array_with_items() {
-        let a_items = a.items.as_ref().expect("array with items").as_ref();
-        let b_items = b.items.as_ref().expect("array with items").as_ref();
+        let a_items = a
+            .items
+            .as_ref()
+            .expect("array with items")
+            .object_or_empty();
+        let b_items = b
+            .items
+            .as_ref()
+            .expect("array with items")
+            .object_or_empty();
         let merged_items = merge_property_schemas(a_items, b_items, &format!("{property_key}[]"))?;
         let mut out = a.clone();
-        out.items = Some(Box::new(merged_items));
+        out.items = Some(Schema::from(merged_items));
         return Ok(out);
     }
-    let type_a = a.type_.as_deref();
-    let type_b = b.type_.as_deref();
+    let type_a: Option<JsonType> = a.primary_type();
+    let type_b: Option<JsonType> = b.primary_type();
     if type_a != type_b {
         return Err(CodeGenError::AllOfMergeConflictingPropertyType {
             property_key: property_key.to_string(),
             subschema_indices: vec![], // we don't have indices in this context; message still clear
         });
     }
-    if a.is_string() && b.is_string() {
+    if type_a == Some(JsonType::String) {
         let mut out = a.clone();
         if out.min_length.is_none() {
             out.min_length = b.min_length;
@@ -882,7 +895,7 @@ fn merge_property_schemas(
         }
         return Ok(out);
     }
-    if a.is_integer() && b.is_integer() || a.is_number() && b.is_number() {
+    if matches!(type_a, Some(JsonType::Integer | JsonType::Number)) {
         let mut out = a.clone();
         merge_numeric_bounds(&mut out, b, property_key, "minimum", "maximum")?;
         return Ok(out);
@@ -998,12 +1011,12 @@ fn rust_type_for_item_schema(
             }
         }
 
-        ref_resolver::resolve_schema_ref_transitive(root, schema).map_err(|e| {
-            CodeGenError::RefResolution {
+        ref_resolver::resolve_schema_ref_transitive(root, schema.into())
+            .map_err(|e| CodeGenError::RefResolution {
                 ref_str: ref_str.to_string(),
                 reason: format!("{e:?}"),
-            }
-        })?
+            })?
+            .object_or_empty()
     } else {
         schema
     };
@@ -1013,7 +1026,8 @@ fn rust_type_for_item_schema(
     {
         return Ok(name.clone());
     }
-    if schema.is_string()
+    let primary: Option<JsonType> = schema.primary_type();
+    if primary == Some(JsonType::String)
         || (schema.enum_values.as_ref().is_some_and(|v| !v.is_empty()) && !schema.is_string_enum())
         || (schema.const_value.is_some() && !schema.is_string_const())
     {
@@ -1025,14 +1039,12 @@ fn rust_type_for_item_schema(
         }
         return Ok("String".to_string());
     }
-    if schema.is_integer() {
-        return Ok(rust_numeric_type_for_schema(schema));
-    }
-    if schema.is_number() {
-        return Ok(rust_numeric_type_for_schema(schema));
-    }
-    if schema.is_boolean() {
-        return Ok("bool".to_string());
+    match primary {
+        Some(JsonType::Integer | JsonType::Number) => {
+            return Ok(rust_numeric_type_for_schema(schema));
+        }
+        Some(JsonType::Boolean) => return Ok("bool".to_string()),
+        Some(JsonType::Array | JsonType::Null | JsonType::Object | JsonType::String) | None => {}
     }
     if schema.is_object_with_properties() {
         if let Some(key) = def_key.as_deref() {
@@ -1049,7 +1061,11 @@ fn rust_type_for_item_schema(
         return Ok(name);
     }
     if schema.is_array_with_items() {
-        let item_schema: &JsonSchema = schema.items.as_ref().expect("array with items").as_ref();
+        let item_schema: &JsonSchema = schema
+            .items
+            .as_ref()
+            .expect("array with items")
+            .object_or_empty();
         let inner: String = rust_type_for_item_schema(
             root,
             item_schema,
@@ -1081,7 +1097,8 @@ fn collect_enums(
     while let Some(node) = stack.pop() {
         let (node, _) = resolve_ref_for_codegen(root, &node, None)?;
         for (key, prop_schema) in &node.properties {
-            let (prop_effective, from_key) = resolve_ref_for_codegen(root, prop_schema, Some(key))?;
+            let (prop_effective, from_key) =
+                resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
             if let Some(values) = string_enum_or_const_values(&prop_effective) {
                 key_to_name_desc_examples
                     .entry(values.clone())
@@ -1109,7 +1126,7 @@ fn collect_enums(
                 && let Some(ref items) = prop_effective.items
             {
                 let (items_effective, items_from_key) =
-                    resolve_ref_for_codegen(root, items.as_ref(), Some(key))?;
+                    resolve_ref_for_codegen(root, items.object_or_empty(), Some(key))?;
                 if let Some(values) = string_enum_or_const_values(&items_effective) {
                     key_to_name_desc_examples
                         .entry(values.clone())
@@ -1137,12 +1154,12 @@ fn collect_enums(
         }
         if let Some(ref any_of) = node.any_of {
             for sub in any_of {
-                stack.push(sub.clone());
+                stack.push(sub.object_or_empty().clone());
             }
         }
         if let Some(ref one_of) = node.one_of {
             for sub in one_of {
-                stack.push(sub.clone());
+                stack.push(sub.object_or_empty().clone());
             }
         }
     }
@@ -1181,7 +1198,7 @@ fn collect_anyof_enums(
             };
             let mut variants = Vec::with_capacity(any_of.len());
             for (i, sub) in any_of.iter().enumerate() {
-                let resolved = resolve_all_of_for_codegen(sub)?;
+                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                 let variant_from_key =
                     format!("{}_Variant{i}", from_key.as_deref().unwrap_or("Root"));
                 let ty = rust_type_for_item_schema(
@@ -1197,12 +1214,12 @@ fn collect_anyof_enums(
             }
             out.push(AnyOfEnumToEmit { name, variants });
             for sub in any_of {
-                let resolved = resolve_all_of_for_codegen(sub)?;
+                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                 stack.push((resolved, None));
             }
         }
         for (key, prop_schema) in &node.properties {
-            stack.push((prop_schema.clone(), Some(key.clone())));
+            stack.push((prop_schema.object_or_empty().clone(), Some(key.clone())));
         }
     }
     Ok(out)
@@ -1232,7 +1249,7 @@ fn collect_oneof_enums(
             };
             let mut variants = Vec::with_capacity(one_of.len());
             for (i, sub) in one_of.iter().enumerate() {
-                let resolved = resolve_all_of_for_codegen(sub)?;
+                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                 let variant_from_key =
                     format!("{}_Variant{i}", from_key.as_deref().unwrap_or("Root"));
                 let ty = rust_type_for_item_schema(
@@ -1248,12 +1265,12 @@ fn collect_oneof_enums(
             }
             out.push(OneOfEnumToEmit { name, variants });
             for sub in one_of {
-                let resolved = resolve_all_of_for_codegen(sub)?;
+                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                 stack.push((resolved, None));
             }
         }
         for (key, prop_schema) in &node.properties {
-            stack.push((prop_schema.clone(), Some(key.clone())));
+            stack.push((prop_schema.object_or_empty().clone(), Some(key.clone())));
         }
     }
     Ok(out)
@@ -1285,13 +1302,12 @@ fn resolve_ref_for_codegen(
         }
     }
 
-    let resolved: &JsonSchema =
-        ref_resolver::resolve_schema_ref_transitive(root, schema).map_err(|e| {
-            CodeGenError::RefResolution {
-                ref_str: ref_str.to_string(),
-                reason: format!("{e:?}"),
-            }
-        })?;
+    let resolved: &JsonSchema = ref_resolver::resolve_schema_ref_transitive(root, schema.into())
+        .map_err(|e| CodeGenError::RefResolution {
+            ref_str: ref_str.to_string(),
+            reason: format!("{e:?}"),
+        })?
+        .object_or_empty();
     Ok((resolved.clone(), from_key))
 }
 
@@ -1323,7 +1339,12 @@ fn collect_structs(
         let keys: Vec<String> = schema_node.properties.keys().cloned().collect();
         if index < keys.len() {
             let key: String = keys.get(index).unwrap().clone();
-            let child: JsonSchema = schema_node.properties.get(&key).unwrap().clone();
+            let child: JsonSchema = schema_node
+                .properties
+                .get(&key)
+                .unwrap()
+                .object_or_empty()
+                .clone();
             let child_resolved = resolve_all_of_for_codegen(&child)?;
             stack.push((schema_node, from_key_opt, index + 1, is_root));
             if child_resolved
@@ -1332,7 +1353,7 @@ fn collect_structs(
                 .is_some_and(|v| !v.is_empty())
             {
                 for (i, sub) in child_resolved.any_of.as_ref().unwrap().iter().enumerate() {
-                    let sub_resolved = resolve_all_of_for_codegen(sub)?;
+                    let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                     let variant_key = format!("{key}_Variant{i}");
                     let (sub_effective, sub_from_key) =
                         resolve_ref_for_codegen(root, &sub_resolved, Some(&variant_key))?;
@@ -1341,7 +1362,7 @@ fn collect_structs(
                     } else if sub_resolved.is_array_with_items()
                         && let Some(ref items) = sub_resolved.items
                     {
-                        let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                        let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
                         let (items_effective, items_from_key) =
                             resolve_ref_for_codegen(root, &items_resolved, Some(&variant_key))?;
                         if items_effective.is_object_with_properties() {
@@ -1355,7 +1376,7 @@ fn collect_structs(
                 .is_some_and(|v| !v.is_empty())
             {
                 for (i, sub) in child_resolved.one_of.as_ref().unwrap().iter().enumerate() {
-                    let sub_resolved = resolve_all_of_for_codegen(sub)?;
+                    let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                     let variant_key = format!("{key}_Variant{i}");
                     let (sub_effective, sub_from_key) =
                         resolve_ref_for_codegen(root, &sub_resolved, Some(&variant_key))?;
@@ -1364,7 +1385,7 @@ fn collect_structs(
                     } else if sub_resolved.is_array_with_items()
                         && let Some(ref items) = sub_resolved.items
                     {
-                        let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                        let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
                         let (items_effective, items_from_key) =
                             resolve_ref_for_codegen(root, &items_resolved, Some(&variant_key))?;
                         if items_effective.is_object_with_properties() {
@@ -1380,7 +1401,7 @@ fn collect_structs(
                 } else if child_effective.is_array_with_items()
                     && let Some(ref items) = child_effective.items
                 {
-                    let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                    let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
                     let (items_effective, items_from_key) =
                         resolve_ref_for_codegen(root, &items_resolved, Some(&key))?;
                     if items_effective.is_object_with_properties() {
@@ -1439,7 +1460,12 @@ fn collect_structs_all_schemas(
             let keys: Vec<String> = schema_node.properties.keys().cloned().collect();
             if index < keys.len() {
                 let key: String = keys[index].clone();
-                let child: JsonSchema = schema_node.properties.get(&key).unwrap().clone();
+                let child: JsonSchema = schema_node
+                    .properties
+                    .get(&key)
+                    .unwrap()
+                    .object_or_empty()
+                    .clone();
                 let child_resolved = resolve_all_of_for_codegen(&child)?;
 
                 stack.push((schema_node, from_key_opt, index + 1, is_root));
@@ -1450,7 +1476,7 @@ fn collect_structs_all_schemas(
                     .is_some_and(|v| !v.is_empty())
                 {
                     for (i, sub) in child_resolved.any_of.as_ref().unwrap().iter().enumerate() {
-                        let sub_resolved = resolve_all_of_for_codegen(sub)?;
+                        let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                         let variant_key = format!("{key}_Variant{i}");
                         let (sub_effective, sub_from_key) = resolve_ref_for_codegen(
                             schema_root,
@@ -1462,7 +1488,8 @@ fn collect_structs_all_schemas(
                         } else if sub_effective.is_array_with_items()
                             && let Some(ref items) = sub_effective.items
                         {
-                            let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                            let items_resolved =
+                                resolve_all_of_for_codegen(items.object_or_empty())?;
                             let (items_effective, items_from_key) = resolve_ref_for_codegen(
                                 schema_root,
                                 &items_resolved,
@@ -1479,7 +1506,7 @@ fn collect_structs_all_schemas(
                     .is_some_and(|v| !v.is_empty())
                 {
                     for (i, sub) in child_resolved.one_of.as_ref().unwrap().iter().enumerate() {
-                        let sub_resolved = resolve_all_of_for_codegen(sub)?;
+                        let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
                         let variant_key = format!("{key}_Variant{i}");
                         let (sub_effective, sub_from_key) = resolve_ref_for_codegen(
                             schema_root,
@@ -1491,7 +1518,8 @@ fn collect_structs_all_schemas(
                         } else if sub_effective.is_array_with_items()
                             && let Some(ref items) = sub_effective.items
                         {
-                            let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                            let items_resolved =
+                                resolve_all_of_for_codegen(items.object_or_empty())?;
                             let (items_effective, items_from_key) = resolve_ref_for_codegen(
                                 schema_root,
                                 &items_resolved,
@@ -1510,7 +1538,7 @@ fn collect_structs_all_schemas(
                     } else if child_effective.is_array_with_items()
                         && let Some(ref items) = child_effective.items
                     {
-                        let items_resolved = resolve_all_of_for_codegen(items.as_ref())?;
+                        let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
                         let (items_effective, items_from_key) =
                             resolve_ref_for_codegen(schema_root, &items_resolved, Some(&key))?;
                         if items_effective.is_object_with_properties() {
@@ -1648,6 +1676,7 @@ fn generate_rust_with_dedupe(
         for (name, schema) in &v {
             let mut set: BTreeSet<String> = BTreeSet::new();
             for prop_schema in schema.properties.values() {
+                let prop_schema: &JsonSchema = prop_schema.object_or_empty();
                 if prop_schema.is_object_with_properties() {
                     let prop_key = DedupeKey::from_schema(prop_schema, mode);
                     if let Some(cn) = key_to_canonical_name.get(&prop_key)
@@ -1658,9 +1687,9 @@ fn generate_rust_with_dedupe(
                 }
                 if prop_schema.is_array_with_items()
                     && let Some(ref items) = prop_schema.items
-                    && items.is_object_with_properties()
+                    && items.object_or_empty().is_object_with_properties()
                 {
-                    let item_key = DedupeKey::from_schema(items, mode);
+                    let item_key = DedupeKey::from_schema(items.object_or_empty(), mode);
                     if let Some(cn) = key_to_canonical_name.get(&item_key)
                         && shared_names.contains(cn)
                     {
@@ -1740,6 +1769,7 @@ fn generate_rust_with_dedupe(
             for (name, schema) in &local_structs {
                 let mut set: BTreeSet<String> = BTreeSet::new();
                 for prop_schema in schema.properties.values() {
+                    let prop_schema: &JsonSchema = prop_schema.object_or_empty();
                     if prop_schema.is_object_with_properties() {
                         let prop_key = DedupeKey::from_schema(prop_schema, mode);
                         if let Some(cn) = key_to_canonical_name.get(&prop_key)
@@ -1750,9 +1780,9 @@ fn generate_rust_with_dedupe(
                     }
                     if prop_schema.is_array_with_items()
                         && let Some(ref items) = prop_schema.items
-                        && items.is_object_with_properties()
+                        && items.object_or_empty().is_object_with_properties()
                     {
-                        let item_key = DedupeKey::from_schema(items, mode);
+                        let item_key = DedupeKey::from_schema(items.object_or_empty(), mode);
                         if let Some(cn) = key_to_canonical_name.get(&item_key)
                             && (local_names.contains(cn) || shared_names.contains(cn))
                         {
@@ -1768,6 +1798,7 @@ fn generate_rust_with_dedupe(
             let mut used_shared: BTreeSet<String> = BTreeSet::new();
             for (_, schema) in &local_structs {
                 for prop_schema in schema.properties.values() {
+                    let prop_schema: &JsonSchema = prop_schema.object_or_empty();
                     if prop_schema.is_object_with_properties() {
                         let prop_key = DedupeKey::from_schema(prop_schema, mode);
                         if let Some(cn) = key_to_canonical_name.get(&prop_key)
@@ -1778,9 +1809,9 @@ fn generate_rust_with_dedupe(
                     }
                     if prop_schema.is_array_with_items()
                         && let Some(ref items) = prop_schema.items
-                        && items.is_object_with_properties()
+                        && items.object_or_empty().is_object_with_properties()
                     {
-                        let item_key = DedupeKey::from_schema(items, mode);
+                        let item_key = DedupeKey::from_schema(items.object_or_empty(), mode);
                         if let Some(cn) = key_to_canonical_name.get(&item_key)
                             && shared_names.contains(cn)
                         {
@@ -1984,33 +2015,37 @@ fn emit_default_functions_for_struct(
     schema: &JsonSchema,
 ) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
+        let prop_schema: &JsonSchema = prop_schema.object_or_empty();
         let Some(ref value) = prop_schema.default_value else {
             continue;
         };
         let field_name = sanitize_field_name(key);
         let is_required = schema.is_required(key);
         let is_optional = !is_required;
-        let ty: String = if prop_schema.is_string() {
-            if is_required {
-                "String".to_string()
-            } else {
-                "Option<String>".to_string()
+        let ty: String = match prop_schema.primary_type() {
+            Some(JsonType::String) => {
+                if is_required {
+                    "String".to_string()
+                } else {
+                    "Option<String>".to_string()
+                }
             }
-        } else if prop_schema.is_integer() || prop_schema.is_number() {
-            let inner = rust_numeric_type_for_schema(prop_schema);
-            if is_required {
-                inner
-            } else {
-                format!("Option<{inner}>")
+            Some(JsonType::Integer | JsonType::Number) => {
+                let inner = rust_numeric_type_for_schema(prop_schema);
+                if is_required {
+                    inner
+                } else {
+                    format!("Option<{inner}>")
+                }
             }
-        } else if prop_schema.is_boolean() {
-            if is_required {
-                "bool".to_string()
-            } else {
-                "Option<bool>".to_string()
+            Some(JsonType::Boolean) => {
+                if is_required {
+                    "bool".to_string()
+                } else {
+                    "Option<bool>".to_string()
+                }
             }
-        } else {
-            continue;
+            Some(JsonType::Array | JsonType::Null | JsonType::Object) | None => continue,
         };
         if json_value_equals_rust_type_default(value, &ty, is_optional) {
             continue;
@@ -2043,8 +2078,10 @@ fn emit_struct_fields_with_resolver(
             .collect()
     });
     for (key, prop_schema) in &schema.properties {
-        let (prop_schema_effective, _) = resolve_ref_for_codegen(root, prop_schema, Some(key))?;
+        let (prop_schema_effective, _) =
+            resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
         let prop_schema: &JsonSchema = &prop_schema_effective;
+        let primary: Option<JsonType> = prop_schema.primary_type();
 
         for line in doc_lines(prop_schema.description.as_deref()) {
             writeln!(out, "    /// {line}")?;
@@ -2066,7 +2103,7 @@ fn emit_struct_fields_with_resolver(
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
             }
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_string()
+        } else if primary == Some(JsonType::String)
             || (prop_schema
                 .enum_values
                 .as_ref()
@@ -2074,7 +2111,7 @@ fn emit_struct_fields_with_resolver(
                 && !prop_schema.is_string_enum())
         {
             #[cfg(feature = "uuid")]
-            if prop_schema.is_string() && prop_schema.format.as_deref() == Some("uuid") {
+            if primary == Some(JsonType::String) && prop_schema.format.as_deref() == Some("uuid") {
                 let ty = if schema.is_required(key) {
                     "Uuid".to_string()
                 } else {
@@ -2121,7 +2158,7 @@ fn emit_struct_fields_with_resolver(
                 schema.is_required(key),
             )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_integer() || prop_schema.is_number() {
+        } else if matches!(primary, Some(JsonType::Integer | JsonType::Number)) {
             let inner: String = rust_numeric_type_for_schema(prop_schema);
             let ty = if schema.is_required(key) {
                 inner
@@ -2140,7 +2177,7 @@ fn emit_struct_fields_with_resolver(
                 schema.is_required(key),
             )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_boolean() {
+        } else if primary == Some(JsonType::Boolean) {
             let ty: String = if schema.is_required(key) {
                 "bool".to_string()
             } else {
@@ -2163,7 +2200,7 @@ fn emit_struct_fields_with_resolver(
                 .items
                 .as_ref()
                 .expect("array with items")
-                .as_ref();
+                .object_or_empty();
             let inner: String = rust_type_for_item_schema(
                 root,
                 item_schema,
@@ -2215,7 +2252,7 @@ fn emit_struct_fields_with_resolver(
             writeln!(out, "    pub {field_name}: {ty},")?;
         }
     }
-    if let Some(AdditionalProperties::Schema(sub)) = &schema.additional_properties {
+    if let Some(Schema::Object(sub)) = &schema.additional_properties {
         let value_ty: String = rust_type_for_item_schema(
             root,
             sub,
@@ -2244,8 +2281,10 @@ fn emit_struct_fields(
     _oneof_enums: Option<&[OneOfEnumToEmit]>,
 ) -> CodeGenResult<()> {
     for (key, prop_schema) in &schema.properties {
-        let (prop_schema_effective, _) = resolve_ref_for_codegen(root, prop_schema, Some(key))?;
+        let (prop_schema_effective, _) =
+            resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
         let prop_schema: &JsonSchema = &prop_schema_effective;
+        let primary: Option<JsonType> = prop_schema.primary_type();
 
         for line in doc_lines(prop_schema.description.as_deref()) {
             writeln!(out, "    /// {line}")?;
@@ -2289,7 +2328,7 @@ fn emit_struct_fields(
                 writeln!(out, "    #[serde(rename = \"{key}\")]")?;
             }
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_string()
+        } else if primary == Some(JsonType::String)
             || (prop_schema
                 .enum_values
                 .as_ref()
@@ -2297,7 +2336,7 @@ fn emit_struct_fields(
                 && !prop_schema.is_string_enum())
         {
             #[cfg(feature = "uuid")]
-            if prop_schema.is_string() && prop_schema.format.as_deref() == Some("uuid") {
+            if primary == Some(JsonType::String) && prop_schema.format.as_deref() == Some("uuid") {
                 let ty = if schema.is_required(key) {
                     "Uuid".to_string()
                 } else {
@@ -2344,7 +2383,7 @@ fn emit_struct_fields(
                 schema.is_required(key),
             )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_integer() || prop_schema.is_number() {
+        } else if matches!(primary, Some(JsonType::Integer | JsonType::Number)) {
             let inner: String = rust_numeric_type_for_schema(prop_schema);
             let ty = if schema.is_required(key) {
                 inner
@@ -2363,7 +2402,7 @@ fn emit_struct_fields(
                 schema.is_required(key),
             )?;
             writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_boolean() {
+        } else if primary == Some(JsonType::Boolean) {
             let ty: String = if schema.is_required(key) {
                 "bool".to_string()
             } else {
@@ -2386,7 +2425,7 @@ fn emit_struct_fields(
                 .items
                 .as_ref()
                 .expect("array with items")
-                .as_ref();
+                .object_or_empty();
             let inner: String = rust_type_for_item_schema(
                 root,
                 item_schema,
@@ -2432,7 +2471,7 @@ fn emit_struct_fields(
             writeln!(out, "    pub {field_name}: {ty},")?;
         }
     }
-    if let Some(AdditionalProperties::Schema(sub)) = &schema.additional_properties {
+    if let Some(Schema::Object(sub)) = &schema.additional_properties {
         let value_ty: String = rust_type_for_item_schema(
             root,
             sub,
@@ -2468,14 +2507,14 @@ fn emit_rust(
             .as_ref()
             .unwrap()
             .iter()
-            .map(resolve_all_of_for_codegen)
+            .map(|s| resolve_all_of_for_codegen(s.object_or_empty()))
             .collect::<CodeGenResult<Vec<_>>>()?
     } else if root.any_of.as_ref().is_some_and(|v| !v.is_empty()) {
         root.any_of
             .as_ref()
             .unwrap()
             .iter()
-            .map(resolve_all_of_for_codegen)
+            .map(|s| resolve_all_of_for_codegen(s.object_or_empty()))
             .collect::<CodeGenResult<Vec<_>>>()?
     } else {
         if !root.is_object_with_properties() {
@@ -2585,7 +2624,7 @@ mod tests {
     use super::CodeGenError;
     use super::{CodeGenBackend, RustBackend, generate_rust, merge_all_of};
     use crate::code_gen::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
-    use crate::json_schema::JsonSchema;
+    use crate::json_schema::{JsonSchema, JsonType, Schema};
 
     fn default_settings() -> CodeGenSettings {
         CodeGenSettings::builder().build()
@@ -2605,7 +2644,7 @@ mod tests {
     #[test]
     fn root_object_empty_properties_errors() {
         let schema: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             ..Default::default()
         };
         let settings: CodeGenSettings = default_settings();
@@ -2724,6 +2763,158 @@ mod tests {
             "    pub name: Option<String>,\n",
             "    #[serde(default)]\n",
             "    pub additional: BTreeMap<String, String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// `["string", "null"]` reads as `string`: the field is the same as for `"type": "string"`.
+    #[test]
+    fn property_type_string_or_null_emits_string() {
+        let json = r#"{"type":"object","properties":{"name":{"type":["string","null"]}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// The order of a type array does not matter: `["null", "string"]` reads as `string`.
+    #[test]
+    fn property_type_null_or_string_emits_string() {
+        let json = r#"{"type":"object","properties":{"name":{"type":["null","string"]}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// A type array with two non-null types has no single Rust type; the property is treated like one without `type`.
+    #[test]
+    fn property_type_with_two_non_null_types_is_omitted_like_typeless() {
+        let json = r#"{"type":"object","properties":{"id":{"type":["integer","string"]},"name":{"type":"string"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// A `true` property schema reads as `{}`.
+    #[test]
+    fn property_true_schema_is_omitted_like_empty_schema() {
+        let json = r#"{"type":"object","properties":{"anything":true,"name":{"type":"string"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// A `false` property schema reads as `{}` for codegen (no value is valid, so it has no shape of its own).
+    #[test]
+    fn property_false_schema_is_omitted_like_empty_schema() {
+        let json = r#"{"type":"object","properties":{"never":false,"name":{"type":"string"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// `"items": true` reads as `{}`: an array of any JSON value.
+    #[test]
+    fn array_items_true_emits_vec_of_value() {
+        let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":true}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub tags: Option<Vec<serde_json::Value>>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// `additionalProperties: true` allows extra keys, like leaving it out: no attribute and no map field.
+    #[test]
+    fn additional_properties_true_emits_no_attribute_or_field() {
+        let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":true}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
+            "}\n\n"
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// A root whose type is `["object", "null"]` reads as `object` and still emits its struct.
+    #[test]
+    fn root_type_object_or_null_with_properties_emits_struct() {
+        let json = r#"{"type":["object","null"],"properties":{"name":{"type":"string"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = concat!(
+            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
+            "use serde::{Deserialize, Serialize};\n\n",
+            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
+            "pub struct Root {\n",
+            "    pub name: Option<String>,\n",
             "}\n\n"
         );
         assert_eq!(expected, actual);
@@ -2931,10 +3122,14 @@ pub struct Root {
             r#"{"type":"object","properties":{"x":{"type":"string","const":"same"}}}"#,
         )
         .unwrap();
-        let actual: Result<JsonSchema, _> = merge_all_of(&[s1, s2]);
+        let actual: Result<JsonSchema, _> = merge_all_of(&[s1.into(), s2.into()]);
         assert!(actual.is_ok());
         let merged: JsonSchema = actual.unwrap();
-        let x_schema: &JsonSchema = merged.properties.get("x").expect("property x");
+        let x_schema: &JsonSchema = merged
+            .properties
+            .get("x")
+            .and_then(Schema::as_object)
+            .expect("property x");
         assert_eq!(
             x_schema.const_value.as_ref(),
             Some(&serde_json::Value::String("same".to_string()))
@@ -2951,7 +3146,7 @@ pub struct Root {
             r#"{"type":"object","properties":{"x":{"type":"string","const":"b"}}}"#,
         )
         .unwrap();
-        let actual: Result<JsonSchema, CodeGenError> = merge_all_of(&[s1, s2]);
+        let actual: Result<JsonSchema, CodeGenError> = merge_all_of(&[s1.into(), s2.into()]);
         let err = actual.expect_err("expected AllOfMergeConflictingConst");
         assert!(matches!(
             err,
@@ -2969,10 +3164,15 @@ pub struct Root {
             r#"{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}}"#,
         )
         .unwrap();
-        let merged: JsonSchema = merge_all_of(&[s1, s2]).expect("merge ok");
-        let actual: JsonSchema = merged.properties.get("x").cloned().expect("property x");
+        let merged: JsonSchema = merge_all_of(&[s1.into(), s2.into()]).expect("merge ok");
+        let actual: JsonSchema = merged
+            .properties
+            .get("x")
+            .and_then(Schema::as_object)
+            .cloned()
+            .expect("property x");
         let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+            type_: Some(JsonType::String.into()),
             pattern: Some("^[a-z]+$".to_string()),
             ..Default::default()
         };
@@ -2989,7 +3189,7 @@ pub struct Root {
             r#"{"type":"object","properties":{"x":{"type":"string","pattern":"^[0-9]+$"}}}"#,
         )
         .unwrap();
-        let actual: Result<JsonSchema, CodeGenError> = merge_all_of(&[s1, s2]);
+        let actual: Result<JsonSchema, CodeGenError> = merge_all_of(&[s1.into(), s2.into()]);
         assert!(matches!(
             actual,
             Err(CodeGenError::AllOfMergeConflictingPattern { .. })
@@ -3178,7 +3378,7 @@ pub struct RootVariant1 {
             r#"{"type":"object","properties":{"b":{"type":"integer"}},"required":["b"]}"#,
         )
         .unwrap();
-        let actual = merge_all_of(&[s1, s2]).unwrap();
+        let actual = merge_all_of(&[s1.into(), s2.into()]).unwrap();
         let expected: JsonSchema = serde_json::from_str(
             r#"{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["b"]}"#,
         )
@@ -3198,7 +3398,7 @@ pub struct RootVariant1 {
             serde_json::from_str(r#"{"type":"object","properties":{"x":{"type":"string"}}}"#)
                 .unwrap();
         let expected = s.clone();
-        let actual = merge_all_of(std::slice::from_ref(&s)).unwrap();
+        let actual = merge_all_of(&[Schema::from(s.clone())]).unwrap();
         assert_eq!(expected, actual);
     }
 
@@ -3210,7 +3410,7 @@ pub struct RootVariant1 {
         let s2: JsonSchema =
             serde_json::from_str(r#"{"type":"object","properties":{"k":{"type":"integer"}}}"#)
                 .unwrap();
-        let actual = merge_all_of(&[s1, s2]);
+        let actual = merge_all_of(&[s1.into(), s2.into()]);
         assert!(matches!(
             actual,
             Err(CodeGenError::AllOfMergeConflictingPropertyType {
@@ -3226,7 +3426,7 @@ pub struct RootVariant1 {
             serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
                 .unwrap();
         let s2: JsonSchema = serde_json::from_str(r#"{"type":"string"}"#).unwrap();
-        let actual = merge_all_of(&[s1, s2]);
+        let actual = merge_all_of(&[s1.into(), s2.into()]);
         assert!(matches!(
             actual,
             Err(CodeGenError::AllOfMergeNonObjectSubschema { index: 1 })
@@ -3241,7 +3441,7 @@ pub struct RootVariant1 {
         let s2: JsonSchema =
             serde_json::from_str(r#"{"type":"object","properties":{"s":{"enum":["x","y"]}}}"#)
                 .unwrap();
-        let actual = merge_all_of(&[s1, s2]);
+        let actual = merge_all_of(&[s1.into(), s2.into()]);
         assert!(matches!(
             actual,
             Err(CodeGenError::AllOfMergeConflictingEnum { property_key: ref k }) if k == "s"
@@ -3258,7 +3458,7 @@ pub struct RootVariant1 {
             r#"{"type":"object","properties":{"n":{"type":"integer","minimum":20,"maximum":30}}}"#,
         )
         .unwrap();
-        let actual = merge_all_of(&[s1, s2]);
+        let actual = merge_all_of(&[s1.into(), s2.into()]);
         assert!(matches!(
             actual,
             Err(CodeGenError::AllOfMergeConflictingNumericBounds {
@@ -3278,7 +3478,7 @@ pub struct RootVariant1 {
             r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993,"maximum":18446744073709551614,"exclusiveMaximum":1e19,"multipleOf":3}}}"#,
         )
         .unwrap();
-        let merged: JsonSchema = merge_all_of(&[s1, s2]).unwrap();
+        let merged: JsonSchema = merge_all_of(&[s1.into(), s2.into()]).unwrap();
         let expected: &str = r#"{"type":"integer","minimum":9007199254740993,"maximum":18446744073709551614,"exclusiveMinimum":0,"exclusiveMaximum":1e+19,"multipleOf":2}"#;
         let actual: String = serde_json::to_string(&merged.properties["n"]).unwrap();
         assert_eq!(expected, actual);
@@ -3294,7 +3494,7 @@ pub struct RootVariant1 {
             r#"{"type":"object","properties":{"n":{"type":"integer","maximum":9007199254740992}}}"#,
         )
         .unwrap();
-        let actual = merge_all_of(&[s1, s2]);
+        let actual = merge_all_of(&[s1.into(), s2.into()]);
         assert!(matches!(
             actual,
             Err(CodeGenError::AllOfMergeConflictingNumericBounds {
@@ -4368,15 +4568,16 @@ pub struct Root {
     fn deeply_nested_schema_does_not_stack_overflow() {
         const DEPTH: usize = 150;
         let mut inner: JsonSchema = JsonSchema {
-            type_: Some("object".to_string()),
+            type_: Some(JsonType::Object.into()),
             properties: {
                 let mut m = std::collections::BTreeMap::new();
                 m.insert(
                     "value".to_string(),
                     JsonSchema {
-                        type_: Some("string".to_string()),
+                        type_: Some(JsonType::String.into()),
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 );
                 m
             },
@@ -4385,11 +4586,11 @@ pub struct Root {
         };
         for i in (0..DEPTH).rev() {
             let mut wrap: JsonSchema = JsonSchema {
-                type_: Some("object".to_string()),
+                type_: Some(JsonType::Object.into()),
                 title: Some(format!("Level{i}")),
                 ..Default::default()
             };
-            wrap.properties.insert("child".to_string(), inner);
+            wrap.properties.insert("child".to_string(), inner.into());
             inner = wrap;
         }
         let settings: CodeGenSettings = default_settings();

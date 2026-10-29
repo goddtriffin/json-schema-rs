@@ -26,7 +26,7 @@ use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
-    JsonSchema, JsonSchemaParseError, JsonSchemaSettings, SpecVersion, ValidationError,
+    JsonSchemaParseError, JsonSchemaSettings, Schema, SpecVersion, ValidationError,
     ValidationResult, validate,
 };
 use serde::Deserialize;
@@ -210,6 +210,7 @@ fn parse_skip_message(error: &JsonSchemaParseError) -> String {
         JsonSchemaParseError::Serde(_)
         | JsonSchemaParseError::InvalidKeywordValue { .. }
         | JsonSchemaParseError::Io(_)
+        | JsonSchemaParseError::BooleanRoot { .. }
         | JsonSchemaParseError::UnknownSchemaUri { .. } => {
             format!("unsupported schema: {error}")
         }
@@ -250,12 +251,12 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
         ]);
     }
     let settings: JsonSchemaSettings = strict_settings(case_spec_version(&case.schema, dialect));
-    let schema: JsonSchema =
-        match catch_panic(|| JsonSchema::new_from_serde_value(&case.schema, &settings)) {
-            Ok(Ok(schema)) => schema,
-            Ok(Err(error)) => return CaseOutcome::Skipped(parse_skip_message(&error)),
-            Err(panic_message) => return CaseOutcome::Errored(panic_message),
-        };
+    let schema: Schema = match catch_panic(|| Schema::new_from_serde_value(&case.schema, &settings))
+    {
+        Ok(Ok(schema)) => schema,
+        Ok(Err(error)) => return CaseOutcome::Skipped(parse_skip_message(&error)),
+        Err(panic_message) => return CaseOutcome::Errored(panic_message),
+    };
     let outcomes: Vec<TestOutcome> = case
         .tests
         .iter()
@@ -569,12 +570,26 @@ mod tests {
     }
 
     #[test]
-    fn boolean_schema_skips_case_as_unsupported_schema() {
-        let expected: CaseOutcome = CaseOutcome::Skipped(
-            "unsupported schema: invalid JSON Schema: invalid type: boolean `true`, expected struct JsonSchema"
-                .to_string(),
-        );
-        let actual: CaseOutcome = run_flag(&json!({"schema": true, "tests": [{"instance": 1}]}));
+    fn true_schema_accepts_every_instance() {
+        let expected: CaseOutcome =
+            CaseOutcome::Results(vec![TestOutcome::Verdict(true), TestOutcome::Verdict(true)]);
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": true,
+            "tests": [{"instance": 1}, {"instance": {"a": [null]}}]
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn false_schema_rejects_every_instance() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![
+            TestOutcome::Verdict(false),
+            TestOutcome::Verdict(false),
+        ]);
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": false,
+            "tests": [{"instance": 1}, {"instance": {"a": [null]}}]
+        }));
         assert_eq!(expected, actual);
     }
 

@@ -7,7 +7,7 @@
 //!
 //! Remote references, `$id`-relative resolution, anchors, and full JSON Pointer traversal are out of scope.
 
-use crate::json_schema::JsonSchema;
+use crate::json_schema::{JsonSchema, SchemaRef};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +109,8 @@ pub fn parse_ref(ref_str: &str) -> Result<ParsedRef, RefResolutionError> {
     }
 }
 
-/// Resolves a fragment-only `$ref` against the root schema (single step).
+/// Resolves a fragment-only `$ref` against the root schema (single step). The target may be a
+/// boolean schema (`"$defs": {"never": false}`).
 ///
 /// # Errors
 ///
@@ -118,9 +119,9 @@ pub fn parse_ref(ref_str: &str) -> Result<ParsedRef, RefResolutionError> {
 pub fn resolve_ref<'a>(
     root: &'a JsonSchema,
     ref_str: &str,
-) -> Result<&'a JsonSchema, RefResolutionError> {
+) -> Result<SchemaRef<'a>, RefResolutionError> {
     match parse_ref(ref_str)? {
-        ParsedRef::Root => Ok(root),
+        ParsedRef::Root => Ok(SchemaRef::Object(root)),
         ParsedRef::Defs(name) => {
             let defs = root
                 .defs
@@ -134,7 +135,7 @@ pub fn resolve_ref<'a>(
                     ref_str: ref_str.to_string(),
                     name,
                 })?;
-            Ok(target)
+            Ok(target.as_schema_ref())
         }
         ParsedRef::Definitions(name) => {
             let definitions = root.definitions.as_ref().ok_or_else(|| {
@@ -149,12 +150,13 @@ pub fn resolve_ref<'a>(
                         ref_str: ref_str.to_string(),
                         name,
                     })?;
-            Ok(target)
+            Ok(target.as_schema_ref())
         }
     }
 }
 
-/// Resolves `$ref` on a schema node transitively until the effective schema has no `$ref`.
+/// Resolves `$ref` on a schema node transitively until the effective schema has no `$ref` (or is
+/// a boolean schema).
 ///
 /// Cycle detection is performed on the `$ref` strings encountered.
 ///
@@ -163,12 +165,12 @@ pub fn resolve_ref<'a>(
 /// Returns [`RefResolutionError`] when any step fails (unsupported ref, missing def, or cycle).
 pub fn resolve_schema_ref_transitive<'a>(
     root: &'a JsonSchema,
-    schema: &'a JsonSchema,
-) -> Result<&'a JsonSchema, RefResolutionError> {
-    let mut current: &'a JsonSchema = schema;
+    schema: SchemaRef<'a>,
+) -> Result<SchemaRef<'a>, RefResolutionError> {
+    let mut current: SchemaRef<'a> = schema;
     let mut visited: HashSet<&'a str> = HashSet::new();
 
-    while let Some(ref_str) = current.ref_.as_deref() {
+    while let Some(ref_str) = current.as_object().and_then(|s| s.ref_.as_deref()) {
         if visited.contains(ref_str) {
             return Err(RefResolutionError::RefCycle {
                 ref_str: ref_str.to_string(),
@@ -186,7 +188,7 @@ mod tests {
     use super::{
         ParsedRef, RefResolutionError, parse_ref, resolve_ref, resolve_schema_ref_transitive,
     };
-    use crate::json_schema::JsonSchema;
+    use crate::json_schema::{JsonSchema, JsonType, SchemaRef};
 
     #[test]
     fn parse_ref_defs() {
@@ -253,13 +255,14 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let actual: &JsonSchema = resolve_ref(&root, "#/$defs/Foo").expect("resolve Foo");
-        let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+        let actual: SchemaRef<'_> = resolve_ref(&root, "#/$defs/Foo").expect("resolve Foo");
+        let expected_schema: JsonSchema = JsonSchema {
+            type_: Some(JsonType::String.into()),
             title: Some("FooType".to_string()),
             ..Default::default()
         };
-        assert_eq!(expected, *actual);
+        let expected: SchemaRef<'_> = SchemaRef::Object(&expected_schema);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -272,13 +275,14 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let actual: &JsonSchema = resolve_ref(&root, "#/definitions/Bar").expect("resolve Bar");
-        let expected: JsonSchema = JsonSchema {
-            type_: Some("integer".to_string()),
+        let actual: SchemaRef<'_> = resolve_ref(&root, "#/definitions/Bar").expect("resolve Bar");
+        let expected_schema: JsonSchema = JsonSchema {
+            type_: Some(JsonType::Integer.into()),
             title: Some("BarType".to_string()),
             ..Default::default()
         };
-        assert_eq!(expected, *actual);
+        let expected: SchemaRef<'_> = SchemaRef::Object(&expected_schema);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -286,8 +290,8 @@ mod tests {
         let root: JsonSchema =
             serde_json::from_str(r#"{"type":"object","properties":{"x":{"type":"string"}}}"#)
                 .unwrap();
-        let actual: &JsonSchema = resolve_ref(&root, "#").expect("resolve root");
-        let expected: &JsonSchema = &root;
+        let actual: SchemaRef<'_> = resolve_ref(&root, "#").expect("resolve root");
+        let expected: SchemaRef<'_> = SchemaRef::Object(&root);
         assert_eq!(expected, actual);
     }
 
@@ -301,12 +305,22 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let actual: &JsonSchema = resolve_ref(&root, "#/$defs/Foo~1bar").expect("resolve Foo/bar");
-        let expected: JsonSchema = JsonSchema {
-            type_: Some("string".to_string()),
+        let actual: SchemaRef<'_> =
+            resolve_ref(&root, "#/$defs/Foo~1bar").expect("resolve Foo/bar");
+        let expected_schema: JsonSchema = JsonSchema {
+            type_: Some(JsonType::String.into()),
             ..Default::default()
         };
-        assert_eq!(expected, *actual);
+        let expected: SchemaRef<'_> = SchemaRef::Object(&expected_schema);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_ref_defs_boolean_target() {
+        let root: JsonSchema = serde_json::from_str(r#"{"$defs":{"never":false}}"#).unwrap();
+        let actual: SchemaRef<'_> = resolve_ref(&root, "#/$defs/never").expect("resolve never");
+        let expected: SchemaRef<'_> = SchemaRef::Bool(false);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -346,7 +360,7 @@ mod tests {
 }"##,
         )
         .unwrap();
-        let actual = resolve_schema_ref_transitive(&root, &root).unwrap_err();
+        let actual = resolve_schema_ref_transitive(&root, SchemaRef::Object(&root)).unwrap_err();
         let expected = RefResolutionError::RefCycle {
             ref_str: "#/$defs/A".to_string(),
         };
