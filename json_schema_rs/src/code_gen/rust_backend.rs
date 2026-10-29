@@ -1099,7 +1099,7 @@ fn collect_enums(
         for (key, prop_schema) in &node.properties {
             let (prop_effective, from_key) =
                 resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
-            if let Some(values) = string_enum_or_const_values(&prop_effective) {
+            if let Some(values) = string_enum_or_const_values(prop_effective) {
                 key_to_name_desc_examples
                     .entry(values.clone())
                     .or_insert_with(|| {
@@ -1127,7 +1127,7 @@ fn collect_enums(
             {
                 let (items_effective, items_from_key) =
                     resolve_ref_for_codegen(root, items.object_or_empty(), Some(key))?;
-                if let Some(values) = string_enum_or_const_values(&items_effective) {
+                if let Some(values) = string_enum_or_const_values(items_effective) {
                     key_to_name_desc_examples
                         .entry(values.clone())
                         .or_insert_with(|| {
@@ -1148,7 +1148,7 @@ fn collect_enums(
                         });
                 }
                 if items_effective.is_object_with_properties() {
-                    stack.push(items_effective);
+                    stack.push(items_effective.clone());
                 }
             }
         }
@@ -1279,14 +1279,14 @@ fn collect_oneof_enums(
 /// Collect all object schemas that need a struct in topological order (children before parents).
 /// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
 /// Resolves allOf for each node before use (merge on-the-fly).
-fn resolve_ref_for_codegen(
-    root: &JsonSchema,
-    schema: &JsonSchema,
+fn resolve_ref_for_codegen<'a>(
+    root: &'a JsonSchema,
+    schema: &'a JsonSchema,
     fallback_from_key: Option<&str>,
-) -> CodeGenResult<(JsonSchema, Option<String>)> {
+) -> CodeGenResult<(&'a JsonSchema, Option<String>)> {
     let mut from_key: Option<String> = fallback_from_key.map(String::from);
     let Some(ref_str) = schema.ref_.as_deref() else {
-        return Ok((schema.clone(), from_key));
+        return Ok((schema, from_key));
     };
 
     match ref_resolver::parse_ref(ref_str) {
@@ -1308,7 +1308,7 @@ fn resolve_ref_for_codegen(
             reason: format!("{e:?}"),
         })?
         .object_or_empty();
-    Ok((resolved.clone(), from_key))
+    Ok((resolved, from_key))
 }
 
 #[expect(clippy::too_many_lines)]
@@ -1358,7 +1358,7 @@ fn collect_structs(
                     let (sub_effective, sub_from_key) =
                         resolve_ref_for_codegen(root, &sub_resolved, Some(&variant_key))?;
                     if sub_effective.is_object_with_properties() {
-                        stack.push((sub_effective, sub_from_key, 0, false));
+                        stack.push((sub_effective.clone(), sub_from_key, 0, false));
                     } else if sub_resolved.is_array_with_items()
                         && let Some(ref items) = sub_resolved.items
                     {
@@ -1366,7 +1366,7 @@ fn collect_structs(
                         let (items_effective, items_from_key) =
                             resolve_ref_for_codegen(root, &items_resolved, Some(&variant_key))?;
                         if items_effective.is_object_with_properties() {
-                            stack.push((items_effective, items_from_key, 0, false));
+                            stack.push((items_effective.clone(), items_from_key, 0, false));
                         }
                     }
                 }
@@ -1381,7 +1381,7 @@ fn collect_structs(
                     let (sub_effective, sub_from_key) =
                         resolve_ref_for_codegen(root, &sub_resolved, Some(&variant_key))?;
                     if sub_effective.is_object_with_properties() {
-                        stack.push((sub_effective, sub_from_key, 0, false));
+                        stack.push((sub_effective.clone(), sub_from_key, 0, false));
                     } else if sub_resolved.is_array_with_items()
                         && let Some(ref items) = sub_resolved.items
                     {
@@ -1389,7 +1389,7 @@ fn collect_structs(
                         let (items_effective, items_from_key) =
                             resolve_ref_for_codegen(root, &items_resolved, Some(&variant_key))?;
                         if items_effective.is_object_with_properties() {
-                            stack.push((items_effective, items_from_key, 0, false));
+                            stack.push((items_effective.clone(), items_from_key, 0, false));
                         }
                     }
                 }
@@ -1397,7 +1397,7 @@ fn collect_structs(
                 let (child_effective, child_from_key) =
                     resolve_ref_for_codegen(root, &child_resolved, Some(&key))?;
                 if child_effective.is_object_with_properties() {
-                    stack.push((child_effective, child_from_key, 0, false));
+                    stack.push((child_effective.clone(), child_from_key, 0, false));
                 } else if child_effective.is_array_with_items()
                     && let Some(ref items) = child_effective.items
                 {
@@ -1405,7 +1405,7 @@ fn collect_structs(
                     let (items_effective, items_from_key) =
                         resolve_ref_for_codegen(root, &items_resolved, Some(&key))?;
                     if items_effective.is_object_with_properties() {
-                        stack.push((items_effective, items_from_key, 0, false));
+                        stack.push((items_effective.clone(), items_from_key, 0, false));
                     }
                 }
             }
@@ -1484,7 +1484,7 @@ fn collect_structs_all_schemas(
                             Some(&variant_key),
                         )?;
                         if sub_effective.is_object_with_properties() {
-                            stack.push((sub_effective, sub_from_key, 0, false));
+                            stack.push((sub_effective.clone(), sub_from_key, 0, false));
                         } else if sub_effective.is_array_with_items()
                             && let Some(ref items) = sub_effective.items
                         {
@@ -1496,7 +1496,7 @@ fn collect_structs_all_schemas(
                                 Some(&variant_key),
                             )?;
                             if items_effective.is_object_with_properties() {
-                                stack.push((items_effective, items_from_key, 0, false));
+                                stack.push((items_effective.clone(), items_from_key, 0, false));
                             }
                         }
                     }
@@ -1514,7 +1514,7 @@ fn collect_structs_all_schemas(
                             Some(&variant_key),
                         )?;
                         if sub_effective.is_object_with_properties() {
-                            stack.push((sub_effective, sub_from_key, 0, false));
+                            stack.push((sub_effective.clone(), sub_from_key, 0, false));
                         } else if sub_effective.is_array_with_items()
                             && let Some(ref items) = sub_effective.items
                         {
@@ -1526,7 +1526,7 @@ fn collect_structs_all_schemas(
                                 Some(&variant_key),
                             )?;
                             if items_effective.is_object_with_properties() {
-                                stack.push((items_effective, items_from_key, 0, false));
+                                stack.push((items_effective.clone(), items_from_key, 0, false));
                             }
                         }
                     }
@@ -1534,7 +1534,7 @@ fn collect_structs_all_schemas(
                     let (child_effective, child_from_key) =
                         resolve_ref_for_codegen(schema_root, &child_resolved, Some(&key))?;
                     if child_effective.is_object_with_properties() {
-                        stack.push((child_effective, child_from_key, 0, false));
+                        stack.push((child_effective.clone(), child_from_key, 0, false));
                     } else if child_effective.is_array_with_items()
                         && let Some(ref items) = child_effective.items
                     {
@@ -1542,7 +1542,7 @@ fn collect_structs_all_schemas(
                         let (items_effective, items_from_key) =
                             resolve_ref_for_codegen(schema_root, &items_resolved, Some(&key))?;
                         if items_effective.is_object_with_properties() {
-                            stack.push((items_effective, items_from_key, 0, false));
+                            stack.push((items_effective.clone(), items_from_key, 0, false));
                         }
                     }
                 }
@@ -2080,7 +2080,7 @@ fn emit_struct_fields_with_resolver(
     for (key, prop_schema) in &schema.properties {
         let (prop_schema_effective, _) =
             resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
-        let prop_schema: &JsonSchema = &prop_schema_effective;
+        let prop_schema: &JsonSchema = prop_schema_effective;
         let primary: Option<JsonType> = prop_schema.primary_type();
 
         for line in doc_lines(prop_schema.description.as_deref()) {
@@ -2283,7 +2283,7 @@ fn emit_struct_fields(
     for (key, prop_schema) in &schema.properties {
         let (prop_schema_effective, _) =
             resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
-        let prop_schema: &JsonSchema = &prop_schema_effective;
+        let prop_schema: &JsonSchema = prop_schema_effective;
         let primary: Option<JsonType> = prop_schema.primary_type();
 
         for line in doc_lines(prop_schema.description.as_deref()) {
@@ -2523,16 +2523,16 @@ fn emit_rust(
         vec![root.clone()]
     };
 
-    let enums: Vec<EnumToEmit> = collect_enums(schema, &root, settings)?;
+    let enums: Vec<EnumToEmit> = collect_enums(schema, root, settings)?;
     let enum_values_to_name: BTreeMap<Vec<String>, String> = enums
         .iter()
         .map(|e| (e.values.clone(), e.name.clone()))
         .collect();
 
     let anyof_enums: Vec<AnyOfEnumToEmit> =
-        collect_anyof_enums(schema, &root, settings, &enum_values_to_name)?;
+        collect_anyof_enums(schema, root, settings, &enum_values_to_name)?;
     let oneof_enums: Vec<OneOfEnumToEmit> =
-        collect_oneof_enums(schema, &root, settings, &enum_values_to_name)?;
+        collect_oneof_enums(schema, root, settings, &enum_values_to_name)?;
 
     let mut structs: Vec<StructToEmit> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
