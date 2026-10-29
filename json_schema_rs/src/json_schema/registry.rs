@@ -47,11 +47,11 @@ pub const DEFAULT_BASE_URI: &str = "json-schema:///";
 
 /// An absolute URI in normal form (RFC 3986 §6.2.2, via `fluent-uri`): two spellings of one
 /// identifier are equal.
-type Uri = Iri<String>;
+pub(crate) type Uri = Iri<String>;
 
 /// Parses and normalises an absolute URI (an IRI: non-ASCII characters are allowed), or says why
 /// `text` is not one.
-fn parse_uri(text: &str) -> Result<Uri, String> {
+pub(crate) fn parse_uri(text: &str) -> Result<Uri, String> {
     match Iri::parse(text) {
         Ok(iri) => Ok(iri.normalize()),
         Err(_) if IriRef::parse(text).is_ok() => {
@@ -65,7 +65,7 @@ fn parse_uri(text: &str) -> Result<Uri, String> {
 /// fragment) and normalises the result, which keeps the reference's fragment. Fails when
 /// `reference` is not a URI reference, or is a relative path against a base without a
 /// hierarchical path (a `urn:`; a fragment-only reference always resolves).
-fn resolve_uri(base: &Uri, reference: &str) -> Result<Uri, String> {
+pub(crate) fn resolve_uri(base: &Uri, reference: &str) -> Result<Uri, String> {
     let reference: IriRef<&str> = IriRef::parse(reference).map_err(|e| e.to_string())?;
     reference
         .resolve_against(&base.strip_fragment())
