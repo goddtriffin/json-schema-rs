@@ -4,6 +4,7 @@
 //! to a writer. Supported keywords and types are documented in the README.
 
 pub mod code_gen;
+pub mod error_list;
 pub mod json_pointer;
 pub mod json_schema;
 mod number;
@@ -15,14 +16,16 @@ pub use code_gen::{
     CodeGenBackend, CodeGenError, CodeGenResult, CodeGenSettings, CodeGenSettingsBuilder,
     DedupeMode, GenerateRustOutput, ModelNameSource, RustBackend, generate_rust,
 };
+pub use error_list::ErrorList;
 pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use json_schema::{
     Dialect, DialectSettings, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics,
-    JsonSchema, JsonSchemaParseError, JsonSchemaParseResult, JsonSchemaSettings,
-    JsonSchemaSettingsBuilder, JsonType, Keyword, OfflineRetriever, RefSiblings, Registry,
-    RegistryBuilder, RegistryError, Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema,
-    SchemaRef, Scope, SpecVersion, SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef,
-    UnknownSchemaUri, Vocabulary, VocabularyKind, VocabularySet, resolve_dialect,
+    JsonSchema, JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult,
+    JsonSchemaSettings, JsonSchemaSettingsBuilder, JsonType, Keyword, OfflineRetriever,
+    RefSiblings, Registry, RegistryBuilder, RegistryError, RegistryErrors, Resolved,
+    ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope, SpecVersion,
+    SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri, Vocabulary,
+    VocabularyKind, VocabularySet, resolve_dialect,
 };
 pub use reverse_code_gen::{
     ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema,

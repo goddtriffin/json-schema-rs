@@ -1,10 +1,14 @@
 //! Errors when parsing JSON Schema.
 
+use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use std::fmt;
 
 /// Result type for JSON Schema parsing operations.
 pub type JsonSchemaParseResult<T> = Result<T, JsonSchemaParseError>;
+
+/// Every problem parsing one schema document found, one [`JsonSchemaParseError`] each.
+pub type JsonSchemaParseErrors = ErrorList<JsonSchemaParseError>;
 
 /// Error when parsing a JSON Schema with the given settings.
 #[derive(Debug)]
