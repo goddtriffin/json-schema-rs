@@ -16380,7 +16380,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -16424,7 +16424,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -16468,7 +16468,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/nodemon.json\": invalid file url: https://json.schemastore.org/nodemon.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -16512,7 +16512,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/nodemon.json\": invalid file url: https://json.schemastore.org/nodemon.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
