@@ -59,26 +59,26 @@
         "ours": {
           "tally": {
             "total": 615,
-            "passed": 471,
+            "passed": 508,
             "failed": 47,
-            "skipped": 97,
+            "skipped": 60,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 471,
+            "numerator": 508,
             "denominator": 615,
-            "percent": "76.59%"
+            "percent": "82.60%"
           },
           "coverage": {
-            "numerator": 518,
+            "numerator": 555,
             "denominator": 615,
-            "percent": "84.23%"
+            "percent": "90.24%"
           },
           "correctness": {
-            "numerator": 471,
-            "denominator": 518,
-            "percent": "90.93%"
+            "numerator": 508,
+            "denominator": 555,
+            "percent": "91.53%"
           },
           "disagreements_with_majority": 47,
           "wrong_vs_expected": 47
@@ -89,29 +89,29 @@
         "ours": {
           "tally": {
             "total": 834,
-            "passed": 631,
-            "failed": 75,
-            "skipped": 128,
+            "passed": 684,
+            "failed": 77,
+            "skipped": 73,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 631,
+            "numerator": 684,
             "denominator": 834,
-            "percent": "75.66%"
+            "percent": "82.01%"
           },
           "coverage": {
-            "numerator": 706,
+            "numerator": 761,
             "denominator": 834,
-            "percent": "84.65%"
+            "percent": "91.25%"
           },
           "correctness": {
-            "numerator": 631,
-            "denominator": 706,
-            "percent": "89.38%"
+            "numerator": 684,
+            "denominator": 761,
+            "percent": "89.88%"
           },
-          "disagreements_with_majority": 75,
-          "wrong_vs_expected": 75
+          "disagreements_with_majority": 77,
+          "wrong_vs_expected": 77
         }
       },
       {
@@ -119,29 +119,29 @@
         "ours": {
           "tally": {
             "total": 922,
-            "passed": 712,
-            "failed": 86,
-            "skipped": 124,
+            "passed": 777,
+            "failed": 88,
+            "skipped": 57,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 712,
+            "numerator": 777,
             "denominator": 922,
-            "percent": "77.22%"
+            "percent": "84.27%"
           },
           "coverage": {
-            "numerator": 798,
+            "numerator": 865,
             "denominator": 922,
-            "percent": "86.55%"
+            "percent": "93.82%"
           },
           "correctness": {
-            "numerator": 712,
-            "denominator": 798,
-            "percent": "89.22%"
+            "numerator": 777,
+            "denominator": 865,
+            "percent": "89.83%"
           },
-          "disagreements_with_majority": 86,
-          "wrong_vs_expected": 86
+          "disagreements_with_majority": 88,
+          "wrong_vs_expected": 88
         }
       },
       {
@@ -149,29 +149,29 @@
         "ours": {
           "tally": {
             "total": 1242,
-            "passed": 896,
-            "failed": 172,
-            "skipped": 174,
+            "passed": 978,
+            "failed": 175,
+            "skipped": 89,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 896,
+            "numerator": 978,
             "denominator": 1242,
-            "percent": "72.14%"
+            "percent": "78.74%"
           },
           "coverage": {
-            "numerator": 1068,
+            "numerator": 1153,
             "denominator": 1242,
-            "percent": "85.99%"
+            "percent": "92.83%"
           },
           "correctness": {
-            "numerator": 896,
-            "denominator": 1068,
-            "percent": "83.90%"
+            "numerator": 978,
+            "denominator": 1153,
+            "percent": "84.82%"
           },
-          "disagreements_with_majority": 172,
-          "wrong_vs_expected": 172
+          "disagreements_with_majority": 175,
+          "wrong_vs_expected": 175
         }
       },
       {
@@ -179,29 +179,29 @@
         "ours": {
           "tally": {
             "total": 1277,
-            "passed": 954,
-            "failed": 205,
-            "skipped": 118,
+            "passed": 1057,
+            "failed": 220,
+            "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 954,
+            "numerator": 1057,
             "denominator": 1277,
-            "percent": "74.71%"
+            "percent": "82.77%"
           },
           "coverage": {
-            "numerator": 1159,
+            "numerator": 1277,
             "denominator": 1277,
-            "percent": "90.76%"
+            "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 954,
-            "denominator": 1159,
-            "percent": "82.31%"
+            "numerator": 1057,
+            "denominator": 1277,
+            "percent": "82.77%"
           },
-          "disagreements_with_majority": 205,
-          "wrong_vs_expected": 205
+          "disagreements_with_majority": 220,
+          "wrong_vs_expected": 220
         }
       }
     ],
@@ -299,16 +299,16 @@
       "localhost/json-schema-rs": {
         "tally": {
           "total": 4890,
-          "passed": 3664,
-          "failed": 585,
-          "skipped": 641,
+          "passed": 4004,
+          "failed": 607,
+          "skipped": 279,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 3664,
+          "numerator": 4004,
           "denominator": 4890,
-          "percent": "74.93%"
+          "percent": "81.88%"
         }
       },
       "python-jsonschema": {
@@ -436,16 +436,16 @@
       "localhost/json-schema-rs": {
         "tally": {
           "total": 2666,
-          "passed": 1604,
-          "failed": 1019,
-          "skipped": 43,
+          "passed": 1615,
+          "failed": 1014,
+          "skipped": 37,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1604,
+          "numerator": 1615,
           "denominator": 2666,
-          "percent": "60.17%"
+          "percent": "60.58%"
         }
       },
       "python-jsonschema": {
@@ -719,16 +719,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 615,
-              "passed": 471,
+              "passed": 508,
               "failed": 47,
-              "skipped": 97,
+              "skipped": 60,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 471,
+              "numerator": 508,
               "denominator": 615,
-              "percent": "76.59%"
+              "percent": "82.60%"
             }
           },
           "python-jsonschema": {
@@ -780,26 +780,26 @@
         "ours": {
           "tally": {
             "total": 615,
-            "passed": 471,
+            "passed": 508,
             "failed": 47,
-            "skipped": 97,
+            "skipped": 60,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 471,
+            "numerator": 508,
             "denominator": 615,
-            "percent": "76.59%"
+            "percent": "82.60%"
           },
           "coverage": {
-            "numerator": 518,
+            "numerator": 555,
             "denominator": 615,
-            "percent": "84.23%"
+            "percent": "90.24%"
           },
           "correctness": {
-            "numerator": 471,
-            "denominator": 518,
-            "percent": "90.93%"
+            "numerator": 508,
+            "denominator": 555,
+            "percent": "91.53%"
           },
           "disagreements_with_majority": 47,
           "wrong_vs_expected": 47
@@ -2563,16 +2563,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 834,
-              "passed": 631,
-              "failed": 75,
-              "skipped": 128,
+              "passed": 684,
+              "failed": 77,
+              "skipped": 73,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 631,
+              "numerator": 684,
               "denominator": 834,
-              "percent": "75.66%"
+              "percent": "82.01%"
             }
           },
           "python-jsonschema": {
@@ -2624,29 +2624,29 @@
         "ours": {
           "tally": {
             "total": 834,
-            "passed": 631,
-            "failed": 75,
-            "skipped": 128,
+            "passed": 684,
+            "failed": 77,
+            "skipped": 73,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 631,
+            "numerator": 684,
             "denominator": 834,
-            "percent": "75.66%"
+            "percent": "82.01%"
           },
           "coverage": {
-            "numerator": 706,
+            "numerator": 761,
             "denominator": 834,
-            "percent": "84.65%"
+            "percent": "91.25%"
           },
           "correctness": {
-            "numerator": 631,
-            "denominator": 706,
-            "percent": "89.38%"
+            "numerator": 684,
+            "denominator": 761,
+            "percent": "89.88%"
           },
-          "disagreements_with_majority": 75,
-          "wrong_vs_expected": 75
+          "disagreements_with_majority": 77,
+          "wrong_vs_expected": 77
         }
       },
       "optional": {
@@ -2730,16 +2730,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 341,
-              "passed": 226,
-              "failed": 112,
+              "passed": 227,
+              "failed": 111,
               "skipped": 3,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 226,
+              "numerator": 227,
               "denominator": 341,
-              "percent": "66.28%"
+              "percent": "66.57%"
             }
           },
           "python-jsonschema": {
@@ -2791,16 +2791,16 @@
         "ours": {
           "tally": {
             "total": 341,
-            "passed": 226,
-            "failed": 112,
+            "passed": 227,
+            "failed": 111,
             "skipped": 3,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 226,
+            "numerator": 227,
             "denominator": 341,
-            "percent": "66.28%"
+            "percent": "66.57%"
           },
           "coverage": {
             "numerator": 338,
@@ -2808,12 +2808,12 @@
             "percent": "99.12%"
           },
           "correctness": {
-            "numerator": 226,
+            "numerator": 227,
             "denominator": 338,
-            "percent": "66.86%"
+            "percent": "67.16%"
           },
-          "disagreements_with_majority": 101,
-          "wrong_vs_expected": 112
+          "disagreements_with_majority": 100,
+          "wrong_vs_expected": 111
         }
       },
       "findings": {
@@ -3762,6 +3762,40 @@
           },
           {
             "group": "draft6",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "refs with relative uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft6",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "relative refs with absolute uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft6",
             "file": "optional/ecmascript-regex.json",
             "optional": true,
             "case_description": "patterns always use unicode semantics with patternProperties",
@@ -4672,23 +4706,6 @@
           },
           {
             "group": "draft6",
-            "file": "optional/id.json",
-            "optional": true,
-            "case_description": "id inside an enum is not a real identifier",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "match $ref to id",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 7,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft6",
             "file": "optional/non-bmp-regex.json",
             "optional": true,
             "case_description": "Proper UTF-16 surrogate pair handling: patternProperties",
@@ -4847,16 +4864,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 922,
-              "passed": 712,
-              "failed": 86,
-              "skipped": 124,
+              "passed": 777,
+              "failed": 88,
+              "skipped": 57,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 712,
+              "numerator": 777,
               "denominator": 922,
-              "percent": "77.22%"
+              "percent": "84.27%"
             }
           },
           "python-jsonschema": {
@@ -4908,29 +4925,29 @@
         "ours": {
           "tally": {
             "total": 922,
-            "passed": 712,
-            "failed": 86,
-            "skipped": 124,
+            "passed": 777,
+            "failed": 88,
+            "skipped": 57,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 712,
+            "numerator": 777,
             "denominator": 922,
-            "percent": "77.22%"
+            "percent": "84.27%"
           },
           "coverage": {
-            "numerator": 798,
+            "numerator": 865,
             "denominator": 922,
-            "percent": "86.55%"
+            "percent": "93.82%"
           },
           "correctness": {
-            "numerator": 712,
-            "denominator": 798,
-            "percent": "89.22%"
+            "numerator": 777,
+            "denominator": 865,
+            "percent": "89.83%"
           },
-          "disagreements_with_majority": 86,
-          "wrong_vs_expected": 86
+          "disagreements_with_majority": 88,
+          "wrong_vs_expected": 88
         }
       },
       "optional": {
@@ -5014,16 +5031,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 621,
-              "passed": 366,
-              "failed": 250,
+              "passed": 367,
+              "failed": 249,
               "skipped": 5,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 366,
+              "numerator": 367,
               "denominator": 621,
-              "percent": "58.94%"
+              "percent": "59.10%"
             }
           },
           "python-jsonschema": {
@@ -5075,16 +5092,16 @@
         "ours": {
           "tally": {
             "total": 621,
-            "passed": 366,
-            "failed": 250,
+            "passed": 367,
+            "failed": 249,
             "skipped": 5,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 366,
+            "numerator": 367,
             "denominator": 621,
-            "percent": "58.94%"
+            "percent": "59.10%"
           },
           "coverage": {
             "numerator": 616,
@@ -5092,12 +5109,12 @@
             "percent": "99.19%"
           },
           "correctness": {
-            "numerator": 366,
+            "numerator": 367,
             "denominator": 616,
-            "percent": "59.42%"
+            "percent": "59.58%"
           },
-          "disagreements_with_majority": 167,
-          "wrong_vs_expected": 250
+          "disagreements_with_majority": 166,
+          "wrong_vs_expected": 249
         }
       },
       "findings": {
@@ -6205,6 +6222,40 @@
             "tests": [
               {
                 "test_description": "object with any other property is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft7",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "refs with relative uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft7",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "relative refs with absolute uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -7693,23 +7744,6 @@
             "group": "draft7",
             "file": "optional/id.json",
             "optional": true,
-            "case_description": "id inside an enum is not a real identifier",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "match $ref to id",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 7,
-                "voters": 8
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/id.json",
-            "optional": true,
             "case_description": "non-schema object containing a plain-name $id property",
             "triage": "likely_our_bug",
             "tests": [
@@ -7930,16 +7964,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 1242,
-              "passed": 896,
-              "failed": 172,
-              "skipped": 174,
+              "passed": 978,
+              "failed": 175,
+              "skipped": 89,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 896,
+              "numerator": 978,
               "denominator": 1242,
-              "percent": "72.14%"
+              "percent": "78.74%"
             }
           },
           "python-jsonschema": {
@@ -7991,29 +8025,29 @@
         "ours": {
           "tally": {
             "total": 1242,
-            "passed": 896,
-            "failed": 172,
-            "skipped": 174,
+            "passed": 978,
+            "failed": 175,
+            "skipped": 89,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 896,
+            "numerator": 978,
             "denominator": 1242,
-            "percent": "72.14%"
+            "percent": "78.74%"
           },
           "coverage": {
-            "numerator": 1068,
+            "numerator": 1153,
             "denominator": 1242,
-            "percent": "85.99%"
+            "percent": "92.83%"
           },
           "correctness": {
-            "numerator": 896,
-            "denominator": 1068,
-            "percent": "83.90%"
+            "numerator": 978,
+            "denominator": 1153,
+            "percent": "84.82%"
           },
-          "disagreements_with_majority": 172,
-          "wrong_vs_expected": 172
+          "disagreements_with_majority": 175,
+          "wrong_vs_expected": 175
         }
       },
       "optional": {
@@ -8097,16 +8131,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 710,
-              "passed": 416,
-              "failed": 278,
-              "skipped": 16,
+              "passed": 420,
+              "failed": 276,
+              "skipped": 14,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 416,
+              "numerator": 420,
               "denominator": 710,
-              "percent": "58.59%"
+              "percent": "59.15%"
             }
           },
           "python-jsonschema": {
@@ -8158,29 +8192,29 @@
         "ours": {
           "tally": {
             "total": 710,
-            "passed": 416,
-            "failed": 278,
-            "skipped": 16,
+            "passed": 420,
+            "failed": 276,
+            "skipped": 14,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 416,
+            "numerator": 420,
             "denominator": 710,
-            "percent": "58.59%"
+            "percent": "59.15%"
           },
           "coverage": {
-            "numerator": 694,
+            "numerator": 696,
             "denominator": 710,
-            "percent": "97.75%"
+            "percent": "98.03%"
           },
           "correctness": {
-            "numerator": 416,
-            "denominator": 694,
-            "percent": "59.94%"
+            "numerator": 420,
+            "denominator": 696,
+            "percent": "60.34%"
           },
-          "disagreements_with_majority": 26,
-          "wrong_vs_expected": 278
+          "disagreements_with_majority": 24,
+          "wrong_vs_expected": 276
         }
       },
       "findings": {
@@ -8413,6 +8447,23 @@
             "tests": [
               {
                 "test_description": "empty array is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2019-09",
+            "file": "defs.json",
+            "optional": false,
+            "case_description": "validate definition against metaschema",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid definition schema",
                 "expected": false,
                 "ours": true,
                 "majority": false,
@@ -9767,6 +9818,40 @@
           },
           {
             "group": "draft2019-09",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "refs with relative uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2019-09",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "relative refs with absolute uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2019-09",
             "file": "unevaluatedItems.json",
             "optional": false,
             "case_description": "unevaluatedItems false",
@@ -10200,6 +10285,23 @@
             "group": "draft2019-09",
             "file": "unevaluatedProperties.json",
             "optional": false,
+            "case_description": "unevaluatedProperties with $recursiveRef",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "with unevaluated properties",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2019-09",
+            "file": "unevaluatedProperties.json",
+            "optional": false,
             "case_description": "unevaluatedProperties can't see inside cousins",
             "triage": "likely_our_bug",
             "tests": [
@@ -10509,40 +10611,6 @@
           },
           {
             "group": "draft2019-09",
-            "file": "vocabulary.json",
-            "optional": false,
-            "case_description": "schema that uses custom metaschema with with no validation vocabulary",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "no validation: invalid number, but it still validates",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 7,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/anchor.json",
-            "optional": true,
-            "case_description": "$anchor inside an enum is not a real identifier",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "match $ref to $anchor",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
             "file": "optional/dependencies-compatibility.json",
             "optional": true,
             "case_description": "single dependency",
@@ -10813,23 +10881,6 @@
                 "majority": true,
                 "agreeing": 6,
                 "voters": 6
-              }
-            ]
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/id.json",
-            "optional": true,
-            "case_description": "$id inside an enum is not a real identifier",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "match $ref to $id",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 7,
-                "voters": 8
               }
             ]
           },
@@ -11137,16 +11188,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 1277,
-              "passed": 954,
-              "failed": 205,
-              "skipped": 118,
+              "passed": 1057,
+              "failed": 220,
+              "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 954,
+              "numerator": 1057,
               "denominator": 1277,
-              "percent": "74.71%"
+              "percent": "82.77%"
             }
           },
           "python-jsonschema": {
@@ -11198,29 +11249,29 @@
         "ours": {
           "tally": {
             "total": 1277,
-            "passed": 954,
-            "failed": 205,
-            "skipped": 118,
+            "passed": 1057,
+            "failed": 220,
+            "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 954,
+            "numerator": 1057,
             "denominator": 1277,
-            "percent": "74.71%"
+            "percent": "82.77%"
           },
           "coverage": {
-            "numerator": 1159,
+            "numerator": 1277,
             "denominator": 1277,
-            "percent": "90.76%"
+            "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 954,
-            "denominator": 1159,
-            "percent": "82.31%"
+            "numerator": 1057,
+            "denominator": 1277,
+            "percent": "82.77%"
           },
-          "disagreements_with_majority": 205,
-          "wrong_vs_expected": 205
+          "disagreements_with_majority": 220,
+          "wrong_vs_expected": 220
         }
       },
       "optional": {
@@ -11304,16 +11355,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 722,
-              "passed": 423,
-              "failed": 283,
-              "skipped": 16,
+              "passed": 428,
+              "failed": 282,
+              "skipped": 12,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 423,
+              "numerator": 428,
               "denominator": 722,
-              "percent": "58.59%"
+              "percent": "59.28%"
             }
           },
           "python-jsonschema": {
@@ -11365,29 +11416,29 @@
         "ours": {
           "tally": {
             "total": 722,
-            "passed": 423,
-            "failed": 283,
-            "skipped": 16,
+            "passed": 428,
+            "failed": 282,
+            "skipped": 12,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 423,
+            "numerator": 428,
             "denominator": 722,
-            "percent": "58.59%"
+            "percent": "59.28%"
           },
           "coverage": {
-            "numerator": 706,
+            "numerator": 710,
             "denominator": 722,
-            "percent": "97.78%"
+            "percent": "98.34%"
           },
           "correctness": {
-            "numerator": 423,
-            "denominator": 706,
-            "percent": "59.92%"
+            "numerator": 428,
+            "denominator": 710,
+            "percent": "60.28%"
           },
-          "disagreements_with_majority": 26,
-          "wrong_vs_expected": 283
+          "disagreements_with_majority": 25,
+          "wrong_vs_expected": 282
         }
       },
       "findings": {
@@ -11630,6 +11681,23 @@
           },
           {
             "group": "draft2020-12",
+            "file": "defs.json",
+            "optional": false,
+            "case_description": "validate definition against metaschema",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid definition schema",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
             "file": "dependentRequired.json",
             "optional": false,
             "case_description": "single dependency",
@@ -11857,6 +11925,74 @@
             "group": "draft2020-12",
             "file": "dynamicRef.json",
             "optional": false,
+            "case_description": "A $dynamicRef resolves to the first $dynamicAnchor still in scope that is encountered when the schema is evaluated",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "An array containing non-strings is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "A $dynamicRef without anchor in fragment behaves identical to $ref",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "An array of strings is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "A $dynamicRef with intermediate scopes that don't include a matching $dynamicAnchor does not affect dynamic scope resolution",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "An array containing non-strings is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "A $dynamicRef that initially resolves to a schema with a matching $dynamicAnchor resolves to the first $dynamicAnchor in the dynamic scope",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "The recursive part is not valid against the root",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
             "case_description": "multiple dynamic paths to the $dynamicRef keyword",
             "triage": "likely_our_bug",
             "tests": [
@@ -11907,6 +12043,91 @@
             "group": "draft2020-12",
             "file": "dynamicRef.json",
             "optional": false,
+            "case_description": "strict-tree schema, guards against misspelled properties",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "instance with misspelled field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "tests for implementation dynamic anchor and reference link",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "incorrect extended schema",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "$ref and $dynamicAnchor are independent of order - $defs first",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "incorrect extended schema",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "$ref and $dynamicAnchor are independent of order - $ref first",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "incorrect extended schema",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "$ref to $dynamicRef finds detached $dynamicAnchor",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "non-number is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
             "case_description": "$dynamicRef points to a boolean schema",
             "triage": "likely_our_bug",
             "tests": [
@@ -11917,6 +12138,40 @@
                 "majority": false,
                 "agreeing": 8,
                 "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "$dynamicRef skips over intermediate resources - direct reference",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "string property fails",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 9,
+                "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "dynamicRef.json",
+            "optional": false,
+            "case_description": "$dynamicRef avoids the root of each schema, but scopes are still registered",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "data is not sufficient for schema at second#/$defs/length",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
               }
             ]
           },
@@ -13075,6 +13330,40 @@
           },
           {
             "group": "draft2020-12",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "refs with relative uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "ref.json",
+            "optional": false,
+            "case_description": "relative refs with absolute uris and defs",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "invalid on inner field",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
             "file": "unevaluatedItems.json",
             "optional": false,
             "case_description": "unevaluatedItems false",
@@ -13290,6 +13579,23 @@
                 "majority": false,
                 "agreeing": 9,
                 "voters": 9
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "unevaluatedItems.json",
+            "optional": false,
+            "case_description": "unevaluatedItems with $dynamicRef",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "with unevaluated items",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
               }
             ]
           },
@@ -13785,6 +14091,23 @@
             "group": "draft2020-12",
             "file": "unevaluatedProperties.json",
             "optional": false,
+            "case_description": "unevaluatedProperties with $dynamicRef",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "with unevaluated properties",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
+            "file": "unevaluatedProperties.json",
+            "optional": false,
             "case_description": "unevaluatedProperties can't see inside cousins",
             "triage": "likely_our_bug",
             "tests": [
@@ -14160,40 +14483,6 @@
           },
           {
             "group": "draft2020-12",
-            "file": "vocabulary.json",
-            "optional": false,
-            "case_description": "schema that uses custom metaschema with with no validation vocabulary",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "no validation: invalid number, but it still validates",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 7,
-                "voters": 9
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/anchor.json",
-            "optional": true,
-            "case_description": "$anchor inside an enum is not a real identifier",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "match $ref to $anchor",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
             "file": "optional/dependencies-compatibility.json",
             "optional": true,
             "case_description": "single dependency",
@@ -14360,6 +14649,23 @@
           },
           {
             "group": "draft2020-12",
+            "file": "optional/dynamicRef.json",
+            "optional": true,
+            "case_description": "$dynamicRef skips over intermediate resources - pointer reference across resource boundary",
+            "triage": "likely_our_bug",
+            "tests": [
+              {
+                "test_description": "string property fails",
+                "expected": false,
+                "ours": true,
+                "majority": false,
+                "agreeing": 8,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft2020-12",
             "file": "optional/ecmascript-regex.json",
             "optional": true,
             "case_description": "patterns always use unicode semantics with patternProperties",
@@ -14464,23 +14770,6 @@
                 "majority": true,
                 "agreeing": 6,
                 "voters": 6
-              }
-            ]
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/id.json",
-            "optional": true,
-            "case_description": "$id inside an enum is not a real identifier",
-            "triage": "likely_our_bug",
-            "tests": [
-              {
-                "test_description": "match $ref to $id",
-                "expected": true,
-                "ours": false,
-                "majority": true,
-                "agreeing": 7,
-                "voters": 8
               }
             ]
           },
@@ -14728,40 +15017,6 @@
       }
     },
     {
-      "reason": "$ref: UnsupportedRef { ref_str: \"folderInteger.json\" }",
-      "tests": 16,
-      "cases": 8,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft4": 4,
-        "draft6": 4,
-        "draft7": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"schema-refs-absolute-uris-defs2.json\" }",
-      "tests": 12,
-      "cases": 4,
-      "by_group": {
-        "draft2019-09": 3,
-        "draft2020-12": 3,
-        "draft6": 3,
-        "draft7": 3
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"schema-relative-uri-defs2.json\" }",
-      "tests": 12,
-      "cases": 4,
-      "by_group": {
-        "draft2019-09": 3,
-        "draft2020-12": 3,
-        "draft6": 3,
-        "draft7": 3
-      }
-    },
-    {
       "reason": "keyword \"array_of_schemas\"",
       "tests": 12,
       "cases": 4,
@@ -14770,94 +15025,6 @@
         "draft2020-12": 3,
         "draft6": 3,
         "draft7": 3
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#/properties/foo\" }",
-      "tests": 10,
-      "cases": 5,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#foo\" }",
-      "tests": 10,
-      "cases": 5,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"node\" }",
-      "tests": 10,
-      "cases": 5,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"extendible-dynamic-ref.json\" }",
-      "tests": 9,
-      "cases": 3,
-      "by_group": {
-        "draft2020-12": 9
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"/absref/foobar.json\" }",
-      "tests": 8,
-      "cases": 4,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://example.com/b/d.json\" }",
-      "tests": 8,
-      "cases": 4,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft4": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"nested/foo-ref-string.json\" }",
-      "tests": 8,
-      "cases": 4,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"urn:uuid:deadbeef-1234-ff00-00ff-4321feebdaed#something\" }",
-      "tests": 8,
-      "cases": 4,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft6": 2,
-        "draft7": 2
       }
     },
     {
@@ -14879,338 +15046,6 @@
       }
     },
     {
-      "reason": "$ref: UnsupportedRef { ref_str: \"list\" }",
-      "tests": 7,
-      "cases": 5,
-      "by_group": {
-        "draft2020-12": 7
-      }
-    },
-    {
-      "reason": "$ref: DefinitionNotFound { ref_str: \"#/definitions/foo%22bar\", name: \"foo%22bar\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: DefinitionNotFound { ref_str: \"#/definitions/percent%25field\", name: \"percent%25field\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#/definitions//definitions/\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#/definitions/baz/definitions/bar\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://example.com/ref/else\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://example.com/ref/if\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://example.com/ref/then\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/integer.json\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/nested.json#foo\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft4": 2,
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"name-defs.json#/$defs/orNull\" }",
-      "tests": 6,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 3,
-        "draft2020-12": 3
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"urn:uuid:deadbeef-1234-ffff-ffff-4321feebdaed\" }",
-      "tests": 6,
-      "cases": 3,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: DefNotFound { ref_str: \"#/$defs/foo%22bar\", name: \"foo%22bar\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: DefNotFound { ref_str: \"#/$defs/percent%25field\", name: \"percent%25field\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#/$defs//$defs/\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#/examples/0\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#bigint\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"./baseSchema\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2020-12": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"baseUriChangeFolder/\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"baseUriChangeFolderInSubschema/#/$defs/bar\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"child1#my_anchor\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://json-schema.org/draft-04/schema#\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft4": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://json-schema.org/draft-06/schema#\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://json-schema.org/draft-07/schema#\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft7": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"https://example.com/schema-with-anchor#foo\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"https://json-schema.org/draft/2019-09/schema\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"https://json-schema.org/draft/2020-12/schema\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2020-12": 4
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"int.json\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"nested/foo.json\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"ref-and-defs.json\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"urn:uuid:deadbeef-1234-0000-0000-4321feebdaed#/$defs/bar\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"urn:uuid:deadbeef-1234-0000-0000-4321feebdaed#/definitions/bar\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft6": 2,
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"urn:uuid:deadbeef-4321-ffff-ffff-1234feebdaed\" }",
-      "tests": 4,
-      "cases": 2,
-      "by_group": {
-        "draft2019-09": 2,
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"draft4/name.json#/definitions/orNull\" }",
-      "tests": 3,
-      "cases": 1,
-      "by_group": {
-        "draft4": 3
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"draft6/name.json#/definitions/orNull\" }",
-      "tests": 3,
-      "cases": 1,
-      "by_group": {
-        "draft6": 3
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"draft7/name.json#/definitions/orNull\" }",
-      "tests": 3,
-      "cases": 1,
-      "by_group": {
-        "draft7": 3
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"extended\" }",
-      "tests": 3,
-      "cases": 2,
-      "by_group": {
-        "draft2020-12": 3
-      }
-    },
-    {
       "reason": "keyword \"const\"",
       "tests": 3,
       "cases": 1,
@@ -15219,39 +15054,7 @@
       }
     },
     {
-      "reason": "$ref: UnsupportedFragment { ref_str: \"#items\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"./tree\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"bar#/$defs/item\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"draft6/ref-and-definitions.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft6": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"draft7/ref-and-definitions.json\" }",
+      "reason": "$ref: $ref \"http://localhost:1234/draft2019-09/dependentRequired.json\" (\"http://localhost:1234/draft2019-09/dependentRequired.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2019-09/dependentRequired.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2019-09/dependentRequired.json\"",
       "tests": 2,
       "cases": 1,
       "by_group": {
@@ -15259,23 +15062,7 @@
       }
     },
     {
-      "reason": "$ref: UnsupportedRef { ref_str: \"first#/$defs/stuff\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"foo.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/bar#foo\" }",
+      "reason": "$ref: $ref \"http://localhost:1234/draft2020-12/prefixItems.json\" (\"http://localhost:1234/draft2020-12/prefixItems.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2020-12/prefixItems.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2020-12/prefixItems.json\"",
       "tests": 2,
       "cases": 1,
       "by_group": {
@@ -15283,311 +15070,7 @@
       }
     },
     {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/dependentRequired.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/detached-ref.json#/$defs/foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/different-id-ref-string.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/integer.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/locationIndependentIdentifier.json#/$defs/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/locationIndependentIdentifier.json#foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/nested-absolute-ref-to-string.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/nested.json#foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/subSchemas.json#/$defs/integer\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/subSchemas.json#/$defs/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/urn-ref-string.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/bar#foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/detached-dynamicref.json#/$defs/foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/detached-ref.json#/$defs/foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/different-id-ref-string.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/integer.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/locationIndependentIdentifier.json#/$defs/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/locationIndependentIdentifier.json#foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/nested-absolute-ref-to-string.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/nested.json#foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/prefixItems.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/subSchemas.json#/$defs/integer\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/subSchemas.json#/$defs/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/urn-ref-string.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft4/locationIndependentIdentifier.json#/definitions/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft4": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft4/subSchemas.json#/definitions/integer\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft4": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft4/subSchemas.json#/definitions/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft4": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft6/detached-ref.json#/definitions/foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft6": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft6/locationIndependentIdentifier.json#/definitions/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft6": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft6/subSchemas.json#/definitions/integer\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft6": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft6/subSchemas.json#/definitions/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft6": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft7/detached-ref.json#/definitions/foo\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft7/locationIndependentIdentifier.json#/definitions/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft7/subSchemas.json#/definitions/integer\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft7/subSchemas.json#/definitions/refToInteger\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"intermediate-scope\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"item\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"tree.json\" }",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 2
-      }
-    },
-    {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft2019-09/ignore-prefixItems.json\" }",
+      "reason": "$ref: $ref \"http://localhost:1234/draft2019-09/ignore-prefixItems.json\" (\"http://localhost:1234/draft2019-09/ignore-prefixItems.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2019-09/ignore-prefixItems.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2019-09/ignore-prefixItems.json\"",
       "tests": 1,
       "cases": 1,
       "by_group": {
@@ -15595,7 +15078,7 @@
       }
     },
     {
-      "reason": "$ref: UnsupportedRef { ref_str: \"http://localhost:1234/draft7/ignore-dependentRequired.json\" }",
+      "reason": "$ref: $ref \"http://localhost:1234/draft7/ignore-dependentRequired.json\" (\"http://localhost:1234/draft7/ignore-dependentRequired.json\") does not resolve: could not retrieve \"http://localhost:1234/draft7/ignore-dependentRequired.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft7/ignore-dependentRequired.json\"",
       "tests": 1,
       "cases": 1,
       "by_group": {
@@ -16897,7 +16380,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/nodemon.json\": invalid file url: https://json.schemastore.org/nodemon.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -16941,7 +16424,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/nodemon.json\": invalid file url: https://json.schemastore.org/nodemon.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -16985,7 +16468,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -17029,7 +16512,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -18747,7 +18230,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "root: could not resolve $ref \"#foo\": UnsupportedFragment { ref_str: \"#foo\" }"
+            "root: expected integer, got string"
           ]
         },
         {
@@ -18970,49 +18453,6 @@
       ]
     },
     {
-      "source": "suite draft2020-12/defs.json",
-      "title": "validate definition against metaschema / invalid definition schema",
-      "schema_path": null,
-      "schema": {
-        "$ref": "https://json-schema.org/draft/2020-12/schema",
-        "$schema": "https://json-schema.org/draft/2020-12/schema"
-      },
-      "instance_path": null,
-      "instance": {
-        "$defs": {
-          "foo": {
-            "type": 1
-          }
-        }
-      },
-      "outputs": [
-        {
-          "tool": "json-schema-rs",
-          "outcome": "invalid",
-          "messages": [
-            "root: could not resolve $ref \"https://json-schema.org/draft/2020-12/schema\": UnsupportedRef { ref_str: \"https://json-schema.org/draft/2020-12/schema\" }"
-          ]
-        },
-        {
-          "tool": "jsonschema",
-          "outcome": "invalid",
-          "messages": [
-            "/$defs/foo/type: 1 is not valid under any of the schemas listed in the 'anyOf' keyword"
-          ]
-        },
-        {
-          "tool": "boon",
-          "outcome": "invalid",
-          "messages": [
-            "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '/$defs/foo/type': anyOf failed",
-            "  - at '/$defs/foo/type': value must be one of 'array', 'boolean', 'integer', 'null', 'number', 'object', 'string'",
-            "  - at '/$defs/foo/type': want array, but got number"
-          ]
-        }
-      ]
-    },
-    {
       "source": "suite draft2020-12/dynamicRef.json",
       "title": "A $ref to a $dynamicAnchor in the same schema resource behaves like a normal $ref to an $anchor / An array containing non-strings is invalid",
       "schema_path": null,
@@ -19040,8 +18480,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "/0: could not resolve $ref \"#items\": UnsupportedFragment { ref_str: \"#items\" }",
-            "/1: could not resolve $ref \"#items\": UnsupportedFragment { ref_str: \"#items\" }"
+            "/1: expected string, got number"
           ]
         },
         {
@@ -19697,7 +19136,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "root: could not resolve $ref \"http://localhost:1234/draft2020-12/integer.json\": UnsupportedRef { ref_str: \"http://localhost:1234/draft2020-12/integer.json\" }"
+            "root: could not resolve $ref \"http://localhost:1234/draft2020-12/integer.json\": $ref \"http://localhost:1234/draft2020-12/integer.json\" (\"http://localhost:1234/draft2020-12/integer.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2020-12/integer.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2020-12/integer.json\""
           ]
         },
         {
@@ -19846,59 +19285,67 @@
     },
     {
       "source": "suite draft2020-12/unevaluatedProperties.json",
-      "title": "unevaluatedProperties with $dynamicRef / with unevaluated properties",
+      "title": "unevaluatedProperties + ref inside allOf / oneOf / Empty is invalid (no x or y)",
       "schema_path": null,
       "schema": {
         "$defs": {
-          "baseSchema": {
-            "$comment": "unevaluatedProperties comes first so it's more likely to catch bugs with implementations that are sensitive to keyword ordering",
-            "$defs": {
-              "defaultAddons": {
-                "$comment": "Needed to satisfy the bookending requirement",
-                "$dynamicAnchor": "addons"
-              }
-            },
-            "$dynamicRef": "#addons",
-            "$id": "./baseSchema",
+          "one": {
             "properties": {
-              "foo": {
-                "type": "string"
-              }
-            },
-            "unevaluatedProperties": false
-          },
-          "derived": {
-            "$dynamicAnchor": "addons",
-            "properties": {
-              "bar": {
-                "type": "string"
-              }
+              "a": true
             }
+          },
+          "two": {
+            "properties": {
+              "x": true
+            },
+            "required": [
+              "x"
+            ]
           }
         },
-        "$id": "https://example.com/unevaluated-properties-with-dynamic-ref/derived",
-        "$ref": "./baseSchema",
-        "$schema": "https://json-schema.org/draft/2020-12/schema"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "allOf": [
+          {
+            "$ref": "#/$defs/one"
+          },
+          {
+            "properties": {
+              "b": true
+            }
+          },
+          {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/two"
+              },
+              {
+                "properties": {
+                  "y": true
+                },
+                "required": [
+                  "y"
+                ]
+              }
+            ]
+          }
+        ],
+        "unevaluatedProperties": false
       },
       "instance_path": null,
-      "instance": {
-        "bar": "bar",
-        "baz": "baz",
-        "foo": "foo"
-      },
+      "instance": {},
       "outputs": [
         {
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "root: could not resolve $ref \"./baseSchema\": UnsupportedRef { ref_str: \"./baseSchema\" }"
+            "root: instance does not match any of the 2 subschema(s)"
           ]
         },
         {
           "tool": "jsonschema",
           "outcome": "invalid",
           "messages": [
-            "/: Unevaluated properties are not allowed ('baz' was unexpected)"
+            "/: {} is not valid under any of the schemas listed in the 'oneOf' keyword"
           ]
         },
         {
@@ -19906,7 +19353,9 @@
           "outcome": "invalid",
           "messages": [
             "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '/baz': false schema"
+            "- at '': oneOf failed, none matched",
+            "  - at '': missing properties 'x'",
+            "  - at '': missing properties 'y'"
           ]
         }
       ]
