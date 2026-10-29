@@ -24,5 +24,7 @@ pub use json_schema::{
     SchemaRef, Scope, SpecVersion, SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef,
     UnknownSchemaUri, Vocabulary, VocabularyKind, VocabularySet, resolve_dialect,
 };
-pub use reverse_code_gen::{SchemaGenerator, ToJsonSchema};
+pub use reverse_code_gen::{
+    ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema,
+};
 pub use validator::{ValidationError, ValidationResult, validate, validate_with_registry};

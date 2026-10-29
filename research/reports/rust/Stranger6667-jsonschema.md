@@ -911,6 +911,8 @@ set keyed by URI), `dereference` inlines `$ref`s, and `canonicalize` keeps share
 definitions in a `DefinitionMap` and merges equivalent subschemas into one canonical
 form.
 
+**Duplicate resource URIs (researched for json-schema-rs #50).** `bundle` is fallible (`Result<Value, ReferencingError>`, `crates/jsonschema/src/lib.rs:1590`), but no error variant exists for duplicates. The registry inserts into a plain map, so the last resource registered at a URI wins (`registry/input.rs:46-99`, `registry/index.rs:53`). The bundler skips URIs it has already visited, and `merge_entries` keeps an existing defs entry and drops the new one with no signal (`bundler.rs:77-80`, `150-174`).
+
 ## Validation (schema + JSON -> errors)
 
 This is the library's primary function.

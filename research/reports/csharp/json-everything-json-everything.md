@@ -337,6 +337,8 @@ Not applicable for the schema -> code direction (no code generator in this clone
 - **Generation**: dedupe is by CLR `Type`: one `TypeGenerationContext` per type, shared by all members. A type used from more than one place becomes one `$defs` entry referenced by `$ref`; a type used once is inlined back into its single user (reintegration), unless that would clash with keywords already on the referrer. Two different CLR types that produce the same `DefinitionName` collide and one is dropped (`DistinctBy`). Structurally identical but distinct types are not merged. `ExternalReferences` and `[Id]` replace a type with a `$ref` to an outside URI.
 - **CodeGeneration**: not present.
 
+**Colliding identities (researched for json-schema-rs #50).** Generation drops the second type whose definition name matches, silently, via `.DistinctBy(DefinitionName)` (`src/JsonSchema.Generation/SchemaGenerationContextCache.cs:70-71`); its `$ref` then points at the wrong type. A non-root `[Id]` type is never embedded: it becomes a bare `$ref` to its URI (`TypeGenerationContext.cs:50-54`), so resolving it is left to the registry. `SchemaRegistry` throws "Overwriting registered schemas is not permitted." when a different schema is registered at a URI that is already taken (`src/JsonSchema/SchemaRegistry.cs:138-141`), stopping at the first. `CreateBundle` keys defs by URI with `??=`, so the first one wins (`SchemaRegistry.cs:313-319`).
+
 ## Validation (schema + JSON -> errors)
 
 **Primary purpose of JsonSchema.Net.**
