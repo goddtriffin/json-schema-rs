@@ -1,5 +1,6 @@
 //! Errors that can occur during code generation.
 
+use crate::json_schema::RegistryError;
 use std::fmt;
 
 /// Result type for code generation operations.
@@ -45,6 +46,9 @@ pub enum CodeGenError {
     OneOfEmpty,
     /// `$ref` could not be resolved (or is unsupported in this crate).
     RefResolution { ref_str: String, reason: String },
+    /// The schema's `$ref` registry could not be built for a reason other than one `$ref`
+    /// (a duplicate `$id` or anchor, an unsupported vocabulary, ...).
+    Registry(RegistryError),
 }
 
 impl fmt::Display for CodeGenError {
@@ -106,6 +110,7 @@ impl fmt::Display for CodeGenError {
             CodeGenError::RefResolution { ref_str, reason } => {
                 write!(f, "could not resolve $ref \"{ref_str}\": {reason}")
             }
+            CodeGenError::Registry(e) => write!(f, "{e}"),
         }
     }
 }
@@ -127,6 +132,7 @@ impl std::error::Error for CodeGenError {
             | CodeGenError::OneOfEmpty
             | CodeGenError::RefResolution { .. } => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
+            CodeGenError::Registry(e) => Some(e),
         }
     }
 }

@@ -80,6 +80,115 @@ pub struct Vocabulary {
     pub required: bool,
 }
 
+/// A group of keywords a 2019-09 / 2020-12 vocabulary defines, as far as this library acts on
+/// it. Drafts before 2019-09 have no vocabularies; every group is in force there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum VocabularyKind {
+    /// `$id`, `$ref`, `$defs`, anchors, `$schema`, `$vocabulary`, `$comment`.
+    Core,
+    /// `allOf`, `anyOf`, `oneOf`, `not`, conditionals, and the object and array applicators.
+    Applicator,
+    /// `unevaluatedItems` and `unevaluatedProperties` (part of the applicator in 2019-09).
+    Unevaluated,
+    /// `type`, `enum`, `const`, and the numeric, string, array and object assertions.
+    Validation,
+    /// `title`, `description`, `default`, `deprecated`, `readOnly`, `writeOnly`, `examples`.
+    MetaData,
+    /// `format` as an annotation (2019-09's `format` vocabulary, 2020-12's `format-annotation`).
+    FormatAnnotation,
+    /// `format` as an assertion (2020-12's `format-assertion`).
+    FormatAssertion,
+    /// `contentEncoding`, `contentMediaType`, `contentSchema`.
+    Content,
+}
+
+impl VocabularyKind {
+    const ALL: [VocabularyKind; 8] = [
+        VocabularyKind::Core,
+        VocabularyKind::Applicator,
+        VocabularyKind::Unevaluated,
+        VocabularyKind::Validation,
+        VocabularyKind::MetaData,
+        VocabularyKind::FormatAnnotation,
+        VocabularyKind::FormatAssertion,
+        VocabularyKind::Content,
+    ];
+
+    /// The vocabulary a 2019-09 or 2020-12 vocabulary URI names, or `None` for any other URI.
+    #[must_use]
+    pub fn from_uri(uri: &str) -> Option<VocabularyKind> {
+        if let Some(name) = uri.strip_prefix("https://json-schema.org/draft/2020-12/vocab/") {
+            return match name {
+                "core" => Some(VocabularyKind::Core),
+                "applicator" => Some(VocabularyKind::Applicator),
+                "unevaluated" => Some(VocabularyKind::Unevaluated),
+                "validation" => Some(VocabularyKind::Validation),
+                "meta-data" => Some(VocabularyKind::MetaData),
+                "format-annotation" => Some(VocabularyKind::FormatAnnotation),
+                "format-assertion" => Some(VocabularyKind::FormatAssertion),
+                "content" => Some(VocabularyKind::Content),
+                _ => None,
+            };
+        }
+        match uri.strip_prefix("https://json-schema.org/draft/2019-09/vocab/")? {
+            "core" => Some(VocabularyKind::Core),
+            "applicator" => Some(VocabularyKind::Applicator),
+            "validation" => Some(VocabularyKind::Validation),
+            "meta-data" => Some(VocabularyKind::MetaData),
+            "format" => Some(VocabularyKind::FormatAnnotation),
+            "content" => Some(VocabularyKind::Content),
+            _ => None,
+        }
+    }
+
+    const fn bit(self) -> u8 {
+        1 << (self as u8)
+    }
+}
+
+/// A set of [`VocabularyKind`]s: the vocabularies in force for a dialect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct VocabularySet(u8);
+
+impl VocabularySet {
+    /// No vocabulary.
+    #[must_use]
+    pub const fn empty() -> VocabularySet {
+        VocabularySet(0)
+    }
+
+    /// Every vocabulary but [`VocabularyKind::FormatAssertion`]: what a draft before 2019-09
+    /// (which has no vocabularies) and the standard 2019-09 / 2020-12 metaschemas put in force.
+    #[must_use]
+    pub fn standard() -> VocabularySet {
+        VocabularyKind::ALL
+            .into_iter()
+            .filter(|kind| *kind != VocabularyKind::FormatAssertion)
+            .collect()
+    }
+
+    /// Whether `kind` is in the set.
+    #[must_use]
+    pub const fn contains(self, kind: VocabularyKind) -> bool {
+        self.0 & kind.bit() != 0
+    }
+
+    /// Adds `kind` to the set.
+    pub const fn insert(&mut self, kind: VocabularyKind) {
+        self.0 |= kind.bit();
+    }
+}
+
+impl FromIterator<VocabularyKind> for VocabularySet {
+    fn from_iter<I: IntoIterator<Item = VocabularyKind>>(iter: I) -> Self {
+        let mut set: VocabularySet = VocabularySet::empty();
+        for kind in iter {
+            set.insert(kind);
+        }
+        set
+    }
+}
+
 /// The effective JSON Schema rules for one schema document.
 ///
 /// Built from a draft's defaults ([`Dialect::for_spec_version`]) with any overrides from
@@ -99,6 +208,9 @@ pub struct Dialect {
     pub format_mode: FormatMode,
     /// The shape of `exclusiveMinimum` / `exclusiveMaximum`.
     pub exclusive_bounds: ExclusiveBounds,
+    /// The vocabularies in force: [`VocabularySet::standard`] for every draft, or the ones a
+    /// custom metaschema's `$vocabulary` declares (see [`Registry`](super::Registry)).
+    pub active_vocabularies: VocabularySet,
 }
 
 /// The drafts that have their own keyword table.
@@ -335,7 +447,14 @@ impl Dialect {
             integer_semantics,
             format_mode,
             exclusive_bounds,
+            active_vocabularies: VocabularySet::standard(),
         }
+    }
+
+    /// Whether the keywords of `kind` apply under this dialect.
+    #[must_use]
+    pub const fn vocabulary_active(&self, kind: VocabularyKind) -> bool {
+        self.active_vocabularies.contains(kind)
     }
 
     /// The keyword that sets a schema resource's URI: `"id"` in draft 4, `"$id"` from draft 6.
@@ -393,10 +512,13 @@ impl Default for Dialect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialectWarning {
     /// `$schema` names a metaschema this library does not recognise; the schema uses the
-    /// default dialect (Draft 2020-12) instead.
+    /// fallback draft instead ([`JsonSchemaSettings::default_spec_version`](super::JsonSchemaSettings::default_spec_version),
+    /// Draft 2020-12 by default).
     UnknownSchemaUri {
         /// The unrecognised `$schema` value.
         uri: String,
+        /// The draft used instead.
+        fallback: SpecVersion,
     },
     /// The draft has no rule set of its own (drafts 00–03); draft 4's rules are used.
     UnsupportedDraft {
@@ -408,10 +530,9 @@ pub enum DialectWarning {
 impl fmt::Display for DialectWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DialectWarning::UnknownSchemaUri { uri } => write!(
-                f,
-                "unknown $schema \"{uri}\"; using JSON Schema Draft 2020-12 rules"
-            ),
+            DialectWarning::UnknownSchemaUri { uri, fallback } => {
+                write!(f, "unknown $schema \"{uri}\"; using {fallback} rules")
+            }
             DialectWarning::UnsupportedDraft { spec_version } => write!(
                 f,
                 "{spec_version:?} has no rule set of its own; using JSON Schema Draft 4 rules"

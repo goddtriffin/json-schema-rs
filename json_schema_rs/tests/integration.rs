@@ -3283,7 +3283,7 @@ members = [{members}]
     }
 }
 
-// --- CLI: dialect settings (`--jss-spec-version`, `--jss-format-mode`, `--jss-unknown-schema-uri`) ---
+// --- CLI: dialect settings (`--jss-forced-spec-version`, `--jss-default-spec-version`, `--jss-format-mode`, `--jss-unknown-schema-uri`) ---
 
 /// Runs `jsonschemars validate` on `schema_json` with `payload_json` on stdin and `extra_args`;
 /// returns the schema file's path, whether it exited successfully, and its stderr.
@@ -3425,17 +3425,43 @@ fn cli_validate_format_mode_assertion_flag_checks_uuid() {
 
 #[cfg(feature = "uuid")]
 #[test]
-fn cli_validate_spec_version_flag_pins_draft() {
+fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
     let (_, actual): (String, (bool, String)) = run_cli_validate(
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"uuid"}"#,
         r#""not-a-uuid""#,
-        &["--jss-spec-version", "draft-07"],
+        &["--jss-forced-spec-version", "draft-07"],
     );
     let expected: (bool, String) = (
         false,
         "root: string \"not-a-uuid\" is not a valid UUID\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_default_spec_version_flag_applies_without_schema_keyword() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"type":"integer"}"#,
+        "1.0",
+        &["--jss-default-spec-version", "draft-04"],
+    );
+    let expected: (bool, String) = (
+        false,
+        "root: expected integer, got number\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_default_spec_version_flag_yields_to_schema_keyword() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"integer"}"#,
+        "1.0",
+        &["--jss-default-spec-version", "draft-04"],
+    );
+    let expected: (bool, String) = (true, String::new());
     assert_eq!(expected, actual);
 }
 

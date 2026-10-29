@@ -1,6 +1,7 @@
 //! JSON Schema specification version.
 
 use super::settings::JsonSchemaSettings;
+use std::fmt;
 
 /// JSON Schema specification version. One variant per vendored spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,7 +80,28 @@ impl SpecVersion {
     /// uses **Draft 2020-12** (the latest supported spec) when `$schema` is absent.
     #[must_use]
     pub fn default_schema_settings(self) -> JsonSchemaSettings {
-        JsonSchemaSettings::builder().spec_version(self).build()
+        JsonSchemaSettings::builder()
+            .forced_spec_version(self)
+            .build()
+    }
+}
+
+impl fmt::Display for SpecVersion {
+    /// The draft's name, e.g. `JSON Schema Draft 2020-12` or `JSON Schema Draft 4`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name: &str = match self {
+            SpecVersion::Draft00 => "0",
+            SpecVersion::Draft01 => "1",
+            SpecVersion::Draft02 => "2",
+            SpecVersion::Draft03 => "3",
+            SpecVersion::Draft04 => "4",
+            SpecVersion::Draft05 => "5",
+            SpecVersion::Draft06 => "6",
+            SpecVersion::Draft07 => "7",
+            SpecVersion::Draft201909 => "2019-09",
+            SpecVersion::Draft202012 => "2020-12",
+        };
+        write!(f, "JSON Schema Draft {name}")
     }
 }
 
@@ -91,9 +113,19 @@ mod tests {
     use crate::json_schema::settings::{JsonSchemaSettings, resolve_dialect};
 
     #[test]
-    fn default_schema_settings_pins_spec_version() {
+    fn display_names_each_draft() {
+        let expected: Vec<&str> = vec!["JSON Schema Draft 4", "JSON Schema Draft 2020-12"];
+        let actual: Vec<String> = [SpecVersion::Draft04, SpecVersion::Draft202012]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn default_schema_settings_forces_spec_version() {
         let expected: JsonSchemaSettings = JsonSchemaSettings {
-            spec_version: Some(SpecVersion::Draft07),
+            forced_spec_version: Some(SpecVersion::Draft07),
             ..JsonSchemaSettings::default()
         };
         let actual: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
