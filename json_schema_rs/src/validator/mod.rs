@@ -5,6 +5,7 @@
 //! instances. [`validate`] and [`validate_with_registry`] compile and validate in one call.
 
 mod compiled;
+mod ecma_regex;
 mod error;
 mod eval;
 mod format;

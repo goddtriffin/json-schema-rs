@@ -3009,3 +3009,213 @@ fn shared_enum_list_reports_each_schema_alike() {
     let actual: ValidationResult = compile(&s).validate(&json!({"a": 2, "b": 2}));
     assert_eq!(expected, actual);
 }
+
+// --- ECMA-262 patterns the `u` grammar refuses ---
+
+/// Parses the schema `value` with the default settings.
+fn schema_value(value: &Value) -> JsonSchema {
+    schema(&value.to_string())
+}
+
+/// `{"pattern": pattern}` validating the string `text`.
+fn pattern_result(pattern: &str, text: &str) -> ValidationResult {
+    validate(&schema_value(&json!({ "pattern": pattern })), &json!(text))
+}
+
+/// `{"patternProperties": {pattern: {"type": "integer"}}}` validating `{key: "x"}`.
+fn pattern_properties_result(pattern: &str, key: &str) -> ValidationResult {
+    let schema: JsonSchema =
+        schema_value(&json!({ "patternProperties": { pattern: { "type": "integer" } } }));
+    validate(&schema, &json!({ key: "x" }))
+}
+
+/// A draft 7 `{"format": "regex"}` (asserted by default) validating the string `value`.
+fn format_regex_result(value: &str) -> ValidationResult {
+    validate(
+        &schema_in(r#"{"format":"regex"}"#, SpecVersion::Draft07),
+        &json!(value),
+    )
+}
+
+fn invalid_pattern_in_schema(pattern: &str) -> ValidationResult {
+    Err(vec![ValidationError::InvalidPatternInSchema {
+        instance_path: root(),
+        pattern: pattern.to_string(),
+    }])
+}
+
+fn invalid_regex_format(value: &str) -> ValidationResult {
+    Err(vec![ValidationError::InvalidFormat {
+        instance_path: root(),
+        format: "regex".to_string(),
+        value: value.to_string(),
+    }])
+}
+
+#[test]
+fn pattern_accepts_escaped_hyphen() {
+    let actual: ValidationResult = pattern_result(r"^a\-b$", "a-b");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_accepts_escaped_colon() {
+    let actual: ValidationResult = pattern_result(r"\:", "x:y");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_accepts_escaped_quote() {
+    let actual: ValidationResult = pattern_result(r#"\""#, r#"say "hi""#);
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_accepts_lone_brace() {
+    let actual: ValidationResult = pattern_result("^a{$", "a{");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_accepts_lone_bracket() {
+    let actual: ValidationResult = pattern_result("^]$", "]");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_rejects_escaped_underscore() {
+    let actual: ValidationResult = pattern_result(r"a\_b", "a_b");
+    let expected: ValidationResult = invalid_pattern_in_schema(r"a\_b");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_rejects_escaped_letter_a() {
+    let actual: ValidationResult = pattern_result(r"\a", "a");
+    let expected: ValidationResult = invalid_pattern_in_schema(r"\a");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_rejects_escaped_letter_e() {
+    let actual: ValidationResult = pattern_result(r"\e", "e");
+    let expected: ValidationResult = invalid_pattern_in_schema(r"\e");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_accepts_escaped_hyphen() {
+    let actual: ValidationResult = pattern_properties_result(r"^a\-b$", "a-b");
+    let expected: ValidationResult = Err(vec![expected_integer("/a-b", "string")]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_accepts_escaped_colon() {
+    let actual: ValidationResult = pattern_properties_result(r"\:", "x:y");
+    let expected: ValidationResult = Err(vec![expected_integer("/x:y", "string")]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_accepts_escaped_quote() {
+    let actual: ValidationResult = pattern_properties_result(r#"\""#, r#"say "hi""#);
+    let expected: ValidationResult = Err(vec![expected_integer(r#"/say "hi""#, "string")]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_accepts_lone_brace() {
+    let actual: ValidationResult = pattern_properties_result("^a{$", "a{");
+    let expected: ValidationResult = Err(vec![expected_integer("/a{", "string")]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_accepts_lone_bracket() {
+    let actual: ValidationResult = pattern_properties_result("^]$", "]");
+    let expected: ValidationResult = Err(vec![expected_integer("/]", "string")]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_rejects_escaped_underscore() {
+    let actual: ValidationResult = pattern_properties_result(r"a\_b", "a_b");
+    let expected: ValidationResult = invalid_pattern_in_schema(r"a\_b");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_rejects_escaped_letter_a() {
+    let actual: ValidationResult = pattern_properties_result(r"\a", "a");
+    let expected: ValidationResult = invalid_pattern_in_schema(r"\a");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_properties_rejects_escaped_letter_e() {
+    let actual: ValidationResult = pattern_properties_result(r"\e", "e");
+    let expected: ValidationResult = invalid_pattern_in_schema(r"\e");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_accepts_escaped_hyphen() {
+    let actual: ValidationResult = format_regex_result(r"^a\-b$");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_accepts_escaped_colon() {
+    let actual: ValidationResult = format_regex_result(r"\:");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_accepts_escaped_quote() {
+    let actual: ValidationResult = format_regex_result(r#"\""#);
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_accepts_lone_brace() {
+    let actual: ValidationResult = format_regex_result("^a{$");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_accepts_lone_bracket() {
+    let actual: ValidationResult = format_regex_result("^]$");
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_rejects_escaped_underscore() {
+    let actual: ValidationResult = format_regex_result(r"a\_b");
+    let expected: ValidationResult = invalid_regex_format(r"a\_b");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_rejects_escaped_letter_a() {
+    let actual: ValidationResult = format_regex_result(r"\a");
+    let expected: ValidationResult = invalid_regex_format(r"\a");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn format_regex_rejects_escaped_letter_e() {
+    let actual: ValidationResult = format_regex_result(r"\e");
+    let expected: ValidationResult = invalid_regex_format(r"\e");
+    assert_eq!(expected, actual);
+}
