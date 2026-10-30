@@ -3407,7 +3407,6 @@ fn cli_validate_uuid_format_is_annotation_by_default_in_2020_12() {
     assert_eq!(expected, actual);
 }
 
-#[cfg(feature = "uuid")]
 #[test]
 fn cli_validate_format_mode_assertion_flag_checks_uuid() {
     let (_, actual): (String, (bool, String)) = run_cli_validate(
@@ -3417,13 +3416,12 @@ fn cli_validate_format_mode_assertion_flag_checks_uuid() {
     );
     let expected: (bool, String) = (
         false,
-        "root: string \"not-a-uuid\" is not a valid UUID\nerror: validation failed with 1 error(s)\n"
+        "root: string \"not-a-uuid\" is not a valid uuid\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
     assert_eq!(expected, actual);
 }
 
-#[cfg(feature = "uuid")]
 #[test]
 fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
     let (_, actual): (String, (bool, String)) = run_cli_validate(
@@ -3433,7 +3431,7 @@ fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
     );
     let expected: (bool, String) = (
         false,
-        "root: string \"not-a-uuid\" is not a valid UUID\nerror: validation failed with 1 error(s)\n"
+        "root: string \"not-a-uuid\" is not a valid uuid\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
     assert_eq!(expected, actual);
@@ -3491,6 +3489,34 @@ fn cli_validate_exclusive_bounds_flag_reads_boolean_modifier() {
         false,
         "root: value 3 is not below exclusiveMaximum 3\nerror: validation failed with 1 error(s)\n"
             .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_ref_siblings_flag_ignores_id_next_to_ref() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"$id":"http://example.com/root.json","$defs":{"int":{"$id":"http://example.com/int.json","type":"integer"},"str":{"$id":"http://example.com/nested/int.json","type":"string"}},"properties":{"x":{"$id":"http://example.com/nested/","$ref":"int.json"}}}"#,
+        r#"{"x":"a"}"#,
+        &["--jss-ref-siblings", "ignored"],
+    );
+    let expected: (bool, String) = (
+        false,
+        "/x: expected integer, got string\nerror: validation failed with 1 error(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_ref_siblings_flag_evaluates_id_next_to_ref() {
+    let (_, actual): (String, (bool, String)) = run_cli_validate(
+        r#"{"$schema":"http://json-schema.org/draft-07/schema#","$id":"http://example.com/root.json","definitions":{"int":{"$id":"http://example.com/int.json","type":"integer"},"str":{"$id":"http://example.com/nested/int.json","type":"string"}},"properties":{"x":{"$id":"http://example.com/nested/","$ref":"int.json"}}}"#,
+        r#"{"x":1}"#,
+        &["--jss-ref-siblings", "evaluated"],
+    );
+    let expected: (bool, String) = (
+        false,
+        "/x: expected string, got number\nerror: validation failed with 1 error(s)\n".to_string(),
     );
     assert_eq!(expected, actual);
 }

@@ -514,6 +514,13 @@ impl<'r> Node<'r> {
         }
     }
 
+    fn get_bool(self, key: &str) -> Option<bool> {
+        match self {
+            Node::Typed(schema) => schema.extensions.get(key).and_then(Value::as_bool),
+            Node::Raw(obj) => obj.get(key).and_then(Value::as_bool),
+        }
+    }
+
     /// The node's resource identifier, as written.
     fn id(self, dialect: Dialect) -> Option<&'r str> {
         match self {
@@ -550,6 +557,26 @@ impl<'r> Node<'r> {
         }
         self.id(dialect)
     }
+}
+
+/// The references `node` makes that the registry resolves: `$ref`, and, where `dialect` defines
+/// them, `$dynamicRef` and `$recursiveRef` (which first resolve like `$ref`) and `#` for a
+/// `$recursiveAnchor: true` (its resource root is the target of a dynamic `$recursiveRef`).
+fn references(node: Node<'_>, dialect: Dialect) -> impl Iterator<Item = &str> {
+    let recursive_anchor: bool = dialect.keyword("$recursiveAnchor").is_some()
+        && node.get_bool("$recursiveAnchor") == Some(true);
+    [
+        node.ref_(),
+        dialect
+            .keyword("$dynamicRef")
+            .and_then(|_| node.get_str("$dynamicRef")),
+        dialect
+            .keyword("$recursiveRef")
+            .and_then(|_| node.get_str("$recursiveRef")),
+        recursive_anchor.then_some("#"),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 /// The node `value` is as a schema, if it is a schema object.
@@ -1123,7 +1150,14 @@ impl<'a, 'b> Builder<'a, 'b> {
             resource
                 .dynamic_anchors
                 .insert(name.to_string(), pointer.clone());
+            // A `$dynamicRef` landing on this resource dynamically resolves `#name` here.
+            self.pending.push_back(PendingRef {
+                scope,
+                ref_str: format!("#{name}"),
+                origin: RefOrigin::Located(JsonPointer::from(pointer.clone()).to_string()),
+            });
         }
+        let resource: &mut Resource = &mut self.registry.resources[scope.0];
         resource.anchors.insert(name.to_string(), pointer);
     }
 
@@ -1226,7 +1260,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 let pointer: Vec<String> = materialise(&paths, path);
                 self.add_anchor(scope, name, pointer, true);
             }
-            if let Some(ref_str) = node.ref_() {
+            for ref_str in references(node, dialect) {
                 let origin: RefOrigin = match walk {
                     Some(walk) => RefOrigin::Walk { walk, visit },
                     None => RefOrigin::Located(encoded_pointer(base_pointer, &paths, path)),
@@ -1636,7 +1670,11 @@ fn typed_step<'r>(s: &'r JsonSchema, seg: &str, next: Option<&str>) -> (Step<'r>
         "allOf" => in_list(s.all_of.as_ref()),
         "anyOf" => in_list(s.any_of.as_ref()),
         "oneOf" => in_list(s.one_of.as_ref()),
-        "items" => single(s.items.as_ref()),
+        // The tuple form of `items` is kept raw in `extensions`.
+        "items" => match (s.items.as_ref(), s.extensions.get("items")) {
+            (None, Some(array)) => (Step::RawContainer(array), 1),
+            (items, _) => single(items),
+        },
         "additionalProperties" => single(s.additional_properties.as_ref()),
         "enum" => in_values(s.enum_values.as_ref()),
         "examples" => in_values(s.examples.as_ref()),
@@ -1700,6 +1738,12 @@ impl<'a> Registry<'a> {
         self.enter_node(scope, Node::Typed(schema))
     }
 
+    /// [`Registry::enter`] for a schema object the typed model keeps raw (under `not`, `if`,
+    /// ...).
+    pub(crate) fn enter_raw(&self, scope: Scope, schema: &Map<String, Value>) -> Scope {
+        self.enter_node(scope, Node::Raw(schema))
+    }
+
     fn enter_node(&self, scope: Scope, node: Node<'_>) -> Scope {
         let resource: &Resource = &self.resources[scope.0];
         match node.effective_id(resource.dialect) {
@@ -1736,6 +1780,12 @@ impl<'a> Registry<'a> {
                     ref_str: ref_str.to_string(),
                 })?;
         Ok(self.resolved(target))
+    }
+
+    /// Whether the resource `scope` is in declares the `$dynamicAnchor` `name` (resolvable in
+    /// that scope as `#name`).
+    pub(crate) fn has_dynamic_anchor(&self, scope: Scope, name: &str) -> bool {
+        self.resources[scope.0].dynamic_anchors.contains_key(name)
     }
 
     /// Resolves `ref_str` in the root's scope, or, when it does not appear there, in the first

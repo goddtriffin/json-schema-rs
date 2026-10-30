@@ -1,36 +1,19 @@
 //! JSON Schema validation: schema + instance → validation result with all errors.
 //!
-//! Collects every validation error (no fail-fast) and returns them in a single result.
+//! A schema is compiled once into a [`CompiledSchema`] (an arena of nodes with every `$ref`
+//! resolved and every regular expression compiled), which then validates any number of
+//! instances. [`validate`] and [`validate_with_registry`] compile and validate in one call.
 
+mod compiled;
 mod error;
+mod eval;
+mod format;
+
+pub use compiled::{CompileError, CompileErrors, CompiledSchema};
 pub use error::{ValidationError, ValidationResult};
 
 use crate::json_pointer::JsonPointer;
-use crate::json_schema::{
-    Dialect, JsonSchema, JsonType, Registry, RegistryError, Schema, SchemaRef, Scope, TypeSet,
-    VocabularyKind,
-};
-use crate::number::{self, JsonEqKey};
-use serde_json::{Map, Number, Value};
-use std::cmp::Ordering;
-use std::collections::HashSet;
-
-/// Returns the JSON type name of the value for use in "got" error messages.
-fn json_type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-/// Serializes a JSON value to a string for error display. Never truncates.
-fn value_to_display_string(v: &Value) -> String {
-    serde_json::to_string(v).unwrap_or_else(|_| "?".to_string())
-}
+use crate::json_schema::{Registry, RegistryError, SchemaRef};
 
 /// Validates a JSON instance against a schema. Collects **all** validation errors
 /// and returns them in a single result (no fail-fast).
@@ -42,10 +25,10 @@ fn value_to_display_string(v: &Value) -> String {
 ///
 /// `$ref` is resolved through a [`Registry`] built for this call with the defaults of
 /// [`Registry::new`] (in-document references, `$id` / `$anchor` resources, the embedded
-/// standard metaschemas; no retrieval). A schema whose registry cannot be built (a dangling
-/// `$ref`, a duplicate `$id`, ...) fails every instance with one error describing why. To
-/// validate many instances, or to give the registry other documents, build the registry once
-/// and call [`validate_with_registry`].
+/// standard metaschemas; no retrieval), and the schema is compiled for this call. A schema whose
+/// registry cannot be built (a dangling `$ref`, a duplicate `$id`, ...) or that cannot be
+/// compiled (an invalid `pattern`) fails every instance with one error per problem. To validate
+/// many instances, build the registry and the [`CompiledSchema`] once.
 ///
 /// # Errors
 ///
@@ -65,7 +48,10 @@ fn value_to_display_string(v: &Value) -> String {
 /// let never: Schema = Schema::try_from("false").unwrap();
 /// assert!(validate(&never, &instance).is_err());
 /// ```
-pub fn validate<'a>(schema: impl Into<SchemaRef<'a>>, instance: &Value) -> ValidationResult {
+pub fn validate<'a>(
+    schema: impl Into<SchemaRef<'a>>,
+    instance: &serde_json::Value,
+) -> ValidationResult {
     match Registry::new(schema) {
         Ok(registry) => validate_with_registry(&registry, instance),
         Err(errors) => Err(errors.iter().map(registry_error).collect()),
@@ -73,7 +59,8 @@ pub fn validate<'a>(schema: impl Into<SchemaRef<'a>>, instance: &Value) -> Valid
 }
 
 /// Validates `instance` against the root schema of `registry`, resolving every `$ref` through
-/// it. See [`validate`] for what is checked.
+/// it. Compiles the schema for this call; to validate many instances, compile it once with
+/// [`CompiledSchema::new`]. See [`validate`] for what is checked.
 ///
 /// # Errors
 ///
@@ -82,7 +69,7 @@ pub fn validate<'a>(schema: impl Into<SchemaRef<'a>>, instance: &Value) -> Valid
 /// # Example
 ///
 /// ```
-/// use json_schema_rs::{JsonSchema, Registry, validate_with_registry};
+/// use json_schema_rs::{CompiledSchema, JsonSchema, Registry, validate_with_registry};
 /// use serde_json::json;
 ///
 /// let schema: JsonSchema = JsonSchema::try_from(
@@ -92,10 +79,18 @@ pub fn validate<'a>(schema: impl Into<SchemaRef<'a>>, instance: &Value) -> Valid
 /// .unwrap();
 /// let registry: Registry<'_> = Registry::new(&schema).unwrap();
 /// assert!(validate_with_registry(&registry, &json!([1, 2])).is_ok());
-/// assert!(validate_with_registry(&registry, &json!(["a"])).is_err());
+///
+/// let compiled: CompiledSchema = CompiledSchema::new(&registry).unwrap();
+/// assert!(!compiled.is_valid(&json!(["a"])));
 /// ```
-pub fn validate_with_registry(registry: &Registry<'_>, instance: &Value) -> ValidationResult {
-    validate_in(registry, registry.root_scope(), registry.root(), instance)
+pub fn validate_with_registry(
+    registry: &Registry<'_>,
+    instance: &serde_json::Value,
+) -> ValidationResult {
+    match CompiledSchema::new(registry) {
+        Ok(compiled) => compiled.validate(instance),
+        Err(errors) => Err(errors.iter().map(compile_error).collect()),
+    }
 }
 
 /// The error every instance gets for one problem that kept the schema's registry from being
@@ -115,467 +110,25 @@ fn registry_error(error: &RegistryError) -> ValidationError {
     }
 }
 
-/// Follows `schema`'s `$ref` chain (each hop entering the target's scope) to a schema without
-/// `$ref`, returning it and the scope inside it. Keywords next to `$ref` are not evaluated.
-fn follow_refs<'r>(
-    registry: &'r Registry<'_>,
-    mut scope: Scope,
-    mut schema: SchemaRef<'r>,
-) -> Result<(SchemaRef<'r>, Scope), ValidationError> {
-    let mut visited: Vec<(Scope, &'r str)> = Vec::new();
-    loop {
-        let SchemaRef::Object(object) = schema else {
-            return Ok((schema, scope));
-        };
-        let inside: Scope = registry.enter(scope, object);
-        let Some(ref_str) = object.ref_.as_deref() else {
-            return Ok((schema, inside));
-        };
-        let invalid_ref = |reason: String| ValidationError::InvalidRef {
-            instance_path: JsonPointer::root(),
-            ref_str: ref_str.to_string(),
-            reason,
-        };
-        if visited.contains(&(inside, ref_str)) {
-            return Err(invalid_ref(
-                "the $ref chain loops back to itself without evaluating anything".to_string(),
-            ));
-        }
-        visited.push((inside, ref_str));
-        let resolved = registry
-            .resolve(inside, ref_str)
-            .map_err(|e| invalid_ref(e.to_string()))?;
-        schema = resolved.schema;
-        scope = resolved.scope;
-    }
-}
-
-/// The error for an instance that `type` rejects: the single-type variant for a set of one,
-/// [`ValidationError::ExpectedType`] otherwise.
-fn type_mismatch(
-    expected: TypeSet,
-    instance: &Value,
-    instance_path: &JsonPointer,
-) -> ValidationError {
-    let instance_path: JsonPointer = instance_path.clone();
-    let got: String = json_type_name(instance).to_string();
-    match expected.single() {
-        Some(JsonType::Object) => ValidationError::ExpectedObject { instance_path, got },
-        Some(JsonType::String) => ValidationError::ExpectedString { instance_path, got },
-        Some(JsonType::Integer) => ValidationError::ExpectedInteger { instance_path, got },
-        Some(JsonType::Number) => ValidationError::ExpectedNumber { instance_path, got },
-        Some(JsonType::Array) => ValidationError::ExpectedArray { instance_path, got },
-        Some(JsonType::Boolean) => ValidationError::ExpectedBoolean { instance_path, got },
-        Some(JsonType::Null) => ValidationError::ExpectedNull { instance_path, got },
-        None => ValidationError::ExpectedType {
+/// The error every instance gets for one problem that kept the schema from compiling (one per
+/// problem).
+fn compile_error(error: &CompileError) -> ValidationError {
+    let instance_path: JsonPointer = JsonPointer::root();
+    match error {
+        CompileError::InvalidPattern { pattern, .. } => ValidationError::InvalidPatternInSchema {
             instance_path,
-            expected,
-            got,
+            pattern: pattern.clone(),
+        },
+        CompileError::UnknownRef { ref_str, .. } => ValidationError::InvalidRef {
+            instance_path,
+            ref_str: ref_str.clone(),
+            reason: error.to_string(),
+        },
+        CompileError::InvalidKeywordValue { .. } => ValidationError::InvalidSchema {
+            instance_path,
+            reason: error.to_string(),
         },
     }
-}
-
-/// A pending check: a schema applied to an instance at a path, in a registry scope (the scope
-/// the schema sits in, before entering its own `$id`).
-type Work<'s, 'v> = (SchemaRef<'s>, &'v Value, JsonPointer, Scope);
-
-/// Validates `instance` against `schema`, which sits in `scope` of `registry`.
-#[expect(clippy::too_many_lines)]
-fn validate_in(
-    registry: &Registry<'_>,
-    scope: Scope,
-    schema: SchemaRef<'_>,
-    instance: &Value,
-) -> ValidationResult {
-    let mut errors: Vec<ValidationError> = Vec::new();
-    let mut stack: Vec<Work<'_, '_>> = Vec::new();
-    stack.push((schema, instance, JsonPointer::root(), scope));
-
-    while let Some((schema, instance, instance_path, scope)) = stack.pop() {
-        let (schema, scope): (&JsonSchema, Scope) = match follow_refs(registry, scope, schema) {
-            Ok((SchemaRef::Object(s), scope)) => (s, scope),
-            Ok((SchemaRef::Bool(true), _)) => continue,
-            Ok((SchemaRef::Bool(false), _)) => {
-                errors.push(ValidationError::FalseSchema { instance_path });
-                continue;
-            }
-            Err(mut e) => {
-                if let ValidationError::InvalidRef {
-                    instance_path: ref mut path,
-                    ..
-                } = e
-                {
-                    path.clone_from(&instance_path);
-                }
-                errors.push(e);
-                continue;
-            }
-        };
-        let dialect: Dialect = registry.dialect(scope);
-        let assertions: bool = dialect.vocabulary_active(VocabularyKind::Validation);
-        let applicators: bool = dialect.vocabulary_active(VocabularyKind::Applicator);
-
-        if assertions
-            && let Some(ref expected) = schema.const_value
-            && !number::json_equal(instance, expected)
-        {
-            let expected_str: String = value_to_display_string(expected);
-            let actual_str: String = value_to_display_string(instance);
-            errors.push(ValidationError::NotConst {
-                instance_path: instance_path.clone(),
-                expected: expected_str,
-                actual: actual_str,
-            });
-            continue;
-        }
-        if assertions
-            && let Some(ref allowed) = schema.enum_values
-            && !allowed.is_empty()
-            && !allowed.iter().any(|a| number::json_equal(a, instance))
-        {
-            let invalid_value: String = value_to_display_string(instance);
-            let allowed_strs: Vec<String> = allowed.iter().map(value_to_display_string).collect();
-            errors.push(ValidationError::NotInEnum {
-                instance_path: instance_path.clone(),
-                invalid_value,
-                allowed: allowed_strs,
-            });
-            continue;
-        }
-        if applicators && let Some(ref any_of) = schema.any_of {
-            if any_of.is_empty() {
-                errors.push(ValidationError::NoSubschemaMatched {
-                    instance_path: instance_path.clone(),
-                    subschema_count: 0,
-                });
-            } else {
-                let mut at_least_one_passed: bool = false;
-                for subschema in any_of {
-                    let sub_result: ValidationResult =
-                        validate_in(registry, scope, subschema.into(), instance);
-                    if sub_result.is_ok() {
-                        at_least_one_passed = true;
-                        break;
-                    }
-                }
-                if !at_least_one_passed {
-                    errors.push(ValidationError::NoSubschemaMatched {
-                        instance_path: instance_path.clone(),
-                        subschema_count: any_of.len(),
-                    });
-                }
-            }
-            continue;
-        }
-        if applicators && let Some(ref one_of) = schema.one_of {
-            if one_of.is_empty() {
-                errors.push(ValidationError::NoSubschemaMatched {
-                    instance_path: instance_path.clone(),
-                    subschema_count: 0,
-                });
-            } else {
-                let mut pass_count: usize = 0;
-                for subschema in one_of {
-                    let sub_result: ValidationResult =
-                        validate_in(registry, scope, subschema.into(), instance);
-                    if sub_result.is_ok() {
-                        pass_count += 1;
-                    }
-                }
-                if pass_count == 0 {
-                    errors.push(ValidationError::NoSubschemaMatched {
-                        instance_path: instance_path.clone(),
-                        subschema_count: one_of.len(),
-                    });
-                } else if pass_count > 1 {
-                    errors.push(ValidationError::MultipleSubschemasMatched {
-                        instance_path: instance_path.clone(),
-                        subschema_count: one_of.len(),
-                        match_count: pass_count,
-                    });
-                }
-            }
-            continue;
-        }
-        if applicators
-            && let Some(ref all_of) = schema.all_of
-            && !all_of.is_empty()
-        {
-            for subschema in all_of.iter().rev() {
-                stack.push((subschema.into(), instance, instance_path.clone(), scope));
-            }
-            continue;
-        }
-        if assertions
-            && let Some(types) = schema.type_
-            && !types.matches(instance, dialect.integer_semantics)
-        {
-            errors.push(type_mismatch(types, instance, &instance_path));
-        }
-        // Type-specific keywords apply to every instance of their kind, whatever `type` says (a
-        // schema without `type` still bounds strings, numbers, arrays and objects), so a type
-        // mismatch is reported next to every other keyword the instance breaks.
-        match instance {
-            Value::Object(obj) => {
-                let work = ObjectWork {
-                    assertions,
-                    applicators,
-                    scope,
-                };
-                push_object_work(schema, obj, &instance_path, work, &mut stack, &mut errors);
-            }
-            Value::String(s) if assertions => {
-                push_string_errors(schema, dialect, s, &instance_path, &mut errors);
-            }
-            Value::Array(arr) => {
-                let actual_count: u64 = arr.len() as u64;
-                if assertions
-                    && let Some(min_items) = schema.min_items
-                    && arr.len() < min_items.try_into().unwrap_or(usize::MAX)
-                {
-                    errors.push(ValidationError::TooFewItems {
-                        instance_path: instance_path.clone(),
-                        min_items,
-                        actual_count,
-                    });
-                }
-                if assertions
-                    && let Some(max_items) = schema.max_items
-                    && arr.len() > max_items.try_into().unwrap_or(0)
-                {
-                    errors.push(ValidationError::TooManyItems {
-                        instance_path: instance_path.clone(),
-                        max_items,
-                        actual_count,
-                    });
-                }
-                if applicators && let Some(ref item_schema) = schema.items {
-                    // Push in reverse order so the first element is checked first.
-                    for (i, elem) in arr.iter().enumerate().rev() {
-                        let path = instance_path.push(&i.to_string());
-                        stack.push((item_schema.into(), elem, path, scope));
-                    }
-                }
-                if assertions
-                    && schema.unique_items == Some(true)
-                    && let Some(duplicate) = first_duplicate(arr)
-                {
-                    errors.push(ValidationError::DuplicateArrayItems {
-                        instance_path: instance_path.clone(),
-                        duplicate_value: value_to_display_string(duplicate),
-                    });
-                }
-            }
-            Value::Number(n) if assertions => {
-                push_numeric_errors(schema, n, &instance_path, &mut errors);
-            }
-            Value::String(_) | Value::Number(_) | Value::Null | Value::Bool(_) => {}
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
-}
-
-/// Which vocabularies apply to an object instance, and the scope its subschemas sit in.
-#[derive(Clone, Copy)]
-struct ObjectWork {
-    assertions: bool,
-    applicators: bool,
-    scope: Scope,
-}
-
-/// Checks `required` and queues `properties` and `additionalProperties` for the object instance
-/// `obj`. `additionalProperties: false` reports each extra key by name rather than as a
-/// [`ValidationError::FalseSchema`].
-fn push_object_work<'s, 'v>(
-    schema: &'s JsonSchema,
-    obj: &'v Map<String, Value>,
-    instance_path: &JsonPointer,
-    work: ObjectWork,
-    stack: &mut Vec<Work<'s, 'v>>,
-    errors: &mut Vec<ValidationError>,
-) {
-    let scope: Scope = work.scope;
-    if work.assertions
-        && let Some(ref required) = schema.required
-    {
-        for name in required {
-            if !obj.contains_key(name) {
-                errors.push(ValidationError::MissingRequired {
-                    instance_path: instance_path.push(name),
-                    property: name.clone(),
-                });
-            }
-        }
-    }
-    if !work.applicators {
-        return;
-    }
-    // Push in reverse order so we pop in schema properties order (first key first).
-    let mut pending: Vec<Work<'s, 'v>> = Vec::new();
-    for (key, sub_schema) in &schema.properties {
-        if let Some(value) = obj.get(key) {
-            pending.push((sub_schema.into(), value, instance_path.push(key), scope));
-        }
-    }
-    stack.extend(pending.into_iter().rev());
-    // additionalProperties: keys not in properties are "additional".
-    match schema.additional_properties.as_ref() {
-        None | Some(Schema::Bool(true)) => {}
-        Some(Schema::Bool(false)) => {
-            for key in obj.keys().filter(|k| !schema.properties.contains_key(*k)) {
-                errors.push(ValidationError::DisallowedAdditionalProperty {
-                    instance_path: instance_path.push(key),
-                    property: key.clone(),
-                });
-            }
-        }
-        Some(sub_schema @ Schema::Object(_)) => {
-            for (key, value) in obj {
-                if !schema.properties.contains_key(key) {
-                    stack.push((sub_schema.into(), value, instance_path.push(key), scope));
-                }
-            }
-        }
-    }
-}
-
-/// Checks `minLength`, `maxLength`, `pattern` and (with the `uuid` feature, when the dialect
-/// asserts formats) `format: "uuid"` against the string instance `s`.
-fn push_string_errors(
-    schema: &JsonSchema,
-    #[cfg_attr(not(feature = "uuid"), expect(unused_variables))] dialect: Dialect,
-    s: &str,
-    instance_path: &JsonPointer,
-    errors: &mut Vec<ValidationError>,
-) {
-    // minLength / maxLength: count Unicode code points (chars), not bytes.
-    let char_count: u64 = s.chars().count() as u64;
-    if let Some(min_length) = schema.min_length
-        && char_count < min_length
-    {
-        errors.push(ValidationError::TooShort {
-            instance_path: instance_path.clone(),
-            min_length,
-            actual_length: char_count,
-        });
-    }
-    if let Some(max_length) = schema.max_length
-        && char_count > max_length
-    {
-        errors.push(ValidationError::TooLong {
-            instance_path: instance_path.clone(),
-            max_length,
-            actual_length: char_count,
-        });
-    }
-    if let Some(ref pattern) = schema.pattern {
-        match regress::Regex::with_flags(pattern, "u") {
-            Ok(re) => {
-                if re.find(s).is_none() {
-                    errors.push(ValidationError::PatternMismatch {
-                        instance_path: instance_path.clone(),
-                        pattern: pattern.clone(),
-                        value: s.to_string(),
-                    });
-                }
-            }
-            Err(_) => {
-                errors.push(ValidationError::InvalidPatternInSchema {
-                    instance_path: instance_path.clone(),
-                    pattern: pattern.clone(),
-                });
-            }
-        }
-    }
-    #[cfg(feature = "uuid")]
-    if dialect.format_mode == crate::json_schema::FormatMode::Assertion
-        && schema.format.as_deref() == Some("uuid")
-        && uuid::Uuid::parse_str(s).is_err()
-    {
-        errors.push(ValidationError::InvalidUuidFormat {
-            instance_path: instance_path.clone(),
-            value: s.to_string(),
-        });
-    }
-}
-
-/// Checks `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and `multipleOf` against
-/// the numeric instance `n`, comparing exactly (see [`number::cmp_num`]).
-fn push_numeric_errors(
-    schema: &JsonSchema,
-    n: &Number,
-    instance_path: &JsonPointer,
-    errors: &mut Vec<ValidationError>,
-) {
-    if let Some(ref minimum) = schema.minimum
-        && number::cmp_num(n, minimum) == Ordering::Less
-    {
-        errors.push(ValidationError::BelowMinimum {
-            instance_path: instance_path.clone(),
-            minimum: minimum.clone(),
-            actual: n.clone(),
-        });
-    }
-    if let Some(ref maximum) = schema.maximum
-        && number::cmp_num(n, maximum) == Ordering::Greater
-    {
-        errors.push(ValidationError::AboveMaximum {
-            instance_path: instance_path.clone(),
-            maximum: maximum.clone(),
-            actual: n.clone(),
-        });
-    }
-    if let Some(ref exclusive_minimum) = schema.exclusive_minimum
-        && number::cmp_num(n, exclusive_minimum) != Ordering::Greater
-    {
-        errors.push(ValidationError::NotAboveExclusiveMinimum {
-            instance_path: instance_path.clone(),
-            exclusive_minimum: exclusive_minimum.clone(),
-            actual: n.clone(),
-        });
-    }
-    if let Some(ref exclusive_maximum) = schema.exclusive_maximum
-        && number::cmp_num(n, exclusive_maximum) != Ordering::Less
-    {
-        errors.push(ValidationError::NotBelowExclusiveMaximum {
-            instance_path: instance_path.clone(),
-            exclusive_maximum: exclusive_maximum.clone(),
-            actual: n.clone(),
-        });
-    }
-    if let Some(ref multiple_of) = schema.multiple_of
-        && !number::is_multiple_of(n, multiple_of)
-    {
-        errors.push(ValidationError::NotMultipleOf {
-            instance_path: instance_path.clone(),
-            multiple_of: multiple_of.clone(),
-            actual: n.clone(),
-        });
-    }
-}
-
-/// Arrays up to this length are checked pairwise for `uniqueItems`; longer ones through a hash
-/// set (the pairwise scan does no hashing or allocation, which wins on short arrays; jsonschema-rs
-/// switches at the same size).
-const UNIQUE_ITEMS_PAIRWISE_MAX: usize = 15;
-
-/// The first element of `items` equal (by [`number::json_equal`]) to an earlier one.
-fn first_duplicate(items: &[Value]) -> Option<&Value> {
-    if items.len() <= UNIQUE_ITEMS_PAIRWISE_MAX {
-        return items.iter().enumerate().find_map(|(j, later)| {
-            items[..j]
-                .iter()
-                .any(|earlier| number::json_equal(earlier, later))
-                .then_some(later)
-        });
-    }
-    let mut seen: HashSet<JsonEqKey<'_>> = HashSet::with_capacity(items.len());
-    items.iter().find(|item| !seen.insert(JsonEqKey(item)))
 }
 
 #[cfg(test)]
@@ -710,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_ref_cycle_in_defs_emits_invalid_ref() {
+    fn validate_ref_cycle_in_defs_emits_ref_cycle() {
         let schema: JsonSchema = serde_json::from_str(
             r##"{
   "$defs": {
@@ -724,12 +277,9 @@ mod tests {
         .expect("parse schema");
         let instance = json!({"x": 42});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected_reason: String =
-            "the $ref chain loops back to itself without evaluating anything".to_string();
-        let expected: ValidationResult = Err(vec![ValidationError::InvalidRef {
+        let expected: ValidationResult = Err(vec![ValidationError::RefCycle {
             instance_path: JsonPointer::root().push("x"),
             ref_str: "#/$defs/A".to_string(),
-            reason: expected_reason,
         }]);
         assert_eq!(expected, actual);
     }
@@ -4936,7 +4486,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_valid_uuid() {
         let schema: JsonSchema =
@@ -4949,7 +4498,6 @@ mod tests {
 
     // --- `format` follows the dialect: asserted in drafts 4/6/7, annotation in 2019-09/2020-12 ---
 
-    #[cfg(feature = "uuid")]
     fn validate_not_a_uuid(
         schema_json: &str,
         settings: &crate::JsonSchemaSettings,
@@ -4958,15 +4506,14 @@ mod tests {
         validate(&schema, &json!("not-a-uuid"))
     }
 
-    #[cfg(feature = "uuid")]
     fn invalid_uuid_errors() -> ValidationResult {
-        Err(vec![ValidationError::InvalidUuidFormat {
+        Err(vec![ValidationError::InvalidFormat {
             instance_path: JsonPointer::root(),
+            format: "uuid".to_string(),
             value: "not-a-uuid".to_string(),
         }])
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_is_annotation_by_default_in_2020_12() {
         let expected: ValidationResult = Ok(());
@@ -4977,7 +4524,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_is_annotation_by_default_in_2019_09() {
         let expected: ValidationResult = Ok(());
@@ -4988,7 +4534,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_asserted_by_default_in_draft7() {
         let expected: ValidationResult = invalid_uuid_errors();
@@ -4999,7 +4544,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_asserted_by_default_in_draft4() {
         let expected: ValidationResult = invalid_uuid_errors();
@@ -5010,7 +4554,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_asserted_in_2020_12_with_assertion_override() {
         let settings: crate::JsonSchemaSettings = crate::JsonSchemaSettings::builder()
@@ -5022,7 +4565,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_is_annotation_in_draft7_with_annotation_override() {
         let settings: crate::JsonSchemaSettings = crate::JsonSchemaSettings::builder()
@@ -5036,7 +4578,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_asserted_when_spec_version_pinned_to_draft7() {
         let expected: ValidationResult = invalid_uuid_errors();
@@ -5047,7 +4588,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[cfg(feature = "uuid")]
     #[test]
     fn validate_uuid_format_asserted_inside_any_of_in_draft7() {
         let expected: ValidationResult = Err(vec![ValidationError::NoSubschemaMatched {

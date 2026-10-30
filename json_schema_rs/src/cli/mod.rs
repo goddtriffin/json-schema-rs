@@ -6,7 +6,7 @@ mod validate;
 
 use clap::{Arg, ArgMatches, Command};
 use json_schema_rs::{
-    ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings, SpecVersion,
+    ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings, RefSiblings, SpecVersion,
     UnknownSchemaUri,
 };
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
 ];
 
 /// JSON Schema Settings (`jss-`) arguments shared by every subcommand that reads a schema.
-fn jss_args() -> [Arg; 7] {
+fn jss_args() -> [Arg; 8] {
     [
         Arg::new("jss-disallow-unknown-fields")
             .long("jss-disallow-unknown-fields")
@@ -59,6 +59,11 @@ fn jss_args() -> [Arg; 7] {
             .value_name("SHAPE")
             .value_parser(["boolean-modifier", "numeric"])
             .help("JSON Schema Settings: read exclusiveMinimum/exclusiveMaximum as a boolean that makes minimum/maximum exclusive (boolean-modifier) or as the bound itself (numeric) (default: the draft's rule)"),
+        Arg::new("jss-ref-siblings")
+            .long("jss-ref-siblings")
+            .value_name("RULE")
+            .value_parser(["ignored", "evaluated"])
+            .help("JSON Schema Settings: keywords next to $ref are ignored (ignored) or evaluated alongside it (evaluated) (default: the draft's rule)"),
         Arg::new("jss-unknown-schema-uri")
             .long("jss-unknown-schema-uri")
             .value_name("POLICY")
@@ -101,6 +106,12 @@ fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
         builder = builder.exclusive_bounds(match shape.as_str() {
             "boolean-modifier" => ExclusiveBounds::BooleanModifier,
             _ => ExclusiveBounds::Numeric,
+        });
+    }
+    if let Some(rule) = matches.get_one::<String>("jss-ref-siblings") {
+        builder = builder.ref_siblings(match rule.as_str() {
+            "ignored" => RefSiblings::Ignored,
+            _ => RefSiblings::Evaluated,
         });
     }
     if let Some(policy) = matches.get_one::<String>("jss-unknown-schema-uri") {

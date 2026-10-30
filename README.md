@@ -185,7 +185,9 @@ loads still follow their own),
 `.integer_semantics(IntegerSemantics::Numeric)` (whether `1.0` is an integer:
 draft 4 says no, draft 6 and later yes),
 `.exclusive_bounds(ExclusiveBounds::BooleanModifier)` (read `exclusiveMinimum` /
-`exclusiveMaximum` as draft 4's boolean modifier or as draft 6's number), and
+`exclusiveMaximum` as draft 4's boolean modifier or as draft 6's number),
+`.ref_siblings(RefSiblings::Evaluated)` (whether keywords next to `$ref` count:
+drafts 4, 6 and 7 ignore them, 2019-09 and 2020-12 evaluate them), and
 `.unknown_schema_uri(UnknownSchemaUri::Reject)` (refuse an unrecognized
 `$schema` instead of falling back to the default draft with a warning).
 `JsonSchema::dialect()` returns a parsed schema's effective rules and
@@ -195,6 +197,7 @@ stderr. CLI: `--jss-default-spec-version` and `--jss-forced-spec-version`
 (`draft-04|draft-06|draft-07|2019-09|2020-12`, and `draft-00` to `draft-05`), `--jss-format-mode annotation|assertion`,
 `--jss-integer-semantics lexical|numeric`,
 `--jss-exclusive-bounds boolean-modifier|numeric`,
+`--jss-ref-siblings ignored|evaluated`,
 `--jss-unknown-schema-uri fallback|reject`.
 
 ## Using the macro (compile-time codegen)
