@@ -5,7 +5,7 @@ use super::dialect::{
 };
 use super::error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
 use super::settings::{DialectSettings, JsonSchemaSettings, resolve_dialect_for_uri};
-use super::type_set::{JsonType, TypeSet};
+use super::type_set::TypeSet;
 use crate::json_pointer::JsonPointer;
 use memchr::memmem;
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, Visitor};
@@ -27,12 +27,6 @@ fn skip_required(v: &Option<Vec<String>>) -> bool {
 #[expect(clippy::ref_option)]
 fn skip_defs_map(v: &Option<BTreeMap<String, Schema>>) -> bool {
     v.as_ref().is_none_or(BTreeMap::is_empty)
-}
-
-/// Returns true when `enum_values` should be omitted from serialized output (None or empty).
-#[expect(clippy::ref_option)]
-fn skip_enum_values(v: &Option<Vec<serde_json::Value>>) -> bool {
-    v.as_ref().is_none_or(Vec::is_empty)
 }
 
 /// Returns true when an `allOf` / `anyOf` / `oneOf` list should be omitted from serialized
@@ -391,7 +385,7 @@ pub struct JsonSchema {
     pub ref_: Option<String>,
 
     /// The `type` keyword: the set of JSON types an instance may have. `None` when absent (any
-    /// type). Read with [`TypeSet`] queries; codegen uses [`JsonSchema::primary_type`].
+    /// type). Read with [`TypeSet`] queries.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub type_: Option<TypeSet>,
 
@@ -433,7 +427,7 @@ pub struct JsonSchema {
     pub comment: Option<String>,
 
     /// Allowed values for the instance (JSON Schema `enum`). When present and non-empty, instance must equal one of these. Codegen uses only string-only enums.
-    #[serde(rename = "enum", skip_serializing_if = "skip_enum_values")]
+    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
     pub enum_values: Option<Vec<serde_json::Value>>,
 
     /// Single allowed value for the instance (JSON Schema `const`, draft-06+). When present, instance must equal this value (numbers by value: `1` equals `1.0`). `"const": null` is `Some(Value::Null)`. Codegen uses only string const (single-variant enum).
@@ -1202,51 +1196,6 @@ impl JsonSchema {
             .unwrap_or_default()
     }
 
-    /// The JSON type codegen builds this schema's Rust type from: the one type of its `type`
-    /// set besides `null`. `None` when `type` is absent, empty, `null` alone, or names two or
-    /// more non-null types (no single Rust type holds those; codegen uses `serde_json::Value`).
-    /// `["string", "null"]` is `String`: making it optional is codegen's nullable handling.
-    #[must_use]
-    pub(crate) fn primary_type(&self) -> Option<JsonType> {
-        self.type_?.without(JsonType::Null).single()
-    }
-
-    /// Returns true if this schema's primary type is `object` and it has properties (for codegen).
-    #[must_use]
-    pub(crate) fn is_object_with_properties(&self) -> bool {
-        self.primary_type() == Some(JsonType::Object) && !self.properties.is_empty()
-    }
-
-    /// Returns true if this schema's primary type is `array` and it has an `items` schema.
-    #[must_use]
-    pub(crate) fn is_array_with_items(&self) -> bool {
-        self.primary_type() == Some(JsonType::Array) && self.items.is_some()
-    }
-
-    /// Returns true if the given property name is required at this object level.
-    #[must_use]
-    pub(crate) fn is_required(&self, name: &str) -> bool {
-        self.required
-            .as_ref()
-            .is_some_and(|r| r.iter().any(|s| s == name))
-    }
-
-    /// Returns true if this schema has a string-only enum (non-empty, all elements are strings). Used for codegen to emit a Rust enum.
-    #[must_use]
-    pub(crate) fn is_string_enum(&self) -> bool {
-        self.enum_values
-            .as_ref()
-            .is_some_and(|v| !v.is_empty() && v.iter().all(serde_json::Value::is_string))
-    }
-
-    /// Returns true when this schema has a string const (single allowed string value). Used for codegen to treat as single-value enum.
-    #[must_use]
-    pub(crate) fn is_string_const(&self) -> bool {
-        self.const_value
-            .as_ref()
-            .is_some_and(serde_json::Value::is_string)
-    }
-
     /// Returns mutable references to this schema's direct subschema objects (boolean schemas
     /// have none), in a fixed order: `$defs`, `definitions`, `properties`,
     /// `additionalProperties`, `items`, `allOf`, `anyOf`, `oneOf`. Walk the whole tree with an
@@ -1842,24 +1791,6 @@ mod tests {
     }
 
     #[test]
-    fn is_object_with_properties() {
-        let mut s = JsonSchema::default();
-        let actual = [
-            s.is_object_with_properties(),
-            {
-                s.type_ = Some(JsonType::Object.into());
-                s.is_object_with_properties()
-            },
-            {
-                s.properties.insert("x".to_string(), Schema::Bool(true));
-                s.is_object_with_properties()
-            },
-        ];
-        let expected = [false, false, true];
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn try_from_schema_integer_to_vec_u8() {
         let schema: JsonSchema = JsonSchema {
             type_: Some(JsonType::Integer.into()),
@@ -1882,116 +1813,6 @@ mod tests {
     }
 
     /// The primary type of a schema whose `type` is `type_json` (`null` = keyword absent).
-    fn primary_type_of(type_json: &str) -> Option<JsonType> {
-        let json: String = if type_json == "null" {
-            "{}".to_string()
-        } else {
-            format!(r#"{{"type":{type_json}}}"#)
-        };
-        JsonSchema::try_from(json.as_str())
-            .expect("parse")
-            .primary_type()
-    }
-
-    #[test]
-    fn primary_type_absent_is_none() {
-        let expected: Option<JsonType> = None;
-        let actual: Option<JsonType> = primary_type_of("null");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn primary_type_single() {
-        let expected: Option<JsonType> = Some(JsonType::Integer);
-        let actual: Option<JsonType> = primary_type_of(r#""integer""#);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn primary_type_ignores_null_after() {
-        let expected: Option<JsonType> = Some(JsonType::String);
-        let actual: Option<JsonType> = primary_type_of(r#"["string","null"]"#);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn primary_type_ignores_null_before() {
-        let expected: Option<JsonType> = Some(JsonType::String);
-        let actual: Option<JsonType> = primary_type_of(r#"["null","string"]"#);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn primary_type_null_alone_is_none() {
-        let expected: Option<JsonType> = None;
-        let actual: Option<JsonType> = primary_type_of(r#""null""#);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn primary_type_two_non_null_types_is_none() {
-        let expected: Option<JsonType> = None;
-        let actual: Option<JsonType> = primary_type_of(r#"["integer","string"]"#);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn primary_type_empty_set_is_none() {
-        let expected: Option<JsonType> = None;
-        let actual: Option<JsonType> = primary_type_of("[]");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn is_string_enum() {
-        let no_enum: JsonSchema = JsonSchema {
-            type_: Some(JsonType::String.into()),
-            ..Default::default()
-        };
-        assert!(!no_enum.is_string_enum());
-        let empty_enum: JsonSchema = JsonSchema {
-            enum_values: Some(vec![]),
-            ..Default::default()
-        };
-        assert!(!empty_enum.is_string_enum());
-        let string_enum: JsonSchema = JsonSchema {
-            enum_values: Some(vec![
-                serde_json::Value::String("a".to_string()),
-                serde_json::Value::String("b".to_string()),
-            ]),
-            ..Default::default()
-        };
-        assert!(string_enum.is_string_enum());
-        let mixed_enum: JsonSchema = JsonSchema {
-            enum_values: Some(vec![
-                serde_json::Value::String("a".to_string()),
-                serde_json::Value::Number(42_i64.into()),
-            ]),
-            ..Default::default()
-        };
-        assert!(!mixed_enum.is_string_enum());
-    }
-
-    #[test]
-    fn is_array_with_items() {
-        let mut s = JsonSchema::default();
-        let actual = [
-            s.is_array_with_items(),
-            {
-                s.type_ = Some(JsonType::Array.into());
-                s.is_array_with_items()
-            },
-            {
-                s.items = Some(Schema::from(JsonSchema {
-                    type_: Some(JsonType::String.into()),
-                    ..Default::default()
-                }));
-                s.is_array_with_items()
-            },
-        ];
-        let expected = [false, false, true];
-        assert_eq!(expected, actual);
-    }
 
     #[test]
     fn try_from_schema_array_with_items_to_string() {
@@ -4089,28 +3910,6 @@ mod tests {
             .unwrap()
             .default_value
             .as_ref();
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn is_string_const_true_when_string() {
-        let schema: JsonSchema = JsonSchema {
-            const_value: Some(serde_json::Value::String("a".to_string())),
-            ..Default::default()
-        };
-        let expected: bool = true;
-        let actual: bool = schema.is_string_const();
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn is_string_const_false_when_non_string() {
-        let schema: JsonSchema = JsonSchema {
-            const_value: Some(serde_json::Value::Number(1_i64.into())),
-            ..Default::default()
-        };
-        let expected: bool = false;
-        let actual: bool = schema.is_string_const();
         assert_eq!(expected, actual);
     }
 

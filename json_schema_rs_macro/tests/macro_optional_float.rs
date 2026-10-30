@@ -1,12 +1,16 @@
 //! Integration test: `json_schema_to_rust!` with a schema that has an optional number (float) property.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(r#"{"type":"object","properties":{"value":{"type":"number"}}}"#);
 
 #[test]
 fn expanded_code_compiles_and_optional_float_deserializes() {
-    let root = schema_0::Root { value: Some(2.5) };
+    let root = schema_0::Root {
+        value: Some(2.5),
+        additional: BTreeMap::new(),
+    };
     assert_eq!(root.value, Some(2.5));
 }
 

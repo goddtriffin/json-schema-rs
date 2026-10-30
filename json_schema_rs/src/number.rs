@@ -221,7 +221,7 @@ fn decimal_is_multiple(value: Decimal, divisor: Decimal) -> bool {
 /// numbers by mathematical value (`1 == 1.0`), objects regardless of key order, arrays element by
 /// element. Iterative, so deep values cannot overflow the stack.
 #[must_use]
-pub(crate) fn json_equal(a: &Value, b: &Value) -> bool {
+pub fn json_equal(a: &Value, b: &Value) -> bool {
     // Scalars (the common `const` / `enum` case) compare directly, without the work stack.
     match (a, b) {
         (Value::Null, Value::Null) => return true,

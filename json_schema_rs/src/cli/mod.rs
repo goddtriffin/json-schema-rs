@@ -165,6 +165,13 @@ pub fn run() {
                         .value_name("MODE")
                         .value_parser(["disabled", "functional", "full"])
                         .help("Codegen Settings: dedupe identical object schemas (default: full)"),
+                )
+                .arg(
+                    Arg::new("cgs-unknown-properties")
+                        .long("cgs-unknown-properties")
+                        .value_name("MODE")
+                        .value_parser(["capture", "drop"])
+                        .help("Codegen Settings: keep (capture) or ignore (drop) object keys the schema does not name, overriding additionalProperties (default: follow the schema)"),
                 ),
         )
         .subcommand(
@@ -210,6 +217,9 @@ pub fn run() {
             let cgs_dedupe_mode: Option<&str> = gen_m
                 .get_one::<String>("cgs-dedupe-mode")
                 .map(String::as_str);
+            let cgs_unknown_properties: Option<&str> = gen_m
+                .get_one::<String>("cgs-unknown-properties")
+                .map(String::as_str);
             generate::run_generate(
                 lang,
                 &inputs,
@@ -217,6 +227,7 @@ pub fn run() {
                 &schema_settings,
                 cgs_model_name_source,
                 cgs_dedupe_mode,
+                cgs_unknown_properties,
             )
         }
         Some(("validate", val_m)) => {

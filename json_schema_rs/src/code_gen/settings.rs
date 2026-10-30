@@ -23,6 +23,20 @@ pub enum DedupeMode {
     Full,
 }
 
+/// What generated types do with object keys their schema does not name, overriding what the
+/// schema says. Without an override, a schema whose `additionalProperties` is absent or `true`
+/// (any key allowed, the spec's default) keeps unknown keys in a map field, so a deserialize /
+/// serialize round trip loses nothing, and `additionalProperties: false` rejects them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnknownProperties {
+    /// Keep unknown keys in a `#[serde(flatten)]` map field on every object type, even where
+    /// the schema forbids them (`additionalProperties: false`).
+    Capture,
+    /// Ignore unknown keys: they are dropped when deserializing (faster: no map field, no
+    /// serde buffering). `additionalProperties: false` still rejects them.
+    Drop,
+}
+
 /// Language-agnostic code generation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeGenSettings {
@@ -30,6 +44,8 @@ pub struct CodeGenSettings {
     pub model_name_source: ModelNameSource,
     /// Whether and how to deduplicate identical object schemas (Disabled, Functional, Full).
     pub dedupe_mode: DedupeMode,
+    /// Override for unknown object keys; `None` follows each schema's `additionalProperties`.
+    pub unknown_properties: Option<UnknownProperties>,
 }
 
 impl Default for CodeGenSettings {
@@ -37,6 +53,7 @@ impl Default for CodeGenSettings {
         Self {
             model_name_source: ModelNameSource::TitleFirst,
             dedupe_mode: DedupeMode::Full,
+            unknown_properties: None,
         }
     }
 }
@@ -46,6 +63,7 @@ impl Default for CodeGenSettings {
 pub struct CodeGenSettingsBuilder {
     model_name_source: Option<ModelNameSource>,
     dedupe_mode: Option<DedupeMode>,
+    unknown_properties: Option<UnknownProperties>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -63,12 +81,20 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Override what generated types do with unknown object keys (see [`UnknownProperties`]).
+    #[must_use]
+    pub fn unknown_properties(mut self, value: UnknownProperties) -> Self {
+        self.unknown_properties = Some(value);
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
         CodeGenSettings {
             model_name_source: self.model_name_source.unwrap_or_default(),
             dedupe_mode: self.dedupe_mode.unwrap_or_default(),
+            unknown_properties: self.unknown_properties,
         }
     }
 }

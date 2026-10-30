@@ -1,6 +1,7 @@
 //! Integration test: `json_schema_to_rust!` with a schema that has the `examples` keyword (meta-data; annotation only).
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(
     r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":["foo"]}"#
@@ -10,6 +11,7 @@ json_schema_to_rust!(
 fn examples_annotation_direct_construction() {
     let root: schema_0::Root = schema_0::Root {
         x: String::from("foo"),
+        additional: BTreeMap::new(),
     };
     let expected: &str = "foo";
     let actual: &str = root.x.as_str();
