@@ -8,6 +8,8 @@
 
 mod idna_table;
 
+use super::ecma_regex;
+
 use idna_table::{
     GREEK, HEBREW, IDNA_VALID, JOIN_DUAL, JOIN_LEFT, JOIN_RIGHT, JOIN_TRANSPARENT, KANA_HAN, MARK,
     VIRAMA,
@@ -129,7 +131,7 @@ impl Format {
             Format::UriTemplate => is_valid_uri_template(value),
             Format::JsonPointer => is_valid_json_pointer(value.as_bytes()),
             Format::RelativeJsonPointer => is_valid_relative_json_pointer(value.as_bytes()),
-            Format::Regex => regress::Regex::with_flags(value, "u").is_ok(),
+            Format::Regex => ecma_regex::compile(value).is_ok(),
             Format::Uuid => is_valid_uuid(value.as_bytes()),
         }
     }
@@ -1882,7 +1884,7 @@ mod tests {
     }
 
     #[test]
-    fn regex_rejects_identity_escape_in_unicode_mode() {
+    fn regex_rejects_identity_escape_of_letter() {
         let expected: bool = false;
         let actual: bool = Format::Regex.is_valid("\\a");
         assert_eq!(expected, actual);

@@ -7,6 +7,7 @@
 //! definition, a recursive schema) is compiled once. Regular expressions are compiled once per
 //! distinct pattern.
 
+use super::ecma_regex;
 use super::format::Format;
 use super::simple_pattern::SimplePattern;
 use crate::error_list::ErrorList;
@@ -1104,7 +1105,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if let Some(id) = self.pattern_ids.get(pattern) {
             return Some(*id);
         }
-        match regress::Regex::with_flags(pattern, "u") {
+        match ecma_regex::compile(pattern) {
             Ok(regex) => {
                 #[expect(
                     clippy::cast_possible_truncation,

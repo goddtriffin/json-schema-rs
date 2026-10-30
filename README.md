@@ -33,7 +33,8 @@ boolean `exclusiveMinimum` is read as draft 6's numeric form), **minLength** and
 enforces; codegen emits `#[json_schema(min_length = ..., max_length = ...)]`
 on generated string fields; reverse codegen supports the same attributes on
 String fields), **pattern** (string constraint as ECMA 262 regex; validator
-enforces via regress; codegen emits `#[json_schema(pattern = "...")]`;
+enforces via regress with Unicode semantics, accepting patterns written for the
+grammar without the `u` flag such as `\-` and `\:`; codegen emits `#[json_schema(pattern = "...")]`;
 reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen emits `#[serde(default)]` or `#[serde(default = "fn")]` so missing keys get the schema default; reverse codegen via `#[json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
 codegen from `///` doc comments on structs, enums and fields, or `#[json_schema(description = "...")]`),
 **examples** (draft-06+; meta-data only; stored and round-tripped; codegen emits examples in doc comments for structs and enums; not used for validation; Full dedupe includes in key, Functional excludes), **deprecated** (draft 2019-09+; meta-data only; codegen emits `#[deprecated]` on the corresponding field or struct; reverse codegen via `#[json_schema(deprecated = true)]`), **$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[json_schema(comment = "...")]`), and **$schema**
