@@ -563,16 +563,16 @@ impl<'r> Node<'r> {
 /// them, `$dynamicRef` and `$recursiveRef` (which first resolve like `$ref`) and `#` for a
 /// `$recursiveAnchor: true` (its resource root is the target of a dynamic `$recursiveRef`).
 fn references(node: Node<'_>, dialect: Dialect) -> impl Iterator<Item = &str> {
-    let recursive_anchor: bool = dialect.keyword("$recursiveAnchor").is_some()
-        && node.get_bool("$recursiveAnchor") == Some(true);
+    // The node's own keys first: they are usually absent, which skips the keyword-table lookup.
+    let defined = |key: &str| dialect.keyword(key).is_some();
+    let recursive_anchor: bool =
+        node.get_bool("$recursiveAnchor") == Some(true) && defined("$recursiveAnchor");
     [
         node.ref_(),
-        dialect
-            .keyword("$dynamicRef")
-            .and_then(|_| node.get_str("$dynamicRef")),
-        dialect
-            .keyword("$recursiveRef")
-            .and_then(|_| node.get_str("$recursiveRef")),
+        node.get_str("$dynamicRef")
+            .filter(|_| defined("$dynamicRef")),
+        node.get_str("$recursiveRef")
+            .filter(|_| defined("$recursiveRef")),
         recursive_anchor.then_some("#"),
     ]
     .into_iter()

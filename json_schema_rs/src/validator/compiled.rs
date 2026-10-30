@@ -697,7 +697,11 @@ impl<'r, 'a> Compiler<'r, 'a> {
 
         // Keywords read raw: every keyword of a raw object, the rest of a typed one.
         let is_raw: bool = matches!(source, Source::Raw(_));
-        let get = |name: &str| -> Option<&'r Value> { defined(name).and(source.raw(name)) };
+        // The schema's own keys first: on a typed schema they are usually absent, which skips
+        // the keyword-table lookup.
+        let get = |name: &str| -> Option<&'r Value> {
+            source.raw(name).filter(|_| defined(name).is_some())
+        };
         let mut errors: Vec<(&'static str, &'static str)> = Vec::new();
         let schema_at = |name: &'static str, errors: &mut Vec<(&'static str, &'static str)>| {
             get(name).and_then(|v| {
