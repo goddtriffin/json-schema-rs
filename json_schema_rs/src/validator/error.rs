@@ -225,13 +225,97 @@ pub enum ValidationError {
         /// The invalid pattern string from the schema.
         pattern: String,
     },
-    /// The string instance does not parse as a valid UUID (only emitted when the `uuid` feature is enabled).
-    #[cfg(feature = "uuid")]
-    InvalidUuidFormat {
+    /// The string instance is not in the `format` the schema asserts (only when formats are
+    /// asserted: see `FormatMode`).
+    InvalidFormat {
         /// JSON Pointer to the instance that failed.
         instance_path: JsonPointer,
+        /// The format name (`"date-time"`, `"uuid"`, ...).
+        format: String,
         /// The invalid string value (for user-facing context).
         value: String,
+    },
+    /// The instance matched the schema of `not`.
+    NotSchemaMatched {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+    },
+    /// The object had fewer members than `minProperties`.
+    TooFewProperties {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's `minProperties`.
+        min_properties: u64,
+        /// Number of members in the instance.
+        actual_count: u64,
+    },
+    /// The object had more members than `maxProperties`.
+    TooManyProperties {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's `maxProperties`.
+        max_properties: u64,
+        /// Number of members in the instance.
+        actual_count: u64,
+    },
+    /// A property that `dependentRequired` (or the array form of `dependencies`) requires,
+    /// because another property is present, was absent.
+    MissingDependentProperty {
+        /// JSON Pointer to the missing property.
+        instance_path: JsonPointer,
+        /// The missing property.
+        property: String,
+        /// The present property that requires it.
+        required_by: String,
+    },
+    /// A member name failed the `propertyNames` schema.
+    InvalidPropertyName {
+        /// JSON Pointer to the member whose name failed.
+        instance_path: JsonPointer,
+        /// The member name.
+        property: String,
+    },
+    /// Fewer items matched `contains` than `minContains` (1 when absent) requires.
+    TooFewContains {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The required minimum.
+        min_contains: u64,
+        /// Number of items that matched.
+        match_count: u64,
+    },
+    /// More items matched `contains` than `maxContains` allows.
+    TooManyContains {
+        /// JSON Pointer to the instance that failed.
+        instance_path: JsonPointer,
+        /// The schema's `maxContains`.
+        max_contains: u64,
+        /// Number of items that matched.
+        match_count: u64,
+    },
+    /// Schema had `unevaluatedProperties: false` and no other keyword evaluated this member.
+    DisallowedUnevaluatedProperty {
+        /// JSON Pointer to the member.
+        instance_path: JsonPointer,
+        /// The member name.
+        property: String,
+    },
+    /// Evaluation re-entered the same `$ref` target at the same instance location without
+    /// consuming any of the instance (an in-place loop such as
+    /// `{"anyOf": [{"type": "string"}, {"$ref": "#"}]}`), so that branch fails.
+    RefCycle {
+        /// JSON Pointer to the instance being evaluated.
+        instance_path: JsonPointer,
+        /// The `$ref` (or `$dynamicRef` / `$recursiveRef`) that closed the loop.
+        ref_str: String,
+    },
+    /// Evaluation nested deeper than the validator's depth guard (deeply nested instances under
+    /// a recursive schema), which stops before the native stack can overflow.
+    DepthLimitExceeded {
+        /// JSON Pointer to the instance where the limit was reached.
+        instance_path: JsonPointer,
+        /// The depth limit.
+        limit: usize,
     },
     /// Schema had `anyOf` but the instance did not validate against any of the subschemas.
     NoSubschemaMatched {
@@ -285,9 +369,18 @@ impl ValidationError {
             | ValidationError::PatternMismatch { instance_path, .. }
             | ValidationError::InvalidPatternInSchema { instance_path, .. }
             | ValidationError::NoSubschemaMatched { instance_path, .. }
-            | ValidationError::MultipleSubschemasMatched { instance_path, .. } => instance_path,
-            #[cfg(feature = "uuid")]
-            ValidationError::InvalidUuidFormat { instance_path, .. } => instance_path,
+            | ValidationError::MultipleSubschemasMatched { instance_path, .. }
+            | ValidationError::InvalidFormat { instance_path, .. }
+            | ValidationError::NotSchemaMatched { instance_path }
+            | ValidationError::TooFewProperties { instance_path, .. }
+            | ValidationError::TooManyProperties { instance_path, .. }
+            | ValidationError::MissingDependentProperty { instance_path, .. }
+            | ValidationError::InvalidPropertyName { instance_path, .. }
+            | ValidationError::TooFewContains { instance_path, .. }
+            | ValidationError::TooManyContains { instance_path, .. }
+            | ValidationError::DisallowedUnevaluatedProperty { instance_path, .. }
+            | ValidationError::RefCycle { instance_path, .. }
+            | ValidationError::DepthLimitExceeded { instance_path, .. } => instance_path,
         }
     }
 }
@@ -460,10 +553,70 @@ impl fmt::Display for ValidationError {
             ValidationError::InvalidPatternInSchema { pattern, .. } => {
                 write!(f, "{location}: schema has invalid pattern \"{pattern}\"")
             }
-            #[cfg(feature = "uuid")]
-            ValidationError::InvalidUuidFormat { value, .. } => {
-                write!(f, "{location}: string \"{value}\" is not a valid UUID")
+            ValidationError::InvalidFormat { format, value, .. } => {
+                write!(f, "{location}: string \"{value}\" is not a valid {format}")
             }
+            ValidationError::NotSchemaMatched { .. } => {
+                write!(f, "{location}: instance matches the schema of not")
+            }
+            ValidationError::TooFewProperties {
+                min_properties,
+                actual_count,
+                ..
+            } => write!(
+                f,
+                "{location}: object has {actual_count} propert(ies), minimum is {min_properties}"
+            ),
+            ValidationError::TooManyProperties {
+                max_properties,
+                actual_count,
+                ..
+            } => write!(
+                f,
+                "{location}: object has {actual_count} propert(ies), maximum is {max_properties}"
+            ),
+            ValidationError::MissingDependentProperty {
+                property,
+                required_by,
+                ..
+            } => write!(
+                f,
+                "{location}: missing property \"{property}\", required when \"{required_by}\" is present"
+            ),
+            ValidationError::InvalidPropertyName { property, .. } => {
+                write!(
+                    f,
+                    "{location}: property name \"{property}\" does not match propertyNames"
+                )
+            }
+            ValidationError::TooFewContains {
+                min_contains,
+                match_count,
+                ..
+            } => write!(
+                f,
+                "{location}: {match_count} item(s) match contains, minimum is {min_contains}"
+            ),
+            ValidationError::TooManyContains {
+                max_contains,
+                match_count,
+                ..
+            } => write!(
+                f,
+                "{location}: {match_count} item(s) match contains, maximum is {max_contains}"
+            ),
+            ValidationError::DisallowedUnevaluatedProperty { property, .. } => write!(
+                f,
+                "{location}: unevaluated property \"{property}\" not allowed"
+            ),
+            ValidationError::RefCycle { ref_str, .. } => write!(
+                f,
+                "{location}: $ref \"{ref_str}\" loops back to itself without consuming the instance"
+            ),
+            ValidationError::DepthLimitExceeded { limit, .. } => write!(
+                f,
+                "{location}: evaluation nested deeper than {limit} levels"
+            ),
             ValidationError::NoSubschemaMatched {
                 subschema_count, ..
             } => {

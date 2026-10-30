@@ -219,6 +219,42 @@ impl<'de> Visitor<'de> for SchemaVisitor {
     }
 }
 
+/// The value of `items`: one schema, or the array of schemas drafts 4 to 2019-09 define (the
+/// tuple form), which the model keeps raw in [`JsonSchema::extensions`].
+enum ItemsValue {
+    Schema(Schema),
+    Array(Value),
+}
+
+impl<'de> Deserialize<'de> for ItemsValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(ItemsVisitor)
+    }
+}
+
+/// Reads `items`: a schema position that may also hold an array of schemas.
+struct ItemsVisitor;
+
+impl<'de> Visitor<'de> for ItemsVisitor {
+    type Value = ItemsValue;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a schema (an object or a boolean) or an array of schemas")
+    }
+
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<ItemsValue, E> {
+        Ok(ItemsValue::Schema(Schema::Bool(v)))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<ItemsValue, A::Error> {
+        SchemaVisitor.visit_map(map).map(ItemsValue::Schema)
+    }
+
+    fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<ItemsValue, A::Error> {
+        Value::deserialize(de::value::SeqAccessDeserializer::new(seq)).map(ItemsValue::Array)
+    }
+}
+
 /// A borrowed [`Schema`]: a boolean schema or a reference to a schema object. What the validator
 /// takes, so it accepts a `&Schema` and a `&JsonSchema` alike.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -654,7 +690,18 @@ impl<'de> Visitor<'de> for JsonSchemaVisitor {
                     "const",
                     map.next_value_seed(Present)?
                 ),
-                Field::Items => set!(14, schema.items, "items", map.next_value()?),
+                Field::Items => {
+                    let (items, array): (Option<Schema>, Option<Value>) =
+                        match map.next_value::<Option<ItemsValue>>()? {
+                            Some(ItemsValue::Schema(items)) => (Some(items), None),
+                            Some(ItemsValue::Array(array)) => (None, Some(array)),
+                            None => (None, None),
+                        };
+                    set!(14, schema.items, "items", items);
+                    if let Some(array) = array {
+                        schema.extensions.insert("items".to_string(), array);
+                    }
+                }
                 Field::UniqueItems => {
                     set!(15, schema.unique_items, "uniqueItems", map.next_value()?);
                 }
@@ -1147,6 +1194,7 @@ impl JsonSchema {
             format_mode: dialect_settings.format_mode,
             integer_semantics: dialect_settings.integer_semantics,
             exclusive_bounds: dialect_settings.exclusive_bounds,
+            ref_siblings: dialect_settings.ref_siblings,
             ..JsonSchemaSettings::default()
         };
         resolve_dialect_for_uri(self.schema.as_deref(), &settings)
@@ -1478,8 +1526,8 @@ mod tests {
     use super::{JsonSchema, Schema};
     use crate::json_schema::{
         Dialect, DialectSettings, ExclusiveBounds, FormatMode, IntegerSemantics,
-        JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaSettings, JsonType, SpecVersion,
-        TypeSet, UnknownSchemaUri,
+        JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaSettings, JsonType, RefSiblings,
+        SpecVersion, TypeSet, UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -2490,12 +2538,8 @@ mod tests {
 
     #[test]
     fn strict_reports_unknown_key_in_draft7_items_array() {
-        // The model does not hold the array form of `items`, so its error follows the walk's.
-        let expected: Result<(), Vec<String>> = Err(vec![
-            "unknown keyword \"bogus\" at /items/1".to_string(),
-            "invalid JSON Schema: invalid type: sequence, expected a schema (an object or a boolean)"
-                .to_string(),
-        ]);
+        let expected: Result<(), Vec<String>> =
+            Err(vec!["unknown keyword \"bogus\" at /items/1".to_string()]);
         let actual: Result<(), Vec<String>> = strict_error_messages(
             r#"{"$schema":"http://json-schema.org/draft-07/schema#","items":[{},{"bogus":1}]}"#,
         );
@@ -3038,11 +3082,31 @@ mod tests {
     #[test]
     fn array_where_schema_expected_names_the_shape() {
         let expected: String = "invalid JSON Schema: invalid type: sequence, expected a schema \
-                                (an object or a boolean) at line 1 column 10"
+                                (an object or a boolean) at line 1 column 25"
             .to_string();
-        let actual: String = JsonSchema::try_from(r#"{"items":[{}]}"#)
-            .expect_err("array items")
+        let actual: String = JsonSchema::try_from(r#"{"additionalProperties":[{}]}"#)
+            .expect_err("array additionalProperties")
             .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn tuple_items_are_kept_in_extensions() {
+        let expected: JsonSchema = JsonSchema {
+            extensions: BTreeMap::from([("items".to_string(), serde_json::json!([{}, true]))]),
+            ..Default::default()
+        };
+        let actual: JsonSchema = JsonSchema::try_from(r#"{"items":[{},true]}"#).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn tuple_items_round_trip() {
+        let expected: String = r#"{"items":[{"type":"string"}]}"#.to_string();
+        let actual: String = serde_json::to_string(
+            &JsonSchema::try_from(r#"{"items":[{"type":"string"}]}"#).expect("parse"),
+        )
+        .expect("serialize");
         assert_eq!(expected, actual);
     }
 
@@ -3634,6 +3698,19 @@ mod tests {
         let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
         let expected: FormatMode = FormatMode::Assertion;
         let actual: FormatMode = schema.dialect().format_mode;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_with_ref_siblings_override_records_it() {
+        let json =
+            r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/a"}"##;
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .ref_siblings(RefSiblings::Evaluated)
+            .build();
+        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let expected: RefSiblings = RefSiblings::Evaluated;
+        let actual: RefSiblings = schema.dialect().ref_siblings;
         assert_eq!(expected, actual);
     }
 
