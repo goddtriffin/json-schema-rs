@@ -693,6 +693,7 @@ enum Step<'r> {
 pub struct RegistryBuilder<'b> {
     base_uri: Option<String>,
     documents: HashMap<String, Value>,
+    parsed_documents: Vec<(String, SchemaRef<'b>)>,
     retriever: Box<dyn Retrieve + 'b>,
     settings: JsonSchemaSettings,
 }
@@ -702,6 +703,14 @@ impl fmt::Debug for RegistryBuilder<'_> {
         f.debug_struct("RegistryBuilder")
             .field("base_uri", &self.base_uri)
             .field("documents", &self.documents.keys().collect::<Vec<_>>())
+            .field(
+                "parsed_documents",
+                &self
+                    .parsed_documents
+                    .iter()
+                    .map(|(uri, _)| uri)
+                    .collect::<Vec<_>>(),
+            )
             .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
@@ -712,6 +721,7 @@ impl Default for RegistryBuilder<'_> {
         RegistryBuilder {
             base_uri: None,
             documents: HashMap::new(),
+            parsed_documents: Vec::new(),
             retriever: Box::new(OfflineRetriever),
             settings: JsonSchemaSettings::default(),
         }
@@ -736,8 +746,26 @@ impl<'b> RegistryBuilder<'b> {
         self
     }
 
+    /// Adds an already parsed document the root may reference, retrieved from `uri` (absolute;
+    /// normalised, and a fragment ignored). A `$ref` reaches it by `uri` or, when its root has an
+    /// `$id`, by that `$id` resolved against `uri`; when two documents claim one URI, the first
+    /// added keeps it. The registry borrows the document instead of parsing it again, so a
+    /// consumer that walks it from several registries sees the same schema objects. It is
+    /// discovered only if a `$ref` reaches it. A `uri` that is not an absolute URI makes
+    /// [`RegistryBuilder::build`] fail.
+    #[must_use]
+    pub fn parsed_document(
+        mut self,
+        uri: impl Into<String>,
+        document: impl Into<SchemaRef<'b>>,
+    ) -> Self {
+        self.parsed_documents.push((uri.into(), document.into()));
+        self
+    }
+
     /// The retriever for referenced documents that are neither embedded metaschemas nor given
-    /// with [`RegistryBuilder::document`]. Default: [`OfflineRetriever`].
+    /// with [`RegistryBuilder::document`] or [`RegistryBuilder::parsed_document`]. Default:
+    /// [`OfflineRetriever`].
     #[must_use]
     pub fn retriever(mut self, retriever: impl Retrieve + 'b) -> Self {
         self.retriever = Box::new(retriever);
@@ -761,7 +789,10 @@ impl<'b> RegistryBuilder<'b> {
     /// referenced document that cannot be retrieved or parsed, a custom metaschema that requires
     /// an unknown vocabulary. A base or document URI given to the builder that is not an
     /// absolute URI is reported before the root is looked at, as the only errors.
-    pub fn build<'a>(self, root: impl Into<SchemaRef<'a>>) -> Result<Registry<'a>, RegistryErrors> {
+    pub fn build<'a>(self, root: impl Into<SchemaRef<'a>>) -> Result<Registry<'a>, RegistryErrors>
+    where
+        'b: 'a,
+    {
         Builder::new(self)?.build(DocumentRoot::Borrowed(root.into()))
     }
 
@@ -770,7 +801,7 @@ impl<'b> RegistryBuilder<'b> {
     /// # Errors
     ///
     /// See [`RegistryBuilder::build`].
-    pub fn build_owned(self, root: Schema) -> Result<Registry<'static>, RegistryErrors> {
+    pub fn build_owned(self, root: Schema) -> Result<Registry<'b>, RegistryErrors> {
         Builder::new(self)?.build(DocumentRoot::Owned(Arc::new(root)))
     }
 }
@@ -816,6 +847,12 @@ struct Builder<'a, 'b> {
     by_uri: HashMap<Uri, Scope>,
     root_base: Uri,
     documents: HashMap<String, Value>,
+    /// Parsed documents given to the builder: retrieval URI and root.
+    parsed_documents: Vec<(Uri, SchemaRef<'a>)>,
+    /// Index in `parsed_documents` by retrieval URI and by root `$id`.
+    parsed_by_uri: HashMap<Uri, usize>,
+    /// Whether each of `parsed_documents` has been added (discovered).
+    parsed_added: Vec<bool>,
     retriever: Box<dyn Retrieve + 'b>,
     settings: JsonSchemaSettings,
     /// Documents fetched (for a `$ref` or a custom `$schema`), by URI, before or after they
@@ -833,7 +870,7 @@ struct Builder<'a, 'b> {
     walks: Vec<Walk>,
 }
 
-impl<'a, 'b> Builder<'a, 'b> {
+impl<'a, 'b: 'a> Builder<'a, 'b> {
     /// Checks the builder's URIs; every one that is not an absolute URI is an error.
     fn new(options: RegistryBuilder<'b>) -> Result<Self, RegistryErrors> {
         let invalid = |value: &str, reason: String| RegistryError::InvalidUri {
@@ -858,9 +895,34 @@ impl<'a, 'b> Builder<'a, 'b> {
                 Err(reason) => errors.push(invalid(&uri, reason)),
             }
         }
+        let mut parsed_documents: Vec<(Uri, SchemaRef<'a>)> = Vec::new();
+        let mut parsed_by_uri: HashMap<Uri, usize> = HashMap::new();
+        for (uri, document) in options.parsed_documents {
+            let retrieval: Uri = match parse_uri(&uri) {
+                Ok(parsed) => without_fragment(&parsed),
+                Err(reason) => {
+                    errors.push(invalid(&uri, reason));
+                    continue;
+                }
+            };
+            let index: usize = parsed_documents.len();
+            parsed_by_uri.entry(retrieval.clone()).or_insert(index);
+            let id: Option<Uri> = document.as_object().and_then(|schema| {
+                let node: Node<'_> = Node::Typed(schema);
+                let id: &str = node.effective_id(schema.dialect())?;
+                resolve_uri(&retrieval, id)
+                    .ok()
+                    .map(|uri| without_fragment(&uri))
+            });
+            if let Some(id) = id {
+                parsed_by_uri.entry(id).or_insert(index);
+            }
+            parsed_documents.push((retrieval, document));
+        }
         if let Some(errors) = ErrorList::from_vec(errors) {
             return Err(errors);
         }
+        let parsed_added: Vec<bool> = vec![false; parsed_documents.len()];
         let root_base: Uri =
             root_base.map_err(|reason| ErrorList::new(invalid(base_text, reason)))?;
         Ok(Builder {
@@ -872,6 +934,9 @@ impl<'a, 'b> Builder<'a, 'b> {
             by_uri: HashMap::new(),
             root_base,
             documents,
+            parsed_documents,
+            parsed_by_uri,
+            parsed_added,
             retriever: options.retriever,
             settings: options.settings,
             fetched: HashMap::new(),
@@ -1385,21 +1450,33 @@ impl<'a, 'b> Builder<'a, 'b> {
         let resource: Scope = if let Some(scope) = known {
             scope
         } else {
-            {
-                let referrer: Dialect = self.registry.resources[pending.scope.0].dialect;
-                let schema: Arc<Schema> = self
-                    .fetch(&resource_uri, Some(referrer.spec_version))
-                    .map_err(|e| unresolvable(e.to_string()))?;
-                self.add_document(
-                    resource_uri.clone(),
-                    DocumentRoot::Owned(schema),
-                    Some(referrer),
-                );
-                self.by_uri
-                    .get(&resource_uri)
-                    .copied()
-                    .ok_or_else(|| unresolvable("no schema resource has this URI".to_string()))?
+            let referrer: Dialect = self.registry.resources[pending.scope.0].dialect;
+            let parsed: Option<usize> = self.parsed_by_uri.get(&resource_uri).copied();
+            match parsed {
+                Some(index) if !self.parsed_added[index] => {
+                    // Added under its retrieval URI; discovery registers its root `$id`.
+                    self.parsed_added[index] = true;
+                    let (uri, document): (Uri, SchemaRef<'a>) =
+                        self.parsed_documents[index].clone();
+                    self.add_document(uri, DocumentRoot::Borrowed(document), Some(referrer));
+                }
+                // Added already, yet not under this URI: its `$id` was a duplicate.
+                Some(_) => {}
+                None => {
+                    let schema: Arc<Schema> = self
+                        .fetch(&resource_uri, Some(referrer.spec_version))
+                        .map_err(|e| unresolvable(e.to_string()))?;
+                    self.add_document(
+                        resource_uri.clone(),
+                        DocumentRoot::Owned(schema),
+                        Some(referrer),
+                    );
+                }
             }
+            self.by_uri
+                .get(&resource_uri)
+                .copied()
+                .ok_or_else(|| unresolvable("no schema resource has this URI".to_string()))?
         };
         let fragment: String = match target_uri.fragment() {
             Some(fragment) => fragment
@@ -3234,6 +3311,149 @@ mod tests {
             .map(|_| ())
             .expect_err("dangling refs")
             .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    /// The errors of validating `instance` against `root` with `documents` given as parsed
+    /// documents (URI, schema), in order.
+    fn validate_with_parsed(
+        root: &JsonSchema,
+        documents: &[(&str, &JsonSchema)],
+        instance: &Value,
+    ) -> ValidationResult {
+        let builder = documents
+            .iter()
+            .fold(Registry::builder(), |builder, (uri, document)| {
+                builder.parsed_document(*uri, *document)
+            });
+        let registry: Registry<'_> = builder.build(root).expect("build registry");
+        validate_with_registry(&registry, instance)
+    }
+
+    fn expected_string_error() -> ValidationResult {
+        Err(vec![ValidationError::ExpectedString {
+            instance_path: JsonPointer::root(),
+            got: "number".to_string(),
+        }])
+    }
+
+    #[test]
+    fn parsed_document_is_reached_by_its_uri() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/b.json"}));
+        let document: JsonSchema = parse(&json!({"type": "string"}));
+        let actual: ValidationResult = validate_with_parsed(
+            &root,
+            &[("https://example.com/b.json", &document)],
+            &json!(1),
+        );
+        let expected: ValidationResult = expected_string_error();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parsed_document_is_reached_by_its_root_id() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/id.json"}));
+        let document: JsonSchema =
+            parse(&json!({"$id": "https://example.com/id.json", "type": "string"}));
+        let actual: ValidationResult =
+            validate_with_parsed(&root, &[("file:///schemas/b.json", &document)], &json!(1));
+        let expected: ValidationResult = expected_string_error();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parsed_document_relative_root_id_resolves_against_its_uri() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/dir/c.json"}));
+        let document: JsonSchema = parse(&json!({"$id": "c.json", "type": "string"}));
+        let actual: ValidationResult = validate_with_parsed(
+            &root,
+            &[("https://example.com/dir/b.json", &document)],
+            &json!(1),
+        );
+        let expected: ValidationResult = expected_string_error();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parsed_document_relative_ref_resolves_against_its_uri() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/dir/b.json"}));
+        let b: JsonSchema = parse(&json!({"$ref": "c.json"}));
+        let c: JsonSchema = parse(&json!({"type": "string"}));
+        let actual: ValidationResult = validate_with_parsed(
+            &root,
+            &[
+                ("https://example.com/dir/b.json", &b),
+                ("https://example.com/dir/c.json", &c),
+            ],
+            &json!(1),
+        );
+        let expected: ValidationResult = expected_string_error();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn first_parsed_document_keeps_a_uri_two_documents_claim() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/id.json"}));
+        let first: JsonSchema =
+            parse(&json!({"$id": "https://example.com/id.json", "type": "string"}));
+        let second: JsonSchema =
+            parse(&json!({"$id": "https://example.com/id.json", "type": "number"}));
+        let actual: ValidationResult = validate_with_parsed(
+            &root,
+            &[
+                ("file:///schemas/first.json", &first),
+                ("file:///schemas/second.json", &second),
+            ],
+            &json!(1),
+        );
+        let expected: ValidationResult = expected_string_error();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ref_target_in_parsed_document_is_the_borrowed_schema() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/b.json"}));
+        let document: JsonSchema = parse(&json!({"type": "string"}));
+        let registry: Registry<'_> = Registry::builder()
+            .parsed_document("https://example.com/b.json", &document)
+            .build(&root)
+            .expect("build registry");
+        let resolved: Resolved<'_> = registry
+            .resolve(registry.root_scope(), "https://example.com/b.json")
+            .expect("resolve");
+        let actual: bool = matches!(
+            resolved.schema,
+            SchemaRef::Object(target) if std::ptr::eq(target, std::ptr::from_ref(&document))
+        );
+        assert!(actual, "the target is a copy, not the given document");
+    }
+
+    #[test]
+    fn parsed_document_with_relative_uri_is_a_build_error() {
+        let root: JsonSchema = parse(&json!({}));
+        let document: JsonSchema = parse(&json!({}));
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
+            .parsed_document("b.json", &document)
+            .build(&root)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::InvalidUri {
+            value: "b.json".to_string(),
+            reason: "it has no scheme (it is a relative reference)".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parsed_document_no_ref_reaches_is_not_discovered() {
+        let root: JsonSchema = parse(&json!({"type": "string"}));
+        let document: JsonSchema = parse(&json!({"$ref": "#/$defs/missing"}));
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
+            .parsed_document("https://example.com/b.json", &document)
+            .build(&root)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Ok(());
         assert_eq!(expected, actual);
     }
 }

@@ -12,7 +12,9 @@ mod derive;
 
 use derive::expand_to_json_schema;
 use json_schema_rs::sanitizers::module_name_from_path;
-use json_schema_rs::{CodeGenBackend, CodeGenSettings, JsonSchema};
+use json_schema_rs::{
+    CodeGenBackend, CodeGenInput, CodeGenSettings, FileRetriever, JsonSchema, file_uri,
+};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -61,7 +63,7 @@ fn json_schema_to_rust_impl(
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|_| syn::Error::new(Span::call_site(), "CARGO_MANIFEST_DIR not set"))?;
 
-    let mut schemas: Vec<json_schema_rs::JsonSchema> =
+    let mut schemas: Vec<(json_schema_rs::JsonSchema, Option<String>)> =
         Vec::with_capacity(schema_inputs.literals.len());
     let mut mod_names: Vec<(String, proc_macro2::Span)> =
         Vec::with_capacity(schema_inputs.literals.len());
@@ -69,28 +71,40 @@ fn json_schema_to_rust_impl(
     for (index, lit) in schema_inputs.literals.iter().enumerate() {
         let s = lit.value();
         let s = s.trim();
-        let (json_str, mod_name): (String, String) = if s.starts_with('{') {
-            (s.to_string(), format!("schema_{index}"))
+        let (json_str, mod_name, uri): (String, String, Option<String>) = if s.starts_with('{') {
+            (s.to_string(), format!("schema_{index}"), None)
         } else {
             let path = std::path::Path::new(&manifest_dir).join(s);
             let contents = std::fs::read_to_string(&path).map_err(|e| {
                 syn::Error::new(lit.span(), format!("failed to read schema file {s}: {e}"))
             })?;
             let name = module_name_from_path(s);
-            (contents, name)
+            // The file's own URI is the base for its relative `$ref`s to sibling files.
+            let uri: Option<String> = path.canonicalize().ok().as_deref().and_then(file_uri);
+            (contents, name, uri)
         };
 
         let schema: json_schema_rs::JsonSchema = JsonSchema::try_from(json_str.as_str())
             .map_err(|e| syn::Error::new(lit.span(), format!("invalid JSON Schema: {e}")))?;
-        schemas.push(schema);
+        schemas.push((schema, uri));
         mod_names.push((mod_name, lit.span()));
     }
 
+    // `$ref`s to files that are not macro inputs are read from inside the crate's directory.
+    let mut input: CodeGenInput<'_> =
+        CodeGenInput::new().retriever(FileRetriever::new(&manifest_dir));
+    for (schema, uri) in &schemas {
+        input = match uri {
+            Some(uri) => input.schema_at(uri.clone(), schema),
+            None => input.schema(schema),
+        };
+    }
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let backend = json_schema_rs::RustBackend;
-    let output: json_schema_rs::GenerateRustOutput = backend
-        .generate(&schemas, &code_gen_settings)
-        .map_err(|e| syn::Error::new(Span::call_site(), format!("codegen failed: {e}")))?;
+    let output: json_schema_rs::GenerateRustOutput =
+        backend
+            .generate(&input, &code_gen_settings)
+            .map_err(|e| syn::Error::new(Span::call_site(), format!("codegen failed: {e}")))?;
 
     let mut modules = Vec::new();
     if let Some(shared_bytes) = &output.shared {

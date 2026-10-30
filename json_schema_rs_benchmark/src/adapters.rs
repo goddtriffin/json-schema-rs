@@ -17,17 +17,27 @@
 //! `cargo-typify` CLI defaults (builder-style interface enabled), so the in-process and
 //! CLI tiers generate the same code.
 //!
+//! A fixture's vendored resources (documents its schema references, see
+//! [`crate::fixtures::Resource`]) are handed to each tool the way it accepts extra documents,
+//! each under its root `$id`, as JSON values parsed from text inside the measured work (as the
+//! schema is): `jsonschemars` through its `$ref` registry (`RegistryBuilder::document` to
+//! compile; an in-memory `Retrieve`r to generate code, so only the schema gets root types, as
+//! with every other fixture), `jsonschema` through a `referencing::Registry`, `boon` through
+//! `Compiler::add_resource`. typify cannot take extra documents (it rejects every external
+//! `$ref`), so its codegen on such a fixture is a compatibility failure.
+//!
 //! Tool panics (typify panics on some schemas) are caught and reported as errors so one
 //! failing cell never aborts a run. [`check`] decides whether a (tool, fixture, operation)
 //! cell is correct, and only correct cells are timed or profiled.
 
-use crate::fixtures::Fixture;
+use crate::fixtures::{Fixture, Resource};
 use json_schema_rs::{
-    CodeGenSettings, CompiledSchema, GenerateRustOutput, JsonSchema, Registry, Schema,
-    generate_rust,
+    CodeGenInput, CodeGenSettings, CompiledSchema, GenerateRustOutput, JsonSchema, Registry,
+    RegistryBuilder, Schema, generate_rust,
 };
 use serde_json::Value;
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -186,6 +196,8 @@ pub enum AdapterError {
     Compile(String),
     /// The tool failed to generate code.
     Codegen(String),
+    /// The tool cannot take the fixture's resource documents.
+    ResourcesUnsupported,
     /// The tool panicked.
     Panic(String),
 }
@@ -203,6 +215,7 @@ impl fmt::Display for AdapterError {
             AdapterError::InstanceParse(message) => write!(f, "instance parse error: {message}"),
             AdapterError::Compile(message) => write!(f, "compile error: {message}"),
             AdapterError::Codegen(message) => write!(f, "codegen error: {message}"),
+            AdapterError::ResourcesUnsupported => f.write_str(RESOURCES_UNSUPPORTED),
             AdapterError::Panic(message) => write!(f, "panic: {message}"),
         }
     }
@@ -237,19 +250,29 @@ pub fn parse_instance(text: &str) -> Result<Value, AdapterError> {
         .map_err(|e: serde_json::Error| AdapterError::InstanceParse(e.to_string()))
 }
 
-/// Compile schema text with `tool`, ready for [`validate`].
+/// Compile schema text with `tool`, ready for [`validate`], with `resources` registered under
+/// their URIs.
 ///
 /// # Errors
 ///
 /// Returns [`AdapterError::Unsupported`] for a tool without validation, and
 /// [`AdapterError::SchemaParse`], [`AdapterError::Compile`], or [`AdapterError::Panic`] when
 /// the tool cannot compile the schema.
-pub fn compile(tool: Tool, schema_text: &str) -> Result<Compiled, AdapterError> {
+pub fn compile(
+    tool: Tool,
+    schema_text: &str,
+    resources: &[Resource],
+) -> Result<Compiled, AdapterError> {
     guarded(|| match tool {
         Tool::JsonSchemaRs => {
             let schema: Schema = serde_json::from_str::<Schema>(schema_text)
                 .map_err(|e: serde_json::Error| AdapterError::SchemaParse(e.to_string()))?;
-            let registry: Registry<'static> = Registry::builder()
+            let mut builder: RegistryBuilder<'static> = Registry::builder();
+            for resource in resources {
+                builder =
+                    builder.document(resource.uri.clone(), parse_schema_value(&resource.text)?);
+            }
+            let registry: Registry<'static> = builder
                 .build_owned(schema)
                 .map_err(|e| AdapterError::Compile(e.to_string()))?;
             CompiledSchema::new(&registry)
@@ -258,9 +281,28 @@ pub fn compile(tool: Tool, schema_text: &str) -> Result<Compiled, AdapterError> 
         }
         Tool::Jsonschema => {
             let schema: Value = parse_schema_value(schema_text)?;
-            jsonschema::validator_for(&schema)
+            let compile_err = |e: jsonschema::ValidationError<'_>| {
+                AdapterError::Compile(stable_jsonschema_message(&e.to_string()))
+            };
+            if resources.is_empty() {
+                return jsonschema::validator_for(&schema)
+                    .map(Compiled::Jsonschema)
+                    .map_err(compile_err);
+            }
+            let referencing_err =
+                |e: jsonschema::ReferencingError| AdapterError::Compile(e.to_string());
+            let mut builder: jsonschema::RegistryBuilder<'_> = jsonschema::Registry::new();
+            for resource in resources {
+                builder = builder
+                    .add(resource.uri.as_str(), parse_schema_value(&resource.text)?)
+                    .map_err(referencing_err)?;
+            }
+            let registry: jsonschema::Registry<'_> = builder.prepare().map_err(referencing_err)?;
+            jsonschema::options()
+                .with_registry(&registry)
+                .build(&schema)
                 .map(Compiled::Jsonschema)
-                .map_err(|e| AdapterError::Compile(stable_jsonschema_message(&e.to_string())))
+                .map_err(compile_err)
         }
         Tool::Boon => {
             let schema: Value = parse_schema_value(schema_text)?;
@@ -269,6 +311,11 @@ pub fn compile(tool: Tool, schema_text: &str) -> Result<Compiled, AdapterError> 
             compiler
                 .add_resource(BOON_SCHEMA_LOC, schema)
                 .map_err(|e: boon::CompileError| AdapterError::Compile(e.to_string()))?;
+            for resource in resources {
+                compiler
+                    .add_resource(&resource.uri, parse_schema_value(&resource.text)?)
+                    .map_err(|e: boon::CompileError| AdapterError::Compile(e.to_string()))?;
+            }
             let index: boon::SchemaIndex = compiler
                 .compile(BOON_SCHEMA_LOC, &mut schemas)
                 .map_err(|e: boon::CompileError| AdapterError::Compile(e.to_string()))?;
@@ -315,16 +362,22 @@ pub fn validate(compiled: &Compiled, instance: &Value) -> bool {
     }
 }
 
-/// Generate Rust source from schema text with `tool`.
+/// Generate Rust source from schema text with `tool`, with `resources` reachable by their URIs.
 ///
 /// # Errors
 ///
-/// Returns [`AdapterError::Unsupported`] for a tool without codegen, and
-/// [`AdapterError::SchemaParse`], [`AdapterError::Codegen`], or [`AdapterError::Panic`] when
-/// generation fails.
-pub fn codegen(tool: Tool, schema_text: &str) -> Result<String, AdapterError> {
+/// Returns [`AdapterError::Unsupported`] for a tool without codegen,
+/// [`AdapterError::ResourcesUnsupported`] when `resources` is not empty and the tool cannot take
+/// extra documents, and [`AdapterError::SchemaParse`], [`AdapterError::Codegen`], or
+/// [`AdapterError::Panic`] when generation fails.
+pub fn codegen(
+    tool: Tool,
+    schema_text: &str,
+    resources: &[Resource],
+) -> Result<String, AdapterError> {
     guarded(|| match tool {
-        Tool::JsonSchemaRs => codegen_jsonschemars(schema_text),
+        Tool::JsonSchemaRs => codegen_jsonschemars(schema_text, resources),
+        Tool::Typify if !resources.is_empty() => Err(AdapterError::ResourcesUnsupported),
         Tool::Typify => codegen_typify(schema_text),
         Tool::Jsonschema | Tool::Boon => Err(AdapterError::Unsupported {
             tool,
@@ -333,12 +386,23 @@ pub fn codegen(tool: Tool, schema_text: &str) -> Result<String, AdapterError> {
     })
 }
 
-fn codegen_jsonschemars(schema_text: &str) -> Result<String, AdapterError> {
+/// Our codegen for the schema alone, its `$ref`s to other documents served from `resources` by
+/// an in-memory retriever: the resources are documents the schema reaches, not inputs of their
+/// own, as in every validating tool's registry.
+fn codegen_jsonschemars(schema_text: &str, resources: &[Resource]) -> Result<String, AdapterError> {
     let schema: JsonSchema = serde_json::from_str(schema_text)
         .map_err(|e: serde_json::Error| AdapterError::SchemaParse(e.to_string()))?;
     let settings: CodeGenSettings = CodeGenSettings::builder().build();
-    let output: GenerateRustOutput = generate_rust(std::slice::from_ref(&schema), &settings)
-        .map_err(|e| AdapterError::Codegen(e.to_string()))?;
+    let mut input: CodeGenInput<'_> = CodeGenInput::new().schema(&schema);
+    if !resources.is_empty() {
+        let mut documents: BTreeMap<String, Value> = BTreeMap::new();
+        for resource in resources {
+            documents.insert(resource.uri.clone(), parse_schema_value(&resource.text)?);
+        }
+        input = input.retriever(documents);
+    }
+    let output: GenerateRustOutput =
+        generate_rust(input, &settings).map_err(|e| AdapterError::Codegen(e.to_string()))?;
     let mut source: Vec<u8> = output.shared.unwrap_or_default();
     for buffer in output.per_schema {
         source.extend_from_slice(&buffer);
@@ -362,10 +426,15 @@ fn codegen_typify(schema_text: &str) -> Result<String, AdapterError> {
     Ok(prettyplease::unparse(&file))
 }
 
-/// Compat detail for a cell left unmeasured because the fixture's schema has external
-/// `$ref`s; the benchmark runs offline (see [`Fixture::external_refs`]). The CLI tier prints the
-/// same text, so both tiers report it identically.
-pub const OFFLINE_SKIP: &str = "not measured: schema needs external documents (offline run)";
+/// Compat detail for a cell left unmeasured because a `$ref` in the fixture names a document the
+/// fixture does not vendor; the benchmark runs offline (see [`Fixture::unresolved_refs`]). The
+/// CLI tier prints the same text, so both tiers report it identically.
+pub const OFFLINE_SKIP: &str =
+    "not measured: schema needs external documents the fixture does not vendor (offline run)";
+
+/// Compat detail for a cell whose tool has no way to take the fixture's resource documents (no
+/// API or CLI option for extra schema documents). The CLI tier prints the same text.
+pub const RESOURCES_UNSUPPORTED: &str = "cannot load the fixture's resource documents";
 
 /// Compat detail for a `validate_invalid` cell left unmeasured because the same tool rejects the
 /// fixture's valid instance. The CLI tier prints the same text.
@@ -386,15 +455,22 @@ fn check_inner(tool: Tool, fixture: &Fixture, operation: Operation) -> Result<()
     if !tool.supports(operation) {
         return Err(AdapterError::Unsupported { tool, operation }.to_string());
     }
-    let external: Vec<String> = fixture.external_refs();
-    if !external.is_empty() {
+    if !fixture.unresolved_refs().is_empty() {
         return Err(OFFLINE_SKIP.to_owned());
     }
+    let resources: &[Resource] = &fixture.resources;
     match operation {
-        Operation::Codegen => codegen(tool, &fixture.schema_text)
-            .map(|_source: String| ())
+        // Generated source that is not a Rust file is not a successful generation.
+        Operation::Codegen => codegen(tool, &fixture.schema_text, resources)
+            .and_then(|source: String| {
+                syn::parse_file(&source)
+                    .map(|_file: syn::File| ())
+                    .map_err(|e: syn::Error| {
+                        AdapterError::Codegen(format!("generated source is not Rust: {e}"))
+                    })
+            })
             .map_err(|e: AdapterError| e.to_string()),
-        Operation::SchemaCompile => compile(tool, &fixture.schema_text)
+        Operation::SchemaCompile => compile(tool, &fixture.schema_text, resources)
             .map(|_compiled: Compiled| ())
             .map_err(|e: AdapterError| e.to_string()),
         Operation::ValidateValid | Operation::ValidateInvalid => {
@@ -402,8 +478,8 @@ fn check_inner(tool: Tool, fixture: &Fixture, operation: Operation) -> Result<()
                 .instance(fixture)
                 .ok_or_else(|| AdapterError::MissingInstance(operation).to_string())?;
             let instance: Value = parse_instance(text).map_err(|e: AdapterError| e.to_string())?;
-            let compiled: Compiled =
-                compile(tool, &fixture.schema_text).map_err(|e: AdapterError| e.to_string())?;
+            let compiled: Compiled = compile(tool, &fixture.schema_text, resources)
+                .map_err(|e: AdapterError| e.to_string())?;
             let expected_valid: bool = operation == Operation::ValidateValid;
             // Rejecting the invalid instance proves nothing when the tool also rejects the valid
             // one (e.g. it rejects everything), so that cell is not measured. The CLI tier
@@ -441,9 +517,60 @@ mod tests {
     use super::{
         AdapterError, Compiled, Operation, Tool, check, codegen, compile, one_line, validate,
     };
-    use crate::fixtures::Fixture;
+    use crate::fixtures::{Fixture, Resource, default_roots, discover};
     use serde_json::Value;
     use std::path::PathBuf;
+
+    /// A schema whose `name` property is defined in another document, [`NAME_RESOURCE`].
+    const SCHEMA_WITH_REF: &str = r#"{
+        "$id": "https://example.com/root.json",
+        "type": "object",
+        "properties": { "name": { "$ref": "name.json" } },
+        "required": ["name"]
+    }"#;
+
+    /// The document [`SCHEMA_WITH_REF`] references.
+    const NAME_RESOURCE: &str = r#"{
+        "$id": "https://example.com/name.json",
+        "title": "Name",
+        "type": "object",
+        "properties": { "first": { "type": "string" } },
+        "required": ["first"]
+    }"#;
+
+    fn name_resource() -> Vec<Resource> {
+        vec![Resource {
+            uri: "https://example.com/name.json".to_owned(),
+            path: PathBuf::new(),
+            text: NAME_RESOURCE.to_owned(),
+        }]
+    }
+
+    /// [`SCHEMA_WITH_REF`] with [`NAME_RESOURCE`] vendored.
+    fn fixture_with_resource() -> Fixture {
+        Fixture {
+            resources: name_resource(),
+            ..fixture(
+                SCHEMA_WITH_REF,
+                Some(r#"{"name":{"first":"a"}}"#),
+                Some(r#"{"name":{"first":1}}"#),
+            )
+        }
+    }
+
+    /// Every supported cell's check on `fixture`, in tool then operation order.
+    fn check_every_supported_cell(fixture: &Fixture) -> Vec<Result<(), String>> {
+        Tool::ALL
+            .iter()
+            .flat_map(|tool: &Tool| {
+                Operation::ALL
+                    .iter()
+                    .map(move |op: &Operation| (*tool, *op))
+            })
+            .filter(|(tool, op): &(Tool, Operation)| tool.supports(*op))
+            .map(|(tool, op): (Tool, Operation)| check(tool, fixture, op))
+            .collect()
+    }
 
     const SCHEMA: &str = r#"{
         "type": "object",
@@ -458,6 +585,7 @@ mod tests {
             schema_text: schema.to_owned(),
             valid_instance: valid.map(str::to_owned),
             invalid_instance: invalid.map(str::to_owned),
+            resources: Vec::new(),
         }
     }
 
@@ -471,7 +599,7 @@ mod tests {
     }
 
     fn verdict(tool: Tool, instance: &str) -> bool {
-        let compiled: Compiled = compile(tool, SCHEMA).expect("compile");
+        let compiled: Compiled = compile(tool, SCHEMA, &[]).expect("compile");
         let value: Value = serde_json::from_str(instance).expect("instance");
         validate(&compiled, &value)
     }
@@ -569,19 +697,20 @@ mod tests {
 
     #[test]
     fn jsonschema_compile_rejects_bad_schema() {
-        let actual: Result<Compiled, AdapterError> = compile(Tool::Jsonschema, r#"{"type": 5}"#);
+        let actual: Result<Compiled, AdapterError> =
+            compile(Tool::Jsonschema, r#"{"type": 5}"#, &[]);
         assert!(matches!(actual, Err(AdapterError::Compile(_))));
     }
 
     #[test]
     fn boon_compile_rejects_bad_schema() {
-        let actual: Result<Compiled, AdapterError> = compile(Tool::Boon, r#"{"type": 5}"#);
+        let actual: Result<Compiled, AdapterError> = compile(Tool::Boon, r#"{"type": 5}"#, &[]);
         assert!(matches!(actual, Err(AdapterError::Compile(_))));
     }
 
     #[test]
     fn compile_rejects_malformed_json() {
-        let actual: Result<Compiled, AdapterError> = compile(Tool::Boon, "{");
+        let actual: Result<Compiled, AdapterError> = compile(Tool::Boon, "{", &[]);
         assert!(matches!(actual, Err(AdapterError::SchemaParse(_))));
     }
 
@@ -591,7 +720,7 @@ mod tests {
             tool: Tool::Typify,
             operation: Operation::SchemaCompile,
         };
-        let actual: AdapterError = compile(Tool::Typify, SCHEMA).expect_err("unsupported");
+        let actual: AdapterError = compile(Tool::Typify, SCHEMA, &[]).expect_err("unsupported");
         assert_eq!(expected, actual);
     }
 
@@ -612,7 +741,7 @@ pub struct Root {
 
 "
         .to_owned();
-        let actual: String = codegen(Tool::JsonSchemaRs, SCHEMA).expect("codegen");
+        let actual: String = codegen(Tool::JsonSchemaRs, SCHEMA, &[]).expect("codegen");
         assert_eq!(expected, actual);
     }
 
@@ -625,7 +754,7 @@ pub struct Root {
 
     #[test]
     fn typify_codegen_rejects_malformed_schema() {
-        let actual: Result<String, AdapterError> = codegen(Tool::Typify, "[]");
+        let actual: Result<String, AdapterError> = codegen(Tool::Typify, "[]", &[]);
         assert!(matches!(actual, Err(AdapterError::SchemaParse(_))));
     }
 
@@ -638,15 +767,70 @@ pub type Root = String;
 
 "
         .to_owned();
-        let actual: String = codegen(Tool::JsonSchemaRs, r#"{"type":"string"}"#).expect("codegen");
+        let actual: String =
+            codegen(Tool::JsonSchemaRs, r#"{"type":"string"}"#, &[]).expect("codegen");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn jsonschemars_codegen_rejects_unresolvable_ref() {
         let actual: Result<String, AdapterError> =
-            codegen(Tool::JsonSchemaRs, r##"{"$ref":"#/$defs/missing"}"##);
+            codegen(Tool::JsonSchemaRs, r##"{"$ref":"#/$defs/missing"}"##, &[]);
         assert!(matches!(actual, Err(AdapterError::Codegen(_))));
+    }
+
+    #[test]
+    fn jsonschemars_codegen_generates_types_from_a_resource() {
+        let expected: String = "\
+//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = \"Name\")]
+#[json_schema(id = \"https://example.com/name.json\")]
+pub struct Name {
+    pub first: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(id = \"https://example.com/root.json\")]
+pub struct Root {
+    pub name: Name,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"
+        .to_owned();
+        let actual: String =
+            codegen(Tool::JsonSchemaRs, SCHEMA_WITH_REF, &name_resource()).expect("codegen");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn jsonschemars_codegen_without_its_resource_fails() {
+        let actual: Result<String, AdapterError> =
+            codegen(Tool::JsonSchemaRs, SCHEMA_WITH_REF, &[]);
+        assert!(matches!(actual, Err(AdapterError::Codegen(_))));
+    }
+
+    #[test]
+    fn jsonschemars_compile_without_its_resource_fails() {
+        let actual: Result<Compiled, AdapterError> =
+            compile(Tool::JsonSchemaRs, SCHEMA_WITH_REF, &[]);
+        assert!(matches!(actual, Err(AdapterError::Compile(_))));
+    }
+
+    #[test]
+    fn typify_codegen_rejects_resources() {
+        let expected: AdapterError = AdapterError::ResourcesUnsupported;
+        let actual: AdapterError =
+            codegen(Tool::Typify, SCHEMA_WITH_REF, &name_resource()).expect_err("unsupported");
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -655,38 +839,52 @@ pub type Root = String;
             tool: Tool::Boon,
             operation: Operation::Codegen,
         };
-        let actual: AdapterError = codegen(Tool::Boon, SCHEMA).expect_err("unsupported");
+        let actual: AdapterError = codegen(Tool::Boon, SCHEMA, &[]).expect_err("unsupported");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn check_passes_every_supported_cell() {
-        let fixture: Fixture = good_fixture();
         let expected: Vec<Result<(), String>> = vec![Ok(()); 11];
-        let actual: Vec<Result<(), String>> = Tool::ALL
-            .iter()
-            .flat_map(|tool: &Tool| {
-                Operation::ALL
-                    .iter()
-                    .map(move |op: &Operation| (*tool, *op))
-            })
-            .filter(|(tool, op): &(Tool, Operation)| tool.supports(*op))
-            .map(|(tool, op): (Tool, Operation)| check(tool, &fixture, op))
-            .collect();
+        let actual: Vec<Result<(), String>> = check_every_supported_cell(&good_fixture());
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn check_skips_a_fixture_with_external_refs() {
+    fn check_skips_a_fixture_with_unresolved_refs() {
         let offline: Fixture = fixture(
             r#"{"properties":{"a":{"$ref":"https://example.com/a.json"}}}"#,
             Some("{}"),
             Some("{}"),
         );
-        let expected: Result<(), String> =
-            Err("not measured: schema needs external documents (offline run)".to_owned());
+        let expected: Result<(), String> = Err(
+            "not measured: schema needs external documents the fixture does not vendor (offline run)"
+                .to_owned(),
+        );
         let actual: Result<(), String> =
             check(Tool::Jsonschema, &offline, Operation::SchemaCompile);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn check_passes_every_cell_through_resources_but_typify_codegen() {
+        let mut expected: Vec<Result<(), String>> = vec![Ok(()); 11];
+        expected[10] = Err("cannot load the fixture's resource documents".to_owned());
+        let actual: Vec<Result<(), String>> = check_every_supported_cell(&fixture_with_resource());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn check_passes_committed_package_json_but_typify_codegen() {
+        let committed: PathBuf = default_roots().into_iter().next().expect("committed root");
+        let package_json: Fixture = discover(&[committed])
+            .expect("discover")
+            .into_iter()
+            .find(|fixture: &Fixture| fixture.id == "medium/package-json")
+            .expect("package-json fixture");
+        let mut expected: Vec<Result<(), String>> = vec![Ok(()); 11];
+        expected[10] = Err("cannot load the fixture's resource documents".to_owned());
+        let actual: Vec<Result<(), String>> = check_every_supported_cell(&package_json);
         assert_eq!(expected, actual);
     }
 

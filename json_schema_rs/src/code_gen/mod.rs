@@ -5,17 +5,17 @@
 //! appropriate backend (e.g. the Rust backend).
 
 mod error;
+mod input;
 mod rust_backend;
 mod settings;
 mod type_graph;
 
 pub use error::{CodeGenError, CodeGenResult};
+pub use input::CodeGenInput;
 pub use rust_backend::{RustBackend, generate_rust};
 pub use settings::{
     CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, ModelNameSource, UnknownProperties,
 };
-
-use crate::json_schema::JsonSchema;
 
 /// Output of Rust code generation: optional shared buffer plus one buffer per input schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,15 +28,17 @@ pub struct GenerateRustOutput {
 
 /// Contract for a codegen backend: schemas in, [`GenerateRustOutput`] with optional shared buffer and per-schema buffers.
 pub trait CodeGenBackend {
-    /// Generate model source for each schema. Returns shared buffer (if any) and one buffer per schema.
+    /// Generate model source for each input schema. Returns shared buffer (if any) and one
+    /// buffer per input schema.
     ///
     /// # Errors
     ///
     /// Returns [`CodeGenError::Batch`] with the schema's index when one schema fails (an
-    /// unresolvable `$ref`, a registry problem), and [`CodeGenError::Io`] on write failure.
+    /// unresolvable `$ref`, a document that cannot be retrieved, a registry problem), and
+    /// [`CodeGenError::Io`] on write failure.
     fn generate(
         &self,
-        schemas: &[JsonSchema],
+        input: &CodeGenInput<'_>,
         settings: &CodeGenSettings,
     ) -> CodeGenResult<GenerateRustOutput>;
 }
