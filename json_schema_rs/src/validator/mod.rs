@@ -8,6 +8,8 @@ mod compiled;
 mod error;
 mod eval;
 mod format;
+#[cfg(test)]
+mod tests_keywords;
 
 pub use compiled::{CompileError, CompileErrors, CompiledSchema};
 pub use error::{ValidationError, ValidationResult};
