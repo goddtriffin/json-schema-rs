@@ -20,10 +20,13 @@ use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-/// How deeply schemas may nest during one evaluation. Each level costs a few native stack
-/// frames; the limit keeps a debug build of the evaluator inside a 2 MiB thread stack (the
-/// default for spawned threads) with a wide margin. Measured by
-/// `depth_guard_fits_two_mib_thread` in this module's tests.
+/// How deeply schemas may nest during one evaluation (each subschema entered, in place or at a
+/// child instance, is one level). A crash guard, not a policy limit: measured on a 2 MiB thread
+/// stack (the default for spawned threads), the costliest recursion shapes (an
+/// `unevaluatedProperties` node re-entered through `allOf` and `$ref`, an `anyOf` branch
+/// re-entered through `items` and `$ref`) overflow after about 1,200 levels in a debug build and
+/// several thousand in a release build, so 512 keeps a margin of more than two in either.
+/// `depth_guard_fits_two_mib_thread` checks the guard fires first on such a thread.
 pub(crate) const DEPTH_LIMIT: usize = 512;
 
 /// An instance location: a linked list on the native stack, encoded as a [`JsonPointer`] only
@@ -127,6 +130,10 @@ struct Context {
     refs: Vec<(NodeId, *const Value)>,
     /// Schema resources entered, outermost first (only when a dynamic reference needs them).
     dynamic_scope: Vec<Scope>,
+    /// Where the depth guard fired. Once set, every evaluation fails at once and the result is
+    /// that one error: a branch cut short by the guard must not read as a branch that failed
+    /// (which would make `not` pass, or `anyOf` report a mismatch).
+    depth_exceeded: Option<JsonPointer>,
 }
 
 /// Returns the JSON type name of the value for use in "got" error messages.
@@ -189,14 +196,46 @@ fn first_duplicate(items: &[Value]) -> Option<&Value> {
     items.iter().find(|item| !seen.insert(JsonEqKey(item)))
 }
 
+/// Records an error in collect mode. Out of line and cold, so building the error (and its
+/// temporaries) takes no space in the evaluator's recursive frames.
+#[cold]
+#[inline(never)]
+fn push_error(errors: &mut Vec<ValidationError>, make: impl FnOnce() -> ValidationError) {
+    errors.push(make());
+}
+
 /// Records `$error` in collect mode and evaluates to `false` (the keyword failed).
 macro_rules! fail {
     ($collect:expr, $cx:expr, $error:expr) => {{
         if $collect {
-            $cx.errors.push($error);
+            push_error(&mut $cx.errors, || $error);
         }
         false
     }};
+}
+
+/// Runs `$check` for each of a keyword's parts; a failure stops the loop in verdict mode and
+/// is remembered in collect mode. Evaluates to whether every part passed.
+macro_rules! each {
+    ($collect:expr, $iter:expr, |$item:pat_param| $check:expr) => {{
+        let mut valid: bool = true;
+        for $item in $iter {
+            if !$check {
+                valid = false;
+                if !$collect {
+                    break;
+                }
+            }
+        }
+        valid
+    }};
+}
+
+/// The shared inputs of a keyword check.
+#[derive(Clone, Copy)]
+struct At<'i, 'l> {
+    instance: &'i Value,
+    location: &'l Location<'l>,
 }
 
 impl CompiledSchema {
@@ -207,9 +246,12 @@ impl CompiledSchema {
     pub fn is_valid(&self, instance: &Value) -> bool {
         let mut cx: Context = Context::default();
         self.eval::<false>(self.root, instance, &Location::ROOT, &mut cx, None)
+            && cx.depth_exceeded.is_none()
     }
 
     /// Validates `instance`, collecting every error (one per problem, see [`ValidationError`]).
+    /// When the instance nests deeper than the depth guard allows, the result is that one
+    /// [`ValidationError::DepthLimitExceeded`].
     ///
     /// # Errors
     ///
@@ -217,6 +259,12 @@ impl CompiledSchema {
     pub fn validate(&self, instance: &Value) -> ValidationResult {
         let mut cx: Context = Context::default();
         let valid: bool = self.eval::<true>(self.root, instance, &Location::ROOT, &mut cx, None);
+        if let Some(instance_path) = cx.depth_exceeded {
+            return Err(vec![ValidationError::DepthLimitExceeded {
+                instance_path,
+                limit: DEPTH_LIMIT,
+            }]);
+        }
         if valid && cx.errors.is_empty() {
             Ok(())
         } else {
@@ -242,32 +290,23 @@ impl CompiledSchema {
         if node.keywords.is_empty() {
             return true;
         }
+        if cx.depth_exceeded.is_some() {
+            return false;
+        }
         if cx.depth >= DEPTH_LIMIT {
-            return fail!(
-                COLLECT,
-                cx,
-                ValidationError::DepthLimitExceeded {
-                    instance_path: location.pointer(),
-                    limit: DEPTH_LIMIT,
-                }
-            );
+            cx.depth_exceeded = Some(location.pointer());
+            return false;
         }
         cx.depth += 1;
         let entered: bool = self.uses_dynamic_scope && cx.dynamic_scope.last() != Some(&node.scope);
         if entered {
             cx.dynamic_scope.push(node.scope);
         }
+        let at: At<'_, '_> = At { instance, location };
         let valid: bool = if node.has_unevaluated {
-            // `unevaluated*` reads every sibling's annotations, so collect them here.
-            let mut local: Evaluated = Evaluated::default();
-            let valid: bool =
-                self.keywords::<COLLECT>(node, instance, location, cx, Some(&mut local));
-            if valid && let Some(parent) = evaluated {
-                parent.merge(&local);
-            }
-            valid
+            self.keywords_with_unevaluated::<COLLECT>(node, at, cx, evaluated)
         } else {
-            self.keywords::<COLLECT>(node, instance, location, cx, evaluated)
+            self.keywords::<COLLECT>(node, at, cx, evaluated)
         };
         if entered {
             cx.dynamic_scope.pop();
@@ -276,49 +315,181 @@ impl CompiledSchema {
         valid
     }
 
+    /// The keywords of a node with `unevaluated*`, which reads every sibling's annotations, so
+    /// they are collected here and passed on only when the node passes.
+    #[inline(never)]
+    fn keywords_with_unevaluated<const COLLECT: bool>(
+        &self,
+        node: &Node,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let mut local: Evaluated = Evaluated::default();
+        let valid: bool = self.keywords::<COLLECT>(node, at, cx, Some(&mut local));
+        if valid && let Some(parent) = evaluated {
+            parent.merge(&local);
+        }
+        valid
+    }
+
     fn keywords<const COLLECT: bool>(
         &self,
         node: &Node,
-        instance: &Value,
-        location: &Location<'_>,
+        at: At<'_, '_>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        let mut valid: bool = true;
-        for keyword in &node.keywords {
-            let ok: bool = match instance {
-                Value::Object(object) => self.object_keyword::<COLLECT>(
-                    keyword,
-                    instance,
-                    object,
-                    location,
-                    cx,
-                    evaluated.as_deref_mut(),
-                ),
-                Value::Array(items) => self.array_keyword::<COLLECT>(
-                    keyword,
-                    instance,
-                    items,
-                    location,
-                    cx,
-                    evaluated.as_deref_mut(),
-                ),
-                _ => self.keyword::<COLLECT>(
-                    keyword,
-                    instance,
-                    location,
-                    cx,
-                    evaluated.as_deref_mut(),
-                ),
-            };
-            if !ok {
-                valid = false;
-                if !COLLECT {
-                    return false;
-                }
+        each!(COLLECT, node.keywords.iter(), |keyword| self
+            .keyword::<COLLECT>(keyword, at, cx, evaluated.as_deref_mut()))
+    }
+
+    /// Dispatches one keyword. Each keyword is its own function, so a recursive evaluation
+    /// holds only the frames of the keywords it passes through.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per keyword; the closed enum is matched exhaustively"
+    )]
+    fn keyword<const COLLECT: bool>(
+        &self,
+        keyword: &Keyword,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        match (keyword, at.instance) {
+            (Keyword::False, _) => Self::false_schema::<COLLECT>(at, cx),
+            (
+                Keyword::Type {
+                    types,
+                    integer_semantics,
+                },
+                instance,
+            ) => {
+                types.matches(instance, *integer_semantics)
+                    || Self::type_error::<COLLECT>(*types, at, cx)
             }
+            (Keyword::Const(expected), _) => Self::const_check::<COLLECT>(expected, at, cx),
+            (Keyword::Enum(allowed), _) => Self::enum_check::<COLLECT>(allowed, at, cx),
+            (
+                Keyword::Minimum(_)
+                | Keyword::Maximum(_)
+                | Keyword::ExclusiveMinimum(_)
+                | Keyword::ExclusiveMaximum(_)
+                | Keyword::MultipleOf(_),
+                Value::Number(n),
+            ) => Self::numeric::<COLLECT>(keyword, n, at, cx),
+            (
+                Keyword::MinLength(_)
+                | Keyword::MaxLength(_)
+                | Keyword::Pattern(_)
+                | Keyword::Format(_),
+                Value::String(s),
+            ) => self.string::<COLLECT>(keyword, s, at, cx),
+            (
+                Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems,
+                Value::Array(items),
+            ) => Self::array_assertion::<COLLECT>(keyword, items, at, cx),
+            (
+                Keyword::Required(_)
+                | Keyword::MinProperties(_)
+                | Keyword::MaxProperties(_)
+                | Keyword::DependentRequired(_)
+                | Keyword::NoAdditionalProperties(_),
+                Value::Object(object),
+            ) => self.object_assertion::<COLLECT>(keyword, object, at, cx),
+            (Keyword::Ref { target, ref_str }, _) => {
+                self.follow::<COLLECT>(*target, ref_str, at, cx, evaluated)
+            }
+            (
+                Keyword::DynamicRef {
+                    fallback,
+                    anchor,
+                    ref_str,
+                },
+                _,
+            ) => {
+                let target: NodeId = self.dynamic_target(*fallback, anchor, cx);
+                self.follow::<COLLECT>(target, ref_str, at, cx, evaluated)
+            }
+            (Keyword::RecursiveRef { fallback, ref_str }, _) => {
+                let target: NodeId = cx
+                    .dynamic_scope
+                    .iter()
+                    .find_map(|scope| self.recursive_anchors.get(scope).copied())
+                    .unwrap_or(*fallback);
+                self.follow::<COLLECT>(target, ref_str, at, cx, evaluated)
+            }
+            (Keyword::Properties(properties), Value::Object(object)) => {
+                self.properties::<COLLECT>(properties, object, at, cx, evaluated)
+            }
+            (Keyword::PatternProperties(patterns), Value::Object(object)) => {
+                self.pattern_properties::<COLLECT>(patterns, object, at, cx, evaluated)
+            }
+            (Keyword::AdditionalProperties { node, known }, Value::Object(object)) => {
+                self.additional_properties::<COLLECT>(*node, known, object, at, cx, evaluated)
+            }
+            (Keyword::PropertyNames(node), Value::Object(object)) => {
+                self.property_names::<COLLECT>(*node, object, at, cx)
+            }
+            (Keyword::DependentSchemas(dependencies), Value::Object(object)) => {
+                self.dependent_schemas::<COLLECT>(dependencies, object, at, cx, evaluated)
+            }
+            (Keyword::UnevaluatedProperties(node), Value::Object(object)) => {
+                self.unevaluated_properties::<COLLECT>(*node, object, at, cx, evaluated)
+            }
+            (Keyword::Items { prefix, rest }, Value::Array(items)) => {
+                self.items::<COLLECT>(prefix, *rest, items, at, cx, evaluated)
+            }
+            (Keyword::Contains { .. }, Value::Array(items)) => {
+                self.contains::<COLLECT>(keyword, items, at, cx, evaluated)
+            }
+            (Keyword::UnevaluatedItems(node), Value::Array(items)) => {
+                self.unevaluated_items::<COLLECT>(*node, items, at, cx, evaluated)
+            }
+            (Keyword::AllOf(nodes), _) => self.all_of::<COLLECT>(nodes, at, cx, evaluated),
+            (Keyword::AnyOf(nodes), _) => self.any_of::<COLLECT>(nodes, at, cx, evaluated),
+            (Keyword::OneOf(nodes), _) => self.one_of::<COLLECT>(nodes, at, cx, evaluated),
+            (Keyword::Not(node), _) => self.not::<COLLECT>(*node, at, cx),
+            (
+                Keyword::IfThenElse {
+                    condition,
+                    then,
+                    otherwise,
+                },
+                _,
+            ) => self.if_then_else::<COLLECT>(*condition, *then, *otherwise, at, cx, evaluated),
+            // Type-specific keywords ignore instances of other types.
+            (
+                Keyword::Minimum(_)
+                | Keyword::Maximum(_)
+                | Keyword::ExclusiveMinimum(_)
+                | Keyword::ExclusiveMaximum(_)
+                | Keyword::MultipleOf(_)
+                | Keyword::MinLength(_)
+                | Keyword::MaxLength(_)
+                | Keyword::Pattern(_)
+                | Keyword::Format(_)
+                | Keyword::MinItems(_)
+                | Keyword::MaxItems(_)
+                | Keyword::UniqueItems
+                | Keyword::Required(_)
+                | Keyword::MinProperties(_)
+                | Keyword::MaxProperties(_)
+                | Keyword::DependentRequired(_)
+                | Keyword::NoAdditionalProperties(_)
+                | Keyword::Properties(_)
+                | Keyword::PatternProperties(_)
+                | Keyword::AdditionalProperties { .. }
+                | Keyword::PropertyNames(_)
+                | Keyword::DependentSchemas(_)
+                | Keyword::UnevaluatedProperties(_)
+                | Keyword::Items { .. }
+                | Keyword::Contains { .. }
+                | Keyword::UnevaluatedItems(_),
+                _,
+            ) => true,
         }
-        valid
     }
 
     /// Evaluates a subschema at the same instance location; its annotations count only when it
@@ -326,22 +497,30 @@ impl CompiledSchema {
     fn in_place<const COLLECT: bool>(
         &self,
         id: NodeId,
-        instance: &Value,
-        location: &Location<'_>,
+        at: At<'_, '_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         match evaluated {
-            None => self.eval::<COLLECT>(id, instance, location, cx, None),
-            Some(parent) => {
-                let mut sub: Evaluated = Evaluated::default();
-                let ok: bool = self.eval::<COLLECT>(id, instance, location, cx, Some(&mut sub));
-                if ok {
-                    parent.merge(&sub);
-                }
-                ok
-            }
+            None => self.eval::<COLLECT>(id, at.instance, at.location, cx, None),
+            Some(parent) => self.in_place_annotated::<COLLECT>(id, at, cx, parent),
         }
+    }
+
+    #[inline(never)]
+    fn in_place_annotated<const COLLECT: bool>(
+        &self,
+        id: NodeId,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        parent: &mut Evaluated,
+    ) -> bool {
+        let mut sub: Evaluated = Evaluated::default();
+        let ok: bool = self.eval::<COLLECT>(id, at.instance, at.location, cx, Some(&mut sub));
+        if ok {
+            parent.merge(&sub);
+        }
+        ok
     }
 
     /// Follows a reference to `target` in place, failing with [`ValidationError::RefCycle`] when
@@ -350,327 +529,172 @@ impl CompiledSchema {
         &self,
         target: NodeId,
         ref_str: &str,
-        instance: &Value,
-        location: &Location<'_>,
+        at: At<'_, '_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        let at: *const Value = instance;
+        let address: *const Value = at.instance;
         // Entries for this instance location are the newest ones: a child location's entries
         // are popped before its parent is evaluated further.
         let looping: bool = cx
             .refs
             .iter()
             .rev()
-            .take_while(|(_, p)| std::ptr::eq(*p, at))
+            .take_while(|(_, p)| std::ptr::eq(*p, address))
             .any(|(node, _)| *node == target);
         if looping {
             return fail!(
                 COLLECT,
                 cx,
                 ValidationError::RefCycle {
-                    instance_path: location.pointer(),
+                    instance_path: at.location.pointer(),
                     ref_str: ref_str.to_string(),
                 }
             );
         }
-        cx.refs.push((target, at));
-        let ok: bool = self.in_place::<COLLECT>(target, instance, location, cx, evaluated);
+        cx.refs.push((target, address));
+        let ok: bool = self.in_place::<COLLECT>(target, at, cx, evaluated);
         cx.refs.pop();
         ok
     }
 
-    /// Keywords that apply to every instance, and the scalar assertions.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per keyword; the closed enum is matched exhaustively"
-    )]
-    fn keyword<const COLLECT: bool>(
-        &self,
-        keyword: &Keyword,
-        instance: &Value,
-        location: &Location<'_>,
+    /// The target of a dynamic `$dynamicRef`: the outermost resource in the dynamic scope that
+    /// declares `anchor`, else `fallback`.
+    fn dynamic_target(&self, fallback: NodeId, anchor: &str, cx: &Context) -> NodeId {
+        cx.dynamic_scope
+            .iter()
+            .find_map(|scope| {
+                self.dynamic_anchors.get(scope).and_then(|anchors| {
+                    anchors
+                        .iter()
+                        .find(|(name, _)| **name == *anchor)
+                        .map(|(_, node)| *node)
+                })
+            })
+            .unwrap_or(fallback)
+    }
+
+    fn false_schema<const COLLECT: bool>(at: At<'_, '_>, cx: &mut Context) -> bool {
+        fail!(
+            COLLECT,
+            cx,
+            ValidationError::FalseSchema {
+                instance_path: at.location.pointer(),
+            }
+        )
+    }
+
+    fn type_error<const COLLECT: bool>(types: TypeSet, at: At<'_, '_>, cx: &mut Context) -> bool {
+        fail!(
+            COLLECT,
+            cx,
+            type_mismatch(types, at.instance, at.location.pointer())
+        )
+    }
+
+    fn const_check<const COLLECT: bool>(
+        expected: &Value,
+        at: At<'_, '_>,
         cx: &mut Context,
-        mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        match keyword {
-            Keyword::False => fail!(
+        number::json_equal(at.instance, expected)
+            || fail!(
                 COLLECT,
                 cx,
-                ValidationError::FalseSchema {
-                    instance_path: location.pointer(),
+                ValidationError::NotConst {
+                    instance_path: at.location.pointer(),
+                    expected: value_to_display_string(expected),
+                    actual: value_to_display_string(at.instance),
                 }
-            ),
-            Keyword::Type {
-                types,
-                integer_semantics,
-            } => {
-                types.matches(instance, *integer_semantics)
-                    || fail!(
-                        COLLECT,
-                        cx,
-                        type_mismatch(*types, instance, location.pointer())
-                    )
-            }
-            Keyword::Const(expected) => {
-                number::json_equal(instance, expected)
-                    || fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::NotConst {
-                            instance_path: location.pointer(),
-                            expected: value_to_display_string(expected),
-                            actual: value_to_display_string(instance),
-                        }
-                    )
-            }
-            Keyword::Enum(allowed) => {
-                allowed.iter().any(|a| number::json_equal(a, instance))
-                    || fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::NotInEnum {
-                            instance_path: location.pointer(),
-                            invalid_value: value_to_display_string(instance),
-                            allowed: allowed.iter().map(value_to_display_string).collect(),
-                        }
-                    )
-            }
-            Keyword::Minimum(_)
-            | Keyword::Maximum(_)
-            | Keyword::ExclusiveMinimum(_)
-            | Keyword::ExclusiveMaximum(_)
-            | Keyword::MultipleOf(_) => match instance {
-                Value::Number(n) => Self::numeric::<COLLECT>(keyword, n, location, cx),
-                _ => true,
-            },
-            Keyword::MinLength(_)
-            | Keyword::MaxLength(_)
-            | Keyword::Pattern(_)
-            | Keyword::Format(_) => match instance {
-                Value::String(s) => self.string::<COLLECT>(keyword, s, location, cx),
-                _ => true,
-            },
-            Keyword::Ref { target, ref_str } => {
-                self.follow::<COLLECT>(*target, ref_str, instance, location, cx, evaluated)
-            }
-            Keyword::DynamicRef {
-                fallback,
-                anchor,
-                ref_str,
-            } => {
-                let target: NodeId = cx
-                    .dynamic_scope
-                    .iter()
-                    .find_map(|scope| {
-                        self.dynamic_anchors.get(scope).and_then(|anchors| {
-                            anchors
-                                .iter()
-                                .find(|(name, _)| **name == **anchor)
-                                .map(|(_, node)| *node)
-                        })
-                    })
-                    .unwrap_or(*fallback);
-                self.follow::<COLLECT>(target, ref_str, instance, location, cx, evaluated)
-            }
-            Keyword::RecursiveRef { fallback, ref_str } => {
-                let target: NodeId = cx
-                    .dynamic_scope
-                    .iter()
-                    .find_map(|scope| self.recursive_anchors.get(scope).copied())
-                    .unwrap_or(*fallback);
-                self.follow::<COLLECT>(target, ref_str, instance, location, cx, evaluated)
-            }
-            Keyword::AllOf(nodes) => {
-                let mut valid: bool = true;
-                for node in nodes {
-                    if !self.in_place::<COLLECT>(
-                        *node,
-                        instance,
-                        location,
-                        cx,
-                        evaluated.as_deref_mut(),
-                    ) {
-                        valid = false;
-                        if !COLLECT {
-                            return false;
-                        }
-                    }
+            )
+    }
+
+    fn enum_check<const COLLECT: bool>(
+        allowed: &[Value],
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
+        allowed.iter().any(|a| number::json_equal(a, at.instance))
+            || fail!(
+                COLLECT,
+                cx,
+                ValidationError::NotInEnum {
+                    instance_path: at.location.pointer(),
+                    invalid_value: value_to_display_string(at.instance),
+                    allowed: allowed.iter().map(value_to_display_string).collect(),
                 }
-                valid
-            }
-            Keyword::AnyOf(nodes) => {
-                let mut matched: bool = false;
-                for node in nodes {
-                    if self.in_place::<false>(
-                        *node,
-                        instance,
-                        location,
-                        cx,
-                        evaluated.as_deref_mut(),
-                    ) {
-                        matched = true;
-                        // Every passing branch annotates, so keep going only when annotations
-                        // are collected.
-                        if evaluated.is_none() {
-                            break;
-                        }
-                    }
-                }
-                matched
-                    || fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::NoSubschemaMatched {
-                            instance_path: location.pointer(),
-                            subschema_count: nodes.len(),
-                        }
-                    )
-            }
-            Keyword::OneOf(nodes) => {
-                let mut match_count: usize = 0;
-                let mut first: Option<Evaluated> = None;
-                for node in nodes {
-                    let mut sub: Evaluated = Evaluated::default();
-                    let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
-                    if self.eval::<false>(*node, instance, location, cx, wants) {
-                        match_count += 1;
-                        if first.is_none() {
-                            first = Some(sub);
-                        }
-                        // A second match decides the verdict; the error counts every match.
-                        if match_count > 1 && !COLLECT {
-                            break;
-                        }
-                    }
-                }
-                match match_count {
-                    1 => {
-                        if let (Some(parent), Some(sub)) = (evaluated, first) {
-                            parent.merge(&sub);
-                        }
-                        true
-                    }
-                    0 => fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::NoSubschemaMatched {
-                            instance_path: location.pointer(),
-                            subschema_count: nodes.len(),
-                        }
-                    ),
-                    _ => fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::MultipleSubschemasMatched {
-                            instance_path: location.pointer(),
-                            subschema_count: nodes.len(),
-                            match_count,
-                        }
-                    ),
-                }
-            }
-            Keyword::Not(node) => {
-                !self.eval::<false>(*node, instance, location, cx, None)
-                    || fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::NotSchemaMatched {
-                            instance_path: location.pointer(),
-                        }
-                    )
-            }
-            Keyword::IfThenElse {
-                condition,
-                then,
-                otherwise,
-            } => {
-                let passed: bool = self.in_place::<false>(
-                    *condition,
-                    instance,
-                    location,
-                    cx,
-                    evaluated.as_deref_mut(),
-                );
-                match if passed { then } else { otherwise } {
-                    Some(node) => {
-                        self.in_place::<COLLECT>(*node, instance, location, cx, evaluated)
-                    }
-                    None => true,
-                }
-            }
-            // Object and array keywords ignore other instances.
-            Keyword::MinItems(_)
-            | Keyword::MaxItems(_)
-            | Keyword::UniqueItems
-            | Keyword::Required(_)
-            | Keyword::MinProperties(_)
-            | Keyword::MaxProperties(_)
-            | Keyword::DependentRequired(_)
-            | Keyword::NoAdditionalProperties(_)
-            | Keyword::Properties(_)
-            | Keyword::PatternProperties(_)
-            | Keyword::AdditionalProperties { .. }
-            | Keyword::PropertyNames(_)
-            | Keyword::DependentSchemas(_)
-            | Keyword::Items { .. }
-            | Keyword::Contains { .. }
-            | Keyword::UnevaluatedProperties(_)
-            | Keyword::UnevaluatedItems(_) => true,
-        }
+            )
     }
 
     fn numeric<const COLLECT: bool>(
         keyword: &Keyword,
         n: &Number,
-        location: &Location<'_>,
+        at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
-        let error: Option<ValidationError> = match keyword {
+        let path = || at.location.pointer();
+        match keyword {
             Keyword::Minimum(minimum) => {
-                (number::cmp_num(n, minimum) == Ordering::Less).then(|| {
-                    ValidationError::BelowMinimum {
-                        instance_path: location.pointer(),
-                        minimum: minimum.clone(),
-                        actual: n.clone(),
-                    }
-                })
+                number::cmp_num(n, minimum) != Ordering::Less
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::BelowMinimum {
+                            instance_path: path(),
+                            minimum: minimum.clone(),
+                            actual: n.clone(),
+                        }
+                    )
             }
             Keyword::Maximum(maximum) => {
-                (number::cmp_num(n, maximum) == Ordering::Greater).then(|| {
-                    ValidationError::AboveMaximum {
-                        instance_path: location.pointer(),
-                        maximum: maximum.clone(),
-                        actual: n.clone(),
-                    }
-                })
+                number::cmp_num(n, maximum) != Ordering::Greater
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::AboveMaximum {
+                            instance_path: path(),
+                            maximum: maximum.clone(),
+                            actual: n.clone(),
+                        }
+                    )
             }
-            Keyword::ExclusiveMinimum(exclusive_minimum) => (number::cmp_num(n, exclusive_minimum)
-                != Ordering::Greater)
-                .then(|| ValidationError::NotAboveExclusiveMinimum {
-                    instance_path: location.pointer(),
-                    exclusive_minimum: exclusive_minimum.clone(),
-                    actual: n.clone(),
-                }),
-            Keyword::ExclusiveMaximum(exclusive_maximum) => (number::cmp_num(n, exclusive_maximum)
-                != Ordering::Less)
-                .then(|| ValidationError::NotBelowExclusiveMaximum {
-                    instance_path: location.pointer(),
-                    exclusive_maximum: exclusive_maximum.clone(),
-                    actual: n.clone(),
-                }),
+            Keyword::ExclusiveMinimum(exclusive_minimum) => {
+                number::cmp_num(n, exclusive_minimum) == Ordering::Greater
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::NotAboveExclusiveMinimum {
+                            instance_path: path(),
+                            exclusive_minimum: exclusive_minimum.clone(),
+                            actual: n.clone(),
+                        }
+                    )
+            }
+            Keyword::ExclusiveMaximum(exclusive_maximum) => {
+                number::cmp_num(n, exclusive_maximum) == Ordering::Less
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::NotBelowExclusiveMaximum {
+                            instance_path: path(),
+                            exclusive_maximum: exclusive_maximum.clone(),
+                            actual: n.clone(),
+                        }
+                    )
+            }
             Keyword::MultipleOf(multiple_of) => {
-                (!number::is_multiple_of(n, multiple_of)).then(|| ValidationError::NotMultipleOf {
-                    instance_path: location.pointer(),
-                    multiple_of: multiple_of.clone(),
-                    actual: n.clone(),
-                })
+                number::is_multiple_of(n, multiple_of)
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::NotMultipleOf {
+                            instance_path: path(),
+                            multiple_of: multiple_of.clone(),
+                            actual: n.clone(),
+                        }
+                    )
             }
-            _ => None,
-        };
-        match error {
-            None => true,
-            Some(error) => fail!(COLLECT, cx, error),
+            _ => true,
         }
     }
 
@@ -678,56 +702,115 @@ impl CompiledSchema {
         &self,
         keyword: &Keyword,
         s: &str,
-        location: &Location<'_>,
+        at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
+        let path = || at.location.pointer();
         // Lengths count Unicode code points; a string has at most as many as it has bytes.
-        let error: Option<ValidationError> = match keyword {
+        match keyword {
             Keyword::MinLength(min_length) => {
-                let short: Option<u64> =
-                    Some(s.chars().count() as u64).filter(|count| *count < *min_length);
-                short.map(|actual_length| ValidationError::TooShort {
-                    instance_path: location.pointer(),
-                    min_length: *min_length,
-                    actual_length,
-                })
+                let count: u64 = s.chars().count() as u64;
+                count >= *min_length
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::TooShort {
+                            instance_path: path(),
+                            min_length: *min_length,
+                            actual_length: count,
+                        }
+                    )
             }
             Keyword::MaxLength(max_length) => {
                 if s.len() as u64 <= *max_length {
-                    None
-                } else {
-                    let count: u64 = s.chars().count() as u64;
-                    (count > *max_length).then(|| ValidationError::TooLong {
-                        instance_path: location.pointer(),
-                        max_length: *max_length,
-                        actual_length: count,
-                    })
+                    return true;
                 }
+                let count: u64 = s.chars().count() as u64;
+                count <= *max_length
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::TooLong {
+                            instance_path: path(),
+                            max_length: *max_length,
+                            actual_length: count,
+                        }
+                    )
             }
             Keyword::Pattern(id) => {
                 let pattern = self.pattern(*id);
-                pattern
-                    .regex
-                    .find(s)
-                    .is_none()
-                    .then(|| ValidationError::PatternMismatch {
-                        instance_path: location.pointer(),
-                        pattern: pattern.source.clone(),
-                        value: s.to_string(),
-                    })
+                pattern.regex.find(s).is_some()
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::PatternMismatch {
+                            instance_path: path(),
+                            pattern: pattern.source.clone(),
+                            value: s.to_string(),
+                        }
+                    )
             }
             Keyword::Format(format) => {
-                (!format.is_valid(s)).then(|| ValidationError::InvalidFormat {
-                    instance_path: location.pointer(),
-                    format: format.name().to_string(),
-                    value: s.to_string(),
-                })
+                format.is_valid(s)
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::InvalidFormat {
+                            instance_path: path(),
+                            format: format.name().to_string(),
+                            value: s.to_string(),
+                        }
+                    )
             }
-            _ => None,
-        };
-        match error {
-            None => true,
-            Some(error) => fail!(COLLECT, cx, error),
+            _ => true,
+        }
+    }
+
+    fn array_assertion<const COLLECT: bool>(
+        keyword: &Keyword,
+        items: &[Value],
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
+        let path = || at.location.pointer();
+        let count: u64 = items.len() as u64;
+        match keyword {
+            Keyword::MinItems(min_items) => {
+                count >= *min_items
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::TooFewItems {
+                            instance_path: path(),
+                            min_items: *min_items,
+                            actual_count: count,
+                        }
+                    )
+            }
+            Keyword::MaxItems(max_items) => {
+                count <= *max_items
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::TooManyItems {
+                            instance_path: path(),
+                            max_items: *max_items,
+                            actual_count: count,
+                        }
+                    )
+            }
+            Keyword::UniqueItems => match first_duplicate(items) {
+                None => true,
+                Some(duplicate) => fail!(
+                    COLLECT,
+                    cx,
+                    ValidationError::DuplicateArrayItems {
+                        instance_path: path(),
+                        duplicate_value: value_to_display_string(duplicate),
+                    }
+                ),
+            },
+            _ => true,
         }
     }
 
@@ -740,401 +823,482 @@ impl CompiledSchema {
                 .any(|id| self.pattern(*id).regex.find(name).is_some())
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per object keyword; the closed enum is matched exhaustively"
-    )]
-    fn object_keyword<const COLLECT: bool>(
+    fn object_assertion<const COLLECT: bool>(
         &self,
         keyword: &Keyword,
-        instance: &Value,
         object: &Map<String, Value>,
-        location: &Location<'_>,
+        at: At<'_, '_>,
         cx: &mut Context,
-        mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
+        let count: u64 = object.len() as u64;
         match keyword {
-            Keyword::Required(names) => {
-                let mut valid: bool = true;
-                for name in names {
-                    if !object.contains_key(&**name) {
-                        valid = fail!(
-                            COLLECT,
-                            cx,
-                            ValidationError::MissingRequired {
-                                instance_path: location.key(name).pointer(),
-                                property: name.to_string(),
-                            }
-                        );
-                        if !COLLECT {
-                            return false;
-                        }
+            Keyword::Required(names) => each!(COLLECT, names.iter(), |name| object
+                .contains_key(&**name)
+                || fail!(
+                    COLLECT,
+                    cx,
+                    ValidationError::MissingRequired {
+                        instance_path: at.location.key(name).pointer(),
+                        property: name.to_string(),
                     }
-                }
-                valid
-            }
+                )),
             Keyword::MinProperties(min_properties) => {
-                object.len() as u64 >= *min_properties
+                count >= *min_properties
                     || fail!(
                         COLLECT,
                         cx,
                         ValidationError::TooFewProperties {
-                            instance_path: location.pointer(),
+                            instance_path: at.location.pointer(),
                             min_properties: *min_properties,
-                            actual_count: object.len() as u64,
+                            actual_count: count,
                         }
                     )
             }
             Keyword::MaxProperties(max_properties) => {
-                object.len() as u64 <= *max_properties
+                count <= *max_properties
                     || fail!(
                         COLLECT,
                         cx,
                         ValidationError::TooManyProperties {
-                            instance_path: location.pointer(),
+                            instance_path: at.location.pointer(),
                             max_properties: *max_properties,
-                            actual_count: object.len() as u64,
+                            actual_count: count,
                         }
                     )
             }
-            Keyword::DependentRequired(dependencies) => {
-                let mut valid: bool = true;
-                for (name, required) in dependencies {
-                    if !object.contains_key(&**name) {
-                        continue;
-                    }
-                    for property in required {
-                        if !object.contains_key(&**property) {
-                            valid = fail!(
-                                COLLECT,
-                                cx,
-                                ValidationError::MissingDependentProperty {
-                                    instance_path: location.key(property).pointer(),
-                                    property: property.to_string(),
-                                    required_by: name.to_string(),
-                                }
-                            );
-                            if !COLLECT {
-                                return false;
-                            }
+            Keyword::DependentRequired(dependencies) => each!(
+                COLLECT,
+                dependencies
+                    .iter()
+                    .filter(|(name, _)| object.contains_key(&**name))
+                    .flat_map(|(name, required)| required.iter().map(move |r| (name, r))),
+                |(name, property)| object.contains_key(&**property)
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::MissingDependentProperty {
+                            instance_path: at.location.key(property).pointer(),
+                            property: property.to_string(),
+                            required_by: name.to_string(),
                         }
-                    }
-                }
-                valid
-            }
+                    )
+            ),
             Keyword::NoAdditionalProperties(known) => {
-                let mut valid: bool = true;
-                for key in object.keys() {
-                    if !self.is_known(known, key) {
-                        valid = fail!(
-                            COLLECT,
-                            cx,
-                            ValidationError::DisallowedAdditionalProperty {
-                                instance_path: location.key(key).pointer(),
-                                property: key.clone(),
-                            }
-                        );
-                        if !COLLECT {
-                            return false;
+                each!(COLLECT, object.keys(), |key| self.is_known(known, key)
+                    || fail!(
+                        COLLECT,
+                        cx,
+                        ValidationError::DisallowedAdditionalProperty {
+                            instance_path: at.location.key(key).pointer(),
+                            property: key.clone(),
                         }
-                    }
-                }
-                valid
+                    ))
             }
-            Keyword::Properties(properties) => {
-                let mut valid: bool = true;
-                if evaluated.is_none() && properties.len() <= object.len() {
-                    for (name, node) in properties {
-                        if let Some((key, value)) = object.get_key_value(&**name) {
-                            let child: Location<'_> = location.key(key);
-                            if !self.eval::<COLLECT>(*node, value, &child, cx, None) {
-                                valid = false;
-                                if !COLLECT {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    for (i, (key, value)) in object.iter().enumerate() {
-                        let Ok(at) = properties.binary_search_by(|(n, _)| (**n).cmp(key)) else {
-                            continue;
-                        };
-                        if let Some(evaluated) = evaluated.as_deref_mut() {
-                            evaluated.mark(i);
-                        }
-                        let child: Location<'_> = location.key(key);
-                        if !self.eval::<COLLECT>(properties[at].1, value, &child, cx, None) {
-                            valid = false;
-                            if !COLLECT {
-                                return false;
-                            }
-                        }
-                    }
-                }
-                valid
-            }
-            Keyword::PatternProperties(patterns) => {
-                let mut valid: bool = true;
-                for (i, (key, value)) in object.iter().enumerate() {
-                    for (pattern, node) in patterns {
-                        if self.pattern(*pattern).regex.find(key).is_none() {
-                            continue;
-                        }
-                        if let Some(evaluated) = evaluated.as_deref_mut() {
-                            evaluated.mark(i);
-                        }
-                        let child: Location<'_> = location.key(key);
-                        if !self.eval::<COLLECT>(*node, value, &child, cx, None) {
-                            valid = false;
-                            if !COLLECT {
-                                return false;
-                            }
-                        }
-                    }
-                }
-                valid
-            }
-            Keyword::AdditionalProperties { node, known } => {
-                let mut valid: bool = true;
-                for (i, (key, value)) in object.iter().enumerate() {
-                    if self.is_known(known, key) {
-                        continue;
-                    }
-                    if let Some(evaluated) = evaluated.as_deref_mut() {
-                        evaluated.mark(i);
-                    }
-                    let child: Location<'_> = location.key(key);
-                    if !self.eval::<COLLECT>(*node, value, &child, cx, None) {
-                        valid = false;
-                        if !COLLECT {
-                            return false;
-                        }
-                    }
-                }
-                valid
-            }
-            Keyword::PropertyNames(node) => {
-                let mut valid: bool = true;
-                for key in object.keys() {
-                    let name: Value = Value::String(key.clone());
-                    let child: Location<'_> = location.key(key);
-                    if !self.eval::<false>(*node, &name, &child, cx, None) {
-                        valid = fail!(
-                            COLLECT,
-                            cx,
-                            ValidationError::InvalidPropertyName {
-                                instance_path: child.pointer(),
-                                property: key.clone(),
-                            }
-                        );
-                        if !COLLECT {
-                            return false;
-                        }
-                    }
-                }
-                valid
-            }
-            Keyword::DependentSchemas(dependencies) => {
-                let mut valid: bool = true;
-                for (name, node) in dependencies {
-                    if object.contains_key(&**name)
-                        && !self.in_place::<COLLECT>(
-                            *node,
-                            instance,
-                            location,
-                            cx,
-                            evaluated.as_deref_mut(),
-                        )
-                    {
-                        valid = false;
-                        if !COLLECT {
-                            return false;
-                        }
-                    }
-                }
-                valid
-            }
-            Keyword::UnevaluatedProperties(node) => {
-                let mut valid: bool = true;
-                let reject: bool = self.is_false(*node);
-                for (i, (key, value)) in object.iter().enumerate() {
-                    if evaluated.as_deref().is_some_and(|e| e.contains(i)) {
-                        continue;
-                    }
-                    let child: Location<'_> = location.key(key);
-                    let ok: bool = if reject {
-                        fail!(
-                            COLLECT,
-                            cx,
-                            ValidationError::DisallowedUnevaluatedProperty {
-                                instance_path: child.pointer(),
-                                property: key.clone(),
-                            }
-                        )
-                    } else {
-                        self.eval::<COLLECT>(*node, value, &child, cx, None)
-                    };
-                    if !ok {
-                        valid = false;
-                        if !COLLECT {
-                            return false;
-                        }
-                    }
-                }
-                if let Some(evaluated) = evaluated {
-                    evaluated.mark_all();
-                }
-                valid
-            }
-            _ => self.keyword::<COLLECT>(keyword, instance, location, cx, evaluated),
+            _ => true,
         }
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per array keyword; the closed enum is matched exhaustively"
-    )]
-    fn array_keyword<const COLLECT: bool>(
+    fn properties<const COLLECT: bool>(
         &self,
-        keyword: &Keyword,
-        instance: &Value,
-        items: &[Value],
-        location: &Location<'_>,
+        properties: &[(Box<str>, NodeId)],
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        match keyword {
-            Keyword::MinItems(min_items) => {
-                items.len() as u64 >= *min_items
-                    || fail!(
-                        COLLECT,
+        // Walk the shorter side: the schema's names (looking each up in the object) unless
+        // annotations need each member's position.
+        if evaluated.is_none() && properties.len() <= object.len() {
+            return each!(
+                COLLECT,
+                properties
+                    .iter()
+                    .filter_map(|(name, node)| object.get_key_value(&**name).map(|kv| (kv, node))),
+                |((key, value), node)| self.eval::<COLLECT>(
+                    *node,
+                    value,
+                    &at.location.key(key),
+                    cx,
+                    None
+                )
+            );
+        }
+        each!(
+            COLLECT,
+            object.iter().enumerate(),
+            |(i, (key, value))| match properties.binary_search_by(|(n, _)| (**n).cmp(key)) {
+                Err(_) => true,
+                Ok(found) => {
+                    if let Some(evaluated) = evaluated.as_deref_mut() {
+                        evaluated.mark(i);
+                    }
+                    self.eval::<COLLECT>(
+                        properties[found].1,
+                        value,
+                        &at.location.key(key),
                         cx,
-                        ValidationError::TooFewItems {
-                            instance_path: location.pointer(),
-                            min_items: *min_items,
-                            actual_count: items.len() as u64,
-                        }
+                        None,
                     )
+                }
             }
-            Keyword::MaxItems(max_items) => {
-                items.len() as u64 <= *max_items
-                    || fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::TooManyItems {
-                            instance_path: location.pointer(),
-                            max_items: *max_items,
-                            actual_count: items.len() as u64,
-                        }
-                    )
+        )
+    }
+
+    fn pattern_properties<const COLLECT: bool>(
+        &self,
+        patterns: &[(super::compiled::RegexId, NodeId)],
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        each!(
+            COLLECT,
+            object.iter().enumerate().flat_map(|(i, kv)| patterns
+                .iter()
+                .filter(|(pattern, _)| self.pattern(*pattern).regex.find(kv.0).is_some())
+                .map(move |(_, node)| (i, kv, node))),
+            |(i, (key, value), node)| {
+                if let Some(evaluated) = evaluated.as_deref_mut() {
+                    evaluated.mark(i);
+                }
+                self.eval::<COLLECT>(*node, value, &at.location.key(key), cx, None)
             }
-            Keyword::UniqueItems => match first_duplicate(items) {
-                None => true,
-                Some(duplicate) => fail!(
+        )
+    }
+
+    fn additional_properties<const COLLECT: bool>(
+        &self,
+        node: NodeId,
+        known: &KnownProperties,
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        each!(
+            COLLECT,
+            object
+                .iter()
+                .enumerate()
+                .filter(|(_, (key, _))| !self.is_known(known, key)),
+            |(i, (key, value))| {
+                if let Some(evaluated) = evaluated.as_deref_mut() {
+                    evaluated.mark(i);
+                }
+                self.eval::<COLLECT>(node, value, &at.location.key(key), cx, None)
+            }
+        )
+    }
+
+    fn property_names<const COLLECT: bool>(
+        &self,
+        node: NodeId,
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
+        each!(COLLECT, object.keys(), |key| {
+            let name: Value = Value::String(key.clone());
+            let child: Location<'_> = at.location.key(key);
+            self.eval::<false>(node, &name, &child, cx, None)
+                || fail!(
                     COLLECT,
                     cx,
-                    ValidationError::DuplicateArrayItems {
-                        instance_path: location.pointer(),
-                        duplicate_value: value_to_display_string(duplicate),
+                    ValidationError::InvalidPropertyName {
+                        instance_path: child.pointer(),
+                        property: key.clone(),
                     }
-                ),
-            },
-            Keyword::Items { prefix, rest } => {
-                let mut valid: bool = true;
-                for (i, item) in items.iter().enumerate() {
-                    let node: NodeId = match prefix.get(i) {
-                        Some(node) => *node,
-                        None => match rest {
-                            Some(node) => *node,
-                            None => break,
-                        },
-                    };
-                    let child: Location<'_> = location.index(i);
-                    if !self.eval::<COLLECT>(node, item, &child, cx, None) {
-                        valid = false;
-                        if !COLLECT {
-                            return false;
-                        }
-                    }
-                }
-                if let Some(evaluated) = evaluated {
-                    if rest.is_some() {
-                        evaluated.mark_all();
-                    } else {
-                        for i in 0..prefix.len().min(items.len()) {
-                            evaluated.mark(i);
-                        }
-                    }
-                }
-                valid
-            }
-            Keyword::Contains {
-                node,
-                min,
-                max,
-                annotates,
-            } => {
-                let annotating: bool = *annotates && evaluated.is_some();
-                let mut match_count: u64 = 0;
-                for (i, item) in items.iter().enumerate() {
-                    let child: Location<'_> = location.index(i);
-                    if self.eval::<false>(*node, item, &child, cx, None) {
-                        match_count += 1;
-                        if annotating && let Some(evaluated) = evaluated.as_deref_mut() {
-                            evaluated.mark(i);
-                        }
-                        if !annotating && max.is_none() && match_count >= *min {
-                            break;
-                        }
-                    }
-                }
-                if match_count < *min {
+                )
+        })
+    }
+
+    fn dependent_schemas<const COLLECT: bool>(
+        &self,
+        dependencies: &[(Box<str>, NodeId)],
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        each!(
+            COLLECT,
+            dependencies
+                .iter()
+                .filter(|(name, _)| object.contains_key(&**name)),
+            |(_, node)| self.in_place::<COLLECT>(*node, at, cx, evaluated.as_deref_mut())
+        )
+    }
+
+    fn unevaluated_properties<const COLLECT: bool>(
+        &self,
+        node: NodeId,
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let reject: bool = self.is_false(node);
+        let seen: Option<&Evaluated> = evaluated.as_deref();
+        let valid: bool = each!(
+            COLLECT,
+            object
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !seen.is_some_and(|e| e.contains(*i))),
+            |(_, (key, value))| {
+                let child: Location<'_> = at.location.key(key);
+                if reject {
                     fail!(
                         COLLECT,
                         cx,
-                        ValidationError::TooFewContains {
-                            instance_path: location.pointer(),
-                            min_contains: *min,
-                            match_count,
-                        }
-                    )
-                } else if let Some(max) = max
-                    && match_count > *max
-                {
-                    fail!(
-                        COLLECT,
-                        cx,
-                        ValidationError::TooManyContains {
-                            instance_path: location.pointer(),
-                            max_contains: *max,
-                            match_count,
+                        ValidationError::DisallowedUnevaluatedProperty {
+                            instance_path: child.pointer(),
+                            property: key.clone(),
                         }
                     )
                 } else {
-                    true
+                    self.eval::<COLLECT>(node, value, &child, cx, None)
                 }
             }
-            Keyword::UnevaluatedItems(node) => {
-                let mut valid: bool = true;
-                for (i, item) in items.iter().enumerate() {
-                    if evaluated.as_deref().is_some_and(|e| e.contains(i)) {
-                        continue;
-                    }
-                    let child: Location<'_> = location.index(i);
-                    if !self.eval::<COLLECT>(*node, item, &child, cx, None) {
-                        valid = false;
-                        if !COLLECT {
-                            return false;
-                        }
-                    }
+        );
+        if let Some(evaluated) = evaluated {
+            evaluated.mark_all();
+        }
+        valid
+    }
+
+    fn items<const COLLECT: bool>(
+        &self,
+        prefix: &[NodeId],
+        rest: Option<NodeId>,
+        items: &[Value],
+        at: At<'_, '_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let valid: bool = each!(
+            COLLECT,
+            items.iter().enumerate().map_while(|(i, item)| prefix
+                .get(i)
+                .copied()
+                .or(rest)
+                .map(|node| (i, item, node))),
+            |(i, item, node)| self.eval::<COLLECT>(node, item, &at.location.index(i), cx, None)
+        );
+        if let Some(evaluated) = evaluated {
+            if rest.is_some() {
+                evaluated.mark_all();
+            } else {
+                for i in 0..prefix.len().min(items.len()) {
+                    evaluated.mark(i);
                 }
-                if let Some(evaluated) = evaluated {
-                    evaluated.mark_all();
-                }
-                valid
             }
-            _ => self.keyword::<COLLECT>(keyword, instance, location, cx, evaluated),
+        }
+        valid
+    }
+
+    fn contains<const COLLECT: bool>(
+        &self,
+        keyword: &Keyword,
+        items: &[Value],
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let Keyword::Contains {
+            node,
+            min,
+            max,
+            annotates,
+        } = keyword
+        else {
+            return true;
+        };
+        let annotating: bool = *annotates && evaluated.is_some();
+        let mut match_count: u64 = 0;
+        for (i, item) in items.iter().enumerate() {
+            if self.eval::<false>(*node, item, &at.location.index(i), cx, None) {
+                match_count += 1;
+                if annotating && let Some(evaluated) = evaluated.as_deref_mut() {
+                    evaluated.mark(i);
+                }
+                if !annotating && max.is_none() && match_count >= *min {
+                    break;
+                }
+            }
+        }
+        if match_count < *min {
+            return fail!(
+                COLLECT,
+                cx,
+                ValidationError::TooFewContains {
+                    instance_path: at.location.pointer(),
+                    min_contains: *min,
+                    match_count,
+                }
+            );
+        }
+        match max {
+            Some(max) if match_count > *max => fail!(
+                COLLECT,
+                cx,
+                ValidationError::TooManyContains {
+                    instance_path: at.location.pointer(),
+                    max_contains: *max,
+                    match_count,
+                }
+            ),
+            _ => true,
+        }
+    }
+
+    fn unevaluated_items<const COLLECT: bool>(
+        &self,
+        node: NodeId,
+        items: &[Value],
+        at: At<'_, '_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let seen: Option<&Evaluated> = evaluated.as_deref();
+        let valid: bool = each!(
+            COLLECT,
+            items
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !seen.is_some_and(|e| e.contains(*i))),
+            |(i, item)| self.eval::<COLLECT>(node, item, &at.location.index(i), cx, None)
+        );
+        if let Some(evaluated) = evaluated {
+            evaluated.mark_all();
+        }
+        valid
+    }
+
+    fn all_of<const COLLECT: bool>(
+        &self,
+        nodes: &[NodeId],
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        each!(COLLECT, nodes.iter(), |node| self.in_place::<COLLECT>(
+            *node,
+            at,
+            cx,
+            evaluated.as_deref_mut()
+        ))
+    }
+
+    fn any_of<const COLLECT: bool>(
+        &self,
+        nodes: &[NodeId],
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let mut matched: bool = false;
+        for node in nodes {
+            if self.in_place::<false>(*node, at, cx, evaluated.as_deref_mut()) {
+                matched = true;
+                // Every passing branch annotates, so keep going only when annotations are
+                // collected.
+                if evaluated.is_none() {
+                    break;
+                }
+            }
+        }
+        matched
+            || fail!(
+                COLLECT,
+                cx,
+                ValidationError::NoSubschemaMatched {
+                    instance_path: at.location.pointer(),
+                    subschema_count: nodes.len(),
+                }
+            )
+    }
+
+    fn one_of<const COLLECT: bool>(
+        &self,
+        nodes: &[NodeId],
+        at: At<'_, '_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let mut match_count: usize = 0;
+        let mut first: Option<Evaluated> = None;
+        for node in nodes {
+            let mut sub: Evaluated = Evaluated::default();
+            let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
+            if self.eval::<false>(*node, at.instance, at.location, cx, wants) {
+                match_count += 1;
+                if first.is_none() {
+                    first = Some(sub);
+                }
+                // A second match decides the verdict; the error counts every match.
+                if match_count > 1 && !COLLECT {
+                    break;
+                }
+            }
+        }
+        match match_count {
+            1 => {
+                if let (Some(parent), Some(sub)) = (evaluated, first) {
+                    parent.merge(&sub);
+                }
+                true
+            }
+            0 => fail!(
+                COLLECT,
+                cx,
+                ValidationError::NoSubschemaMatched {
+                    instance_path: at.location.pointer(),
+                    subschema_count: nodes.len(),
+                }
+            ),
+            _ => fail!(
+                COLLECT,
+                cx,
+                ValidationError::MultipleSubschemasMatched {
+                    instance_path: at.location.pointer(),
+                    subschema_count: nodes.len(),
+                    match_count,
+                }
+            ),
+        }
+    }
+
+    fn not<const COLLECT: bool>(&self, node: NodeId, at: At<'_, '_>, cx: &mut Context) -> bool {
+        let matched: bool = self.eval::<false>(node, at.instance, at.location, cx, None);
+        // A branch cut short by the depth guard did not fail: it must not make `not` pass.
+        if cx.depth_exceeded.is_some() {
+            return false;
+        }
+        !matched
+            || fail!(
+                COLLECT,
+                cx,
+                ValidationError::NotSchemaMatched {
+                    instance_path: at.location.pointer(),
+                }
+            )
+    }
+
+    fn if_then_else<const COLLECT: bool>(
+        &self,
+        condition: NodeId,
+        then: Option<NodeId>,
+        otherwise: Option<NodeId>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let passed: bool = self.in_place::<false>(condition, at, cx, evaluated.as_deref_mut());
+        match if passed { then } else { otherwise } {
+            Some(node) => self.in_place::<COLLECT>(node, at, cx, evaluated),
+            None => true,
         }
     }
 }
