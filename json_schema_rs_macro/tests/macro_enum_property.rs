@@ -1,6 +1,7 @@
 //! Integration test: `json_schema_to_rust!` with a schema that has an enum property.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(
     r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#
@@ -10,6 +11,7 @@ json_schema_to_rust!(
 fn expanded_code_compiles_and_root_exists() {
     let root = schema_0::Root {
         status: schema_0::Status::Open,
+        additional: BTreeMap::new(),
     };
     assert!(matches!(root.status, schema_0::Status::Open));
 }

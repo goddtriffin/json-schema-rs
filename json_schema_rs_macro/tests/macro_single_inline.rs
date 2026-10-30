@@ -1,6 +1,7 @@
 //! Integration test: `json_schema_to_rust!` with a single inline JSON Schema string.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(
     r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#
@@ -10,6 +11,7 @@ json_schema_to_rust!(
 fn expanded_code_compiles_and_root_exists() {
     let root = schema_0::Root {
         id: String::from("test"),
+        additional: BTreeMap::new(),
     };
     assert_eq!(root.id, "test");
 }

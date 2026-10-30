@@ -1140,13 +1140,61 @@ impl ToJsonSchema for f64 {
     }
 }
 
+/// `null`: the JSON form of `()`, which forward codegen emits for a `null` branch of a union.
+impl ToJsonSchema for () {
+    fn json_schema() -> ReverseCodeGenResult {
+        Ok(null_schema())
+    }
+}
+
+/// The schema `{"type": "null"}`.
+fn null_schema() -> JsonSchema {
+    JsonSchema {
+        type_: Some(JsonType::Null.into()),
+        ..Default::default()
+    }
+}
+
+/// `schema` widened to also accept `null`.
+///
+/// A schema that only constrains by `type` (no `$ref`, `enum`, `const`, `allOf`, `anyOf` or
+/// `oneOf`, any of which would still reject `null`) gets `null` added to its type set. The empty
+/// schema already accepts `null` and is returned unchanged. Any other schema becomes
+/// `{"anyOf": [schema, {"type": "null"}]}`.
+fn nullable(schema: JsonSchema) -> JsonSchema {
+    if schema == JsonSchema::default() {
+        return schema;
+    }
+    let only_typed: bool = schema.ref_.is_none()
+        && schema.enum_values.is_none()
+        && schema.const_value.is_none()
+        && schema.all_of.is_none()
+        && schema.any_of.is_none()
+        && schema.one_of.is_none();
+    match schema.type_ {
+        Some(types) if only_typed => JsonSchema {
+            type_: Some(types.with(JsonType::Null)),
+            ..schema
+        },
+        _ => JsonSchema {
+            any_of: Some(vec![schema.into(), null_schema().into()]),
+            ..Default::default()
+        },
+    }
+}
+
+/// A nullable `T`: `T`'s schema widened to accept `null` (see [`nullable`]).
+///
+/// The derive strips one `Option` from a struct field to mean "not required", so this impl is
+/// reached where `Option` means `null` is allowed: nested (`Vec<Option<T>>`, an
+/// `Option<Option<T>>` field) or on a field marked `#[json_schema(required)]`.
 impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
     fn json_schema() -> ReverseCodeGenResult {
         root_schema_for::<Self>()
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
-        T::json_schema_with(generator)
+        nullable(T::json_schema_with(generator))
     }
 }
 
@@ -1234,7 +1282,7 @@ mod tests {
     use super::{
         ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema, root_schema_for,
     };
-    use crate::json_schema::{JsonSchema, JsonType, Schema};
+    use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
     use std::collections::BTreeMap;
 
     /// `result` with the schema serialized to JSON text.
@@ -1279,10 +1327,77 @@ mod tests {
     }
 
     #[test]
-    fn option_string_json_schema() {
-        let expected: ReverseCodeGenResult = String::json_schema();
-        let actual: ReverseCodeGenResult = Option::<String>::json_schema();
+    fn option_string_json_schema_adds_null_to_type() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":["null","string"]}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(Option::<String>::json_schema());
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn option_option_string_json_schema_adds_null_once() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":["null","string"]}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(Option::<Option<String>>::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn option_serde_json_value_json_schema_stays_empty_schema() {
+        let expected: ReverseCodeGenResult = Ok(JsonSchema::default());
+        let actual: ReverseCodeGenResult = Option::<serde_json::Value>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unit_json_schema_is_null_type() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":"null"}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> = serialized(<()>::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn vec_option_string_json_schema_has_nullable_items() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":"array","items":{"type":["null","string"]}}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(Vec::<Option<String>>::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn option_of_ref_json_schema_is_any_of_with_null() {
+        let expected: JsonSchema = JsonSchema {
+            any_of: Some(vec![ref_to("Named").into(), null_type_schema().into()]),
+            ..Default::default()
+        };
+        let actual: JsonSchema = super::nullable(ref_to("Named"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn option_of_enum_json_schema_is_any_of_with_null() {
+        let enum_schema: JsonSchema = JsonSchema {
+            type_: Some(JsonType::String.into()),
+            enum_values: Some(vec![serde_json::json!("a"), serde_json::json!("b")]),
+            ..Default::default()
+        };
+        let expected: JsonSchema = JsonSchema {
+            any_of: Some(vec![enum_schema.clone().into(), null_type_schema().into()]),
+            ..Default::default()
+        };
+        let actual: JsonSchema = super::nullable(enum_schema);
+        assert_eq!(expected, actual);
+    }
+
+    fn null_type_schema() -> JsonSchema {
+        JsonSchema {
+            type_: Some(JsonType::Null.into()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1296,8 +1411,12 @@ mod tests {
     }
 
     #[test]
-    fn option_i64_json_schema() {
-        let expected: ReverseCodeGenResult = i64::json_schema();
+    fn option_i64_json_schema_adds_null_to_type() {
+        let expected: ReverseCodeGenResult =
+            i64::json_schema().map(|schema: JsonSchema| JsonSchema {
+                type_: Some(TypeSet::from(JsonType::Integer).with(JsonType::Null)),
+                ..schema
+            });
         let actual: ReverseCodeGenResult = Option::<i64>::json_schema();
         assert_eq!(expected, actual);
     }
@@ -1369,8 +1488,12 @@ mod tests {
     }
 
     #[test]
-    fn option_f64_json_schema() {
-        let expected: ReverseCodeGenResult = f64::json_schema();
+    fn option_f64_json_schema_adds_null_to_type() {
+        let expected: ReverseCodeGenResult =
+            f64::json_schema().map(|schema: JsonSchema| JsonSchema {
+                type_: Some(TypeSet::from(JsonType::Number).with(JsonType::Null)),
+                ..schema
+            });
         let actual: ReverseCodeGenResult = Option::<f64>::json_schema();
         assert_eq!(expected, actual);
     }
@@ -1423,9 +1546,11 @@ mod tests {
     }
 
     #[test]
-    fn option_vec_string_json_schema() {
-        let expected: ReverseCodeGenResult = Vec::<String>::json_schema();
-        let actual: ReverseCodeGenResult = Option::<Vec<String>>::json_schema();
+    fn option_vec_string_json_schema_adds_null_to_type() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":["array","null"],"items":{"type":"string"}}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(Option::<Vec<String>>::json_schema());
         assert_eq!(expected, actual);
     }
 
@@ -1471,9 +1596,9 @@ mod tests {
 
     #[cfg(feature = "uuid")]
     #[test]
-    fn option_uuid_json_schema() {
+    fn option_uuid_json_schema_adds_null_to_type() {
         let expected: Result<String, Vec<ReverseCodeGenError>> =
-            Ok(r#"{"type":"string","format":"uuid"}"#.to_string());
+            Ok(r#"{"type":["null","string"],"format":"uuid"}"#.to_string());
         let actual: Result<String, Vec<ReverseCodeGenError>> =
             serialized(Option::<uuid::Uuid>::json_schema());
         assert_eq!(expected, actual);

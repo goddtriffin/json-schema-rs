@@ -14,7 +14,7 @@ pub mod validator;
 
 pub use code_gen::{
     CodeGenBackend, CodeGenError, CodeGenResult, CodeGenSettings, CodeGenSettingsBuilder,
-    DedupeMode, GenerateRustOutput, ModelNameSource, RustBackend, generate_rust,
+    DedupeMode, GenerateRustOutput, ModelNameSource, RustBackend, UnknownProperties, generate_rust,
 };
 pub use error_list::ErrorList;
 pub use json_pointer::{JsonPointer, JsonPointerError};
@@ -27,6 +27,7 @@ pub use json_schema::{
     SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri, Vocabulary,
     VocabularyKind, VocabularySet, resolve_dialect,
 };
+pub use number::json_equal;
 pub use reverse_code_gen::{
     ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema,
 };

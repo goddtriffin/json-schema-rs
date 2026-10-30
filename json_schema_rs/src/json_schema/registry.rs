@@ -1797,24 +1797,6 @@ impl<'a> Registry<'a> {
         self.resources[scope.0].dynamic_anchors.contains_key(name)
     }
 
-    /// Resolves `ref_str` in the root's scope, or, when it does not appear there, in the first
-    /// resource (in discovery order) where it appears. For consumers that do not track scopes:
-    /// codegen walks copies and merges of subschemas, so it resolves every `$ref` this way.
-    pub(crate) fn resolve_anywhere(&self, ref_str: &str) -> Result<Resolved<'_>, UnknownRef> {
-        let root: Scope = match self.root().as_object() {
-            Some(root) => self.enter(self.root_scope(), root),
-            None => self.root_scope(),
-        };
-        self.resources[root.0]
-            .refs
-            .get(ref_str)
-            .or_else(|| self.resources.iter().find_map(|r| r.refs.get(ref_str)))
-            .map(|target| self.resolved(target))
-            .ok_or_else(|| UnknownRef {
-                ref_str: ref_str.to_string(),
-            })
-    }
-
     fn resolved<'s>(&'s self, target: &'s Target) -> Resolved<'s> {
         let schema: SchemaRef<'_> = match target.schema {
             TargetSchema::Detached(index) => self.detached[index].as_schema_ref(),

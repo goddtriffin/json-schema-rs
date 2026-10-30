@@ -7,10 +7,13 @@
 mod error;
 mod rust_backend;
 mod settings;
+mod type_graph;
 
 pub use error::{CodeGenError, CodeGenResult};
 pub use rust_backend::{RustBackend, generate_rust};
-pub use settings::{CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, ModelNameSource};
+pub use settings::{
+    CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, ModelNameSource, UnknownProperties,
+};
 
 use crate::json_schema::JsonSchema;
 
@@ -29,9 +32,8 @@ pub trait CodeGenBackend {
     ///
     /// # Errors
     ///
-    /// Returns [`CodeGenError::RootNotObject`] if a root schema is not an object with properties.
-    /// Returns [`CodeGenError::Io`] on write failure.
-    /// Returns [`CodeGenError::Batch`] with index when one schema in the batch fails.
+    /// Returns [`CodeGenError::Batch`] with the schema's index when one schema fails (an
+    /// unresolvable `$ref`, a registry problem), and [`CodeGenError::Io`] on write failure.
     fn generate(
         &self,
         schemas: &[JsonSchema],

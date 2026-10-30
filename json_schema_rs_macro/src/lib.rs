@@ -108,11 +108,8 @@ fn json_schema_to_rust_impl(
         });
     }
     for ((mod_name, span), bytes) in mod_names.into_iter().zip(output.per_schema) {
-        let mut rust_str = String::from_utf8(bytes)
+        let rust_str = String::from_utf8(bytes)
             .map_err(|e| syn::Error::new(span, format!("generated code was not UTF-8: {e}")))?;
-        if output.shared.is_some() {
-            rust_str = rust_str.replace("use crate::", "use crate::shared::");
-        }
 
         let file: syn::File = syn::parse_str(&rust_str)
             .map_err(|e| syn::Error::new(span, format!("generated Rust did not parse: {e}")))?;

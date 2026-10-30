@@ -7,10 +7,12 @@ use std::fmt;
 pub type CodeGenResult<T> = Result<T, CodeGenError>;
 
 /// Errors that can occur during code generation.
+///
+/// Every schema the registry accepts gets a type: an unsatisfiable one (conflicting `allOf`
+/// branches, an empty `anyOf`, `"type": []`) becomes a type with no values, so the only errors
+/// are references that do not resolve and failures to write.
 #[derive(Debug)]
 pub enum CodeGenError {
-    /// Root schema is not an object with properties.
-    RootNotObject,
     /// I/O error while writing output.
     Io(std::io::Error),
     /// One schema in a batch failed; index is the 0-based schema index.
@@ -18,34 +20,10 @@ pub enum CodeGenError {
         index: usize,
         source: Box<CodeGenError>,
     },
-    /// allOf is present but empty (no subschemas to merge).
-    AllOfMergeEmpty,
-    /// At least one subschema in allOf is not object-like (no type "object" and no non-empty properties).
-    AllOfMergeNonObjectSubschema { index: usize },
-    /// Same property appears in multiple subschemas with incompatible types (e.g. string vs integer).
-    AllOfMergeConflictingPropertyType {
-        property_key: String,
-        subschema_indices: Vec<usize>,
-    },
-    /// Same property has conflicting minimum/maximum (or minLength/maxLength, minItems/maxItems) across subschemas that cannot be merged.
-    AllOfMergeConflictingNumericBounds {
-        property_key: String,
-        keyword: String,
-    },
-    /// Same property has enum in more than one subschema with incompatible value sets.
-    AllOfMergeConflictingEnum { property_key: String },
-    /// Same property has const in more than one subschema with different values.
-    AllOfMergeConflictingConst { property_key: String },
-    /// Same property has pattern in more than one subschema with different values.
-    AllOfMergeConflictingPattern { property_key: String },
-    /// Subschema uses unsupported features for merge (e.g. $ref, non-object type).
-    AllOfMergeUnsupportedSubschema { index: usize, reason: String },
-    /// anyOf is present but empty (no subschemas).
-    AnyOfEmpty,
-    /// oneOf is present but empty (no subschemas).
-    OneOfEmpty,
-    /// `$ref` could not be resolved (or is unsupported in this crate).
+    /// `$ref` could not be resolved.
     RefResolution { ref_str: String, reason: String },
+    /// A `then` / `else` subschema (kept raw by the schema model) does not parse as a schema.
+    InvalidSubschema { reason: String },
     /// The schema's `$ref` registry could not be built: every problem found (a `$ref` that does
     /// not resolve, a duplicate `$id` or anchor, an unsupported vocabulary, ...), one per line
     /// when displayed.
@@ -55,61 +33,15 @@ pub enum CodeGenError {
 impl fmt::Display for CodeGenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CodeGenError::RootNotObject => write!(
-                f,
-                "root schema must have type \"object\" and non-empty properties"
-            ),
             CodeGenError::Io(e) => write!(f, "io error: {e}"),
             CodeGenError::Batch { index, source } => {
                 write!(f, "schema at index {index}: {source}")
             }
-            CodeGenError::AllOfMergeEmpty => {
-                write!(f, "allOf is present but empty (no subschemas to merge)")
-            }
-            CodeGenError::AllOfMergeNonObjectSubschema { index } => write!(
-                f,
-                "allOf subschema at index {index} is not object-like (need type \"object\" or non-empty properties)"
-            ),
-            CodeGenError::AllOfMergeConflictingPropertyType {
-                property_key,
-                subschema_indices,
-            } => write!(
-                f,
-                "allOf merge: property \"{property_key}\" has conflicting types in subschemas at indices {subschema_indices:?}"
-            ),
-            CodeGenError::AllOfMergeConflictingNumericBounds {
-                property_key,
-                keyword,
-            } => write!(
-                f,
-                "allOf merge: property \"{property_key}\" has conflicting {keyword} across subschemas"
-            ),
-            CodeGenError::AllOfMergeConflictingEnum { property_key } => write!(
-                f,
-                "allOf merge: property \"{property_key}\" has conflicting enum values across subschemas"
-            ),
-            CodeGenError::AllOfMergeConflictingConst { property_key } => write!(
-                f,
-                "allOf merge: property \"{property_key}\" has conflicting const values across subschemas"
-            ),
-            CodeGenError::AllOfMergeConflictingPattern { property_key } => write!(
-                f,
-                "allOf merge: property \"{property_key}\" has conflicting pattern across subschemas"
-            ),
-            CodeGenError::AllOfMergeUnsupportedSubschema { index, reason } => {
-                write!(
-                    f,
-                    "allOf subschema at index {index} is unsupported for merge: {reason}"
-                )
-            }
-            CodeGenError::AnyOfEmpty => {
-                write!(f, "anyOf is present but empty (no subschemas)")
-            }
-            CodeGenError::OneOfEmpty => {
-                write!(f, "oneOf is present but empty (no subschemas)")
-            }
             CodeGenError::RefResolution { ref_str, reason } => {
                 write!(f, "could not resolve $ref \"{ref_str}\": {reason}")
+            }
+            CodeGenError::InvalidSubschema { reason } => {
+                write!(f, "invalid then / else subschema: {reason}")
             }
             CodeGenError::Registry(e) => write!(f, "{e}"),
         }
@@ -120,18 +52,7 @@ impl std::error::Error for CodeGenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CodeGenError::Io(e) => Some(e),
-            CodeGenError::RootNotObject
-            | CodeGenError::AllOfMergeEmpty
-            | CodeGenError::AllOfMergeNonObjectSubschema { .. }
-            | CodeGenError::AllOfMergeConflictingPropertyType { .. }
-            | CodeGenError::AllOfMergeConflictingNumericBounds { .. }
-            | CodeGenError::AllOfMergeConflictingEnum { .. }
-            | CodeGenError::AllOfMergeConflictingConst { .. }
-            | CodeGenError::AllOfMergeConflictingPattern { .. }
-            | CodeGenError::AllOfMergeUnsupportedSubschema { .. }
-            | CodeGenError::AnyOfEmpty
-            | CodeGenError::OneOfEmpty
-            | CodeGenError::RefResolution { .. } => None,
+            CodeGenError::RefResolution { .. } | CodeGenError::InvalidSubschema { .. } => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
             CodeGenError::Registry(e) => Some(e),
         }

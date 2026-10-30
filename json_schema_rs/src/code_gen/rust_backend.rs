@@ -1,19 +1,30 @@
-//! Rust codegen backend: emits serde-compatible Rust structs from JSON Schema.
+//! Rust codegen backend: lowers the [`TypeGraph`] to serde-compatible Rust items and renders
+//! them (see design.md, *Codegen backends*).
+//!
+//! Pipeline: one `$ref` registry per input schema → [`type_graph::build`] → passes (variant
+//! order, dedup, cycle breaking) → placement (shared vs per-schema output) → name allocation →
+//! item order → rendering. Every step is a pure function of the input schemas, so the output is
+//! byte-identical across runs.
 
 use super::CodeGenBackend;
 use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
-use super::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
-use crate::json_schema::{JsonSchema, JsonType, Registry, Schema, TypeSet};
+use super::settings::{CodeGenSettings, DedupeMode};
+use super::type_graph::passes;
+use super::type_graph::{
+    self, Annotations, EnumNode, Field, FloatWidth, IntWidth, NameProposal, NameTier, ObjectNode,
+    StringFormat, TypeGraph, TypeId, TypeNode, UnionKind, UnionNode,
+};
+use crate::json_schema::{JsonSchema, Registry};
 use crate::number;
 use crate::sanitizers::{
-    enum_variant_names_with_collision_resolution, sanitize_field_name, sanitize_struct_name,
+    enum_variant_name_from_value, sanitize_field_name, sanitize_struct_name, to_pascal_case,
 };
-use heck::ToSnakeCase;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Write};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
+use std::io::Write;
 
 /// Backend that emits Rust structs (serde-compatible).
 #[derive(Debug, Clone, Default)]
@@ -25,66 +36,501 @@ impl CodeGenBackend for RustBackend {
         schemas: &[JsonSchema],
         settings: &CodeGenSettings,
     ) -> CodeGenResult<GenerateRustOutput> {
-        match settings.dedupe_mode {
-            DedupeMode::Disabled => {
-                let mut per_schema: Vec<Vec<u8>> = Vec::with_capacity(schemas.len());
-                for (index, schema) in schemas.iter().enumerate() {
-                    let mut out = Cursor::new(Vec::new());
-                    emit_rust(schema, &mut out, settings).map_err(|e| CodeGenError::Batch {
-                        index,
-                        source: Box::new(e),
-                    })?;
-                    per_schema.push({
-                        let result = maybe_prepend_btreemap_use(out.into_inner());
-                        let result = maybe_prepend_hash_set_use(result);
-                        #[cfg(feature = "uuid")]
-                        let result = maybe_prepend_uuid_use(result);
-                        result
-                    });
-                }
-                Ok(GenerateRustOutput {
-                    shared: None,
-                    per_schema,
+        let registries: Vec<Registry<'_>> = schemas
+            .iter()
+            .enumerate()
+            .map(|(index, schema)| {
+                Registry::new(schema).map_err(|e| CodeGenError::Batch {
+                    index,
+                    source: Box::new(CodeGenError::Registry(e)),
                 })
-            }
-            DedupeMode::Functional | DedupeMode::Full => {
-                generate_rust_with_dedupe(schemas, settings)
-            }
-        }
+            })
+            .collect::<CodeGenResult<Vec<Registry<'_>>>>()?;
+        let conditionals: type_graph::Conditionals =
+            type_graph::Conditionals::collect(schemas, &registries)?;
+        let mut graph: TypeGraph =
+            type_graph::build(schemas, &registries, &conditionals, settings)?;
+        passes::collapse_wrapper_cycles(&mut graph);
+        passes::order_variants(&mut graph);
+        passes::dedup(&mut graph, settings.dedupe_mode);
+        passes::break_cycles(&mut graph);
+        let plan: Plan = Plan::new(&graph, settings);
+        let shared: Option<Vec<u8>> = if plan.has_shared() {
+            Some(render_buffer(&graph, &plan, Home::Shared)?)
+        } else {
+            None
+        };
+        let per_schema: Vec<Vec<u8>> = (0..schemas.len())
+            .map(|index| render_buffer(&graph, &plan, Home::Schema(index)))
+            .collect::<CodeGenResult<Vec<Vec<u8>>>>()?;
+        Ok(GenerateRustOutput { shared, per_schema })
     }
 }
 
-/// One struct to emit: name and the object schema (root or nested).
-struct StructToEmit {
-    name: String,
-    schema: JsonSchema,
+/// Generate Rust source from one or more parsed schemas.
+///
+/// Callers pass `settings` (use [`CodeGenSettings::builder`] and call
+/// [`CodeGenSettingsBuilder::build`](super::CodeGenSettingsBuilder::build) for all-default
+/// settings). Returns [`GenerateRustOutput`] with an optional shared buffer and one buffer per
+/// schema. Per-schema buffers import shared items as `super::shared::Name`, so the shared module
+/// must be a sibling module named `shared` (or be re-exported as `shared` in the parent).
+///
+/// # Errors
+///
+/// Returns [`CodeGenError::Batch`] with the schema's index when one schema fails (an
+/// unresolvable `$ref`, a registry problem), and [`CodeGenError::Io`] on write failure.
+pub fn generate_rust(
+    schemas: &[JsonSchema],
+    settings: &CodeGenSettings,
+) -> CodeGenResult<GenerateRustOutput> {
+    RustBackend.generate(schemas, settings)
 }
 
-/// Map from enum value list to (name, description, examples) for dedupe path. Used to resolve enum type names and carry description and examples from first occurrence.
-type EnumValuesToNameMap =
-    BTreeMap<Vec<String>, (String, Option<String>, Option<Vec<serde_json::Value>>)>;
-
-/// One enum to emit: name, sorted deduplicated string values, optional description, and optional examples (from first property schema that contributed this enum).
-struct EnumToEmit {
-    name: String,
-    values: Vec<String>,
-    description: Option<String>,
-    examples: Option<Vec<serde_json::Value>>,
+/// Which output buffer an item goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Home {
+    Shared,
+    Schema(usize),
 }
 
-/// One anyOf enum to emit: name and list of (`variant_name`, `rust_type_string`).
-struct AnyOfEnumToEmit {
-    name: String,
-    variants: Vec<(String, String)>,
+/// Names the Rust prelude, std collections or the generated code's imports already use: an
+/// item with one of these names would shadow it.
+const RESERVED_NAMES: [&str; 14] = [
+    "BTreeMap",
+    "Box",
+    "Deserialize",
+    "Err",
+    "HashSet",
+    "None",
+    "Ok",
+    "Option",
+    "Result",
+    "Serialize",
+    "Some",
+    "String",
+    "Uuid",
+    "Vec",
+];
+
+/// An item that needs a name: a named node, or the type alias for a schema's root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum ItemKey {
+    Node(TypeId),
+    RootAlias(usize),
 }
 
-/// One oneOf enum to emit: name and list of (`variant_name`, `rust_type_string`).
-struct OneOfEnumToEmit {
-    name: String,
-    variants: Vec<(String, String)>,
+/// Where every item goes and what it is called.
+#[derive(Debug)]
+struct Plan {
+    /// Named node → (home, name).
+    items: HashMap<TypeId, (Home, String)>,
+    /// Per schema, the name of the type alias for a root that is not a named item.
+    root_aliases: Vec<Option<String>>,
 }
 
-/// Returns doc comment lines for emission: empty if description is None or whitespace-only; else one line per non-empty trimmed line (no blank lines).
+impl Plan {
+    fn new(graph: &TypeGraph, settings: &CodeGenSettings) -> Plan {
+        let reach: Vec<BTreeSet<TypeId>> = passes::reachable(graph);
+        // Which schemas use each named node.
+        let mut users: BTreeMap<TypeId, BTreeSet<usize>> = BTreeMap::new();
+        for (schema, ids) in reach.iter().enumerate() {
+            for &id in ids {
+                if graph.node(id).is_named() {
+                    users.entry(id).or_default().insert(schema);
+                }
+            }
+        }
+        // Shared: used by two or more schemas, and everything such an item reaches.
+        let mut shared: BTreeSet<TypeId> = BTreeSet::new();
+        if settings.dedupe_mode != DedupeMode::Disabled {
+            let mut stack: Vec<TypeId> = users
+                .iter()
+                .filter(|(_, s)| s.len() > 1)
+                .map(|(id, _)| *id)
+                .collect();
+            let mut seen: BTreeSet<TypeId> = BTreeSet::new();
+            while let Some(id) = stack.pop() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                if graph.node(id).is_named() {
+                    shared.insert(id);
+                }
+                stack.extend(graph.node(id).children());
+            }
+        }
+        let uses_shared: Vec<bool> = reach
+            .iter()
+            .map(|ids| ids.iter().any(|id| shared.contains(id)))
+            .collect();
+        let home_of = |id: TypeId| -> Home {
+            if shared.contains(&id) {
+                Home::Shared
+            } else {
+                Home::Schema(*users[&id].first().expect("a named node has a user"))
+            }
+        };
+        // Every item that wants a name: (best proposal, key, home).
+        let mut candidates: Vec<(NameProposal, ItemKey, Home)> = Vec::new();
+        for &id in users.keys() {
+            candidates.push((best_proposal(graph, id), ItemKey::Node(id), home_of(id)));
+        }
+        for (schema, roots) in graph.schemas.iter().enumerate() {
+            if !graph.node(graph.peel(roots.root)).is_named() {
+                candidates.push((
+                    root_alias_proposal(graph, schema, roots.root),
+                    ItemKey::RootAlias(schema),
+                    Home::Schema(schema),
+                ));
+            }
+        }
+        candidates.sort();
+        let wanted: Vec<(String, Home)> = candidates
+            .iter()
+            .map(|(proposal, key, home)| {
+                let base: String = match key {
+                    ItemKey::Node(id) => item_base_name(graph, *id, proposal),
+                    ItemKey::RootAlias(_) => sanitize_struct_name(&proposal.text),
+                };
+                (base, *home)
+            })
+            .collect();
+        // Two items clash when they share a module, or one is shared and the other's schema
+        // uses the shared module.
+        let clash = |a: Home, b: Home| -> bool {
+            match (a, b) {
+                (Home::Shared, Home::Shared) => true,
+                (Home::Schema(x), Home::Schema(y)) => x == y,
+                (Home::Shared, Home::Schema(s)) | (Home::Schema(s), Home::Shared) => uses_shared[s],
+            }
+        };
+        let names: Vec<String> = allocate_names(&wanted, clash);
+        let mut items: HashMap<TypeId, (Home, String)> = HashMap::new();
+        let mut root_aliases: Vec<Option<String>> = vec![None; graph.schemas.len()];
+        for ((_, key, home), name) in candidates.into_iter().zip(names) {
+            match key {
+                ItemKey::Node(id) => {
+                    items.insert(id, (home, name));
+                }
+                ItemKey::RootAlias(schema) => root_aliases[schema] = Some(name),
+            }
+        }
+        Plan {
+            items,
+            root_aliases,
+        }
+    }
+
+    fn has_shared(&self) -> bool {
+        self.items.values().any(|(home, _)| *home == Home::Shared)
+    }
+
+    fn name(&self, id: TypeId) -> &str {
+        &self.items[&id].1
+    }
+
+    fn home(&self, id: TypeId) -> Home {
+        self.items[&id].0
+    }
+}
+
+/// The best name proposal for `id`: lowest tier, then lowest origin. A node without proposals
+/// is `Unnamed`.
+fn best_proposal(graph: &TypeGraph, id: TypeId) -> NameProposal {
+    graph.proposals[id.index()]
+        .iter()
+        // A title like `"!!"` sanitizes to nothing: fall back to the next proposal.
+        .filter(|p| p.text.chars().any(char::is_alphanumeric))
+        .min()
+        .cloned()
+        .unwrap_or(NameProposal {
+            tier: NameTier::Fallback,
+            origin: (usize::MAX, String::new()),
+            text: "Unnamed".to_string(),
+        })
+}
+
+/// The name proposal for schema `schema`'s root type alias: only proposals made at that root
+/// (its title, `Root`) count, since an unnamed root node (any value, a scalar) can be shared
+/// with other positions and schemas.
+fn root_alias_proposal(graph: &TypeGraph, schema: usize, root: TypeId) -> NameProposal {
+    graph.proposals[root.index()]
+        .iter()
+        .filter(|p| p.origin.0 == schema && p.origin.1.is_empty())
+        .filter(|p| p.text.chars().any(char::is_alphanumeric))
+        .min()
+        .cloned()
+        .unwrap_or(NameProposal {
+            tier: NameTier::Root,
+            origin: (schema, String::new()),
+            text: "Root".to_string(),
+        })
+}
+
+/// The base name of a named node from its best proposal: a union reached through a property or
+/// title gets an `AnyOf` / `OneOf` suffix; a `$defs` key is used as written.
+fn item_base_name(graph: &TypeGraph, id: TypeId, proposal: &NameProposal) -> String {
+    let base: String = sanitize_struct_name(&proposal.text);
+    match (graph.node(id), proposal.tier) {
+        (TypeNode::Union(u), tier) if tier != NameTier::Definition => match u.kind {
+            UnionKind::AnyOf => format!("{base}AnyOf"),
+            UnionKind::OneOf => format!("{base}OneOf"),
+            UnionKind::TypeArray => base,
+        },
+        _ => base,
+    }
+}
+
+/// Final names for `wanted` items (base name and home, in allocation order). Items whose base
+/// names are equal and that `clash` (would be visible in one module) form a group; when a group
+/// has two or more items, or its name is reserved, every item in it gets a numeric suffix
+/// (`Name0`, `Name1`) in allocation order. A suffixed name already used where the item is
+/// visible moves to the next number.
+fn allocate_names(wanted: &[(String, Home)], clash: impl Fn(Home, Home) -> bool) -> Vec<String> {
+    let n: usize = wanted.len();
+    // Union-find over items with the same base that clash.
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut by_base: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, (base, _)) in wanted.iter().enumerate() {
+        by_base.entry(base.as_str()).or_default().push(i);
+    }
+    for members in by_base.values() {
+        for (k, &i) in members.iter().enumerate() {
+            for &j in &members[k + 1..] {
+                if clash(wanted[i].1, wanted[j].1) {
+                    let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                    if ri != rj {
+                        parent[rj.max(ri)] = rj.min(ri);
+                    }
+                }
+            }
+        }
+    }
+    let roots: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
+    let mut group_size: HashMap<usize, usize> = HashMap::new();
+    for root in &roots {
+        *group_size.entry(*root).or_insert(0) += 1;
+    }
+    let suffixed: Vec<bool> = wanted
+        .iter()
+        .zip(&roots)
+        .map(|((base, _), root)| group_size[root] > 1 || RESERVED_NAMES.contains(&base.as_str()))
+        .collect();
+    // Names in use per home: every unsuffixed base first, so a suffix never takes one.
+    let mut taken: Vec<(Home, String)> = wanted
+        .iter()
+        .zip(&suffixed)
+        .filter(|(_, s)| !**s)
+        .map(|((base, home), _)| (*home, base.clone()))
+        .collect();
+    let mut next: HashMap<usize, usize> = HashMap::new();
+    let mut out: Vec<String> = Vec::with_capacity(n);
+    for (((base, home), root), is_suffixed) in wanted.iter().zip(&roots).zip(&suffixed) {
+        let home: Home = *home;
+        if !is_suffixed {
+            out.push(base.clone());
+            continue;
+        }
+        let counter: &mut usize = next.entry(*root).or_insert(0);
+        loop {
+            let candidate: String = format!("{base}{counter}");
+            *counter += 1;
+            let used: bool = taken
+                .iter()
+                .any(|(h, name)| *name == candidate && clash(*h, home));
+            if !used {
+                taken.push((home, candidate.clone()));
+                out.push(candidate);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The representative of `i`'s union-find set (with path halving).
+fn find(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
+/// Final names for a list of identifiers that must be unique among themselves (fields of one
+/// struct, variants of one enum): every colliding one gets a numeric suffix, in order.
+fn unique_idents(bases: &[String], separator: &str) -> Vec<String> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for base in bases {
+        *counts.entry(base.as_str()).or_insert(0) += 1;
+    }
+    let mut taken: BTreeSet<String> = bases
+        .iter()
+        .filter(|b| counts[b.as_str()] == 1)
+        .cloned()
+        .collect();
+    let mut next: HashMap<&str, usize> = HashMap::new();
+    bases
+        .iter()
+        .map(|base| {
+            if counts[base.as_str()] == 1 {
+                return base.clone();
+            }
+            let counter: &mut usize = next.entry(base.as_str()).or_insert(0);
+            loop {
+                let candidate: String = format!("{base}{separator}{counter}");
+                *counter += 1;
+                if taken.insert(candidate.clone()) {
+                    return candidate;
+                }
+            }
+        })
+        .collect()
+}
+
+/// What a buffer's rendered code needs imported.
+#[derive(Debug, Default)]
+struct Imports {
+    /// `use` paths (sorted).
+    uses: BTreeSet<&'static str>,
+    /// Shared items referenced from a per-schema buffer.
+    shared: BTreeSet<String>,
+    /// The `deserialize_some` helper is needed.
+    deserialize_some: bool,
+}
+
+/// Renders the Rust type of `id` as seen from `home`, recording imports. Iterative: a type is
+/// rendered as a token stream of open / close parts so deep nesting cannot overflow.
+fn rust_type(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    id: TypeId,
+    imports: &mut Imports,
+) -> String {
+    enum Part {
+        Node(TypeId),
+        Text(&'static str),
+    }
+    let mut out: String = String::new();
+    let mut stack: Vec<Part> = vec![Part::Node(id)];
+    while let Some(part) = stack.pop() {
+        let id: TypeId = match part {
+            Part::Text(t) => {
+                out.push_str(t);
+                continue;
+            }
+            Part::Node(id) => id,
+        };
+        if let Some((item_home, name)) = plan.items.get(&id) {
+            out.push_str(name);
+            if *item_home == Home::Shared && home != Home::Shared {
+                imports.shared.insert(name.clone());
+            }
+            continue;
+        }
+        match graph.node(id) {
+            TypeNode::Pending | TypeNode::Any => out.push_str("serde_json::Value"),
+            TypeNode::Null => out.push_str("()"),
+            TypeNode::Boolean => out.push_str("bool"),
+            TypeNode::Integer(w) => out.push_str(int_name(*w)),
+            TypeNode::Number(FloatWidth::F32) => out.push_str("f32"),
+            TypeNode::Number(FloatWidth::F64) => out.push_str("f64"),
+            TypeNode::String { format, .. } => out.push_str(string_type(*format, imports)),
+            TypeNode::Array { items, unique, .. } => {
+                if *unique && is_hashable(graph, *items) {
+                    imports.uses.insert("std::collections::HashSet");
+                    out.push_str("HashSet<");
+                } else {
+                    out.push_str("Vec<");
+                }
+                stack.push(Part::Text(">"));
+                stack.push(Part::Node(*items));
+            }
+            TypeNode::Map { values } => {
+                imports.uses.insert("std::collections::BTreeMap");
+                out.push_str("BTreeMap<String, ");
+                stack.push(Part::Text(">"));
+                stack.push(Part::Node(*values));
+            }
+            TypeNode::Option(inner) => {
+                out.push_str("Option<");
+                stack.push(Part::Text(">"));
+                stack.push(Part::Node(*inner));
+            }
+            TypeNode::Box(inner) => {
+                out.push_str("Box<");
+                stack.push(Part::Text(">"));
+                stack.push(Part::Node(*inner));
+            }
+            TypeNode::Object(_) | TypeNode::Enum(_) | TypeNode::Union(_) => {
+                unreachable!("every reachable named node has a planned name")
+            }
+        }
+    }
+    out
+}
+
+fn int_name(width: IntWidth) -> &'static str {
+    match width {
+        IntWidth::U8 => "u8",
+        IntWidth::U16 => "u16",
+        IntWidth::U32 => "u32",
+        IntWidth::U64 => "u64",
+        IntWidth::I8 => "i8",
+        IntWidth::I16 => "i16",
+        IntWidth::I32 => "i32",
+        IntWidth::I64 => "i64",
+    }
+}
+
+/// The Rust type for a string: `Uuid` for `format: "uuid"` with the `uuid` feature, else
+/// `String`.
+fn string_type(format: StringFormat, imports: &mut Imports) -> &'static str {
+    match format {
+        #[cfg(feature = "uuid")]
+        StringFormat::Uuid => {
+            imports.uses.insert("uuid::Uuid");
+            "Uuid"
+        }
+        #[cfg(not(feature = "uuid"))]
+        StringFormat::Uuid => {
+            let _ = imports;
+            "String"
+        }
+        StringFormat::Plain => "String",
+    }
+}
+
+/// Whether the Rust type for `id` implements `Hash + Eq` (so `uniqueItems` can use `HashSet`):
+/// strings, integers and booleans.
+fn is_hashable(graph: &TypeGraph, id: TypeId) -> bool {
+    matches!(
+        graph.node(id),
+        TypeNode::String { .. } | TypeNode::Integer(_) | TypeNode::Boolean
+    )
+}
+
+/// Whether the Rust type for `id` can hold JSON `null` itself: any value, `()`, or a union
+/// with such a branch.
+fn accepts_null(graph: &TypeGraph, id: TypeId) -> bool {
+    let mut stack: Vec<TypeId> = vec![id];
+    let mut seen: BTreeSet<TypeId> = BTreeSet::new();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match graph.node(id) {
+            TypeNode::Any | TypeNode::Null | TypeNode::Option(_) => return true,
+            TypeNode::Box(inner) => stack.push(*inner),
+            TypeNode::Union(u) => stack.extend(u.variants.iter().map(|v| v.ty)),
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Doc comment lines: empty if `s` is `None` or blank; else one per non-empty trimmed line.
 fn doc_lines(s: Option<&str>) -> Vec<String> {
     let Some(trimmed) = s.map(str::trim) else {
         return Vec::new();
@@ -96,2562 +542,687 @@ fn doc_lines(s: Option<&str>) -> Vec<String> {
         .split('\n')
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .map(String::from)
+        // A bare carriage return is not allowed in a Rust doc comment.
+        .map(|line| line.replace('\r', " "))
         .collect()
 }
 
-/// Returns doc comment lines for the # Examples section when examples are present and non-empty.
-/// Each example is serialized to compact JSON. Returns empty vec when None or empty.
-fn examples_doc_lines(examples: Option<&[serde_json::Value]>) -> Vec<String> {
-    let Some(examples) = examples else {
+/// Doc comment lines for an `# Examples` section (compact JSON per example).
+fn examples_doc_lines(examples: Option<&[Value]>) -> Vec<String> {
+    let Some(examples) = examples.filter(|e| !e.is_empty()) else {
         return Vec::new();
     };
-    if examples.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = vec![String::new(), "# Examples".to_string(), String::new()];
-    for ex in examples {
-        if let Ok(s) = serde_json::to_string(ex) {
-            lines.push(s);
-        }
-    }
+    let mut lines: Vec<String> = vec![String::new(), "# Examples".to_string(), String::new()];
+    lines.extend(examples.iter().map(Value::to_string));
     lines
 }
 
-/// Emits `#[deprecated]` or `#[deprecated = "description"]` when schema has `deprecated: true`.
-/// Uses the first line of description for the message when present and non-empty.
-fn emit_deprecated_attr(out: &mut impl Write, schema: &JsonSchema) -> CodeGenResult<()> {
-    if schema.deprecated != Some(true) {
-        return Ok(());
+/// `s` escaped for the inside of a Rust string literal: quotes, backslashes and every control
+/// character (`\r`, `\u{1}`, ...) are escaped, so any JSON string is a valid literal.
+fn escape(s: &str) -> String {
+    let quoted: String = format!("{s:?}");
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+/// `value` as Rust tokens for `serde_json::json!` (and the derive's `value = ...`): strings and
+/// keys as Rust string literals, numbers as written, built iteratively.
+fn json_tokens(value: &Value) -> String {
+    enum Part<'a> {
+        Value(&'a Value),
+        Text(String),
     }
-    let msg: Option<String> = schema
-        .description
-        .as_deref()
+    let mut out: String = String::new();
+    let mut stack: Vec<Part<'_>> = vec![Part::Value(value)];
+    while let Some(part) = stack.pop() {
+        let value: &Value = match part {
+            Part::Text(t) => {
+                out.push_str(&t);
+                continue;
+            }
+            Part::Value(v) => v,
+        };
+        match value {
+            Value::Null => out.push_str("null"),
+            Value::Bool(b) => out.push_str(&b.to_string()),
+            Value::Number(n) => out.push_str(&n.to_string()),
+            Value::String(s) => {
+                let _ = write!(out, "{s:?}");
+            }
+            Value::Array(items) => {
+                out.push('[');
+                stack.push(Part::Text("]".to_string()));
+                for (i, item) in items.iter().enumerate().rev() {
+                    stack.push(Part::Value(item));
+                    if i > 0 {
+                        stack.push(Part::Text(", ".to_string()));
+                    }
+                }
+            }
+            Value::Object(map) => {
+                out.push('{');
+                stack.push(Part::Text("}".to_string()));
+                let entries: Vec<(&String, &Value)> = map.iter().collect();
+                for (i, (key, item)) in entries.into_iter().enumerate().rev() {
+                    stack.push(Part::Value(item));
+                    stack.push(Part::Text(format!("{key:?}: ")));
+                    if i > 0 {
+                        stack.push(Part::Text(", ".to_string()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `#[deprecated]` (or `#[deprecated = "<first description line>"]`) when `deprecated` is true.
+fn deprecated_attr(deprecated: Option<bool>, description: Option<&str>, indent: &str) -> String {
+    if deprecated != Some(true) {
+        return String::new();
+    }
+    let message: Option<String> = description
         .map(str::trim)
-        .filter(|s| !s.is_empty())
         .and_then(|s| s.split('\n').next())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.replace('\\', "\\\\").replace('"', "\\\""));
-    if let Some(m) = msg {
-        writeln!(out, "    #[deprecated = \"{m}\"]")?;
-    } else {
-        writeln!(out, "    #[deprecated]")?;
+        .map(escape);
+    match message {
+        Some(m) => format!("{indent}#[deprecated = \"{m}\"]\n"),
+        None => format!("{indent}#[deprecated]\n"),
     }
-    Ok(())
 }
 
-/// Emits struct-level `#[deprecated]` when schema has `deprecated: true`.
-fn emit_struct_deprecated_attr(out: &mut impl Write, schema: &JsonSchema) -> CodeGenResult<()> {
-    if schema.deprecated != Some(true) {
-        return Ok(());
+/// Doc comments for an item from its annotations (description, then examples).
+fn item_docs(annotations: &Annotations) -> String {
+    let mut out: String = String::new();
+    for line in doc_lines(annotations.description.as_deref()) {
+        let _ = writeln!(out, "/// {line}");
     }
-    let msg: Option<String> = schema
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.split('\n').next())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.replace('\\', "\\\\").replace('"', "\\\""));
-    if let Some(m) = msg {
-        writeln!(out, "#[deprecated = \"{m}\"]")?;
-    } else {
-        writeln!(out, "#[deprecated]")?;
+    for line in examples_doc_lines(annotations.examples.as_deref()) {
+        if line.is_empty() {
+            out.push_str("///\n");
+        } else {
+            let _ = writeln!(out, "/// {line}");
+        }
     }
-    Ok(())
+    out
 }
 
-/// Returns sorted, deduplicated string values if the schema is a string enum; otherwise None.
-fn string_enum_values(schema: &JsonSchema) -> Option<Vec<String>> {
-    if !schema.is_string_enum() {
-        return None;
+/// A Rust expression for a scalar JSON default of the value type `node`, and whether it equals
+/// that type's `Default` (so `#[serde(default)]` suffices). `None` when the default does not fit
+/// the type (a string for a number, `300` for a `u8`, a UUID string): `default` is an
+/// annotation, so it is left out rather than emitted as code that does not compile.
+fn default_literal(value: &Value, node: &TypeNode) -> Option<(String, bool)> {
+    match (node, value) {
+        (TypeNode::Boolean, Value::Bool(b)) => Some((b.to_string(), !*b)),
+        (
+            TypeNode::String {
+                format: StringFormat::Plain,
+                ..
+            },
+            Value::String(text),
+        ) => Some((format!("\"{}\".to_string()", escape(text)), text.is_empty())),
+        (TypeNode::Integer(width), Value::Number(n)) => {
+            // An integer value (`3` or `3.0`): its ceiling and floor agree.
+            let exact: i128 = number::integer_lower_bound(n, false)?;
+            if number::integer_upper_bound(n, false)? != exact {
+                return None;
+            }
+            let (lo, hi): (i128, i128) = int_bounds(*width);
+            (lo..=hi)
+                .contains(&exact)
+                .then(|| (exact.to_string(), exact == 0))
+        }
+        (TypeNode::Number(_), Value::Number(n)) => {
+            let f: f64 = n.as_f64()?;
+            Some((format!("{f:?}"), f == 0.0))
+        }
+        _ => None,
     }
-    let v: Vec<String> = schema
-        .enum_values
-        .as_ref()
-        .expect("string enum")
+}
+
+/// The values an integer width holds.
+fn int_bounds(width: IntWidth) -> (i128, i128) {
+    match width {
+        IntWidth::U8 => (0, i128::from(u8::MAX)),
+        IntWidth::U16 => (0, i128::from(u16::MAX)),
+        IntWidth::U32 => (0, i128::from(u32::MAX)),
+        IntWidth::U64 => (0, i128::from(u64::MAX)),
+        IntWidth::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
+        IntWidth::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
+        IntWidth::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+        IntWidth::I64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
+    }
+}
+
+/// How a field holds its value: presence and nullability (absent and `null` are different).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldShape {
+    /// Required, not nullable: `T`.
+    Plain,
+    /// Optional, not nullable: `Option<T>`, `None` when absent (and not serialized).
+    Optional,
+    /// Required, nullable: `Option<T>`, `None` for `null`; absence is an error.
+    RequiredNullable,
+    /// Optional, nullable: `Option<Option<T>>`: `None` absent, `Some(None)` `null`.
+    OptionalNullable,
+}
+
+/// One rendered field.
+#[derive(Debug)]
+struct RenderedField {
+    name: String,
+    ty: String,
+    attrs: String,
+    /// `fn default_...() -> T { ... }` when the field needs a default function.
+    default_fn: Option<String>,
+}
+
+/// Renders the fields of `object` (named `struct_name`).
+fn render_fields(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    struct_name: &str,
+    object: &ObjectNode,
+    imports: &mut Imports,
+) -> Vec<RenderedField> {
+    let mut bases: Vec<String> = object
+        .fields
         .iter()
-        .filter_map(|x| x.as_str().map(String::from))
+        .map(|f| sanitize_field_name(&f.json_key))
         .collect();
-    let set: BTreeSet<String> = v.into_iter().collect();
-    let mut out: Vec<String> = set.iter().cloned().collect();
-    out.sort();
-    Some(out)
-}
-
-/// Returns effective string enum values: either from `enum` (string-only) or from `const` when it is a string (single-value).
-fn string_enum_or_const_values(schema: &JsonSchema) -> Option<Vec<String>> {
-    if let Some(values) = string_enum_values(schema) {
-        return Some(values);
+    if object.additional.is_some() {
+        bases.push("additional".to_string());
     }
-    if schema.is_string_const() {
-        let s: String = schema
-            .const_value
-            .as_ref()
-            .and_then(|v| v.as_str().map(String::from))
-            .expect("string const");
-        return Some(vec![s]);
-    }
-    None
-}
-
-/// For dedupe key: `additionalProperties` as `false` (Forbid) or a schema object (Schema(sub key)).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum AdditionalPropertiesDedupe {
-    Forbid,
-    Schema(Box<DedupeKey>),
-}
-
-/// Key for deduplication: canonical representation of an object schema for a given mode.
-/// Implements `Ord` + `Eq` for use in `BTreeMap`. Full mode includes id, description, comment, and examples; Functional mode excludes them (key ignores $id).
-#[derive(Debug, Clone)]
-struct DedupeKey {
-    id: Option<String>,
-    type_: Option<TypeSet>,
-    properties: BTreeMap<String, DedupeKey>,
-    additional_properties: Option<AdditionalPropertiesDedupe>,
-    required: Option<Vec<String>>,
-    title: Option<String>,
-    description: Option<String>,
-    comment: Option<String>,
-    deprecated: Option<bool>,
-    examples: Option<Vec<serde_json::Value>>,
-    items: Option<Box<DedupeKey>>,
-    unique_items: Option<bool>,
-    min_items: Option<u64>,
-    max_items: Option<u64>,
-    min_length: Option<u64>,
-    max_length: Option<u64>,
-    pattern: Option<String>,
-    format: Option<String>,
-    default_value: Option<serde_json::Value>,
-}
-
-impl PartialEq for DedupeKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.type_ == other.type_
-            && self.properties == other.properties
-            && self.additional_properties == other.additional_properties
-            && self.required == other.required
-            && self.title == other.title
-            && self.description == other.description
-            && self.comment == other.comment
-            && self.deprecated == other.deprecated
-            && self.examples == other.examples
-            && self.items == other.items
-            && self.unique_items == other.unique_items
-            && self.min_items == other.min_items
-            && self.max_items == other.max_items
-            && self.min_length == other.min_length
-            && self.max_length == other.max_length
-            && self.pattern == other.pattern
-            && self.format == other.format
-            && self.default_value == other.default_value
-    }
-}
-
-impl Eq for DedupeKey {}
-
-impl PartialOrd for DedupeKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for DedupeKey {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.id
-            .cmp(&other.id)
-            .then_with(|| self.type_.cmp(&other.type_))
-            .then_with(|| {
-                self.properties
-                    .keys()
-                    .cmp(other.properties.keys())
-                    .then_with(|| {
-                        for (k, v) in &self.properties {
-                            if let Some(ov) = other.properties.get(k) {
-                                let c = v.cmp(ov);
-                                if c != Ordering::Equal {
-                                    return c;
-                                }
-                            }
-                        }
-                        self.properties.len().cmp(&other.properties.len())
-                    })
-            })
-            .then_with(|| self.additional_properties.cmp(&other.additional_properties))
-            .then_with(|| compare_option_vec(self.required.as_ref(), other.required.as_ref()))
-            .then_with(|| self.title.cmp(&other.title))
-            .then_with(|| self.description.cmp(&other.description))
-            .then_with(|| self.comment.cmp(&other.comment))
-            .then_with(|| self.deprecated.cmp(&other.deprecated))
-            .then_with(|| compare_option_vec_value(self.examples.as_ref(), other.examples.as_ref()))
-            .then_with(|| self.items.cmp(&other.items))
-            .then_with(|| self.unique_items.cmp(&other.unique_items))
-            .then_with(|| self.min_items.cmp(&other.min_items))
-            .then_with(|| self.max_items.cmp(&other.max_items))
-            .then_with(|| self.min_length.cmp(&other.min_length))
-            .then_with(|| self.max_length.cmp(&other.max_length))
-            .then_with(|| self.pattern.cmp(&other.pattern))
-            .then_with(|| self.format.cmp(&other.format))
-            .then_with(|| {
-                compare_option_value(self.default_value.as_ref(), other.default_value.as_ref())
-            })
-    }
-}
-
-fn compare_option_value(a: Option<&serde_json::Value>, b: Option<&serde_json::Value>) -> Ordering {
-    match (a, b) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(a_val), Some(b_val)) => {
-            let a_str: String = serde_json::to_string(a_val).unwrap_or_default();
-            let b_str: String = serde_json::to_string(b_val).unwrap_or_default();
-            a_str.cmp(&b_str)
-        }
-    }
-}
-
-fn compare_option_vec_value(
-    a: Option<&Vec<serde_json::Value>>,
-    b: Option<&Vec<serde_json::Value>>,
-) -> Ordering {
-    match (a, b) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(aa), Some(bb)) => {
-            let len_cmp: Ordering = aa.len().cmp(&bb.len());
-            if len_cmp != Ordering::Equal {
-                return len_cmp;
-            }
-            for (a_val, b_val) in aa.iter().zip(bb.iter()) {
-                let c: Ordering = compare_option_value(Some(a_val), Some(b_val));
-                if c != Ordering::Equal {
-                    return c;
-                }
-            }
-            Ordering::Equal
-        }
-    }
-}
-
-/// Returns true when the JSON default value equals the Rust type default (so we can use `#[serde(default)]`).
-fn json_value_equals_rust_type_default(
-    value: &serde_json::Value,
-    _type_str: &str,
-    is_optional: bool,
-) -> bool {
-    if is_optional {
-        return value.is_null();
-    }
-    match value {
-        serde_json::Value::Null => true,
-        serde_json::Value::Bool(b) => !*b,
-        serde_json::Value::Number(n) => {
-            if n.as_i64() == Some(0) {
-                return true;
-            }
-            if n.as_f64() == Some(0.0) {
-                return true;
-            }
-            false
-        }
-        serde_json::Value::String(s) => s.is_empty(),
-        serde_json::Value::Array(a) => a.is_empty(),
-        serde_json::Value::Object(o) => o.is_empty(),
-    }
-}
-
-/// Returns the default function name for a struct field (e.g. `default_root_my_field`).
-/// Uses `snake_case` for both struct and field names per Rust naming conventions.
-fn default_function_name(struct_name: &str, field_name: &str) -> String {
-    let struct_snake: String = struct_name.to_snake_case();
-    let field_snake: String = field_name.to_snake_case();
-    format!("default_{struct_snake}_{field_snake}")
-}
-
-/// Returns Rust expression for a JSON default value for the given type (e.g. `Some("foo".to_string())` for Option<String>).
-fn json_default_to_rust_expr(
-    value: &serde_json::Value,
-    _ty: &str,
-    is_optional: bool,
-) -> Option<String> {
-    let inner: String = match value {
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => {
-            if n.is_f64() {
-                n.as_f64()?.to_string()
-            } else {
-                // `u64` / `i64`: `Number`'s `Display` writes the integer exactly.
-                n.to_string()
-            }
-        }
-        serde_json::Value::String(s) => {
-            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("\"{escaped}\".to_string()")
-        }
-        serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            return None;
-        }
-    };
-    let expr: String = if is_optional {
-        format!("Some({inner})")
-    } else {
-        inner
-    };
-    Some(expr)
-}
-
-fn compare_option_vec(a: Option<&Vec<String>>, b: Option<&Vec<String>>) -> Ordering {
-    match (a, b) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(aa), Some(bb)) => aa.cmp(bb),
-    }
-}
-
-/// If the buffer contains "`HashSet`", insert `use std::collections::HashSet;` after the serde use line.
-fn maybe_prepend_btreemap_use(mut buf: Vec<u8>) -> Vec<u8> {
-    if !buf.windows(8).any(|w| w == b"BTreeMap") {
-        return buf;
-    }
-    let needle = b"use serde::{Deserialize, Serialize};\n";
-    let pos = buf
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|i| i + needle.len());
-    if let Some(insert_at) = pos {
-        let line = b"use std::collections::BTreeMap;\n";
-        buf.splice(insert_at..insert_at, line.iter().copied());
-    }
-    buf
-}
-
-fn maybe_prepend_hash_set_use(mut buf: Vec<u8>) -> Vec<u8> {
-    if !buf.windows(7).any(|w| w == b"HashSet") {
-        return buf;
-    }
-    let needle = b"use serde::{Deserialize, Serialize};\n";
-    let pos = buf
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|i| i + needle.len());
-    if let Some(insert_at) = pos {
-        let hash_set_use = b"use std::collections::HashSet;\n";
-        buf.splice(insert_at..insert_at, hash_set_use.iter().copied());
-    }
-    buf
-}
-
-/// If the buffer contains "`Uuid`", insert `use uuid::Uuid;` after the `HashSet` use line (if present) or after the serde use line.
-#[cfg(feature = "uuid")]
-fn maybe_prepend_uuid_use(mut buf: Vec<u8>) -> Vec<u8> {
-    if !buf.windows(4).any(|w| w == b"Uuid") {
-        return buf;
-    }
-    let hash_set_needle = b"use std::collections::HashSet;\n";
-    let serde_needle = b"use serde::{Deserialize, Serialize};\n";
-    let insert_at = buf
-        .windows(hash_set_needle.len())
-        .position(|w| w == hash_set_needle)
-        .map(|i| i + hash_set_needle.len())
-        .or_else(|| {
-            buf.windows(serde_needle.len())
-                .position(|w| w == serde_needle)
-                .map(|i| i + serde_needle.len())
-        });
-    if let Some(pos) = insert_at {
-        let uuid_use = b"use uuid::Uuid;\n";
-        buf.splice(pos..pos, uuid_use.iter().copied());
-    }
-    buf
-}
-
-/// Emits `#[derive(..., ToJsonSchema)]` and optional `#[json_schema(title = "...")]` for a struct.
-/// Uses `json_schema_rs_macro::ToJsonSchema` so generated code compiles when the macro crate is a dependency.
-/// Emits struct doc comment from schema.description when non-empty.
-fn emit_struct_derive_and_attrs(
-    out: &mut impl Write,
-    name: &str,
-    schema: &JsonSchema,
-) -> CodeGenResult<()> {
-    for line in doc_lines(schema.description.as_deref()) {
-        writeln!(out, "/// {line}")?;
-    }
-    for line in examples_doc_lines(schema.examples.as_deref()) {
-        writeln!(out, "/// {line}")?;
-    }
-    emit_struct_deprecated_attr(out, schema)?;
-    writeln!(
-        out,
-        "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
-    )?;
-    if let Some(ref t) = schema.title {
-        let t = t.trim();
-        if !t.is_empty() {
-            let escaped = t.replace('\\', "\\\\").replace('"', "\\\"");
-            writeln!(out, "#[json_schema(title = \"{escaped}\")]")?;
-        }
-    }
-    if let Some(ref i) = schema.id {
-        let escaped = i.replace('\\', "\\\\").replace('"', "\\\"");
-        writeln!(out, "#[json_schema(id = \"{escaped}\")]")?;
-    }
-    if schema
-        .additional_properties
-        .as_ref()
-        .is_some_and(|ap| matches!(ap, Schema::Bool(false)))
-    {
-        writeln!(out, "#[serde(deny_unknown_fields)]")?;
-    }
-    writeln!(out, "pub struct {name} {{")?;
-    Ok(())
-}
-
-impl DedupeKey {
-    fn from_schema(schema: &JsonSchema, mode: DedupeMode) -> Self {
-        let properties: BTreeMap<String, DedupeKey> = schema
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), DedupeKey::from_schema(v.object_or_empty(), mode)))
-            .collect();
-        let items: Option<Box<DedupeKey>> = schema
-            .items
-            .as_ref()
-            .filter(|_| schema.primary_type() == Some(JsonType::Array))
-            .map(|s| Box::new(DedupeKey::from_schema(s.object_or_empty(), mode)));
-        let unique_items: Option<bool> = if schema.primary_type() == Some(JsonType::Array) {
-            schema.unique_items
-        } else {
-            None
-        };
-        let min_items: Option<u64> = if schema.primary_type() == Some(JsonType::Array) {
-            schema.min_items
-        } else {
-            None
-        };
-        let max_items: Option<u64> = if schema.primary_type() == Some(JsonType::Array) {
-            schema.max_items
-        } else {
-            None
-        };
-        let min_length: Option<u64> = if schema.primary_type() == Some(JsonType::String) {
-            schema.min_length
-        } else {
-            None
-        };
-        let max_length: Option<u64> = if schema.primary_type() == Some(JsonType::String) {
-            schema.max_length
-        } else {
-            None
-        };
-        let pattern: Option<String> = if schema.primary_type() == Some(JsonType::String) {
-            schema.pattern.clone()
-        } else {
-            None
-        };
-        let format: Option<String> = if schema.primary_type() == Some(JsonType::String) {
-            schema.format.clone()
-        } else {
-            None
-        };
-        let additional_properties: Option<AdditionalPropertiesDedupe> =
-            match schema.additional_properties.as_ref() {
-                None | Some(Schema::Bool(true)) => None,
-                Some(Schema::Bool(false)) => Some(AdditionalPropertiesDedupe::Forbid),
-                Some(Schema::Object(s)) => Some(AdditionalPropertiesDedupe::Schema(Box::new(
-                    DedupeKey::from_schema(s, mode),
-                ))),
-            };
-        DedupeKey {
-            id: match mode {
-                DedupeMode::Full => schema.id.clone(),
-                DedupeMode::Functional | DedupeMode::Disabled => None,
-            },
-            type_: schema.type_,
-            properties,
-            additional_properties,
-            required: schema.required.clone(),
-            title: schema.title.clone(),
-            description: match mode {
-                DedupeMode::Full => schema.description.clone(),
-                DedupeMode::Functional | DedupeMode::Disabled => None,
-            },
-            comment: match mode {
-                DedupeMode::Full => schema.comment.clone(),
-                DedupeMode::Functional | DedupeMode::Disabled => None,
-            },
-            deprecated: match mode {
-                DedupeMode::Full => schema.deprecated,
-                DedupeMode::Functional | DedupeMode::Disabled => None,
-            },
-            examples: match mode {
-                DedupeMode::Full => schema.examples.clone(),
-                DedupeMode::Functional | DedupeMode::Disabled => None,
-            },
-            items,
-            unique_items,
-            min_items,
-            max_items,
-            min_length,
-            max_length,
-            pattern,
-            format,
-            default_value: schema.default_value.clone(),
-        }
-    }
-}
-
-/// Compute struct/type name from title, property key, and root fallback per settings.
-fn struct_name_from(
-    title: Option<&str>,
-    from_key: Option<&str>,
-    is_root: bool,
-    settings: &CodeGenSettings,
-) -> String {
-    let title_trimmed: Option<&str> = title.filter(|t| !t.trim().is_empty()).map(str::trim);
-    let from_key_s: Option<&str> = from_key;
-
-    let (first, second) = match settings.model_name_source {
-        ModelNameSource::TitleFirst => (title_trimmed, from_key_s),
-        ModelNameSource::PropertyKeyFirst => (from_key_s, title_trimmed),
-    };
-
-    first
-        .map(sanitize_struct_name)
-        .or_else(|| second.map(sanitize_struct_name))
-        .unwrap_or_else(|| {
-            if is_root {
-                "Root".to_string()
-            } else {
-                "Unnamed".to_string()
-            }
-        })
-}
-
-/// The narrowest Rust integer type holding every integer in `lo..=hi`, or `None` when the range
-/// is empty or no 64-bit type holds it.
-fn rust_integer_type_for_range(lo: i128, hi: i128) -> Option<&'static str> {
-    if lo > hi {
-        return None;
-    }
-    let candidates: [(&'static str, i128, i128); 8] = [
-        ("u8", 0, i128::from(u8::MAX)),
-        ("u16", 0, i128::from(u16::MAX)),
-        ("u32", 0, i128::from(u32::MAX)),
-        ("u64", 0, i128::from(u64::MAX)),
-        ("i8", i128::from(i8::MIN), i128::from(i8::MAX)),
-        ("i16", i128::from(i16::MIN), i128::from(i16::MAX)),
-        ("i32", i128::from(i32::MIN), i128::from(i32::MAX)),
-        ("i64", i128::from(i64::MIN), i128::from(i64::MAX)),
-    ];
-    candidates
-        .into_iter()
-        .find(|&(_, min, max)| lo >= min && hi <= max)
-        .map(|(name, _, _)| name)
-}
-
-/// The tighter of two optional bounds under `keep` (`Ordering::Greater` keeps the larger, for
-/// lower bounds; `Ordering::Less` the smaller, for upper bounds).
-fn tighter_bound<T: Ord>(a: Option<T>, b: Option<T>, keep: Ordering) -> Option<T> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(if a.cmp(&b) == keep { a } else { b }),
-        (a, None) | (None, a) => a,
-    }
-}
-
-/// Returns the Rust type string for an integer or number schema from its bounds (`minimum`,
-/// `maximum`, `exclusiveMinimum`, `exclusiveMaximum`), compared exactly; falls back to `i64` or
-/// `f64` when a side is unbounded or the range fits no narrower type.
-///
-/// An integer schema takes the narrowest type holding every integer its bounds allow (an
-/// exclusive bound `e` admits integers from `⌊e⌋ + 1` / up to `⌈e⌉ - 1`), unsigned when the
-/// range starts at zero or above. A number schema is `f32` when both sides are bounded within
-/// `f32::MIN..=f32::MAX`.
-fn rust_numeric_type_for_schema(schema: &JsonSchema) -> String {
-    let primary: Option<JsonType> = schema.primary_type();
-    if primary == Some(JsonType::Integer) {
-        let lower: Option<i128> = tighter_bound(
-            schema
-                .minimum
-                .as_ref()
-                .and_then(|n| number::integer_lower_bound(n, false)),
-            schema
-                .exclusive_minimum
-                .as_ref()
-                .and_then(|n| number::integer_lower_bound(n, true)),
-            Ordering::Greater,
-        );
-        let upper: Option<i128> = tighter_bound(
-            schema
-                .maximum
-                .as_ref()
-                .and_then(|n| number::integer_upper_bound(n, false)),
-            schema
-                .exclusive_maximum
-                .as_ref()
-                .and_then(|n| number::integer_upper_bound(n, true)),
-            Ordering::Less,
-        );
-        let narrow: Option<&'static str> = match (lower, upper) {
-            (Some(lo), Some(hi)) => rust_integer_type_for_range(lo, hi),
-            _ => None,
-        };
-        return narrow.unwrap_or("i64").to_string();
-    }
-    if primary == Some(JsonType::Number) {
-        let lower: Option<&serde_json::Number> = [&schema.minimum, &schema.exclusive_minimum]
-            .into_iter()
-            .flatten()
-            .max_by(|a, b| number::cmp_num(a, b));
-        let upper: Option<&serde_json::Number> = [&schema.maximum, &schema.exclusive_maximum]
-            .into_iter()
-            .flatten()
-            .min_by(|a, b| number::cmp_num(a, b));
-        if let (Some(lo), Some(hi)) = (lower, upper)
-            && let (Some(f32_min), Some(f32_max)) = (
-                serde_json::Number::from_f64(f64::from(f32::MIN)),
-                serde_json::Number::from_f64(f64::from(f32::MAX)),
-            )
-            && number::cmp_num(lo, hi) != Ordering::Greater
-            && number::cmp_num(lo, &f32_min) != Ordering::Less
-            && number::cmp_num(hi, &f32_max) != Ordering::Greater
-        {
-            return "f32".to_string();
-        }
-        return "f64".to_string();
-    }
-    unreachable!("rust_numeric_type_for_schema only called for integer or number schema");
-}
-
-/// Returns true when the schema represents a type that is Hash + Eq (string, integer, number, or enum).
-/// Used to decide whether to emit `HashSet<T>` for array with uniqueItems: true.
-fn item_schema_is_hashable(schema: &JsonSchema) -> bool {
-    !schema.is_object_with_properties() && !schema.is_array_with_items()
-}
-
-/// True if schema is object-like for allOf merge: primary type "object" or non-empty properties.
-fn is_object_like_for_merge(schema: &JsonSchema) -> bool {
-    schema.primary_type() == Some(JsonType::Object) || !schema.properties.is_empty()
-}
-
-/// Merge an array of object-like schemas (allOf) into a single schema. Errors on empty array,
-/// non-object-like subschema (a boolean schema reads as `{}`, which is not object-like), or
-/// conflicting property types/bounds/enums.
-pub(crate) fn merge_all_of(schemas: &[Schema]) -> CodeGenResult<JsonSchema> {
-    if schemas.is_empty() {
-        return Err(CodeGenError::AllOfMergeEmpty);
-    }
-    for (index, s) in schemas.iter().enumerate() {
-        if !is_object_like_for_merge(s.object_or_empty()) {
-            return Err(CodeGenError::AllOfMergeNonObjectSubschema { index });
-        }
-    }
-    let mut merged = JsonSchema::default();
-    for s in schemas {
-        merge_object_schema_into(&mut merged, s.object_or_empty(), "")?;
-    }
-    merged.type_ = Some(JsonType::Object.into());
-    Ok(merged)
-}
-
-/// Merge one object schema into `target`. Used for allOf merge. `parent_key` is for error messages.
-fn merge_object_schema_into(
-    target: &mut JsonSchema,
-    other: &JsonSchema,
-    parent_key: &str,
-) -> CodeGenResult<()> {
-    for (k, other_prop) in &other.properties {
-        let key_for_errors = if parent_key.is_empty() {
-            k.clone()
-        } else {
-            format!("{parent_key}.{k}")
-        };
-        if let Some(target_prop) = target.properties.get_mut(k) {
-            let merged_prop = merge_property_schemas(
-                target_prop.object_or_empty(),
-                other_prop.object_or_empty(),
-                &key_for_errors,
-            )?;
-            *target_prop = Schema::from(merged_prop);
-        } else {
-            target.properties.insert(k.clone(), other_prop.clone());
-        }
-    }
-    // Required: union, dedupe, first-occurrence order
-    let mut required: Vec<String> = target.required.clone().unwrap_or_default();
-    for r in other.required.as_deref().unwrap_or(&[]) {
-        if !required.contains(r) {
-            required.push(r.clone());
-        }
-    }
-    target.required = if required.is_empty() {
-        None
-    } else {
-        Some(required)
-    };
-    if target.title.as_deref().map_or("", str::trim).is_empty() {
-        target.title.clone_from(&other.title);
-    }
-    if target
-        .description
-        .as_deref()
-        .map_or("", str::trim)
-        .is_empty()
-    {
-        target.description.clone_from(&other.description);
-    }
-    if target.comment.is_none() {
-        target.comment.clone_from(&other.comment);
-    }
-    if target.deprecated.is_none() {
-        target.deprecated = other.deprecated;
-    }
-    if target.examples.is_none() {
-        target.examples.clone_from(&other.examples);
-    }
-    Ok(())
-}
-
-/// Merge two property subschemas (same key in different allOf branches). Returns merged schema or error on conflict.
-fn merge_property_schemas(
-    a: &JsonSchema,
-    b: &JsonSchema,
-    property_key: &str,
-) -> CodeGenResult<JsonSchema> {
-    if a.is_object_with_properties() && b.is_object_with_properties() {
-        let mut merged = a.clone();
-        merge_object_schema_into(&mut merged, b, property_key)?;
-        return Ok(merged);
-    }
-    if a.is_array_with_items() && b.is_array_with_items() {
-        let a_items = a
-            .items
-            .as_ref()
-            .expect("array with items")
-            .object_or_empty();
-        let b_items = b
-            .items
-            .as_ref()
-            .expect("array with items")
-            .object_or_empty();
-        let merged_items = merge_property_schemas(a_items, b_items, &format!("{property_key}[]"))?;
-        let mut out = a.clone();
-        out.items = Some(Schema::from(merged_items));
-        return Ok(out);
-    }
-    let type_a: Option<JsonType> = a.primary_type();
-    let type_b: Option<JsonType> = b.primary_type();
-    if type_a != type_b {
-        return Err(CodeGenError::AllOfMergeConflictingPropertyType {
-            property_key: property_key.to_string(),
-            subschema_indices: vec![], // we don't have indices in this context; message still clear
-        });
-    }
-    if type_a == Some(JsonType::String) {
-        let mut out = a.clone();
-        if out.min_length.is_none() {
-            out.min_length = b.min_length;
-        }
-        if out.max_length.is_none() {
-            out.max_length = b.max_length;
-        }
-        if let (Some(pa), Some(pb)) = (&a.pattern, &b.pattern) {
-            if pa != pb {
-                return Err(CodeGenError::AllOfMergeConflictingPattern {
-                    property_key: property_key.to_string(),
-                });
-            }
-        } else if out.pattern.is_none() {
-            out.pattern.clone_from(&b.pattern);
-        }
-        if out.format.is_none() {
-            out.format.clone_from(&b.format);
-        }
-        if let (Some(ea), Some(eb)) = (&a.enum_values, &b.enum_values) {
-            if ea != eb {
-                return Err(CodeGenError::AllOfMergeConflictingEnum {
-                    property_key: property_key.to_string(),
-                });
-            }
-        } else if b.enum_values.is_some() {
-            out.enum_values.clone_from(&b.enum_values);
-        }
-        if let (Some(ca), Some(cb)) = (&a.const_value, &b.const_value) {
-            if ca != cb {
-                return Err(CodeGenError::AllOfMergeConflictingConst {
-                    property_key: property_key.to_string(),
-                });
-            }
-        } else if b.const_value.is_some() {
-            out.const_value.clone_from(&b.const_value);
-        }
-        return Ok(out);
-    }
-    if matches!(type_a, Some(JsonType::Integer | JsonType::Number)) {
-        let mut out = a.clone();
-        merge_numeric_bounds(&mut out, b, property_key, "minimum", "maximum")?;
-        return Ok(out);
-    }
-    if a.is_string_enum() && b.is_string_enum() {
-        if a.enum_values != b.enum_values {
-            return Err(CodeGenError::AllOfMergeConflictingEnum {
-                property_key: property_key.to_string(),
-            });
-        }
-        return Ok(a.clone());
-    }
-    if type_a.is_some() || type_b.is_some() {
-        return Err(CodeGenError::AllOfMergeConflictingPropertyType {
-            property_key: property_key.to_string(),
-            subschema_indices: vec![],
-        });
-    }
-    Ok(a.clone())
-}
-
-/// The tighter of two optional numeric bounds under `keep` (see [`tighter_bound`]), compared
-/// exactly.
-fn tighter_number(
-    a: Option<&serde_json::Number>,
-    b: Option<&serde_json::Number>,
-    keep: Ordering,
-) -> Option<serde_json::Number> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(if number::cmp_num(a, b) == keep { a } else { b }.clone()),
-        (a, None) | (None, a) => a.cloned(),
-    }
-}
-
-/// Merges `other`'s numeric bounds into `target` for `allOf`: each bound keeps the tighter of
-/// the two, compared exactly. `multipleOf` keeps `target`'s when both have one (it does not
-/// change the emitted type). A lower bound above the upper bound is a conflict.
-fn merge_numeric_bounds(
-    target: &mut JsonSchema,
-    other: &JsonSchema,
-    property_key: &str,
-    min_kw: &str,
-    max_kw: &str,
-) -> CodeGenResult<()> {
-    let new_min: Option<serde_json::Number> = tighter_number(
-        target.minimum.as_ref(),
-        other.minimum.as_ref(),
-        Ordering::Greater,
-    );
-    let new_max: Option<serde_json::Number> = tighter_number(
-        target.maximum.as_ref(),
-        other.maximum.as_ref(),
-        Ordering::Less,
-    );
-    if let (Some(mi), Some(ma)) = (&new_min, &new_max)
-        && number::cmp_num(mi, ma) == Ordering::Greater
-    {
-        return Err(CodeGenError::AllOfMergeConflictingNumericBounds {
-            property_key: property_key.to_string(),
-            keyword: format!("{min_kw}/{max_kw}"),
-        });
-    }
-    target.exclusive_minimum = tighter_number(
-        target.exclusive_minimum.as_ref(),
-        other.exclusive_minimum.as_ref(),
-        Ordering::Greater,
-    );
-    target.exclusive_maximum = tighter_number(
-        target.exclusive_maximum.as_ref(),
-        other.exclusive_maximum.as_ref(),
-        Ordering::Less,
-    );
-    if target.multiple_of.is_none() {
-        target.multiple_of.clone_from(&other.multiple_of);
-    }
-    target.minimum = new_min;
-    target.maximum = new_max;
-    Ok(())
-}
-
-/// Resolve allOf for codegen: if schema has non-empty `all_of`, merge and return; otherwise return clone.
-pub(crate) fn resolve_all_of_for_codegen(schema: &JsonSchema) -> CodeGenResult<JsonSchema> {
-    match &schema.all_of {
-        Some(all) if !all.is_empty() => merge_all_of(all),
-        Some(_) => Err(CodeGenError::AllOfMergeEmpty),
-        None => Ok(schema.clone()),
-    }
-}
-
-/// Returns the Rust type string for a schema (used for array item type and nested types).
-/// Unsupported types yield `serde_json::Value`.
-fn rust_type_for_item_schema(
-    root: &Registry<'_>,
-    schema: &JsonSchema,
-    from_key: Option<&str>,
-    enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
-    key_to_name: Option<&BTreeMap<DedupeKey, String>>,
-    settings: &CodeGenSettings,
-    mode: DedupeMode,
-) -> CodeGenResult<String> {
-    let (schema, def_key): (&JsonSchema, Option<String>) =
-        resolve_ref_for_codegen(root, schema, None)?;
-    if let Some(values) = string_enum_or_const_values(schema)
-        && let Some(m) = enum_values_to_name
-        && let Some(name) = m.get(&values)
-    {
-        return Ok(name.clone());
-    }
-    let primary: Option<JsonType> = schema.primary_type();
-    if primary == Some(JsonType::String)
-        || (schema.enum_values.as_ref().is_some_and(|v| !v.is_empty()) && !schema.is_string_enum())
-        || (schema.const_value.is_some() && !schema.is_string_const())
-    {
-        #[cfg(feature = "uuid")]
-        {
-            if schema.format.as_deref() == Some("uuid") {
-                return Ok("Uuid".to_string());
-            }
-        }
-        return Ok("String".to_string());
-    }
-    match primary {
-        Some(JsonType::Integer | JsonType::Number) => {
-            return Ok(rust_numeric_type_for_schema(schema));
-        }
-        Some(JsonType::Boolean) => return Ok("bool".to_string()),
-        Some(JsonType::Array | JsonType::Null | JsonType::Object | JsonType::String) | None => {}
-    }
-    if schema.is_object_with_properties() {
-        if let Some(key) = def_key.as_deref() {
-            return Ok(sanitize_struct_name(key));
-        }
-        let name: String = if let Some(m) = key_to_name {
-            let key = DedupeKey::from_schema(schema, mode);
-            m.get(&key).cloned().unwrap_or_else(|| {
-                struct_name_from(schema.title.as_deref(), from_key, false, settings)
-            })
-        } else {
-            struct_name_from(schema.title.as_deref(), from_key, false, settings)
-        };
-        return Ok(name);
-    }
-    if schema.is_array_with_items() {
-        let item_schema: &JsonSchema = schema
-            .items
-            .as_ref()
-            .expect("array with items")
-            .object_or_empty();
-        let inner: String = rust_type_for_item_schema(
-            root,
-            item_schema,
-            from_key,
-            enum_values_to_name,
-            key_to_name,
-            settings,
-            mode,
-        )?;
-        let use_hash_set: bool =
-            schema.unique_items == Some(true) && item_schema_is_hashable(item_schema);
-        return Ok(if use_hash_set {
-            format!("HashSet<{inner}>")
-        } else {
-            format!("Vec<{inner}>")
-        });
-    }
-    Ok("serde_json::Value".to_string())
-}
-
-/// Collect all string enums from a schema (and nested properties). Dedupe by value list; first occurrence wins the name, description, and examples.
-fn collect_enums(
-    root: &Registry<'_>,
-    schema: &JsonSchema,
-    settings: &CodeGenSettings,
-) -> CodeGenResult<Vec<EnumToEmit>> {
-    let mut key_to_name_desc_examples: EnumValuesToNameMap = BTreeMap::new();
-    let mut stack: Vec<JsonSchema> = vec![schema.clone()];
-    while let Some(node) = stack.pop() {
-        let (node, _) = resolve_ref_for_codegen(root, &node, None)?;
-        for (key, prop_schema) in &node.properties {
-            let (prop_effective, from_key) =
-                resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
-            if let Some(values) = string_enum_or_const_values(prop_effective) {
-                key_to_name_desc_examples
-                    .entry(values.clone())
-                    .or_insert_with(|| {
-                        let name: String = struct_name_from(
-                            prop_effective.title.as_deref(),
-                            from_key.as_deref(),
-                            false,
-                            settings,
-                        );
-                        let description: Option<String> = prop_effective
-                            .description
-                            .as_ref()
-                            .filter(|s| !s.trim().is_empty())
-                            .cloned();
-                        let examples: Option<Vec<serde_json::Value>> =
-                            prop_effective.examples.clone();
-                        (name, description, examples)
-                    });
-            }
-            if prop_effective.is_object_with_properties() {
-                stack.push(prop_effective.clone());
-            }
-            if prop_effective.is_array_with_items()
-                && let Some(ref items) = prop_effective.items
-            {
-                let (items_effective, items_from_key) =
-                    resolve_ref_for_codegen(root, items.object_or_empty(), Some(key))?;
-                if let Some(values) = string_enum_or_const_values(items_effective) {
-                    key_to_name_desc_examples
-                        .entry(values.clone())
-                        .or_insert_with(|| {
-                            let name: String = struct_name_from(
-                                items_effective.title.as_deref(),
-                                items_from_key.as_deref(),
-                                false,
-                                settings,
-                            );
-                            let description: Option<String> = items_effective
-                                .description
-                                .as_ref()
-                                .filter(|s| !s.trim().is_empty())
-                                .cloned();
-                            let examples: Option<Vec<serde_json::Value>> =
-                                items_effective.examples.clone();
-                            (name, description, examples)
-                        });
-                }
-                if items_effective.is_object_with_properties() {
-                    stack.push(items_effective.clone());
-                }
-            }
-        }
-        if let Some(ref any_of) = node.any_of {
-            for sub in any_of {
-                stack.push(sub.object_or_empty().clone());
-            }
-        }
-        if let Some(ref one_of) = node.one_of {
-            for sub in one_of {
-                stack.push(sub.object_or_empty().clone());
-            }
-        }
-    }
-    Ok(key_to_name_desc_examples
-        .into_iter()
-        .map(|(values, (name, description, examples))| EnumToEmit {
+    let names: Vec<String> = unique_idents(&bases, "");
+    let mut out: Vec<RenderedField> = Vec::new();
+    for (field, name) in object.fields.iter().zip(&names) {
+        out.push(render_field(
+            graph,
+            plan,
+            home,
+            struct_name,
+            field,
             name,
-            values,
-            description,
-            examples,
-        })
-        .collect())
-}
-
-/// Collect all anyOf enums from a schema (root and nested). Each node with non-empty anyOf produces one enum.
-fn collect_anyof_enums(
-    root: &Registry<'_>,
-    schema: &JsonSchema,
-    settings: &CodeGenSettings,
-    enum_values_to_name: &BTreeMap<Vec<String>, String>,
-) -> CodeGenResult<Vec<AnyOfEnumToEmit>> {
-    let mut out: Vec<AnyOfEnumToEmit> = vec![];
-    let mut stack: Vec<(JsonSchema, Option<String>)> = vec![(schema.clone(), None)];
-    while let Some((node, from_key)) = stack.pop() {
-        let (node, from_key) = resolve_ref_for_codegen(root, &node, from_key.as_deref())?;
-        if let Some(ref any_of) = node.any_of {
-            if any_of.is_empty() {
-                return Err(CodeGenError::AnyOfEmpty);
-            }
-            let name = match &from_key {
-                Some(k) => sanitize_struct_name(k) + "AnyOf",
-                None => node.title.as_deref().map_or_else(
-                    || "RootAnyOf".to_string(),
-                    |t| sanitize_struct_name(t) + "AnyOf",
-                ),
-            };
-            let mut variants = Vec::with_capacity(any_of.len());
-            for (i, sub) in any_of.iter().enumerate() {
-                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                let variant_from_key =
-                    format!("{}_Variant{i}", from_key.as_deref().unwrap_or("Root"));
-                let ty = rust_type_for_item_schema(
-                    root,
-                    &resolved,
-                    Some(&variant_from_key),
-                    Some(enum_values_to_name),
-                    None,
-                    settings,
-                    DedupeMode::Full,
-                )?;
-                variants.push((format!("Variant{i}"), ty));
-            }
-            out.push(AnyOfEnumToEmit { name, variants });
-            for sub in any_of {
-                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                stack.push((resolved, None));
-            }
-        }
-        for (key, prop_schema) in &node.properties {
-            stack.push((prop_schema.object_or_empty().clone(), Some(key.clone())));
-        }
+            imports,
+        ));
     }
-    Ok(out)
-}
-
-/// Collect all oneOf enums from a schema (root and nested). Each node with non-empty oneOf produces one enum.
-fn collect_oneof_enums(
-    root: &Registry<'_>,
-    schema: &JsonSchema,
-    settings: &CodeGenSettings,
-    enum_values_to_name: &BTreeMap<Vec<String>, String>,
-) -> CodeGenResult<Vec<OneOfEnumToEmit>> {
-    let mut out: Vec<OneOfEnumToEmit> = vec![];
-    let mut stack: Vec<(JsonSchema, Option<String>)> = vec![(schema.clone(), None)];
-    while let Some((node, from_key)) = stack.pop() {
-        let (node, from_key) = resolve_ref_for_codegen(root, &node, from_key.as_deref())?;
-        if let Some(ref one_of) = node.one_of {
-            if one_of.is_empty() {
-                return Err(CodeGenError::OneOfEmpty);
-            }
-            let name = match &from_key {
-                Some(k) => sanitize_struct_name(k) + "OneOf",
-                None => node.title.as_deref().map_or_else(
-                    || "RootOneOf".to_string(),
-                    |t| sanitize_struct_name(t) + "OneOf",
-                ),
-            };
-            let mut variants = Vec::with_capacity(one_of.len());
-            for (i, sub) in one_of.iter().enumerate() {
-                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                let variant_from_key =
-                    format!("{}_Variant{i}", from_key.as_deref().unwrap_or("Root"));
-                let ty = rust_type_for_item_schema(
-                    root,
-                    &resolved,
-                    Some(&variant_from_key),
-                    Some(enum_values_to_name),
-                    None,
-                    settings,
-                    DedupeMode::Full,
-                )?;
-                variants.push((format!("Variant{i}"), ty));
-            }
-            out.push(OneOfEnumToEmit { name, variants });
-            for sub in one_of {
-                let resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                stack.push((resolved, None));
-            }
-        }
-        for (key, prop_schema) in &node.properties {
-            stack.push((prop_schema.object_or_empty().clone(), Some(key.clone())));
-        }
+    if let Some(additional) = object.additional {
+        let value: String = rust_type(graph, plan, home, additional, imports);
+        imports.uses.insert("std::collections::BTreeMap");
+        out.push(RenderedField {
+            name: names.last().expect("additional field name").clone(),
+            ty: format!("BTreeMap<String, {value}>"),
+            attrs: "    #[serde(flatten)]\n".to_string(),
+            default_fn: None,
+        });
     }
-    Ok(out)
-}
-
-/// Collect all object schemas that need a struct in topological order (children before parents).
-/// Uses an explicit stack to avoid recursion and stack overflow on deep schemas.
-/// Resolves allOf for each node before use (merge on-the-fly).
-///
-/// Follows `schema`'s `$ref` chain through `root`'s registry to a schema without `$ref`. The
-/// returned key is the `$defs` / `definitions` entry name of the first hop's target (the
-/// struct name for it), or `fallback_from_key`. A boolean target reads as `{}`. Codegen walks
-/// copies and merges of subschemas, so it resolves each `$ref` without a scope
-/// ([`Registry::resolve_anywhere`]).
-fn resolve_ref_for_codegen<'a>(
-    root: &'a Registry<'_>,
-    schema: &'a JsonSchema,
-    fallback_from_key: Option<&str>,
-) -> CodeGenResult<(&'a JsonSchema, Option<String>)> {
-    let mut from_key: Option<String> = fallback_from_key.map(String::from);
-    let mut current: &'a JsonSchema = schema;
-    let mut visited: Vec<&'a str> = Vec::new();
-    while let Some(ref_str) = current.ref_.as_deref() {
-        if visited.contains(&ref_str) {
-            return Err(CodeGenError::RefResolution {
-                ref_str: ref_str.to_string(),
-                reason: "the $ref chain loops back to itself".to_string(),
-            });
-        }
-        let resolved = root
-            .resolve_anywhere(ref_str)
-            .map_err(|e| CodeGenError::RefResolution {
-                ref_str: ref_str.to_string(),
-                reason: e.to_string(),
-            })?;
-        if visited.is_empty()
-            && let Some(name) = resolved.definition_name()
-        {
-            from_key = Some(name.to_string());
-        }
-        visited.push(ref_str);
-        current = resolved.schema.object_or_empty();
-    }
-    Ok((current, from_key))
-}
-
-/// Builds the registry codegen resolves `$ref` through for one root schema.
-fn codegen_registry(schema: &JsonSchema) -> CodeGenResult<Registry<'_>> {
-    Registry::new(schema).map_err(CodeGenError::Registry)
+    out
 }
 
 #[expect(clippy::too_many_lines)]
-fn collect_structs(
-    root: &Registry<'_>,
-    schema: &JsonSchema,
-    from_key: Option<&str>,
-    out: &mut Vec<StructToEmit>,
-    seen: &mut BTreeSet<String>,
-    settings: &CodeGenSettings,
-) -> CodeGenResult<()> {
-    let (schema, from_key_opt) = resolve_ref_for_codegen(root, schema, from_key)?;
-    if !schema.is_object_with_properties() {
-        return Ok(());
+fn render_field(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    struct_name: &str,
+    field: &Field,
+    name: &str,
+    imports: &mut Imports,
+) -> RenderedField {
+    let (nullable, value_id): (bool, TypeId) = match graph.node(field.ty) {
+        TypeNode::Option(inner) => (true, *inner),
+        _ => (false, field.ty),
+    };
+    // A value type that itself holds `null` (any value, `()`, a union with a null branch):
+    // `Option`'s own deserializer would turn `null` into `None`, so present values go through
+    // `deserialize_some` and only absence is `None`.
+    let holds_null: bool = !nullable && accepts_null(graph, value_id);
+    let shape: FieldShape = match (field.required, nullable, holds_null) {
+        (true, false, _) => FieldShape::Plain,
+        (false, false, false) => FieldShape::Optional,
+        (true, true, _) => FieldShape::RequiredNullable,
+        (false, true, _) | (false, false, true) => FieldShape::OptionalNullable,
+    };
+    let value_ty: String = rust_type(graph, plan, home, value_id, imports);
+    let ty: String = match shape {
+        FieldShape::Plain => value_ty.clone(),
+        FieldShape::Optional | FieldShape::RequiredNullable => format!("Option<{value_ty}>"),
+        // `T` already holds `null`: one `Option` marks absence.
+        FieldShape::OptionalNullable if holds_null => format!("Option<{value_ty}>"),
+        FieldShape::OptionalNullable => format!("Option<Option<{value_ty}>>"),
+    };
+    let mut serde_args: Vec<String> = Vec::new();
+    if name != field.json_key {
+        serde_args.push(format!("rename = \"{}\"", escape(&field.json_key)));
     }
-
-    // Phase 1: iterative post-order DFS to collect (schema, from_key) so children come before parents.
-    let mut post_order: Vec<(JsonSchema, Option<String>, bool)> = Vec::new();
-    let mut stack: Vec<(JsonSchema, Option<String>, usize, bool)> = Vec::new();
-    stack.push((
-        schema.clone(),
-        from_key_opt.clone(),
-        0,
-        from_key_opt.is_none(),
+    // Defaults apply to scalar fields that hold their value directly (`T` or `Option<T>`).
+    let mut default_fn: Option<String> = None;
+    let scalar: bool = matches!(
+        graph.node(value_id),
+        TypeNode::String { .. } | TypeNode::Integer(_) | TypeNode::Number(_) | TypeNode::Boolean
+    );
+    if let Some(ref value) = field.default
+        && scalar
+        && shape != FieldShape::OptionalNullable
+        && let Some((expr, is_rust_default)) = default_literal(value, graph.node(value_id))
+    {
+        let is_optional: bool = shape != FieldShape::Plain;
+        if is_rust_default && !is_optional {
+            serde_args.push("default".to_string());
+        } else {
+            // An associated function of the struct, so its name cannot clash in the module.
+            let fn_name: String = format!("default_{name}");
+            let expr: String = if is_optional {
+                format!("Some({expr})")
+            } else {
+                expr
+            };
+            serde_args.push(format!("default = \"{struct_name}::{fn_name}\""));
+            default_fn = Some(format!(
+                "    fn {fn_name}() -> {ty} {{\n        {expr}\n    }}\n"
+            ));
+        }
+    }
+    match shape {
+        FieldShape::Plain => {}
+        FieldShape::Optional => {
+            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
+        }
+        FieldShape::RequiredNullable => {
+            serde_args.push("deserialize_with = \"Option::deserialize\"".to_string());
+        }
+        FieldShape::OptionalNullable => {
+            imports.deserialize_some = true;
+            if !serde_args.iter().any(|a| a.starts_with("default")) {
+                serde_args.push("default".to_string());
+            }
+            serde_args.push("deserialize_with = \"deserialize_some\"".to_string());
+            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
+        }
+    }
+    let mut attrs: String = String::new();
+    for line in doc_lines(field.description.as_deref()) {
+        let _ = writeln!(attrs, "    /// {line}");
+    }
+    attrs.push_str(&deprecated_attr(
+        field.deprecated,
+        field.description.as_deref(),
+        "    ",
     ));
-
-    while let Some((schema_node, from_key_opt, index, is_root)) = stack.pop() {
-        let keys: Vec<String> = schema_node.properties.keys().cloned().collect();
-        if index < keys.len() {
-            let key: String = keys.get(index).unwrap().clone();
-            let child: JsonSchema = schema_node
-                .properties
-                .get(&key)
-                .unwrap()
-                .object_or_empty()
-                .clone();
-            let child_resolved = resolve_all_of_for_codegen(&child)?;
-            stack.push((schema_node, from_key_opt, index + 1, is_root));
-            if child_resolved
-                .any_of
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
-            {
-                for (i, sub) in child_resolved.any_of.as_ref().unwrap().iter().enumerate() {
-                    let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                    let variant_key = format!("{key}_Variant{i}");
-                    let (sub_effective, sub_from_key) =
-                        resolve_ref_for_codegen(root, &sub_resolved, Some(&variant_key))?;
-                    if sub_effective.is_object_with_properties() {
-                        stack.push((sub_effective.clone(), sub_from_key, 0, false));
-                    } else if sub_resolved.is_array_with_items()
-                        && let Some(ref items) = sub_resolved.items
-                    {
-                        let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
-                        let (items_effective, items_from_key) =
-                            resolve_ref_for_codegen(root, &items_resolved, Some(&variant_key))?;
-                        if items_effective.is_object_with_properties() {
-                            stack.push((items_effective.clone(), items_from_key, 0, false));
-                        }
-                    }
-                }
-            } else if child_resolved
-                .one_of
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
-            {
-                for (i, sub) in child_resolved.one_of.as_ref().unwrap().iter().enumerate() {
-                    let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                    let variant_key = format!("{key}_Variant{i}");
-                    let (sub_effective, sub_from_key) =
-                        resolve_ref_for_codegen(root, &sub_resolved, Some(&variant_key))?;
-                    if sub_effective.is_object_with_properties() {
-                        stack.push((sub_effective.clone(), sub_from_key, 0, false));
-                    } else if sub_resolved.is_array_with_items()
-                        && let Some(ref items) = sub_resolved.items
-                    {
-                        let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
-                        let (items_effective, items_from_key) =
-                            resolve_ref_for_codegen(root, &items_resolved, Some(&variant_key))?;
-                        if items_effective.is_object_with_properties() {
-                            stack.push((items_effective.clone(), items_from_key, 0, false));
-                        }
-                    }
-                }
-            } else {
-                let (child_effective, child_from_key) =
-                    resolve_ref_for_codegen(root, &child_resolved, Some(&key))?;
-                if child_effective.is_object_with_properties() {
-                    stack.push((child_effective.clone(), child_from_key, 0, false));
-                } else if child_effective.is_array_with_items()
-                    && let Some(ref items) = child_effective.items
-                {
-                    let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
-                    let (items_effective, items_from_key) =
-                        resolve_ref_for_codegen(root, &items_resolved, Some(&key))?;
-                    if items_effective.is_object_with_properties() {
-                        stack.push((items_effective.clone(), items_from_key, 0, false));
-                    }
-                }
+    if !serde_args.is_empty() {
+        let _ = writeln!(attrs, "    #[serde({})]", serde_args.join(", "));
+    }
+    let mut schema_args: Vec<String> = Vec::new();
+    if shape == FieldShape::RequiredNullable {
+        schema_args.push("required".to_string());
+    }
+    match graph.node(value_id) {
+        TypeNode::String { constraints, .. } => {
+            if let Some(n) = constraints.min_length {
+                schema_args.push(format!("min_length = {n}"));
             }
-        } else {
-            post_order.push((schema_node, from_key_opt, is_root));
+            if let Some(n) = constraints.max_length {
+                schema_args.push(format!("max_length = {n}"));
+            }
+            if let Some(ref p) = constraints.pattern {
+                schema_args.push(format!("pattern = \"{}\"", escape(p)));
+            }
         }
-    }
-
-    // Phase 2: emit in post-order, dedupe by name (first occurrence wins).
-    for (schema_node, from_key_opt, is_root) in post_order {
-        let name: String = struct_name_from(
-            schema_node.title.as_deref(),
-            from_key_opt.as_deref(),
-            is_root,
-            settings,
-        );
-
-        if seen.contains(&name) {
-            continue;
+        TypeNode::Array { constraints, .. } => {
+            if let Some(n) = constraints.min_items {
+                schema_args.push(format!("min_items = {n}"));
+            }
+            if let Some(n) = constraints.max_items {
+                schema_args.push(format!("max_items = {n}"));
+            }
         }
-        seen.insert(name.clone());
-
-        out.push(StructToEmit {
-            name,
-            schema: schema_node,
-        });
+        _ => {}
     }
-    Ok(())
+    if !schema_args.is_empty() {
+        let _ = writeln!(attrs, "    #[json_schema({})]", schema_args.join(", "));
+    }
+    RenderedField {
+        name: name.to_string(),
+        ty,
+        attrs,
+        default_fn,
+    }
 }
 
-/// Collect (`schema_idx`, `candidate_name`, schema) for every struct from all schemas in post-order
-/// (children before parents) per schema. No name dedupe.
-#[expect(clippy::too_many_lines)]
-fn collect_structs_all_schemas(
-    schemas: &[JsonSchema],
-    registries: &[Registry<'_>],
-    settings: &CodeGenSettings,
-) -> CodeGenResult<Vec<(usize, String, JsonSchema)>> {
-    let mut out: Vec<(usize, String, JsonSchema)> = Vec::new();
-    for (schema_idx, (schema, schema_root)) in schemas.iter().zip(registries).enumerate() {
-        let (effective_root, root_from_key) = resolve_ref_for_codegen(schema_root, schema, None)?;
-        if !effective_root.is_object_with_properties() {
-            continue;
-        }
+const STRUCT_DERIVE: &str =
+    "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]";
+const STRING_ENUM_DERIVE: &str = "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]";
+const VALUE_ENUM_DERIVE: &str =
+    "#[derive(Debug, Clone, PartialEq, json_schema_rs_macro::ToJsonSchema)]";
 
-        let mut post_order: Vec<(JsonSchema, Option<String>, bool)> = Vec::new();
-        let mut stack: Vec<(JsonSchema, Option<String>, usize, bool)> = Vec::new();
-        let is_root: bool = root_from_key.is_none();
-        stack.push((effective_root.clone(), root_from_key, 0, is_root));
-
-        while let Some((schema_node, from_key_opt, index, is_root)) = stack.pop() {
-            let keys: Vec<String> = schema_node.properties.keys().cloned().collect();
-            if index < keys.len() {
-                let key: String = keys[index].clone();
-                let child: JsonSchema = schema_node
-                    .properties
-                    .get(&key)
-                    .unwrap()
-                    .object_or_empty()
-                    .clone();
-                let child_resolved = resolve_all_of_for_codegen(&child)?;
-
-                stack.push((schema_node, from_key_opt, index + 1, is_root));
-
-                if child_resolved
-                    .any_of
-                    .as_ref()
-                    .is_some_and(|v| !v.is_empty())
-                {
-                    for (i, sub) in child_resolved.any_of.as_ref().unwrap().iter().enumerate() {
-                        let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                        let variant_key = format!("{key}_Variant{i}");
-                        let (sub_effective, sub_from_key) = resolve_ref_for_codegen(
-                            schema_root,
-                            &sub_resolved,
-                            Some(&variant_key),
-                        )?;
-                        if sub_effective.is_object_with_properties() {
-                            stack.push((sub_effective.clone(), sub_from_key, 0, false));
-                        } else if sub_effective.is_array_with_items()
-                            && let Some(ref items) = sub_effective.items
-                        {
-                            let items_resolved =
-                                resolve_all_of_for_codegen(items.object_or_empty())?;
-                            let (items_effective, items_from_key) = resolve_ref_for_codegen(
-                                schema_root,
-                                &items_resolved,
-                                Some(&variant_key),
-                            )?;
-                            if items_effective.is_object_with_properties() {
-                                stack.push((items_effective.clone(), items_from_key, 0, false));
-                            }
-                        }
-                    }
-                } else if child_resolved
-                    .one_of
-                    .as_ref()
-                    .is_some_and(|v| !v.is_empty())
-                {
-                    for (i, sub) in child_resolved.one_of.as_ref().unwrap().iter().enumerate() {
-                        let sub_resolved = resolve_all_of_for_codegen(sub.object_or_empty())?;
-                        let variant_key = format!("{key}_Variant{i}");
-                        let (sub_effective, sub_from_key) = resolve_ref_for_codegen(
-                            schema_root,
-                            &sub_resolved,
-                            Some(&variant_key),
-                        )?;
-                        if sub_effective.is_object_with_properties() {
-                            stack.push((sub_effective.clone(), sub_from_key, 0, false));
-                        } else if sub_effective.is_array_with_items()
-                            && let Some(ref items) = sub_effective.items
-                        {
-                            let items_resolved =
-                                resolve_all_of_for_codegen(items.object_or_empty())?;
-                            let (items_effective, items_from_key) = resolve_ref_for_codegen(
-                                schema_root,
-                                &items_resolved,
-                                Some(&variant_key),
-                            )?;
-                            if items_effective.is_object_with_properties() {
-                                stack.push((items_effective.clone(), items_from_key, 0, false));
-                            }
-                        }
-                    }
-                } else {
-                    let (child_effective, child_from_key) =
-                        resolve_ref_for_codegen(schema_root, &child_resolved, Some(&key))?;
-                    if child_effective.is_object_with_properties() {
-                        stack.push((child_effective.clone(), child_from_key, 0, false));
-                    } else if child_effective.is_array_with_items()
-                        && let Some(ref items) = child_effective.items
-                    {
-                        let items_resolved = resolve_all_of_for_codegen(items.object_or_empty())?;
-                        let (items_effective, items_from_key) =
-                            resolve_ref_for_codegen(schema_root, &items_resolved, Some(&key))?;
-                        if items_effective.is_object_with_properties() {
-                            stack.push((items_effective.clone(), items_from_key, 0, false));
-                        }
-                    }
-                }
-            } else {
-                post_order.push((schema_node, from_key_opt, is_root));
-            }
-        }
-
-        for (schema_node, from_key_opt, is_root) in post_order {
-            let name: String = struct_name_from(
-                schema_node.title.as_deref(),
-                from_key_opt.as_deref(),
-                is_root,
-                settings,
-            );
-            out.push((schema_idx, name, schema_node));
-        }
+fn render_struct(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    name: &str,
+    object: &ObjectNode,
+    imports: &mut Imports,
+) -> String {
+    let fields: Vec<RenderedField> = render_fields(graph, plan, home, name, object, imports);
+    let default_fns: Vec<String> = fields.iter().filter_map(|f| f.default_fn.clone()).collect();
+    let mut out: String = String::new();
+    let a: &Annotations = &object.annotations;
+    out.push_str(&item_docs(a));
+    out.push_str(&deprecated_attr(a.deprecated, a.description.as_deref(), ""));
+    out.push_str(STRUCT_DERIVE);
+    out.push('\n');
+    if let Some(ref title) = a.title {
+        let _ = writeln!(out, "#[json_schema(title = \"{}\")]", escape(title));
     }
-    Ok(out)
+    if let Some(ref id) = a.id {
+        let _ = writeln!(out, "#[json_schema(id = \"{}\")]", escape(id));
+    }
+    if object.deny_unknown {
+        out.push_str("#[serde(deny_unknown_fields)]\n");
+    }
+    let _ = writeln!(out, "pub struct {name} {{");
+    for field in fields {
+        out.push_str(&field.attrs);
+        let _ = writeln!(out, "    pub {}: {},", field.name, field.ty);
+    }
+    out.push_str("}\n\n");
+    if !default_fns.is_empty() {
+        let _ = writeln!(out, "impl {name} {{");
+        out.push_str(&default_fns.join("\n"));
+        out.push_str("}\n\n");
+    }
+    out
 }
 
-/// Generate Rust with dedupe (Functional or Full mode). Returns shared buffer (if any) and per-schema buffers.
-#[expect(clippy::too_many_lines)]
-#[expect(clippy::type_complexity)]
-fn generate_rust_with_dedupe(
-    schemas: &[JsonSchema],
-    settings: &CodeGenSettings,
-) -> CodeGenResult<GenerateRustOutput> {
-    let mode: DedupeMode = settings.dedupe_mode;
-
-    let resolved_schemas: Vec<JsonSchema> = schemas
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            resolve_all_of_for_codegen(s).map_err(|e| CodeGenError::Batch {
-                index: i,
-                source: Box::new(e),
-            })
-        })
-        .collect::<CodeGenResult<Vec<_>>>()?;
-    let registries: Vec<Registry<'_>> = resolved_schemas
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            codegen_registry(s).map_err(|e| CodeGenError::Batch {
-                index: i,
-                source: Box::new(e),
-            })
-        })
-        .collect::<CodeGenResult<Vec<_>>>()?;
-
-    let mut enum_values_to_name: EnumValuesToNameMap = BTreeMap::new();
-    for (schema, registry) in resolved_schemas.iter().zip(&registries) {
-        for e in collect_enums(registry, schema, settings)? {
-            enum_values_to_name
-                .entry(e.values.clone())
-                .or_insert_with(|| (e.name.clone(), e.description.clone(), e.examples.clone()));
+/// The variant name for one enum value.
+fn value_variant_base(value: &Value) -> String {
+    match value {
+        Value::String(s) => enum_variant_name_from_value(s),
+        Value::Null => "Null".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Number(n) => {
+            let text: String = n
+                .to_string()
+                .replace('-', "Minus")
+                .replace('.', "Point")
+                .replace('+', "");
+            to_pascal_case(&format!("N{text}"))
         }
+        Value::Array(_) => "Array".to_string(),
+        Value::Object(_) => "Object".to_string(),
     }
-    let all_enums: Vec<EnumToEmit> = enum_values_to_name
-        .iter()
-        .map(|(values, (name, description, examples))| EnumToEmit {
-            name: name.clone(),
-            values: values.clone(),
-            description: description.clone(),
-            examples: examples.clone(),
-        })
-        .collect();
+}
 
-    let collected: Vec<(usize, String, JsonSchema)> =
-        collect_structs_all_schemas(&resolved_schemas, &registries, settings)?;
-
-    // Build BTreeMap: DedupeKey -> (canonical_name, schema, occurrences)
-    let mut map: BTreeMap<DedupeKey, (String, JsonSchema, Vec<(usize, String)>)> = BTreeMap::new();
-    for (schema_idx, name, schema) in &collected {
-        let key: DedupeKey = DedupeKey::from_schema(schema, mode);
-        map.entry(key)
-            .or_insert_with(|| (name.clone(), schema.clone(), Vec::new()))
-            .2
-            .push((*schema_idx, name.clone()));
-    }
-
-    let shared_names: BTreeSet<String> = map
-        .iter()
-        .filter(|(_, (_, _, occs))| occs.len() > 1)
-        .map(|(_, (canonical_name, _, _))| canonical_name.clone())
-        .collect();
-
-    let canonical_name_to_first_schema_idx: BTreeMap<String, usize> = {
-        let mut out: BTreeMap<String, usize> = BTreeMap::new();
-        for (canonical_name, _, occs) in map.values() {
-            let first_idx: usize = occs.iter().map(|(i, _)| *i).min().unwrap_or(0);
-            out.entry(canonical_name.clone())
-                .and_modify(|v| *v = (*v).min(first_idx))
-                .or_insert(first_idx);
-        }
-        out
-    };
-
-    let key_to_canonical_name: BTreeMap<DedupeKey, String> = map
-        .iter()
-        .map(|(k, (canonical, _, _))| (k.clone(), canonical.clone()))
-        .collect();
-
-    let key_to_canonical: BTreeMap<DedupeKey, (String, JsonSchema)> = map
-        .iter()
-        .map(|(k, (cn, schema, _))| (k.clone(), (cn.clone(), schema.clone())))
-        .collect();
-
-    if shared_names.is_empty() {
-        let mut per_schema: Vec<Vec<u8>> = Vec::with_capacity(resolved_schemas.len());
-        for (index, schema) in resolved_schemas.iter().enumerate() {
-            let mut out = Cursor::new(Vec::new());
-            emit_rust(schema, &mut out, settings).map_err(|e| CodeGenError::Batch {
-                index,
-                source: Box::new(e),
-            })?;
-            per_schema.push({
-                let result = maybe_prepend_btreemap_use(out.into_inner());
-                let result = maybe_prepend_hash_set_use(result);
-                #[cfg(feature = "uuid")]
-                let result = maybe_prepend_uuid_use(result);
-                result
-            });
-        }
-        return Ok(GenerateRustOutput {
-            shared: None,
-            per_schema,
-        });
-    }
-
-    // Shared structs: (canonical_name, schema) in dependency order
-    let shared_structs: Vec<(String, JsonSchema)> = {
-        let mut v: Vec<(String, JsonSchema)> = key_to_canonical
-            .iter()
-            .filter(|(_, (cn, _))| shared_names.contains(cn))
-            .map(|(_, (cn, s))| (cn.clone(), s.clone()))
-            .collect();
-        let order: Vec<String> = v.iter().map(|(n, _)| n.clone()).collect();
-        let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for (name, schema) in &v {
-            let mut set: BTreeSet<String> = BTreeSet::new();
-            for prop_schema in schema.properties.values() {
-                let prop_schema: &JsonSchema = prop_schema.object_or_empty();
-                if prop_schema.is_object_with_properties() {
-                    let prop_key = DedupeKey::from_schema(prop_schema, mode);
-                    if let Some(cn) = key_to_canonical_name.get(&prop_key)
-                        && shared_names.contains(cn)
-                    {
-                        set.insert(cn.clone());
-                    }
-                }
-                if prop_schema.is_array_with_items()
-                    && let Some(ref items) = prop_schema.items
-                    && items.object_or_empty().is_object_with_properties()
-                {
-                    let item_key = DedupeKey::from_schema(items.object_or_empty(), mode);
-                    if let Some(cn) = key_to_canonical_name.get(&item_key)
-                        && shared_names.contains(cn)
-                    {
-                        set.insert(cn.clone());
-                    }
-                }
+fn render_enum(name: &str, e: &EnumNode) -> String {
+    let bases: Vec<String> = e.values.iter().map(value_variant_base).collect();
+    let variants: Vec<String> = unique_idents(&bases, "");
+    let mut out: String = item_docs(&e.annotations);
+    if e.is_string_enum() {
+        out.push_str(STRING_ENUM_DERIVE);
+        out.push('\n');
+        let _ = writeln!(out, "pub enum {name} {{");
+        for (value, variant) in e.values.iter().zip(&variants) {
+            let raw: &str = value.as_str().expect("string enum value");
+            if raw != variant {
+                let _ = writeln!(out, "    #[serde(rename = \"{}\")]", escape(raw));
             }
-            deps.insert(name.clone(), set);
+            let _ = writeln!(out, "    {variant},");
         }
-        topo_sort_by_deps(&order, &deps, &mut v);
-        v
-    };
-
-    let shared_buffer: Vec<u8> = {
-        let mut out = Cursor::new(Vec::new());
-        writeln!(
+        out.push_str("}\n\n");
+        return out;
+    }
+    // Values of other JSON types: serde goes through `serde_json::Value` and compares by JSON
+    // Schema equality (`1` equals `1.0`).
+    out.push_str(VALUE_ENUM_DERIVE);
+    out.push('\n');
+    let _ = writeln!(out, "pub enum {name} {{");
+    for (value, variant) in e.values.iter().zip(&variants) {
+        let _ = writeln!(out, "    #[json_schema(value = {})]", json_tokens(value));
+        let _ = writeln!(out, "    {variant},");
+    }
+    out.push_str("}\n\n");
+    let _ = writeln!(out, "impl Serialize for {name} {{");
+    out.push_str(
+        "    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {\n",
+    );
+    out.push_str("        let value: serde_json::Value = match self {\n");
+    for (value, variant) in e.values.iter().zip(&variants) {
+        let _ = writeln!(
             out,
-            "//! Generated by json-schema-rs. Do not edit manually."
-        )?;
-        writeln!(out)?;
-        writeln!(out, "use serde::{{Deserialize, Serialize}};")?;
-        writeln!(out)?;
-        for e in &all_enums {
-            let pairs: Vec<(String, String)> =
-                enum_variant_names_with_collision_resolution(&e.values);
-            emit_enum_from_pairs(
-                &mut out,
-                &e.name,
-                &pairs,
-                e.description.as_deref(),
-                e.examples.as_deref(),
-            )?;
-        }
-        for (name, schema) in &shared_structs {
-            let root_idx: usize = *canonical_name_to_first_schema_idx
-                .get(name)
-                .expect("root schema index for shared struct");
-            let root_schema: &Registry<'_> = registries.get(root_idx).expect("root schema");
-            emit_default_functions_for_struct(&mut out, name, schema)?;
-            emit_struct_derive_and_attrs(&mut out, name, schema)?;
-            emit_struct_fields_with_resolver(
-                root_schema,
-                name,
-                schema,
-                &mut out,
-                settings,
-                Some(&key_to_canonical_name),
-                mode,
-                Some(&enum_values_to_name),
-            )?;
-            writeln!(out, "}}")?;
-            writeln!(out)?;
-        }
-        {
-            let result = maybe_prepend_btreemap_use(out.into_inner());
-            let result = maybe_prepend_hash_set_use(result);
-            #[cfg(feature = "uuid")]
-            let result = maybe_prepend_uuid_use(result);
-            result
-        }
-    };
-
-    let per_schema: Vec<Vec<u8>> = (0..schemas.len())
-        .map(|schema_idx| {
-            let mut local_structs: Vec<(String, JsonSchema)> = map
-                .iter()
-                .filter(|(_, (canonical_name, _, occs))| {
-                    occs.len() == 1
-                        && occs[0].0 == schema_idx
-                        && !shared_names.contains(canonical_name)
-                })
-                .map(|(_, (name, schema, _))| (name.clone(), schema.clone()))
-                .collect();
-            let local_names: BTreeSet<String> =
-                local_structs.iter().map(|(n, _)| n.clone()).collect();
-            let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-            for (name, schema) in &local_structs {
-                let mut set: BTreeSet<String> = BTreeSet::new();
-                for prop_schema in schema.properties.values() {
-                    let prop_schema: &JsonSchema = prop_schema.object_or_empty();
-                    if prop_schema.is_object_with_properties() {
-                        let prop_key = DedupeKey::from_schema(prop_schema, mode);
-                        if let Some(cn) = key_to_canonical_name.get(&prop_key)
-                            && (local_names.contains(cn) || shared_names.contains(cn))
-                        {
-                            set.insert(cn.clone());
-                        }
-                    }
-                    if prop_schema.is_array_with_items()
-                        && let Some(ref items) = prop_schema.items
-                        && items.object_or_empty().is_object_with_properties()
-                    {
-                        let item_key = DedupeKey::from_schema(items.object_or_empty(), mode);
-                        if let Some(cn) = key_to_canonical_name.get(&item_key)
-                            && (local_names.contains(cn) || shared_names.contains(cn))
-                        {
-                            set.insert(cn.clone());
-                        }
-                    }
-                }
-                deps.insert(name.clone(), set);
-            }
-            let order: Vec<String> = local_structs.iter().map(|(n, _)| n.clone()).collect();
-            topo_sort_by_deps(&order, &deps, &mut local_structs);
-
-            let mut used_shared: BTreeSet<String> = BTreeSet::new();
-            for (_, schema) in &local_structs {
-                for prop_schema in schema.properties.values() {
-                    let prop_schema: &JsonSchema = prop_schema.object_or_empty();
-                    if prop_schema.is_object_with_properties() {
-                        let prop_key = DedupeKey::from_schema(prop_schema, mode);
-                        if let Some(cn) = key_to_canonical_name.get(&prop_key)
-                            && shared_names.contains(cn)
-                        {
-                            used_shared.insert(cn.clone());
-                        }
-                    }
-                    if prop_schema.is_array_with_items()
-                        && let Some(ref items) = prop_schema.items
-                        && items.object_or_empty().is_object_with_properties()
-                    {
-                        let item_key = DedupeKey::from_schema(items.object_or_empty(), mode);
-                        if let Some(cn) = key_to_canonical_name.get(&item_key)
-                            && shared_names.contains(cn)
-                        {
-                            used_shared.insert(cn.clone());
-                        }
-                    }
-                    if let Some(values) = string_enum_or_const_values(prop_schema)
-                        && let Some((enum_name, _, _)) = enum_values_to_name.get(&values)
-                    {
-                        used_shared.insert(enum_name.clone());
-                    }
-                }
-            }
-            let root_for_schema = collected
-                .iter()
-                .rev()
-                .find(|(idx, _, _)| *idx == schema_idx)
-                .map(|(_, _, s)| DedupeKey::from_schema(s, mode));
-            if let Some(root_key) = root_for_schema
-                && let Some(cn) = key_to_canonical_name.get(&root_key)
-                && shared_names.contains(cn)
-            {
-                used_shared.insert(cn.clone());
-            }
-
-            let mut buf = Cursor::new(Vec::new());
-            writeln!(
-                buf,
-                "//! Generated by json-schema-rs. Do not edit manually."
-            )
-            .ok();
-            writeln!(buf).ok();
-            writeln!(buf, "use serde::{{Deserialize, Serialize}};").ok();
-            for u in &used_shared {
-                writeln!(buf, "pub use crate::{u};").ok();
-            }
-            if !used_shared.is_empty() {
-                writeln!(buf).ok();
-            }
-            let root_schema: &Registry<'_> = registries
-                .get(schema_idx)
-                .expect("root schema for local emission");
-            for (name, schema) in &local_structs {
-                emit_default_functions_for_struct(&mut buf, name, schema).ok();
-                emit_struct_derive_and_attrs(&mut buf, name, schema).ok();
-                emit_struct_fields_with_resolver(
-                    root_schema,
-                    name,
-                    schema,
-                    &mut buf,
-                    settings,
-                    Some(&key_to_canonical_name),
-                    mode,
-                    Some(&enum_values_to_name),
-                )
-                .ok();
-                writeln!(buf, "}}").ok();
-                writeln!(buf).ok();
-            }
-            {
-                let result = maybe_prepend_btreemap_use(buf.into_inner());
-                let result = maybe_prepend_hash_set_use(result);
-                #[cfg(feature = "uuid")]
-                let result = maybe_prepend_uuid_use(result);
-                result
-            }
-        })
-        .collect();
-
-    Ok(GenerateRustOutput {
-        shared: Some(shared_buffer),
-        per_schema,
-    })
-}
-
-fn topo_sort_by_deps(
-    order: &[String],
-    deps: &BTreeMap<String, BTreeSet<String>>,
-    v: &mut Vec<(String, JsonSchema)>,
-) {
-    let mut sorted: Vec<String> = Vec::new();
-    let mut visited: BTreeSet<String> = BTreeSet::new();
-    for name in order {
-        visit_topo(name, deps, &mut visited, &mut sorted);
+            "            Self::{variant} => serde_json::json!({}),",
+            json_tokens(value)
+        );
     }
-    let name_to_pair: BTreeMap<String, (String, JsonSchema)> =
-        v.drain(..).map(|(n, s)| (n.clone(), (n, s))).collect();
-    for n in &sorted {
-        if let Some(pair) = name_to_pair.get(n) {
-            v.push(pair.clone());
-        }
+    out.push_str("        };\n        value.serialize(serializer)\n    }\n}\n\n");
+    let _ = writeln!(out, "impl<'de> Deserialize<'de> for {name} {{");
+    out.push_str(
+        "    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {\n",
+    );
+    out.push_str(
+        "        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;\n",
+    );
+    for (value, variant) in e.values.iter().zip(&variants) {
+        let _ = writeln!(
+            out,
+            "        if json_schema_rs::json_equal(&value, &serde_json::json!({})) {{\n            return Ok(Self::{variant});\n        }}",
+            json_tokens(value)
+        );
     }
-}
-
-fn visit_topo(
-    name: &str,
-    deps: &BTreeMap<String, BTreeSet<String>>,
-    visited: &mut BTreeSet<String>,
-    out: &mut Vec<String>,
-) {
-    if visited.contains(name) {
-        return;
-    }
-    visited.insert(name.to_string());
-    if let Some(d) = deps.get(name) {
-        for dep in d {
-            visit_topo(dep, deps, visited, out);
-        }
-    }
-    out.push(name.to_string());
-}
-
-/// Emit a single Rust enum (unit variants). Pairs are (`json_value`, `variant_name`); serde rename when they differ.
-/// Emits enum doc comment from description and examples when present.
-fn emit_enum_from_pairs(
-    out: &mut impl Write,
-    name: &str,
-    pairs: &[(String, String)],
-    description: Option<&str>,
-    examples: Option<&[serde_json::Value]>,
-) -> CodeGenResult<()> {
-    for line in doc_lines(description) {
-        writeln!(out, "/// {line}")?;
-    }
-    for line in examples_doc_lines(examples) {
-        writeln!(out, "/// {line}")?;
-    }
-    writeln!(
+    let _ = writeln!(
         out,
-        "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]"
-    )?;
-    writeln!(out, "pub enum {name} {{")?;
-    for (value, variant_name) in pairs {
-        if value != variant_name {
-            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-            writeln!(out, "    #[serde(rename = \"{escaped}\")]")?;
-        }
-        writeln!(out, "    {variant_name},")?;
-    }
-    writeln!(out, "}}")?;
-    writeln!(out)?;
-    Ok(())
+        "        Err(serde::de::Error::custom(format!(\"{{value}} is not a {name} value\")))\n    }}\n}}\n"
+    );
+    out
 }
 
-/// Emit a single anyOf enum (union) to `out`.
-/// We do not derive `ToJsonSchema` (macro supports only unit enums) or PartialEq/Eq (variant structs may not implement them).
-fn emit_anyof_enum(out: &mut impl Write, a: &AnyOfEnumToEmit) -> CodeGenResult<()> {
-    writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
-    writeln!(out, "pub enum {} {{", a.name)?;
-    for (variant_name, ty) in &a.variants {
-        writeln!(out, "    {variant_name}({ty}),")?;
+/// The variant name for a union branch: its title, the named type a `$ref` points to, the
+/// kind of a scalar, else `Variant{i}`.
+fn variant_base(graph: &TypeGraph, plan: &Plan, union: &UnionNode, index: usize) -> String {
+    let variant = &union.variants[index];
+    if let Some(ref title) = variant.title {
+        return sanitize_struct_name(title);
     }
-    writeln!(out, "}}")?;
-    writeln!(out)?;
-    Ok(())
-}
-
-/// Emit a single oneOf enum (union) to `out`.
-/// We do not derive `ToJsonSchema` (macro supports only unit enums) or PartialEq/Eq (variant structs may not implement them).
-fn emit_oneof_enum(out: &mut impl Write, a: &OneOfEnumToEmit) -> CodeGenResult<()> {
-    writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")?;
-    writeln!(out, "pub enum {} {{", a.name)?;
-    for (variant_name, ty) in &a.variants {
-        writeln!(out, "    {variant_name}({ty}),")?;
-    }
-    writeln!(out, "}}")?;
-    writeln!(out)?;
-    Ok(())
-}
-
-/// Emits `#[serde(default)]` or `#[serde(default = "fn")]` when the property has a default value.
-/// Default functions are emitted at module level by `emit_default_functions_for_struct`.
-fn emit_default_attr(
-    out: &mut impl Write,
-    struct_name: &str,
-    field_name: &str,
-    prop_schema: &JsonSchema,
-    ty: &str,
-    is_required: bool,
-) -> CodeGenResult<()> {
-    let Some(ref value) = prop_schema.default_value else {
-        return Ok(());
-    };
-    let is_optional: bool = !is_required;
-    if json_value_equals_rust_type_default(value, ty, is_optional) {
-        writeln!(out, "    #[serde(default)]")?;
-        return Ok(());
-    }
-    let Some(_expr) = json_default_to_rust_expr(value, ty, is_optional) else {
-        return Ok(());
-    };
-    let fn_name: String = default_function_name(struct_name, field_name);
-    writeln!(out, "    #[serde(default = \"{fn_name}\")]")?;
-    Ok(())
-}
-
-/// Emits module-level default functions for all properties of the struct that have a custom default value.
-fn emit_default_functions_for_struct(
-    out: &mut impl Write,
-    struct_name: &str,
-    schema: &JsonSchema,
-) -> CodeGenResult<()> {
-    for (key, prop_schema) in &schema.properties {
-        let prop_schema: &JsonSchema = prop_schema.object_or_empty();
-        let Some(ref value) = prop_schema.default_value else {
-            continue;
-        };
-        let field_name = sanitize_field_name(key);
-        let is_required = schema.is_required(key);
-        let is_optional = !is_required;
-        let ty: String = match prop_schema.primary_type() {
-            Some(JsonType::String) => {
-                if is_required {
-                    "String".to_string()
-                } else {
-                    "Option<String>".to_string()
-                }
-            }
-            Some(JsonType::Integer | JsonType::Number) => {
-                let inner = rust_numeric_type_for_schema(prop_schema);
-                if is_required {
-                    inner
-                } else {
-                    format!("Option<{inner}>")
-                }
-            }
-            Some(JsonType::Boolean) => {
-                if is_required {
-                    "bool".to_string()
-                } else {
-                    "Option<bool>".to_string()
-                }
-            }
-            Some(JsonType::Array | JsonType::Null | JsonType::Object) | None => continue,
-        };
-        if json_value_equals_rust_type_default(value, &ty, is_optional) {
-            continue;
-        }
-        let Some(expr) = json_default_to_rust_expr(value, &ty, is_optional) else {
-            continue;
-        };
-        let fn_name = default_function_name(struct_name, &field_name);
-        writeln!(out, "fn {fn_name}() -> {ty} {{ {expr} }}")?;
-        writeln!(out)?;
-    }
-    Ok(())
-}
-
-/// Emit struct fields; when resolver is Some (dedupe mode), use canonical type names for nested objects.
-#[expect(clippy::too_many_lines, clippy::too_many_arguments)]
-fn emit_struct_fields_with_resolver(
-    root: &Registry<'_>,
-    struct_name: &str,
-    schema: &JsonSchema,
-    out: &mut impl Write,
-    settings: &CodeGenSettings,
-    key_to_name: Option<&BTreeMap<DedupeKey, String>>,
-    mode: DedupeMode,
-    enum_values_to_name: Option<&EnumValuesToNameMap>,
-) -> CodeGenResult<()> {
-    let enum_names_simple: Option<BTreeMap<Vec<String>, String>> = enum_values_to_name.map(|m| {
-        m.iter()
-            .map(|(k, (n, _, _))| (k.clone(), n.clone()))
-            .collect()
-    });
-    for (key, prop_schema) in &schema.properties {
-        let (prop_schema_effective, _) =
-            resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
-        let prop_schema: &JsonSchema = prop_schema_effective;
-        let primary: Option<JsonType> = prop_schema.primary_type();
-
-        for line in doc_lines(prop_schema.description.as_deref()) {
-            writeln!(out, "    /// {line}")?;
-        }
-        emit_deprecated_attr(out, prop_schema)?;
-        let field_name = sanitize_field_name(key);
-        let needs_rename = field_name != *key;
-
-        if let Some(values) = string_enum_or_const_values(prop_schema) {
-            let enum_name: &String = enum_values_to_name
-                .and_then(|m| m.get(&values).map(|(n, _, _)| n))
-                .expect("enum name for string enum");
-            let ty = if schema.is_required(key) {
-                enum_name.clone()
-            } else {
-                format!("Option<{enum_name}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if primary == Some(JsonType::String)
-            || (prop_schema
-                .enum_values
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
-                && !prop_schema.is_string_enum())
-        {
-            #[cfg(feature = "uuid")]
-            if primary == Some(JsonType::String) && prop_schema.format.as_deref() == Some("uuid") {
-                let ty = if schema.is_required(key) {
-                    "Uuid".to_string()
-                } else {
-                    "Option<Uuid>".to_string()
-                };
-                if needs_rename {
-                    writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-                }
-                writeln!(out, "    pub {field_name}: {ty},")?;
-                continue;
-            }
-            // String type, or non-string/mixed enum fallback per design.
-            let ty = if schema.is_required(key) {
-                "String".to_string()
-            } else {
-                "Option<String>".to_string()
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            if prop_schema.min_length.is_some()
-                || prop_schema.max_length.is_some()
-                || prop_schema.pattern.is_some()
-            {
-                let mut attrs: Vec<String> = Vec::new();
-                if let Some(n) = prop_schema.min_length {
-                    attrs.push(format!("min_length = {n}"));
-                }
-                if let Some(n) = prop_schema.max_length {
-                    attrs.push(format!("max_length = {n}"));
-                }
-                if let Some(ref p) = prop_schema.pattern {
-                    let escaped = p.replace('\\', "\\\\").replace('"', "\\\"");
-                    attrs.push(format!("pattern = \"{escaped}\""));
-                }
-                writeln!(out, "    #[json_schema({})]", attrs.join(", "))?;
-            }
-            emit_default_attr(
-                out,
-                struct_name,
-                &field_name,
-                prop_schema,
-                &ty,
-                schema.is_required(key),
-            )?;
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if matches!(primary, Some(JsonType::Integer | JsonType::Number)) {
-            let inner: String = rust_numeric_type_for_schema(prop_schema);
-            let ty = if schema.is_required(key) {
-                inner
-            } else {
-                format!("Option<{inner}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            emit_default_attr(
-                out,
-                struct_name,
-                &field_name,
-                prop_schema,
-                &ty,
-                schema.is_required(key),
-            )?;
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if primary == Some(JsonType::Boolean) {
-            let ty: String = if schema.is_required(key) {
-                "bool".to_string()
-            } else {
-                "Option<bool>".to_string()
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            emit_default_attr(
-                out,
-                struct_name,
-                &field_name,
-                prop_schema,
-                &ty,
-                schema.is_required(key),
-            )?;
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_array_with_items() {
-            let item_schema: &JsonSchema = prop_schema
-                .items
-                .as_ref()
-                .expect("array with items")
-                .object_or_empty();
-            let inner: String = rust_type_for_item_schema(
-                root,
-                item_schema,
-                Some(key),
-                enum_names_simple.as_ref(),
-                key_to_name,
-                settings,
-                mode,
-            )?;
-            let use_hash_set: bool =
-                prop_schema.unique_items == Some(true) && item_schema_is_hashable(item_schema);
-            let container: &str = if use_hash_set { "HashSet" } else { "Vec" };
-            let ty = if schema.is_required(key) {
-                format!("{container}<{inner}>")
-            } else {
-                format!("Option<{container}<{inner}>>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            if prop_schema.min_items.is_some() || prop_schema.max_items.is_some() {
-                let mut attrs: Vec<String> = Vec::new();
-                if let Some(n) = prop_schema.min_items {
-                    attrs.push(format!("min_items = {n}"));
-                }
-                if let Some(n) = prop_schema.max_items {
-                    attrs.push(format!("max_items = {n}"));
-                }
-                writeln!(out, "    #[json_schema({})]", attrs.join(", "))?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_object_with_properties() {
-            let nested_name: String = if let Some(m) = key_to_name {
-                let prop_key = DedupeKey::from_schema(prop_schema, mode);
-                m.get(&prop_key).cloned().unwrap_or_else(|| {
-                    struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings)
-                })
-            } else {
-                struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings)
-            };
-            let ty = if schema.is_required(key) {
-                nested_name.clone()
-            } else {
-                format!("Option<{nested_name}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        }
-    }
-    if let Some(Schema::Object(sub)) = &schema.additional_properties {
-        let value_ty: String = rust_type_for_item_schema(
-            root,
-            sub,
-            Some("additional"),
-            enum_names_simple.as_ref(),
-            key_to_name,
-            settings,
-            mode,
-        )?;
-        writeln!(out, "    #[serde(default)]")?;
-        writeln!(out, "    pub additional: BTreeMap<String, {value_ty}>,")?;
-    }
-    Ok(())
-}
-
-/// Emit a single struct's fields to `out`.
-#[expect(clippy::too_many_lines, clippy::too_many_arguments)]
-fn emit_struct_fields(
-    root: &Registry<'_>,
-    struct_name: &str,
-    schema: &JsonSchema,
-    out: &mut impl Write,
-    settings: &CodeGenSettings,
-    enum_values_to_name: Option<&BTreeMap<Vec<String>, String>>,
-    _anyof_enums: Option<&[AnyOfEnumToEmit]>,
-    _oneof_enums: Option<&[OneOfEnumToEmit]>,
-) -> CodeGenResult<()> {
-    for (key, prop_schema) in &schema.properties {
-        let (prop_schema_effective, _) =
-            resolve_ref_for_codegen(root, prop_schema.object_or_empty(), Some(key))?;
-        let prop_schema: &JsonSchema = prop_schema_effective;
-        let primary: Option<JsonType> = prop_schema.primary_type();
-
-        for line in doc_lines(prop_schema.description.as_deref()) {
-            writeln!(out, "    /// {line}")?;
-        }
-        emit_deprecated_attr(out, prop_schema)?;
-        let field_name = sanitize_field_name(key);
-        let needs_rename = field_name != *key;
-
-        if prop_schema.any_of.as_ref().is_some_and(|v| !v.is_empty()) {
-            let enum_name = sanitize_struct_name(key) + "AnyOf";
-            let ty = if schema.is_required(key) {
-                enum_name.clone()
-            } else {
-                format!("Option<{enum_name}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.one_of.as_ref().is_some_and(|v| !v.is_empty()) {
-            let enum_name = sanitize_struct_name(key) + "OneOf";
-            let ty = if schema.is_required(key) {
-                enum_name.clone()
-            } else {
-                format!("Option<{enum_name}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if let Some(values) = string_enum_or_const_values(prop_schema) {
-            let enum_name: &String = enum_values_to_name
-                .and_then(|m| m.get(&values))
-                .expect("enum name for string enum");
-            let ty = if schema.is_required(key) {
-                enum_name.clone()
-            } else {
-                format!("Option<{enum_name}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if primary == Some(JsonType::String)
-            || (prop_schema
-                .enum_values
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
-                && !prop_schema.is_string_enum())
-        {
-            #[cfg(feature = "uuid")]
-            if primary == Some(JsonType::String) && prop_schema.format.as_deref() == Some("uuid") {
-                let ty = if schema.is_required(key) {
-                    "Uuid".to_string()
-                } else {
-                    "Option<Uuid>".to_string()
-                };
-                if needs_rename {
-                    writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-                }
-                writeln!(out, "    pub {field_name}: {ty},")?;
-                continue;
-            }
-            // String type, or non-string/mixed enum fallback per design.
-            let ty = if schema.is_required(key) {
-                "String".to_string()
-            } else {
-                "Option<String>".to_string()
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            if prop_schema.min_length.is_some()
-                || prop_schema.max_length.is_some()
-                || prop_schema.pattern.is_some()
-            {
-                let mut attrs: Vec<String> = Vec::new();
-                if let Some(n) = prop_schema.min_length {
-                    attrs.push(format!("min_length = {n}"));
-                }
-                if let Some(n) = prop_schema.max_length {
-                    attrs.push(format!("max_length = {n}"));
-                }
-                if let Some(ref p) = prop_schema.pattern {
-                    let escaped = p.replace('\\', "\\\\").replace('"', "\\\"");
-                    attrs.push(format!("pattern = \"{escaped}\""));
-                }
-                writeln!(out, "    #[json_schema({})]", attrs.join(", "))?;
-            }
-            emit_default_attr(
-                out,
-                struct_name,
-                &field_name,
-                prop_schema,
-                &ty,
-                schema.is_required(key),
-            )?;
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if matches!(primary, Some(JsonType::Integer | JsonType::Number)) {
-            let inner: String = rust_numeric_type_for_schema(prop_schema);
-            let ty = if schema.is_required(key) {
-                inner
-            } else {
-                format!("Option<{inner}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            emit_default_attr(
-                out,
-                struct_name,
-                &field_name,
-                prop_schema,
-                &ty,
-                schema.is_required(key),
-            )?;
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if primary == Some(JsonType::Boolean) {
-            let ty: String = if schema.is_required(key) {
-                "bool".to_string()
-            } else {
-                "Option<bool>".to_string()
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            emit_default_attr(
-                out,
-                struct_name,
-                &field_name,
-                prop_schema,
-                &ty,
-                schema.is_required(key),
-            )?;
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_array_with_items() {
-            let item_schema: &JsonSchema = prop_schema
-                .items
-                .as_ref()
-                .expect("array with items")
-                .object_or_empty();
-            let inner: String = rust_type_for_item_schema(
-                root,
-                item_schema,
-                Some(key),
-                enum_values_to_name,
-                None,
-                settings,
-                DedupeMode::Full,
-            )?;
-            let use_hash_set: bool =
-                prop_schema.unique_items == Some(true) && item_schema_is_hashable(item_schema);
-            let container: &str = if use_hash_set { "HashSet" } else { "Vec" };
-            let ty = if schema.is_required(key) {
-                format!("{container}<{inner}>")
-            } else {
-                format!("Option<{container}<{inner}>>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            if prop_schema.min_items.is_some() || prop_schema.max_items.is_some() {
-                let mut attrs: Vec<String> = Vec::new();
-                if let Some(n) = prop_schema.min_items {
-                    attrs.push(format!("min_items = {n}"));
-                }
-                if let Some(n) = prop_schema.max_items {
-                    attrs.push(format!("max_items = {n}"));
-                }
-                writeln!(out, "    #[json_schema({})]", attrs.join(", "))?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        } else if prop_schema.is_object_with_properties() {
-            let nested_name: String =
-                struct_name_from(prop_schema.title.as_deref(), Some(key), false, settings);
-            let ty = if schema.is_required(key) {
-                nested_name.clone()
-            } else {
-                format!("Option<{nested_name}>")
-            };
-            if needs_rename {
-                writeln!(out, "    #[serde(rename = \"{key}\")]")?;
-            }
-            writeln!(out, "    pub {field_name}: {ty},")?;
-        }
-    }
-    if let Some(Schema::Object(sub)) = &schema.additional_properties {
-        let value_ty: String = rust_type_for_item_schema(
-            root,
-            sub,
-            Some("additional"),
-            enum_values_to_name,
-            None,
-            settings,
-            settings.dedupe_mode,
-        )?;
-        writeln!(out, "    #[serde(default)]")?;
-        writeln!(out, "    pub additional: BTreeMap<String, {value_ty}>,")?;
-    }
-    Ok(())
-}
-
-/// Emit Rust source from a parsed schema to `out`. Used by [`RustBackend::generate`].
-fn emit_rust(
-    schema: &JsonSchema,
-    out: &mut impl Write,
-    settings: &CodeGenSettings,
-) -> CodeGenResult<()> {
-    let registry: Registry<'_> = codegen_registry(schema)?;
-    let root_unresolved = resolve_all_of_for_codegen(schema)?;
-    let (root, root_from_key) = resolve_ref_for_codegen(&registry, &root_unresolved, None)?;
-    if root.any_of.as_ref().is_some_and(std::vec::Vec::is_empty) {
-        return Err(CodeGenError::AnyOfEmpty);
-    }
-    if root.one_of.as_ref().is_some_and(std::vec::Vec::is_empty) {
-        return Err(CodeGenError::OneOfEmpty);
-    }
-    let roots_for_structs: Vec<JsonSchema> = if root.one_of.as_ref().is_some_and(|v| !v.is_empty())
+    let target: TypeId = graph.peel(variant.ty);
+    if let Some((_, name)) = plan.items.get(&target)
+        && (variant.is_ref || union.kind == UnionKind::TypeArray)
     {
-        root.one_of
-            .as_ref()
-            .unwrap()
-            .iter()
-            .map(|s| resolve_all_of_for_codegen(s.object_or_empty()))
-            .collect::<CodeGenResult<Vec<_>>>()?
-    } else if root.any_of.as_ref().is_some_and(|v| !v.is_empty()) {
-        root.any_of
-            .as_ref()
-            .unwrap()
-            .iter()
-            .map(|s| resolve_all_of_for_codegen(s.object_or_empty()))
-            .collect::<CodeGenResult<Vec<_>>>()?
-    } else {
-        if !root.is_object_with_properties() {
-            return Err(CodeGenError::RootNotObject);
-        }
-        vec![root.clone()]
-    };
-
-    let enums: Vec<EnumToEmit> = collect_enums(&registry, root, settings)?;
-    let enum_values_to_name: BTreeMap<Vec<String>, String> = enums
-        .iter()
-        .map(|e| (e.values.clone(), e.name.clone()))
-        .collect();
-
-    let anyof_enums: Vec<AnyOfEnumToEmit> =
-        collect_anyof_enums(&registry, root, settings, &enum_values_to_name)?;
-    let oneof_enums: Vec<OneOfEnumToEmit> =
-        collect_oneof_enums(&registry, root, settings, &enum_values_to_name)?;
-
-    let mut structs: Vec<StructToEmit> = Vec::new();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let root_is_anyof = root.any_of.as_ref().is_some_and(|v| !v.is_empty());
-    let root_is_oneof = root.one_of.as_ref().is_some_and(|v| !v.is_empty());
-    for (i, r) in roots_for_structs.iter().enumerate() {
-        let from_key: Option<String> = if root_is_anyof || root_is_oneof {
-            Some(format!("Root_Variant{i}"))
-        } else {
-            root_from_key.clone()
-        };
-        collect_structs(
-            &registry,
-            r,
-            from_key.as_deref(),
-            &mut structs,
-            &mut seen,
-            settings,
-        )?;
+        return name.clone();
     }
+    let kind: Option<&str> = match graph.node(target) {
+        TypeNode::Null => Some("Null"),
+        TypeNode::Boolean => Some("Boolean"),
+        TypeNode::Integer(_) => Some("Integer"),
+        TypeNode::Number(_) => Some("Number"),
+        TypeNode::String { .. } => Some("String"),
+        TypeNode::Array { .. } => Some("Array"),
+        TypeNode::Map { .. } => Some("Object"),
+        TypeNode::Any => Some("Value"),
+        TypeNode::Object(_) if union.kind == UnionKind::TypeArray => Some("Object"),
+        _ => None,
+    };
+    kind.map_or_else(|| format!("Variant{index}"), str::to_string)
+}
 
+fn render_union(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    name: &str,
+    union: &UnionNode,
+    imports: &mut Imports,
+) -> String {
+    let bases: Vec<String> = (0..union.variants.len())
+        .map(|i| variant_base(graph, plan, union, i))
+        .collect();
+    let names: Vec<String> = unique_idents(&bases, "");
+    let mut out: String = item_docs(&union.annotations);
+    out.push_str(STRUCT_DERIVE);
+    out.push('\n');
+    out.push_str("#[serde(untagged)]\n");
+    if union.kind == UnionKind::OneOf {
+        out.push_str("#[json_schema(one_of)]\n");
+    }
+    let _ = writeln!(out, "pub enum {name} {{");
+    for (variant, variant_name) in union.variants.iter().zip(&names) {
+        let ty: String = rust_type(graph, plan, home, variant.ty, imports);
+        let _ = writeln!(out, "    {variant_name}({ty}),");
+    }
+    out.push_str("}\n\n");
+    out
+}
+
+/// The items of `home` in output order: a depth-first walk from the buffer's starting points,
+/// each item after the items it uses (children in field / variant order), so the file reads
+/// bottom-up. Per-schema buffers start at the root, then each definition; the shared buffer
+/// starts at its items in name order.
+fn ordered_items(graph: &TypeGraph, plan: &Plan, home: Home) -> Vec<TypeId> {
+    let starts: Vec<TypeId> = match home {
+        Home::Schema(s) => {
+            let roots = &graph.schemas[s];
+            std::iter::once(roots.root)
+                .chain(roots.definitions.iter().map(|(_, id)| *id))
+                .collect()
+        }
+        Home::Shared => {
+            let mut shared: Vec<(&str, TypeId)> = plan
+                .items
+                .iter()
+                .filter(|(_, (h, _))| *h == Home::Shared)
+                .map(|(id, (_, name))| (name.as_str(), *id))
+                .collect();
+            shared.sort_unstable();
+            shared.into_iter().map(|(_, id)| id).collect()
+        }
+    };
+    let mut out: Vec<TypeId> = Vec::new();
+    let mut visited: BTreeSet<TypeId> = BTreeSet::new();
+    for start in starts {
+        if visited.contains(&start) {
+            continue;
+        }
+        visited.insert(start);
+        // Frames: (node, its children, next child index).
+        let mut stack: Vec<(TypeId, Vec<TypeId>, usize)> =
+            vec![(start, graph.node(start).children(), 0)];
+        while let Some((id, children, next)) = stack.last_mut() {
+            if *next < children.len() {
+                let child: TypeId = children[*next];
+                *next += 1;
+                if visited.insert(child) {
+                    let grandchildren: Vec<TypeId> = graph.node(child).children();
+                    stack.push((child, grandchildren, 0));
+                }
+                continue;
+            }
+            let id: TypeId = *id;
+            stack.pop();
+            if plan.items.get(&id).is_some_and(|(h, _)| *h == home) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+/// Renders one output buffer.
+fn render_buffer(graph: &TypeGraph, plan: &Plan, home: Home) -> CodeGenResult<Vec<u8>> {
+    let mut imports: Imports = Imports::default();
+    let mut body: String = String::new();
+    let items: Vec<TypeId> = ordered_items(graph, plan, home);
+    for &id in &items {
+        let name: &str = plan.name(id);
+        debug_assert_eq!(plan.home(id), home);
+        let item: String = match graph.node(id) {
+            TypeNode::Object(o) => render_struct(graph, plan, home, name, o, &mut imports),
+            TypeNode::Enum(e) => render_enum(name, e),
+            TypeNode::Union(u) => render_union(graph, plan, home, name, u, &mut imports),
+            _ => unreachable!("only named nodes are items"),
+        };
+        body.push_str(&item);
+    }
+    if let Home::Schema(s) = home {
+        let roots = &graph.schemas[s];
+        if let Some(ref alias) = plan.root_aliases[s] {
+            let ty: String = rust_type(graph, plan, home, roots.root, &mut imports);
+            let _ = writeln!(body, "pub type {alias} = {ty};\n");
+        }
+        // A schema's own root and definitions are reachable from its module even when shared.
+        for id in std::iter::once(roots.root).chain(roots.definitions.iter().map(|(_, id)| *id)) {
+            let id: TypeId = graph.peel(id);
+            if let Some((Home::Shared, name)) = plan.items.get(&id) {
+                imports.shared.insert(name.clone());
+            }
+        }
+    }
+    let mut out: Vec<u8> = Vec::new();
     writeln!(
         out,
         "//! Generated by json-schema-rs. Do not edit manually."
     )?;
     writeln!(out)?;
-    writeln!(out, "use serde::{{Deserialize, Serialize}};")?;
-    writeln!(out)?;
-
-    for e in &enums {
-        let pairs: Vec<(String, String)> = enum_variant_names_with_collision_resolution(&e.values);
-        emit_enum_from_pairs(
-            out,
-            &e.name,
-            &pairs,
-            e.description.as_deref(),
-            e.examples.as_deref(),
-        )?;
+    // Only items (and the `deserialize_some` helper) use serde: a buffer holding just a type
+    // alias or re-exports of shared items needs no import.
+    let serde_import: bool = !items.is_empty() || imports.deserialize_some;
+    if serde_import {
+        writeln!(out, "use serde::{{Deserialize, Serialize}};")?;
     }
-
-    for a in &anyof_enums {
-        emit_anyof_enum(out, a)?;
+    for path in &imports.uses {
+        writeln!(out, "use {path};")?;
     }
-
-    for o in &oneof_enums {
-        emit_oneof_enum(out, o)?;
-    }
-
-    for st in &structs {
-        emit_default_functions_for_struct(out, &st.name, &st.schema)?;
-        emit_struct_derive_and_attrs(out, &st.name, &st.schema)?;
-        emit_struct_fields(
-            &registry,
-            &st.name,
-            &st.schema,
-            out,
-            settings,
-            Some(&enum_values_to_name),
-            Some(&anyof_enums),
-            Some(&oneof_enums),
-        )?;
-        writeln!(out, "}}")?;
+    if serde_import || !imports.uses.is_empty() {
         writeln!(out)?;
     }
-
-    Ok(())
+    if !imports.shared.is_empty() {
+        for name in &imports.shared {
+            writeln!(out, "pub use super::shared::{name};")?;
+        }
+        writeln!(out)?;
+    }
+    if imports.deserialize_some {
+        out.write_all(DESERIALIZE_SOME.as_bytes())?;
+    }
+    out.write_all(body.as_bytes())?;
+    Ok(out)
 }
 
-/// Generate Rust source from one or more parsed schemas.
-///
-/// Callers must pass `settings` (use [`CodeGenSettings::builder`] and call [`CodeGenSettingsBuilder::build`]
-/// for all-default settings). Returns [`GenerateRustOutput`] with optional shared buffer and one buffer per schema.
-/// Root of each schema must have `type: "object"` and non-empty `properties`.
-///
-/// # Errors
-///
-/// Returns [`CodeGenError::RootNotObject`] if a root schema is not an object with properties.
-/// Returns [`CodeGenError::Io`] on write failure.
-/// Returns [`CodeGenError::Batch`] with index when one schema in the batch fails.
-pub fn generate_rust(
-    schemas: &[JsonSchema],
-    settings: &CodeGenSettings,
-) -> CodeGenResult<GenerateRustOutput> {
-    RustBackend.generate(schemas, settings)
+/// Helper for optional nullable fields: a present value (including `null`) is `Some(..)`, so
+/// an absent field (`None`, via `#[serde(default)]`) differs from `null` (`Some(None)`).
+const DESERIALIZE_SOME: &str =
+    "fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
+
+";
 
 #[cfg(test)]
 mod tests {
     use super::CodeGenError;
-    use super::{CodeGenBackend, RustBackend, generate_rust, merge_all_of};
-    use crate::code_gen::settings::{CodeGenSettings, DedupeMode, ModelNameSource};
-    use crate::json_schema::{JsonSchema, JsonType, RegistryError, Schema};
+    use super::{CodeGenBackend, RustBackend, generate_rust};
+    use crate::code_gen::settings::{
+        CodeGenSettings, DedupeMode, ModelNameSource, UnknownProperties,
+    };
+    use crate::json_schema::{JsonSchema, JsonType, RegistryError};
 
     fn default_settings() -> CodeGenSettings {
         CodeGenSettings::builder().build()
     }
 
-    #[test]
-    fn root_not_object_errors() {
-        let schema: JsonSchema = JsonSchema::default();
-        let settings: CodeGenSettings = default_settings();
-        let actual = generate_rust(&[schema], &settings).unwrap_err();
-        assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
-        if let CodeGenError::Batch { source, .. } = actual {
-            assert!(matches!(*source, CodeGenError::RootNotObject));
-        }
-    }
-
-    #[test]
-    fn root_object_empty_properties_errors() {
-        let schema: JsonSchema = JsonSchema {
-            type_: Some(JsonType::Object.into()),
-            ..Default::default()
-        };
-        let settings: CodeGenSettings = default_settings();
-        let actual = generate_rust(&[schema], &settings).unwrap_err();
-        assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
-        if let CodeGenError::Batch { source, .. } = actual {
-            assert!(matches!(*source, CodeGenError::RootNotObject));
-        }
+    /// Every output buffer as text: the shared buffer, then one per schema.
+    fn buffers(output: super::GenerateRustOutput) -> (Option<String>, Vec<String>) {
+        let shared: Option<String> = output.shared.map(|b| String::from_utf8(b).unwrap());
+        let per_schema: Vec<String> = output
+            .per_schema
+            .into_iter()
+            .map(|b| String::from_utf8(b).unwrap())
+            .collect();
+        (shared, per_schema)
     }
 
     #[test]
@@ -2661,13 +1232,21 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "#[json_schema(id = \"http://example.com/schema\")]\n",
-            "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(id = "http://example.com/schema")]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2678,13 +1257,18 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "#[serde(deny_unknown_fields)]\n",
-            "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2696,15 +1280,21 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    #[deprecated]\n",
-            "    pub legacy: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[deprecated]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2715,16 +1305,22 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    /// Use 'new' instead\n",
-            "    #[deprecated = \"Use 'new' instead\"]\n",
-            "    pub old: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    /// Use 'new' instead
+    #[deprecated = "Use 'new' instead"]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2735,130 +1331,205 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub x: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn additional_properties_schema_emits_map_field() {
+    fn additional_properties_schema_emits_flattened_map_field() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":{"type":"string"}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n",
-            "use std::collections::BTreeMap;\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "    #[serde(default)]\n",
-            "    pub additional: BTreeMap<String, String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, String>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
-    /// `["string", "null"]` reads as `string`: the field is the same as for `"type": "string"`.
+    /// An optional `["string", "null"]` property tells absent (`None`) from `null` (`Some(None)`).
     #[test]
-    fn property_type_string_or_null_emits_string() {
+    fn optional_property_type_string_or_null_emits_option_option_string() {
         let json = r#"{"type":"object","properties":{"name":{"type":["string","null"]}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
-    /// The order of a type array does not matter: `["null", "string"]` reads as `string`.
+    /// The order of a type array does not matter: `["null", "string"]` reads as `["string", "null"]`.
     #[test]
-    fn property_type_null_or_string_emits_string() {
+    fn optional_property_type_null_or_string_emits_option_option_string() {
         let json = r#"{"type":"object","properties":{"name":{"type":["null","string"]}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
-    /// A type array with two non-null types has no single Rust type; the property is treated like one without `type`.
+    /// A type array with two non-null types becomes an untagged enum named after the property.
     #[test]
-    fn property_type_with_two_non_null_types_is_omitted_like_typeless() {
+    fn property_type_with_two_non_null_types_emits_untagged_union() {
         let json = r#"{"type":"object","properties":{"id":{"type":["integer","string"]},"name":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum Id {
+    Integer(i64),
+    String(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
-    /// A `true` property schema reads as `{}`.
+    /// A `true` property schema accepts any value, `null` included: an optional `serde_json::Value`
+    /// read through `deserialize_some`, so absent and `null` differ.
     #[test]
-    fn property_true_schema_is_omitted_like_empty_schema() {
+    fn property_true_schema_emits_optional_value_field() {
         let json = r#"{"type":"object","properties":{"anything":true,"name":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub anything: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
-    /// A `false` property schema reads as `{}` for codegen (no value is valid, so it has no shape of its own).
+    /// A `false` property schema accepts no value, so the property can only be absent: no field.
     #[test]
-    fn property_false_schema_is_omitted_like_empty_schema() {
+    fn property_false_schema_is_omitted() {
         let json = r#"{"type":"object","properties":{"never":false,"name":{"type":"string"}}}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2870,33 +1541,46 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub tags: Option<Vec<serde_json::Value>>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<serde_json::Value>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
-    /// `additionalProperties: true` allows extra keys, like leaving it out: no attribute and no map field.
+    /// `additionalProperties: true` allows extra keys, like leaving it out: they are captured in a
+    /// flattened `serde_json::Value` map.
     #[test]
-    fn additional_properties_true_emits_no_attribute_or_field() {
+    fn additional_properties_true_captures_unknown_keys_in_value_map() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":true}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2908,14 +1592,20 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: &str = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n",
-            "    pub name: Option<String>,\n",
-            "}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2926,12 +1616,20 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = concat!(
-            "//! Generated by json-schema-rs. Do not edit manually.\n\n",
-            "use serde::{Deserialize, Serialize};\n\n",
-            "#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\n",
-            "pub struct Root {\n    pub name: Option<String>,\n}\n\n"
-        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -2943,14 +1641,18 @@ mod tests {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[json_schema(pattern = "^[a-z]+$")]
     pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -2964,13 +1666,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -2995,18 +1700,23 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Address {
     pub city: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub address: Address,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3042,28 +1752,38 @@ pub struct Root {
         );
     }
 
+    /// A `$ref` chain that loops without reaching a schema of its own constrains nothing: the
+    /// property is any JSON value, and the definitions on the loop emit no items.
     #[test]
-    fn ref_cycle_in_defs_returns_ref_resolution_error() {
-        let json = r##"{
-  "$defs": {
-    "A": { "$ref": "#/$defs/B" },
-    "B": { "$ref": "#/$defs/A" }
-  },
-  "type": "object",
-  "properties": { "x": { "$ref": "#/$defs/A" } }
-}"##;
+    fn pure_ref_loop_emits_value() {
+        let json: &str = r##"{"$defs":{"A":{"$ref":"#/$defs/B"},"B":{"$ref":"#/$defs/A"}},"type":"object","properties":{"a":{"$ref":"#/$defs/A"}}}"##;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
-        let actual: super::CodeGenResult<super::GenerateRustOutput> =
-            generate_rust(&[schema], &settings);
-        assert!(
-            matches!(
-                actual,
-                Err(CodeGenError::RefResolution { ref ref_str, ref reason })
-                if ref_str == "#/$defs/A" && reason == "the $ref chain loops back to itself"
-            ),
-            "expected RefResolution for the $ref loop, got: {actual:?}"
-        );
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub a: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -3073,9 +1793,10 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum Status {
@@ -3088,6 +1809,8 @@ pub enum Status {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub status: Status,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3104,6 +1827,7 @@ pub struct Root {
         let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum Key {
@@ -3114,94 +1838,12 @@ pub enum Key {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub key: Key,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
         assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn all_of_merge_same_const_ok() {
-        let s1: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","const":"same"}}}"#,
-        )
-        .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","const":"same"}}}"#,
-        )
-        .unwrap();
-        let actual: Result<JsonSchema, _> = merge_all_of(&[s1.into(), s2.into()]);
-        assert!(actual.is_ok());
-        let merged: JsonSchema = actual.unwrap();
-        let x_schema: &JsonSchema = merged
-            .properties
-            .get("x")
-            .and_then(Schema::as_object)
-            .expect("property x");
-        assert_eq!(
-            x_schema.const_value.as_ref(),
-            Some(&serde_json::Value::String("same".to_string()))
-        );
-    }
-
-    #[test]
-    fn all_of_merge_conflicting_const_err() {
-        let s1: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","const":"a"}}}"#,
-        )
-        .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","const":"b"}}}"#,
-        )
-        .unwrap();
-        let actual: Result<JsonSchema, CodeGenError> = merge_all_of(&[s1.into(), s2.into()]);
-        let err = actual.expect_err("expected AllOfMergeConflictingConst");
-        assert!(matches!(
-            err,
-            CodeGenError::AllOfMergeConflictingConst { .. }
-        ));
-    }
-
-    #[test]
-    fn all_of_merge_same_pattern_ok() {
-        let s1: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}}"#,
-        )
-        .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}}"#,
-        )
-        .unwrap();
-        let merged: JsonSchema = merge_all_of(&[s1.into(), s2.into()]).expect("merge ok");
-        let actual: JsonSchema = merged
-            .properties
-            .get("x")
-            .and_then(Schema::as_object)
-            .cloned()
-            .expect("property x");
-        let expected: JsonSchema = JsonSchema {
-            type_: Some(JsonType::String.into()),
-            pattern: Some("^[a-z]+$".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn all_of_merge_conflicting_pattern_err() {
-        let s1: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}}"#,
-        )
-        .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"x":{"type":"string","pattern":"^[0-9]+$"}}}"#,
-        )
-        .unwrap();
-        let actual: Result<JsonSchema, CodeGenError> = merge_all_of(&[s1.into(), s2.into()]);
-        assert!(matches!(
-            actual,
-            Err(CodeGenError::AllOfMergeConflictingPattern { .. })
-        ));
     }
 
     #[test]
@@ -3211,17 +1853,21 @@ pub struct Root {
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<String>,
     pub b: i64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -3232,27 +1878,35 @@ pub struct Root {
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct FooVariant1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
 pub enum FooAnyOf {
-    Variant0(String),
+    String(String),
     Variant1(FooVariant1),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct FooVariant1 {
-    pub x: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub foo: Option<FooAnyOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -3263,42 +1917,36 @@ pub struct Root {
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct RootVariant0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct RootVariant1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
 pub enum RootAnyOf {
     Variant0(RootVariant0),
     Variant1(RootVariant1),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct RootVariant0 {
-    pub a: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct RootVariant1 {
-    pub b: Option<i64>,
-}
-
-";
+"#;
         assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn anyof_empty_errors() {
-        let schema: JsonSchema = JsonSchema {
-            any_of: Some(vec![]),
-            ..Default::default()
-        };
-        let settings = default_settings();
-        let actual = generate_rust(&[schema], &settings).unwrap_err();
-        assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
-        if let CodeGenError::Batch { source, .. } = actual {
-            assert!(matches!(*source, CodeGenError::AnyOfEmpty));
-        }
     }
 
     #[test]
@@ -3308,27 +1956,36 @@ pub struct RootVariant1 {
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct FooVariant1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
 pub enum FooOneOf {
-    Variant0(String),
+    String(String),
     Variant1(FooVariant1),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct FooVariant1 {
-    pub x: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub foo: Option<FooOneOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -3339,203 +1996,37 @@ pub struct Root {
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct RootVariant0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct RootVariant1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
 pub enum RootOneOf {
     Variant0(RootVariant0),
     Variant1(RootVariant1),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct RootVariant0 {
-    pub a: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct RootVariant1 {
-    pub b: Option<i64>,
-}
-
-";
+"#;
         assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn oneof_empty_errors() {
-        let schema: JsonSchema = JsonSchema {
-            one_of: Some(vec![]),
-            ..Default::default()
-        };
-        let settings = default_settings();
-        let actual = generate_rust(&[schema], &settings).unwrap_err();
-        assert!(matches!(actual, CodeGenError::Batch { index: 0, .. }));
-        if let CodeGenError::Batch { source, .. } = actual {
-            assert!(matches!(*source, CodeGenError::OneOfEmpty));
-        }
-    }
-
-    #[test]
-    fn merge_all_of_success_two_object_subschemas() {
-        let s1: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
-                .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"b":{"type":"integer"}},"required":["b"]}"#,
-        )
-        .unwrap();
-        let actual = merge_all_of(&[s1.into(), s2.into()]).unwrap();
-        let expected: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["b"]}"#,
-        )
-        .unwrap();
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn merge_all_of_empty_errors() {
-        let actual = merge_all_of(&[]);
-        assert!(matches!(actual, Err(CodeGenError::AllOfMergeEmpty)));
-    }
-
-    #[test]
-    fn merge_all_of_single_schema() {
-        let s: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"x":{"type":"string"}}}"#)
-                .unwrap();
-        let expected = s.clone();
-        let actual = merge_all_of(&[Schema::from(s.clone())]).unwrap();
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn merge_all_of_conflicting_property_type_errors() {
-        let s1: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"k":{"type":"string"}}}"#)
-                .unwrap();
-        let s2: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"k":{"type":"integer"}}}"#)
-                .unwrap();
-        let actual = merge_all_of(&[s1.into(), s2.into()]);
-        assert!(matches!(
-            actual,
-            Err(CodeGenError::AllOfMergeConflictingPropertyType {
-                property_key: ref k,
-                ..
-            }) if k == "k"
-        ));
-    }
-
-    #[test]
-    fn merge_all_of_non_object_subschema_errors() {
-        let s1: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
-                .unwrap();
-        let s2: JsonSchema = serde_json::from_str(r#"{"type":"string"}"#).unwrap();
-        let actual = merge_all_of(&[s1.into(), s2.into()]);
-        assert!(matches!(
-            actual,
-            Err(CodeGenError::AllOfMergeNonObjectSubschema { index: 1 })
-        ));
-    }
-
-    #[test]
-    fn merge_all_of_conflicting_enum_errors() {
-        let s1: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"s":{"enum":["a","b"]}}}"#)
-                .unwrap();
-        let s2: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"s":{"enum":["x","y"]}}}"#)
-                .unwrap();
-        let actual = merge_all_of(&[s1.into(), s2.into()]);
-        assert!(matches!(
-            actual,
-            Err(CodeGenError::AllOfMergeConflictingEnum { property_key: ref k }) if k == "s"
-        ));
-    }
-
-    #[test]
-    fn merge_all_of_conflicting_numeric_bounds_errors() {
-        let s1: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":10}}}"#,
-        )
-        .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":20,"maximum":30}}}"#,
-        )
-        .unwrap();
-        let actual = merge_all_of(&[s1.into(), s2.into()]);
-        assert!(matches!(
-            actual,
-            Err(CodeGenError::AllOfMergeConflictingNumericBounds {
-                property_key: ref k,
-                keyword: ref w
-            }) if k == "n" && w == "minimum/maximum"
-        ));
-    }
-
-    #[test]
-    fn merge_all_of_keeps_tighter_bounds_exactly() {
-        let s1: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740992,"maximum":18446744073709551615,"exclusiveMinimum":0,"multipleOf":2}}}"#,
-        )
-        .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993,"maximum":18446744073709551614,"exclusiveMaximum":1e19,"multipleOf":3}}}"#,
-        )
-        .unwrap();
-        let merged: JsonSchema = merge_all_of(&[s1.into(), s2.into()]).unwrap();
-        let expected: &str = r#"{"type":"integer","minimum":9007199254740993,"maximum":18446744073709551614,"exclusiveMinimum":0,"exclusiveMaximum":1e+19,"multipleOf":2}"#;
-        let actual: String = serde_json::to_string(&merged.properties["n"]).unwrap();
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn merge_all_of_conflicting_bounds_beyond_f64_precision_errors() {
-        let s1: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993}}}"#,
-        )
-        .unwrap();
-        let s2: JsonSchema = serde_json::from_str(
-            r#"{"type":"object","properties":{"n":{"type":"integer","maximum":9007199254740992}}}"#,
-        )
-        .unwrap();
-        let actual = merge_all_of(&[s1.into(), s2.into()]);
-        assert!(matches!(
-            actual,
-            Err(CodeGenError::AllOfMergeConflictingNumericBounds {
-                property_key: ref k,
-                keyword: ref w
-            }) if k == "n" && w == "minimum/maximum"
-        ));
-    }
-
-    #[test]
-    fn batch_error_when_allof_merge_fails_in_second_schema() {
-        let s0: JsonSchema =
-            serde_json::from_str(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
-                .unwrap();
-        let s1_bad: JsonSchema = serde_json::from_str(
-            r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string"}}},{"type":"object","properties":{"x":{"type":"integer"}}}]}"#,
-        )
-        .unwrap();
-        let settings = default_settings();
-        let actual = generate_rust(&[s0.clone(), s1_bad], &settings).unwrap_err();
-        assert!(matches!(actual, CodeGenError::Batch { index: 1, .. }));
-    }
-
-    #[test]
-    fn root_all_of_merges_to_empty_object_errors_with_root_not_object() {
-        let schema: JsonSchema =
-            serde_json::from_str(r#"{"allOf":[{"type":"object"},{"type":"object"}]}"#).unwrap();
-        let settings = default_settings();
-        let actual = generate_rust(&[schema], &settings).unwrap_err();
-        assert!(
-            matches!(actual, CodeGenError::Batch { index: 0, source: ref s } if matches!(**s, CodeGenError::RootNotObject)),
-            "expected Batch {{ index: 0, source: RootNotObject }}, got {actual:?}"
-        );
     }
 
     #[test]
@@ -3545,9 +2036,10 @@ pub struct RootVariant1 {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum Level {
@@ -3561,7 +2053,10 @@ pub enum Level {
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<Level>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3575,9 +2070,10 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum A {
@@ -3590,7 +2086,10 @@ pub enum A {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub a: A,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub b: Option<A>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3604,9 +2103,10 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum T {
@@ -3619,6 +2119,8 @@ pub enum T {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub t: T,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3632,9 +2134,10 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum T {
@@ -3647,6 +2150,8 @@ pub enum T {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub t: T,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3660,9 +2165,10 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum Id {
@@ -3675,6 +2181,8 @@ pub enum Id {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: Id,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3688,14 +2196,17 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(rename = "toddGriffin")]
     pub todd_griffin: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3709,23 +2220,31 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
-
-fn default_valerie_hunter_todd_griffin() -> String { "bar".to_string() }
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "ValerieHunter")]
 pub struct ValerieHunter {
-    #[serde(rename = "toddGriffin")]
-    #[serde(default = "default_valerie_hunter_todd_griffin")]
+    #[serde(rename = "toddGriffin", default = "ValerieHunter::default_todd_griffin")]
     pub todd_griffin: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl ValerieHunter {
+    fn default_todd_griffin() -> String {
+        "bar".to_string()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub person: ValerieHunter,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -3733,23 +2252,63 @@ pub struct Root {
     }
 
     #[test]
-    fn non_string_enum_fallback_emits_string() {
+    fn mixed_type_enum_emits_value_enum_with_json_equal_impls() {
         let json =
             r#"{"type":"object","properties":{"tag":{"enum":["foo",1,true]}},"required":["tag"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, json_schema_rs_macro::ToJsonSchema)]
+pub enum Tag {
+    #[json_schema(value = "foo")]
+    Foo,
+    #[json_schema(value = 1)]
+    N1,
+    #[json_schema(value = true)]
+    True,
+}
+
+impl Serialize for Tag {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value: serde_json::Value = match self {
+            Self::Foo => serde_json::json!("foo"),
+            Self::N1 => serde_json::json!(1),
+            Self::True => serde_json::json!(true),
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Tag {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        if json_schema_rs::json_equal(&value, &serde_json::json!("foo")) {
+            return Ok(Self::Foo);
+        }
+        if json_schema_rs::json_equal(&value, &serde_json::json!(1)) {
+            return Ok(Self::N1);
+        }
+        if json_schema_rs::json_equal(&value, &serde_json::json!(true)) {
+            return Ok(Self::True);
+        }
+        Err(serde::de::Error::custom(format!("{value} is not a Tag value")))
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub tag: String,
+    pub tag: Tag,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -3761,13 +2320,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub count: i64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3781,16 +2343,20 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -3802,13 +2368,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub value: f64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3822,16 +2391,20 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -3842,13 +2415,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub byte: u8,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3862,13 +2438,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub n: u8,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3882,13 +2461,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub n: u8,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3902,13 +2484,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub n: u64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3922,13 +2507,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub n: i64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3936,19 +2524,26 @@ pub struct Root {
     }
 
     #[test]
-    fn integer_with_empty_range_emits_i64_fallback() {
+    fn integer_with_empty_range_emits_uninhabited_enum() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":5,"maximum":5}},"required":["n"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum N {
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub n: i64,
+    pub n: N,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3962,13 +2557,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub n: u8,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -3982,13 +2580,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub n: f32,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4002,13 +2603,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub n: f64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4022,16 +2626,23 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
-
-fn default_root_n() -> u64 { 18446744073709551615 }
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default = "default_root_n")]
+    #[serde(default = "Root::default_n")]
     pub n: u64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Root {
+    fn default_n() -> u64 {
+        18446744073709551615
+    }
 }
 
 "#;
@@ -4045,16 +2656,20 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4065,16 +2680,20 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4086,13 +2705,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub value: f64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4106,13 +2728,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub value: f32,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4126,13 +2751,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub enabled: bool,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4146,16 +2774,20 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flag: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4166,17 +2798,21 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     /// Is it enabled?
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flag: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4187,13 +2823,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub flags: Vec<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4207,14 +2846,17 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub flags: HashSet<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4229,16 +2871,23 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
-
-fn default_root_enabled() -> Option<bool> { Some(true) }
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default = "default_root_enabled")]
+    #[serde(default = "Root::default_enabled", skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Root {
+    fn default_enabled() -> Option<bool> {
+        Some(true)
+    }
 }
 
 "#;
@@ -4252,13 +2901,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub tags: Vec<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4271,15 +2923,22 @@ pub struct Root {
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
-        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        assert!(
-            actual.contains("pub tags: HashSet<String>"),
-            "expected HashSet<String>: {actual}"
-        );
-        assert!(
-            actual.contains(concat!("use std::collections::", "HashSet")),
-            "expected HashSet use: {actual}"
-        );
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub tags: HashSet<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4289,13 +2948,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub tags: Vec<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4308,15 +2970,29 @@ pub struct Root {
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
-        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        assert!(
-            actual.contains("pub items: Vec<") && actual.contains(">,"),
-            "uniqueItems true with object items should emit Vec: {actual}"
-        );
-        assert!(
-            !actual.contains("HashSet"),
-            "should not use HashSet for object items: {actual}"
-        );
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Items {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub items: Vec<Items>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4326,14 +3002,17 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[json_schema(min_items = 2, max_items = 5)]
     pub tags: Vec<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4346,15 +3025,22 @@ pub struct Root {
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
-        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        assert!(
-            actual.contains("#[json_schema(min_items = 1)]"),
-            "expected min_items attribute: {actual}"
-        );
-        assert!(
-            !actual.contains("max_items"),
-            "should not emit max_items when absent: {actual}"
-        );
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[json_schema(min_items = 1)]
+    pub tags: Vec<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4365,16 +3051,20 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4385,13 +3075,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub counts: Vec<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4405,21 +3098,27 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Items {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub items: Vec<Items>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4430,13 +3129,16 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub matrix: Vec<Vec<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -4450,18 +3152,23 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<i64>,
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4472,17 +3179,21 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<i64>,
     pub id: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4505,23 +3216,32 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Address {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub street_address: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<Address>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub first_name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4548,27 +3268,40 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Address {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub street_address: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<Address>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub birthday: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub first_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4623,14 +3356,17 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(rename = "foo-bar")]
+    #[serde(rename = "foo-bar", skip_serializing_if = "Option::is_none")]
     pub foo_bar: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -4638,16 +3374,16 @@ pub struct Root {
     }
 
     #[test]
-    fn generate_rust_one_schema_returns_one_buffer() {
-        let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
+    fn generate_rust_equals_rust_backend_generate() {
+        let json: &str =
+            r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
         let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
-        let output: super::GenerateRustOutput =
+        let actual: super::GenerateRustOutput =
             generate_rust(std::slice::from_ref(&schema), &settings).unwrap();
         let expected: super::GenerateRustOutput =
             RustBackend.generate(&[schema], &settings).unwrap();
-        assert_eq!(expected.per_schema, output.per_schema);
-        assert_eq!(1, output.per_schema.len());
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4658,15 +3394,31 @@ pub struct Root {
             .model_name_source(ModelNameSource::PropertyKeyFirst)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
-        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        assert!(
-            actual.contains(concat!("pub struct ", "Address")),
-            "with PropertyKeyFirst nested struct should be named from key address -> Address; got: {actual}"
-        );
-        assert!(
-            !actual.contains(concat!("struct ", "FooBar")),
-            "with PropertyKeyFirst title FooBar should not be used for nested name; got: {actual}"
-        );
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "FooBar")]
+pub struct Address {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<Address>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4676,25 +3428,54 @@ pub struct Root {
         let s1: JsonSchema = serde_json::from_str(json1).unwrap();
         let s2: JsonSchema = serde_json::from_str(json2).unwrap();
         let settings: CodeGenSettings = default_settings();
-        let output: super::GenerateRustOutput =
-            generate_rust(&[s1.clone(), s2.clone()], &settings).unwrap();
-        let expected: super::GenerateRustOutput =
-            RustBackend.generate(&[s1, s2], &settings).unwrap();
-        assert_eq!(expected.per_schema, output.per_schema);
-        assert_eq!(2, output.per_schema.len());
-        let out1 = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let out2 = String::from_utf8(output.per_schema[1].clone()).unwrap();
-        assert!(out1.contains("pub a: Option<String>") || out1.contains("pub a:"));
-        assert!(out2.contains("pub b: Option<String>") || out2.contains("pub b:"));
+        let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
     fn batch_error_includes_index() {
-        let valid = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-        let invalid: JsonSchema = JsonSchema::default();
-        let s1: JsonSchema = serde_json::from_str(valid).unwrap();
+        let valid: &str = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
+        let invalid: &str = r##"{"type":"object","properties":{"x":{"$ref":"#/$defs/Missing"}}}"##;
+        let s0: JsonSchema = serde_json::from_str(valid).unwrap();
+        let s1: JsonSchema = serde_json::from_str(invalid).unwrap();
         let settings: CodeGenSettings = default_settings();
-        let actual = generate_rust(&[s1, invalid], &settings).unwrap_err();
+        let actual: CodeGenError = generate_rust(&[s0, s1], &settings).unwrap_err();
         assert!(matches!(actual, CodeGenError::Batch { index: 1, .. }));
     }
 
@@ -4707,10 +3488,43 @@ pub struct Root {
             .build();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema.clone(), schema], &settings).unwrap();
-        let expected: Option<Vec<u8>> = None;
-        let actual = output.shared.clone();
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
         assert_eq!(expected, actual);
-        assert_eq!(2, output.per_schema.len());
     }
 
     #[test]
@@ -4722,13 +3536,43 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Disabled)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        assert_eq!(None, output.shared);
-        assert_eq!(2, output.per_schema.len());
-        let out0 = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let out1 = String::from_utf8(output.per_schema[1].clone()).unwrap();
-        let root_struct: &str = concat!("pub struct ", "Root");
-        assert!(out0.contains(root_struct));
-        assert!(out1.contains(root_struct));
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4740,17 +3584,41 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = true;
-        let actual_shared_some = output.shared.is_some();
-        assert_eq!(expected_shared_some, actual_shared_some);
-        assert_eq!(2, output.per_schema.len());
-        let shared_str = String::from_utf8(output.shared.unwrap()).unwrap();
-        let root_struct: &str = concat!("pub struct ", "Root");
-        assert!(shared_str.contains(root_struct));
-        let per0 = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let root_use: &str = concat!("pub use crate::", "Root");
-        let root_only: &str = "Root";
-        assert!(per0.contains(root_use) || per0.contains(root_only));
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            Some(
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            vec![
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4761,10 +3629,28 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
-        let expected: Option<Vec<u8>> = None;
-        let actual = output.shared.clone();
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
         assert_eq!(expected, actual);
-        assert_eq!(1, output.per_schema.len());
     }
 
     #[test]
@@ -4777,8 +3663,43 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        assert_eq!(None, output.shared);
-        assert_eq!(2, output.per_schema.len());
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4795,20 +3716,38 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
-        let per_str = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        assert!(
-            per_str.contains("addr1") && per_str.contains("addr2"),
-            "per_schema should reference both fields; got: {per_str}"
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Addr1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub street: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub addr1: Option<Addr1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub addr2: Option<Addr1>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
         );
-        let shared_count = output
-            .shared
-            .as_ref()
-            .map_or(0, |b| b.windows(11).filter(|w| w == b"pub struct ").count());
-        let per_count = per_str.matches("pub struct ").count();
-        assert!(
-            shared_count + per_count >= 1,
-            "at least one struct (Root in per_schema, nested in shared when deduped)"
-        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4818,17 +3757,21 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A root type
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4839,47 +3782,73 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Line one
 /// Line two
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn description_empty_or_whitespace_emits_no_doc() {
-        let json_empty =
+    fn description_empty_emits_no_doc() {
+        let json: &str =
             r#"{"type":"object","properties":{"a":{"type":"string"}},"description":""}"#;
-        let schema_empty: JsonSchema = serde_json::from_str(json_empty).unwrap();
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
-        let output: super::GenerateRustOutput = generate_rust(&[schema_empty], &settings).unwrap();
-        let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
+    }
 
-        let json_ws =
+    #[test]
+    fn description_whitespace_only_emits_no_doc() {
+        let json: &str =
             r#"{"type":"object","properties":{"a":{"type":"string"}},"description":"   \n  "}"#;
-        let schema_ws: JsonSchema = serde_json::from_str(json_ws).unwrap();
-        let output_ws: super::GenerateRustOutput = generate_rust(&[schema_ws], &settings).unwrap();
-        let actual_ws = String::from_utf8(output_ws.per_schema[0].clone()).unwrap();
-        assert_eq!(expected, actual_ws);
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4889,23 +3858,30 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Inner type
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Nested {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub v: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     /// Inner type
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nested: Option<Nested>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4916,17 +3892,21 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     /// User full name
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -4937,9 +3917,10 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r#"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Issue status
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
@@ -4954,6 +3935,8 @@ pub enum Status {
 pub struct Root {
     /// Issue status
     pub status: Status,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 "#;
@@ -4971,9 +3954,42 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Functional)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = true;
-        let actual_shared_some = output.shared.is_some();
-        assert_eq!(expected_shared_some, actual_shared_some);
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            Some(
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// First
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            vec![
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -4987,10 +4003,45 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = false;
-        let actual_shared_some = output.shared.is_some();
-        assert_eq!(expected_shared_some, actual_shared_some);
-        assert_eq!(2, output.per_schema.len());
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// First
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Second
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -5003,9 +4054,41 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Functional)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = true;
-        let actual_shared_some = output.shared.is_some();
-        assert_eq!(expected_shared_some, actual_shared_some);
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            Some(
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            vec![
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -5018,10 +4101,43 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = false;
-        let actual_shared_some = output.shared.is_some();
-        assert_eq!(expected_shared_some, actual_shared_some);
-        assert_eq!(2, output.per_schema.len());
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -5031,7 +4147,23 @@ pub struct Root {
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: String = "//! Generated by json-schema-rs. Do not edit manually.\n\nuse serde::{Deserialize, Serialize};\n\n/// \n/// # Examples\n/// \n/// {\"x\":\"foo\"}\n#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\npub struct Root {\n    pub x: String,\n}\n\n".to_string();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+///
+/// # Examples
+///
+/// {"x":"foo"}
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub x: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -5042,7 +4174,24 @@ pub struct Root {
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: String = "//! Generated by json-schema-rs. Do not edit manually.\n\nuse serde::{Deserialize, Serialize};\n\n/// \n/// # Examples\n/// \n/// \"a\"\n/// 1\n#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\npub struct Root {\n    pub x: String,\n}\n\n".to_string();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+///
+/// # Examples
+///
+/// "a"
+/// 1
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub x: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -5053,7 +4202,29 @@ pub struct Root {
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: String = "//! Generated by json-schema-rs. Do not edit manually.\n\nuse serde::{Deserialize, Serialize};\n\n/// \n/// # Examples\n/// \n/// \"open\"\n#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\npub enum Status {\n    #[serde(rename = \"open\")]\n    Open,\n}\n\n#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\npub struct Root {\n    pub status: Status,\n}\n\n".to_string();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+///
+/// # Examples
+///
+/// "open"
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Status {
+    #[serde(rename = "open")]
+    Open,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub status: Status,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -5064,8 +4235,19 @@ pub struct Root {
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected: String =
-            "//! Generated by json-schema-rs. Do not edit manually.\n\nuse serde::{Deserialize, Serialize};\n\n#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]\npub struct Root {\n    pub x: String,\n}\n\n".to_string();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub x: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
         assert_eq!(expected, actual);
     }
 
@@ -5079,8 +4261,50 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected: (bool, usize) = (false, 2);
-        let actual: (bool, usize) = (output.shared.is_some(), output.per_schema.len());
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+///
+/// # Examples
+///
+/// 1
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+///
+/// # Examples
+///
+/// 2
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
+        );
         assert_eq!(expected, actual);
     }
 
@@ -5094,9 +4318,45 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Functional)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = true;
-        let actual_shared_some = output.shared.is_some();
-        assert_eq!(expected_shared_some, actual_shared_some);
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            Some(
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+///
+/// # Examples
+///
+/// 1
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            vec![
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -5109,13 +4369,45 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Full)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = false;
-        let actual_shared_some = output.shared.is_some();
-        let msg: &str = concat!(
-            "Full dedupe: same shape different id yields two ",
-            "structs"
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(id = "http://example.com/a")]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(id = "http://example.com/b")]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ],
         );
-        assert_eq!(expected_shared_some, actual_shared_some, "{msg}");
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -5128,13 +4420,42 @@ pub struct Root {
             .dedupe_mode(DedupeMode::Functional)
             .build();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
-        let expected_shared_some = true;
-        let actual_shared_some = output.shared.is_some();
-        let msg: &str = concat!(
-            "Functional dedupe: same shape different id yields one shared ",
-            "struct"
+        let actual: (Option<String>, Vec<String>) = buffers(output);
+        let expected: (Option<String>, Vec<String>) = (
+            Some(
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(id = "http://example.com/a")]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            vec![
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+"
+                .to_string(),
+            ],
         );
-        assert_eq!(expected_shared_some, actual_shared_some, "{msg}");
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -5152,8 +4473,9 @@ pub struct Root {
             generate_rust(&[s1.clone(), s2.clone()], &settings_full).unwrap();
         let output_func: super::GenerateRustOutput =
             generate_rust(&[s1, s2], &settings_func).unwrap();
-        assert_eq!(output_full.shared.is_some(), output_func.shared.is_some());
-        assert_eq!(output_full.per_schema.len(), output_func.per_schema.len());
+        let expected: super::GenerateRustOutput = output_full;
+        let actual: super::GenerateRustOutput = output_func;
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -5172,14 +4494,17 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: Uuid,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
@@ -5194,17 +4519,21 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Uuid>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-";
+"#;
         assert_eq!(expected, actual);
     }
 
@@ -5216,17 +4545,2106 @@ pub struct Root {
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
-        let expected = r"//! Generated by json-schema-rs. Do not edit manually.
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub ids: Vec<Uuid>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 ";
+        assert_eq!(expected, actual);
+    }
+
+    /// A root without `type` or keywords accepts any value: a type alias to `serde_json::Value`.
+    #[test]
+    fn root_without_keywords_emits_value_type_alias() {
+        let json: &str = r"{}";
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = serde_json::Value;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An object root without properties is a map of its additional properties (any value here).
+    #[test]
+    fn root_object_without_properties_emits_map_type_alias() {
+        let json: &str = r#"{"type":"object"}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use std::collections::BTreeMap;
+
+pub type Root = BTreeMap<String, serde_json::Value>;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A root whose type is not an object gets a type alias named `Root`.
+    #[test]
+    fn root_string_emits_type_alias() {
+        let json: &str = r#"{"type":"string"}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = String;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A root object whose `additionalProperties` is a schema and that has no properties is a map of that schema.
+    #[test]
+    fn root_object_with_only_additional_properties_emits_map_type_alias() {
+        let json: &str = r#"{"type":"object","additionalProperties":{"type":"integer"}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use std::collections::BTreeMap;
+
+pub type Root = BTreeMap<String, i64>;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An `allOf` of objects without properties is an object without properties: a map alias.
+    #[test]
+    fn root_all_of_objects_without_properties_emits_map_type_alias() {
+        let json: &str = r#"{"allOf":[{"type":"object"},{"type":"object"}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use std::collections::BTreeMap;
+
+pub type Root = BTreeMap<String, serde_json::Value>;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An empty `anyOf` has no valid value: an uninhabited untagged enum.
+    #[test]
+    fn root_empty_any_of_emits_uninhabited_enum() {
+        let json: &str = r#"{"anyOf":[]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum RootAnyOf {
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An empty `oneOf` has no valid value: an uninhabited untagged enum marked `one_of`.
+    #[test]
+    fn root_empty_one_of_emits_uninhabited_enum() {
+        let json: &str = r#"{"oneOf":[]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
+pub enum RootOneOf {
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A property whose `anyOf` is empty gets an uninhabited enum, so the field can only be absent.
+    #[test]
+    fn property_empty_any_of_emits_uninhabited_enum() {
+        let json: &str = r#"{"type":"object","properties":{"a":{"anyOf":[]}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum AAnyOf {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<AAnyOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `allOf` branches with the same `const` keep it.
+    #[test]
+    fn all_of_same_const_emits_single_variant_enum() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","const":"same"}}},{"type":"object","properties":{"x":{"type":"string","const":"same"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum X {
+    #[serde(rename = "same")]
+    Same,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<X>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `allOf` branches with different `const` values have no common value: an uninhabited enum.
+    #[test]
+    fn all_of_conflicting_const_emits_uninhabited_enum() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","const":"a"}}},{"type":"object","properties":{"x":{"type":"string","const":"b"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum X {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<X>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `allOf` branches with the same `pattern` keep it.
+    #[test]
+    fn all_of_same_pattern_keeps_pattern() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}},{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(pattern = "^[a-z]+$")]
+    pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A property typed `string` in one `allOf` branch and `integer` in another has no valid value.
+    #[test]
+    fn all_of_conflicting_property_types_emits_uninhabited_enum() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"k":{"type":"string"}}},{"type":"object","properties":{"k":{"type":"integer"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum K {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k: Option<K>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A required property with no valid value makes the field's type uninhabited, not optional.
+    #[test]
+    fn all_of_conflicting_required_property_types_emits_required_uninhabited_field() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"k":{"type":"string"}},"required":["k"]},{"type":"object","properties":{"k":{"type":"integer"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum K {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub k: K,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An `allOf` of an object and a string has no valid value: the root is an uninhabited enum.
+    #[test]
+    fn all_of_object_and_string_emits_uninhabited_root() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"string"}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Root {
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// `allOf` enums intersect: only the values in every branch remain.
+    #[test]
+    fn all_of_enums_emit_intersection() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"s":{"enum":["a","b","c"]}}},{"type":"object","properties":{"s":{"enum":["b","c","d"]}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum S {
+    #[serde(rename = "b")]
+    B,
+    #[serde(rename = "c")]
+    C,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s: Option<S>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `allOf` enums without a common value give an uninhabited enum.
+    #[test]
+    fn all_of_disjoint_enums_emits_uninhabited_enum() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"s":{"enum":["a","b"]}}},{"type":"object","properties":{"s":{"enum":["x","y"]}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum S {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s: Option<S>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `allOf` integer bounds combine to the tightest range, which picks the integer width.
+    #[test]
+    fn all_of_integer_bounds_take_tightest_range() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":1000}}},{"type":"object","properties":{"n":{"type":"integer","minimum":10,"maximum":200}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<u8>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Disjoint `allOf` integer bounds leave no valid integer: an uninhabited enum.
+    #[test]
+    fn all_of_disjoint_integer_bounds_emits_uninhabited_enum() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":10}}},{"type":"object","properties":{"n":{"type":"integer","minimum":20,"maximum":30}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum N {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<N>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `allOf` bounds compare exactly beyond `f64` precision: `minimum: 2^53 + 1` and
+    /// `maximum: 2^53` leave no valid integer (an uninhabited enum).
+    #[test]
+    fn all_of_integer_bounds_beyond_f64_precision_compare_exactly() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993}}},{"type":"object","properties":{"n":{"type":"integer","maximum":9007199254740992}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum N {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<N>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A root that refers to itself through `#` gets `Box` on the by-value back-edge.
+    #[test]
+    fn self_reference_through_root_boxes_back_edge() {
+        let json: &str = r##"{"title":"Node","type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#"}},"required":["value"]}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Node")]
+pub struct Node {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<Box<Node>>,
+    pub value: i64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A definition that refers to itself gets `Box` on the by-value back-edge.
+    #[test]
+    fn self_reference_through_defs_boxes_back_edge() {
+        let json: &str = r##"{"type":"object","properties":{"head":{"$ref":"#/$defs/Node"}},"$defs":{"Node":{"type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#/$defs/Node"}},"required":["value"]}}}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Node {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<Box<Node>>,
+    pub value: i64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<Node>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Mutually recursive definitions box exactly one edge of the cycle.
+    #[test]
+    fn mutual_recursion_boxes_one_edge() {
+        let json: &str = r##"{"type":"object","properties":{"a":{"$ref":"#/$defs/A"}},"$defs":{"A":{"type":"object","properties":{"b":{"$ref":"#/$defs/B"}}},"B":{"type":"object","properties":{"a":{"$ref":"#/$defs/A"}}}}}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct A {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<Box<B>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct B {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<A>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A recursive `Vec` needs no `Box` (the vector already allocates); the `Option` back-edge does.
+    #[test]
+    fn self_reference_in_array_items_is_not_boxed() {
+        let json: &str = r##"{"title":"Node","type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#"},"children":{"type":"array","items":{"$ref":"#"}}},"required":["value"]}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Node")]
+pub struct Node {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<Node>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<Box<Node>>,
+    pub value: i64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// An object root whose `allOf` is one `$ref` is the referenced definition: the root is
+    /// structurally identical to it and takes the definition's name.
+    #[test]
+    fn all_of_single_ref_merges_root_into_definition() {
+        let json: &str = r##"{"type":"object","allOf":[{"$ref":"#/definitions/base"}],"definitions":{"base":{"type":"object","properties":{"a":{"type":"string"}}}}}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Base {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A root structurally identical to a `$defs` entry is emitted once, under the definition's name.
+    #[test]
+    fn root_identical_to_definition_takes_definition_name() {
+        let json: &str = r#"{"type":"object","properties":{"a":{"type":"string"}},"$defs":{"Thing":{"type":"object","properties":{"a":{"type":"string"}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Thing {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// From 2019-09 on, keywords next to `$ref` combine with its target: the property's struct has
+    /// both the target's and its own properties.
+    #[test]
+    fn ref_with_sibling_properties_merges_into_one_struct() {
+        let json: &str = r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"p":{"$ref":"#/$defs/Base","properties":{"extra":{"type":"integer"}},"required":["extra"]}},"$defs":{"Base":{"type":"object","properties":{"a":{"type":"string"}}}}}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct P {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    pub extra: i64,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p: Option<P>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Base {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Two different nested objects with the same title both keep it, each with a numeric suffix.
+    #[test]
+    fn colliding_struct_names_get_numeric_suffixes() {
+        let json: &str = r#"{"type":"object","properties":{"first":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}},"second":{"title":"Item","type":"object","properties":{"b":{"type":"integer"}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Item")]
+pub struct Item0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Item")]
+pub struct Item1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first: Option<Item0>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub second: Option<Item1>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A name taken by std or the generated imports (`String`) gets a numeric suffix.
+    #[test]
+    fn reserved_struct_name_gets_numeric_suffix() {
+        let json: &str = r#"{"type":"object","properties":{"s":{"title":"String","type":"object","properties":{"a":{"type":"string"}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "String")]
+pub struct String0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s: Option<String0>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Two keys that sanitize to the same field name both get a numeric suffix and keep their JSON key.
+    #[test]
+    fn colliding_field_names_get_numeric_suffixes() {
+        let json: &str = r#"{"type":"object","properties":{"fooBar":{"type":"string"},"foo_bar":{"type":"integer"}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(rename = "fooBar", skip_serializing_if = "Option::is_none")]
+    pub foo_bar0: Option<String>,
+    #[serde(rename = "foo_bar", skip_serializing_if = "Option::is_none")]
+    pub foo_bar1: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `anyOf` branches that are `$ref`s name their variants after the target types.
+    #[test]
+    fn any_of_ref_branches_name_variants_after_targets() {
+        let json: &str = r##"{"type":"object","properties":{"pet":{"anyOf":[{"$ref":"#/$defs/Cat"},{"$ref":"#/$defs/Dog"}]}},"$defs":{"Cat":{"type":"object","properties":{"meow":{"type":"boolean"}}},"Dog":{"type":"object","properties":{"bark":{"type":"boolean"}}}}}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Cat {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meow: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Dog {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bark: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum PetAnyOf {
+    Cat(Cat),
+    Dog(Dog),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pet: Option<PetAnyOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `oneOf` branches that are `$ref`s name their variants after the target types; the enum is
+    /// marked `one_of`.
+    #[test]
+    fn one_of_ref_branches_name_variants_after_targets() {
+        let json: &str = r##"{"type":"object","properties":{"pet":{"oneOf":[{"$ref":"#/$defs/Cat"},{"$ref":"#/$defs/Dog"}]}},"$defs":{"Cat":{"type":"object","properties":{"meow":{"type":"boolean"}}},"Dog":{"type":"object","properties":{"bark":{"type":"boolean"}}}}}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Cat {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meow: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Dog {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bark: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
+pub enum PetOneOf {
+    Cat(Cat),
+    Dog(Dog),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pet: Option<PetOneOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A required `anyOf` of a type and `null` is a required nullable field: `Option<T>` that must be present.
+    #[test]
+    fn required_any_of_type_and_null_emits_required_nullable_field() {
+        let json: &str = r#"{"type":"object","properties":{"name":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["name"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[json_schema(required)]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// An optional `oneOf` of `null` and a type is an optional nullable field: `Option<Option<T>>`.
+    #[test]
+    fn optional_one_of_null_and_type_emits_optional_nullable_field() {
+        let json: &str = r#"{"type":"object","properties":{"name":{"oneOf":[{"type":"null"},{"type":"string"}]}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A type array with several non-null types is an untagged enum, `integer` before `number`.
+    #[test]
+    fn type_array_union_orders_integer_before_number() {
+        let json: &str = r#"{"type":"object","properties":{"v":{"type":["string","number","integer","boolean"]}},"required":["v"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum V {
+    Boolean(bool),
+    Integer(i64),
+    Number(f64),
+    String(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub v: V,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An integer enum is a unit enum whose serde impls compare values by JSON equality.
+    #[test]
+    fn integer_enum_emits_value_enum_with_json_equal_impls() {
+        let json: &str =
+            r#"{"type":"object","properties":{"level":{"enum":[1,2,3]}},"required":["level"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, json_schema_rs_macro::ToJsonSchema)]
+pub enum Level {
+    #[json_schema(value = 1)]
+    N1,
+    #[json_schema(value = 2)]
+    N2,
+    #[json_schema(value = 3)]
+    N3,
+}
+
+impl Serialize for Level {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value: serde_json::Value = match self {
+            Self::N1 => serde_json::json!(1),
+            Self::N2 => serde_json::json!(2),
+            Self::N3 => serde_json::json!(3),
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Level {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        if json_schema_rs::json_equal(&value, &serde_json::json!(1)) {
+            return Ok(Self::N1);
+        }
+        if json_schema_rs::json_equal(&value, &serde_json::json!(2)) {
+            return Ok(Self::N2);
+        }
+        if json_schema_rs::json_equal(&value, &serde_json::json!(3)) {
+            return Ok(Self::N3);
+        }
+        Err(serde::de::Error::custom(format!("{value} is not a Level value")))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub level: Level,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// An integer `const` is a single-variant value enum.
+    #[test]
+    fn const_integer_emits_single_variant_value_enum() {
+        let json: &str =
+            r#"{"type":"object","properties":{"version":{"const":2}},"required":["version"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, json_schema_rs_macro::ToJsonSchema)]
+pub enum Version {
+    #[json_schema(value = 2)]
+    N2,
+}
+
+impl Serialize for Version {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value: serde_json::Value = match self {
+            Self::N2 => serde_json::json!(2),
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        if json_schema_rs::json_equal(&value, &serde_json::json!(2)) {
+            return Ok(Self::N2);
+        }
+        Err(serde::de::Error::custom(format!("{value} is not a Version value")))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub version: Version,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A required `["string", "null"]` property must be present but may be `null`.
+    #[test]
+    fn required_property_type_string_or_null_emits_required_nullable_field() {
+        let json: &str = r#"{"type":"object","properties":{"name":{"type":["string","null"]}},"required":["name"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[json_schema(required)]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Properties next to an `additionalProperties` schema: the extra keys go to a flattened map.
+    #[test]
+    fn properties_with_additional_properties_schema_emits_flattened_map() {
+        let json: &str = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":{"type":"integer"}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub id: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, i64>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An object property with no properties and an `additionalProperties` schema is a map.
+    #[test]
+    fn object_property_with_only_additional_properties_emits_map() {
+        let json: &str = r#"{"type":"object","properties":{"labels":{"type":"object","additionalProperties":{"type":"string"}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<BTreeMap<String, String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A required property without keywords is any JSON value.
+    #[test]
+    fn required_typeless_property_emits_value() {
+        let json: &str = r#"{"type":"object","properties":{"data":{}},"required":["data"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub data: serde_json::Value,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// An optional property without keywords is any JSON value, `null` included: one `Option` for
+    /// absence, read through `deserialize_some`.
+    #[test]
+    fn optional_typeless_property_emits_option_value_with_deserialize_some() {
+        let json: &str = r#"{"type":"object","properties":{"data":{}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `then` / `else` properties become optional fields; a key in both is the `anyOf` of the two.
+    /// The `if` schema itself adds no field.
+    #[test]
+    fn then_else_properties_emit_optional_fields() {
+        let json: &str = r#"{"type":"object","properties":{"kind":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"properties":{"a":{"type":"string"},"shared":{"type":"string"}}},"else":{"properties":{"b":{"type":"integer"},"shared":{"type":"integer"}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum SharedAnyOf {
+    String(String),
+    Integer(i64),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared: Option<SharedAnyOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `not` does not change the generated type.
+    #[test]
+    fn not_is_ignored_for_the_type() {
+        let json: &str =
+            r#"{"type":"object","properties":{"a":{"type":"string","not":{"const":"x"}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A `$defs` entry nothing refers to is still emitted, after the root.
+    #[test]
+    fn unreferenced_definition_is_emitted() {
+        let json: &str = r#"{"type":"object","properties":{"a":{"type":"string"}},"$defs":{"Unused":{"type":"object","properties":{"z":{"type":"boolean"}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Unused {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<bool>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// The order of `$defs` keys in the input does not change the output.
+    #[test]
+    fn defs_key_order_does_not_change_output() {
+        let json_a: &str = r##"{"type":"object","properties":{"x":{"$ref":"#/$defs/X"},"y":{"$ref":"#/$defs/Y"}},"$defs":{"X":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}}}},"Y":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"b":{"type":"string"}}}}}}}"##;
+        let json_b: &str = r##"{"type":"object","properties":{"x":{"$ref":"#/$defs/X"},"y":{"$ref":"#/$defs/Y"}},"$defs":{"Y":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"b":{"type":"string"}}}}},"X":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}}}}}}"##;
+        let schema_a: JsonSchema = serde_json::from_str(json_a).unwrap();
+        let schema_b: JsonSchema = serde_json::from_str(json_b).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let expected: super::GenerateRustOutput = generate_rust(&[schema_a], &settings).unwrap();
+        let actual: super::GenerateRustOutput = generate_rust(&[schema_b], &settings).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    /// A schema's output does not depend on the other schemas in the batch when nothing is shared.
+    #[test]
+    fn unrelated_schema_in_batch_does_not_change_output() {
+        let json: &str = r#"{"type":"object","properties":{"first":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}},"second":{"title":"Item","type":"object","properties":{"b":{"type":"integer"}}}}}"#;
+        let other: &str = r#"{"title":"Other","type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"c":{"type":"boolean"}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let other_schema: JsonSchema = serde_json::from_str(other).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let alone: super::GenerateRustOutput =
+            generate_rust(std::slice::from_ref(&schema), &settings).unwrap();
+        let together: super::GenerateRustOutput =
+            generate_rust(&[schema, other_schema], &settings).unwrap();
+        let expected: &[u8] = &alone.per_schema[0];
+        let actual: &[u8] = &together.per_schema[0];
+        assert_eq!(expected, actual);
+    }
+
+    /// With dedup disabled, two identical inline objects with one title are two items with
+    /// suffixed names.
+    #[test]
+    fn dedupe_disabled_identical_inline_objects_get_numeric_suffixes() {
+        let json: &str = r#"{"type":"object","properties":{"a":{"title":"Point","type":"object","properties":{"x":{"type":"integer"}}},"b":{"title":"Point","type":"object","properties":{"x":{"type":"integer"}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .dedupe_mode(DedupeMode::Disabled)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Point")]
+pub struct Point0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Point")]
+pub struct Point1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<Point0>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<Point1>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Without `additionalProperties`, unknown keys are valid data: a flattened `serde_json::Value` map
+    /// captures them.
+    #[test]
+    fn additional_properties_absent_captures_unknown_keys_in_value_map() {
+        let json: &str =
+            r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// `UnknownProperties::Capture` adds the map even when the schema says `additionalProperties: false`
+    /// (and drops `deny_unknown_fields`).
+    #[test]
+    fn unknown_properties_capture_overrides_additional_properties_false() {
+        let json: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unknown_properties(UnknownProperties::Capture)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// `UnknownProperties::Drop` leaves out the map when `additionalProperties` is absent.
+    #[test]
+    fn unknown_properties_drop_omits_map_when_additional_properties_absent() {
+        let json: &str =
+            r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unknown_properties(UnknownProperties::Drop)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub name: String,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// `UnknownProperties::Drop` leaves out the map even for a typed `additionalProperties` schema.
+    #[test]
+    fn unknown_properties_drop_omits_typed_map() {
+        let json: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":{"type":"integer"}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unknown_properties(UnknownProperties::Drop)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub name: String,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// `UnknownProperties::Drop` keeps `deny_unknown_fields` for `additionalProperties: false`.
+    #[test]
+    fn unknown_properties_drop_keeps_deny_unknown_fields() {
+        let json: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unknown_properties(UnknownProperties::Drop)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub name: String,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A property named `additional` and the unknown-keys map collide: both get a numeric suffix.
+    #[test]
+    fn property_named_additional_collides_with_unknown_keys_map() {
+        let json: &str = r#"{"type":"object","properties":{"additional":{"type":"string"}},"required":["additional"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(rename = "additional")]
+    pub additional0: String,
+    #[serde(flatten)]
+    pub additional1: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Two different `pattern`s in a conjunction combine into one pattern of lookaheads.
+    #[test]
+    fn all_of_different_patterns_combine_into_lookaheads() {
+        let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}},{"type":"object","properties":{"x":{"type":"string","pattern":"^[0-9]+$"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(pattern = "^(?=[\\s\\S]*?(?:^[a-z]+$))(?=[\\s\\S]*?(?:^[0-9]+$))")]
+    pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Number bounds with an empty range have no valid value: an uninhabited enum.
+    #[test]
+    fn number_with_empty_range_emits_uninhabited_enum() {
+        let json: &str = r#"{"type":"object","properties":{"n":{"type":"number","minimum":1.5,"exclusiveMaximum":1.5}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum N {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: N,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// Equal integer bounds hold exactly one value: the narrowest type for it, not an uninhabited enum.
+    #[test]
+    fn integer_with_equal_bounds_emits_narrowest_type() {
+        let json: &str = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":5,"maximum":5}},"required":["n"]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub n: u8,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// The value type of a property's typed map is named after the property: `<key>Value`.
+    #[test]
+    fn map_value_struct_is_named_after_property_key() {
+        let json: &str = r#"{"type":"object","properties":{"foo":{"type":"object","additionalProperties":{"type":"object","properties":{"x":{"type":"integer"}}}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct FooValue {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foo: Option<BTreeMap<String, FooValue>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// The value type of a root map is named after the root: `RootValue`.
+    #[test]
+    fn map_value_struct_of_root_is_named_after_root() {
+        let json: &str = r#"{"type":"object","additionalProperties":{"type":"object","properties":{"x":{"type":"integer"}}}}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct RootValue {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+pub type Root = BTreeMap<String, RootValue>;
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Inline union variants of a `$defs` entry are named after the definition key.
+    #[test]
+    fn union_variant_structs_of_definition_are_named_after_definition_key() {
+        let json: &str = r##"{"type":"object","properties":{"s":{"$ref":"#/$defs/Shape"}},"$defs":{"Shape":{"anyOf":[{"type":"object","properties":{"r":{"type":"number"}}},{"type":"object","properties":{"w":{"type":"number"}}}]}}}"##;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct ShapeVariant0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct ShapeVariant1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub w: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum Shape {
+    Variant0(ShapeVariant0),
+    Variant1(ShapeVariant1),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s: Option<Shape>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Inline union variants of a titled root are named after the title.
+    #[test]
+    fn union_variant_structs_of_titled_root_are_named_after_title() {
+        let json: &str = r#"{"title":"Shape","oneOf":[{"type":"object","properties":{"r":{"type":"number"}}},{"type":"object","properties":{"w":{"type":"number"}}}]}"#;
+        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct ShapeVariant0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct ShapeVariant1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub w: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
+pub enum ShapeOneOf {
+    Variant0(ShapeVariant0),
+    Variant1(ShapeVariant1),
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Two by-value back-edges to the same struct are both boxed.
+    #[test]
+    fn cycle_with_two_back_edges_boxes_both() {
+        let schema: JsonSchema = JsonSchema::try_from(r##"{"title":"Tree","type":"object","properties":{"left":{"$ref":"#"},"right":{"$ref":"#"}}}"##).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Tree")]
+pub struct Tree {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left: Option<Box<Tree>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right: Option<Box<Tree>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A cycle through the root and a definition boxes each back-edge.
+    #[test]
+    fn cycle_through_root_and_definition_boxes_every_back_edge() {
+        let schema: JsonSchema = JsonSchema::try_from(r##"{"type":"object","properties":{"a":{"$ref":"#"},"b":{"$ref":"#/$defs/B"}},"$defs":{"B":{"type":"object","properties":{"r":{"$ref":"#"}}}}}"##).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct B {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r: Option<Box<Root>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<Box<Root>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<B>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A union of itself and null carries no type information: any value.
+    #[test]
+    fn nullable_self_reference_is_value() {
+        let schema: JsonSchema =
+            JsonSchema::try_from(r##"{"anyOf":[{"$ref":"#"},{"type":"null"}]}"##).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = serde_json::Value;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// Two definitions that are each other or null: any value.
+    #[test]
+    fn nullable_mutual_reference_is_value() {
+        let schema: JsonSchema = JsonSchema::try_from(r##"{"$defs":{"A":{"anyOf":[{"$ref":"#/$defs/B"},{"type":"null"}]},"B":{"anyOf":[{"$ref":"#/$defs/A"},{"type":"null"}]}},"properties":{"a":{"$ref":"#/$defs/A"}}}"##).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub a: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Defaults that fit the field type become functions; a default that does not fit (300 for u8, a UUID string) is left out.
+    #[test]
+    fn defaults_that_do_not_fit_the_type_are_left_out() {
+        let schema: JsonSchema = JsonSchema::try_from(r#"{"type": "object", "properties": {"x": {"type": "number", "default": 5}, "y": {"type": "number", "default": 2.5}, "u": {"type": "string", "format": "uuid", "default": "00000000-0000-0000-0000-000000000000"}, "b": {"type": "integer", "maximum": 10, "minimum": 0, "default": 300}, "c": {"type": "integer", "maximum": 10, "minimum": 0, "default": 7}, "s": {"type": "string", "default": "a\r\"b"}}, "required": ["x"]}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<u8>,
+    #[serde(default = "Root::default_c", skip_serializing_if = "Option::is_none")]
+    pub c: Option<u8>,
+    #[serde(default = "Root::default_s", skip_serializing_if = "Option::is_none")]
+    pub s: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub u: Option<Uuid>,
+    #[serde(default = "Root::default_x")]
+    pub x: f64,
+    #[serde(default = "Root::default_y", skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Root {
+    fn default_c() -> Option<u8> {
+        Some(7)
+    }
+
+    fn default_s() -> Option<String> {
+        Some("a\r\"b".to_string())
+    }
+
+    fn default_x() -> f64 {
+        5.0
+    }
+
+    fn default_y() -> Option<f64> {
+        Some(2.5)
+    }
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Default functions are associated functions, so `FooBar.baz` and `Foo.bar_baz` cannot clash.
+    #[test]
+    fn default_functions_with_same_snake_case_name_do_not_clash() {
+        let schema: JsonSchema = JsonSchema::try_from(r#"{"$defs":{"FooBar":{"type":"object","properties":{"baz":{"type":"integer","default":1}}},"Foo":{"type":"object","properties":{"bar_baz":{"type":"integer","default":2}}}}}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Foo {
+    #[serde(default = "Foo::default_bar_baz", skip_serializing_if = "Option::is_none")]
+    pub bar_baz: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Foo {
+    fn default_bar_baz() -> Option<i64> {
+        Some(2)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct FooBar {
+    #[serde(default = "FooBar::default_baz", skip_serializing_if = "Option::is_none")]
+    pub baz: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl FooBar {
+    fn default_baz() -> Option<i64> {
+        Some(1)
+    }
+}
+
+pub type Root = serde_json::Value;
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Control characters are escaped as Rust literals in renames and enum values.
+    #[test]
+    fn control_characters_in_keys_titles_and_enum_values_are_escaped() {
+        let schema: JsonSchema = JsonSchema::try_from(r#"{"type": "object", "title": "T\u0001", "properties": {"k\rx": {"type": "string"}, "e": {"enum": [1, "a\u0001b", {"k\"": [null, true]}]}}}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, json_schema_rs_macro::ToJsonSchema)]
+pub enum E {
+    #[json_schema(value = "a\u{1}b")]
+    AB,
+    #[json_schema(value = 1)]
+    N1,
+    #[json_schema(value = {"k\"": [null, true]})]
+    Object,
+}
+
+impl Serialize for E {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value: serde_json::Value = match self {
+            Self::AB => serde_json::json!("a\u{1}b"),
+            Self::N1 => serde_json::json!(1),
+            Self::Object => serde_json::json!({"k\"": [null, true]}),
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for E {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        if json_schema_rs::json_equal(&value, &serde_json::json!("a\u{1}b")) {
+            return Ok(Self::AB);
+        }
+        if json_schema_rs::json_equal(&value, &serde_json::json!(1)) {
+            return Ok(Self::N1);
+        }
+        if json_schema_rs::json_equal(&value, &serde_json::json!({"k\"": [null, true]})) {
+            return Ok(Self::Object);
+        }
+        Err(serde::de::Error::custom(format!("{value} is not a E value")))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "T\u{1}")]
+pub struct T {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub e: Option<E>,
+    #[serde(rename = "k\rx", skip_serializing_if = "Option::is_none")]
+    pub k_x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// The root keeps `Root` although a property refers back to it; a title with no letters falls
+    /// back to the key.
+    #[test]
+    fn root_keeps_root_name_when_a_property_refers_back_to_it() {
+        let schema: JsonSchema = JsonSchema::try_from(r##"{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#"}},"z":{"title":"!!","type":"object","properties":{"q":{"type":"string"}}}}}"##).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "!!")]
+pub struct Z {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<Root>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<Z>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
         assert_eq!(expected, actual);
     }
 }
