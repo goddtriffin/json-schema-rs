@@ -2717,3 +2717,295 @@ fn raw_dependencies_array_with_non_string_fails_to_compile() {
     ));
     assert_eq!(expected, actual);
 }
+
+// --- Sorted-map fast paths: `properties`, `required`, `additionalProperties: false` ---
+
+/// `count` names `p00`, `p01`, ... each mapped to `{"type": "integer"}`.
+fn integer_properties(count: usize) -> String {
+    let members: Vec<String> = (0..count)
+        .map(|i| format!(r#""p{i:02}":{{"type":"integer"}}"#))
+        .collect();
+    format!(r#"{{"properties":{{{}}}}}"#, members.join(","))
+}
+
+/// `count` names `p00`, `p01`, ... each mapped to `true`, with `additionalProperties: false`.
+fn closed_properties(count: usize) -> String {
+    let members: Vec<String> = (0..count).map(|i| format!(r#""p{i:02}":true"#)).collect();
+    format!(
+        r#"{{"properties":{{{}}},"additionalProperties":false}}"#,
+        members.join(",")
+    )
+}
+
+/// Validates `instance` against `schema` with the sorted-map fast paths turned off, as when
+/// `serde_json`'s `preserve_order` keeps maps in insertion order.
+fn validate_unsorted(schema: &JsonSchema, instance: &Value) -> ValidationResult {
+    let mut compiled: CompiledSchema = compile(schema);
+    compiled.sorted_maps = false;
+    compiled.validate(instance)
+}
+
+fn missing_required(property: &str) -> ValidationError {
+    ValidationError::MissingRequired {
+        instance_path: root().push(property),
+        property: property.to_string(),
+    }
+}
+
+fn disallowed_additional(property: &str) -> ValidationError {
+    ValidationError::DisallowedAdditionalProperty {
+        instance_path: root().push(property),
+        property: property.to_string(),
+    }
+}
+
+#[test]
+fn properties_walk_with_sorted_keys_checks_named_members() {
+    let s: JsonSchema = schema(&integer_properties(4));
+    let instance: Value = json!({"p00": 1, "p01": "x", "p02": 2, "q": "y", "p03": "z"});
+    let expected: ValidationResult = Err(vec![
+        expected_integer("/p01", "string"),
+        expected_integer("/p03", "string"),
+    ]);
+    let actual: ValidationResult = compile(&s).validate(&instance);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn properties_search_when_object_is_much_smaller_than_list() {
+    let s: JsonSchema = schema(&integer_properties(20));
+    let instance: Value = json!({"a": "x", "p03": "y", "p17": "z"});
+    let expected: ValidationResult = Err(vec![
+        expected_integer("/p03", "string"),
+        expected_integer("/p17", "string"),
+    ]);
+    let actual: ValidationResult = compile(&s).validate(&instance);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn properties_lookup_when_object_is_much_larger_than_list() {
+    let s: JsonSchema = schema(&integer_properties(1));
+    let instance: Value =
+        json!({"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, "p00": "x", "z": 7});
+    let expected: ValidationResult = Err(vec![expected_integer("/p00", "string")]);
+    let actual: ValidationResult = compile(&s).validate(&instance);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn properties_unsorted_maps_give_the_same_errors() {
+    let s: JsonSchema = schema(&integer_properties(4));
+    let instance: Value = json!({"p00": 1, "p01": "x", "p02": 2, "q": "y", "p03": "z"});
+    let expected: ValidationResult = compile(&s).validate(&instance);
+    let actual: ValidationResult = validate_unsorted(&s, &instance);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn properties_walk_annotates_member_positions() {
+    let s: JsonSchema =
+        schema(r#"{"properties":{"a":true,"c":true,"e":true},"unevaluatedProperties":false}"#);
+    let instance: Value = json!({"a": 1, "b": 2, "c": 3, "d": 4, "e": 5});
+    let expected: ValidationResult = Err(vec![unevaluated("/b", "b"), unevaluated("/d", "d")]);
+    let actual: ValidationResult = compile(&s).validate(&instance);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn properties_search_annotates_member_positions() {
+    let s: JsonSchema = schema(
+        r#"{"properties":{"p0":true,"p1":true,"p2":true,"p3":true,"p4":true,"p5":true,
+            "p6":true,"p7":true,"p8":true,"p9":true},"unevaluatedProperties":false}"#,
+    );
+    let instance: Value = json!({"a": 1, "p5": 2});
+    let expected: ValidationResult = Err(vec![unevaluated("/a", "a")]);
+    let actual: ValidationResult = compile(&s).validate(&instance);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn required_all_present_passes() {
+    let s: JsonSchema = schema(r#"{"required":["c","a","b","a"]}"#);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compile(&s).validate(&json!({"a": 1, "b": 2, "c": 3, "d": 4}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn required_more_names_than_members_reports_in_schema_order() {
+    let s: JsonSchema = schema(r#"{"required":["b","a","b","z"]}"#);
+    let expected: ValidationResult = Err(vec![
+        missing_required("b"),
+        missing_required("b"),
+        missing_required("z"),
+    ]);
+    let actual: ValidationResult = compile(&s).validate(&json!({"a": 1}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn required_sorted_walk_finds_missing_name() {
+    let s: JsonSchema = schema(r#"{"required":["c","a"]}"#);
+    let expected: ValidationResult = Err(vec![missing_required("c")]);
+    let actual: ValidationResult = compile(&s).validate(&json!({"a": 1, "b": 2, "d": 3}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn required_lookup_when_object_is_much_larger_than_list() {
+    let s: JsonSchema = schema(r#"{"required":["a"]}"#);
+    let expected: ValidationResult = Err(vec![missing_required("a")]);
+    let actual: ValidationResult =
+        compile(&s).validate(&json!({"b": 1, "c": 2, "d": 3, "e": 4, "f": 5, "g": 6}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn required_verdicts_agree_with_and_without_sorted_maps() {
+    let s: JsonSchema = schema(r#"{"required":["c","a"]}"#);
+    let instances: [Value; 4] = [
+        json!({"a": 1, "c": 2}),
+        json!({"a": 1, "b": 2, "d": 3}),
+        json!({"a": 1}),
+        json!({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1}),
+    ];
+    let sorted: CompiledSchema = compile(&s);
+    let mut unsorted: CompiledSchema = compile(&s);
+    unsorted.sorted_maps = false;
+    let expected: (Vec<bool>, Vec<bool>) = (
+        vec![true, false, false, true],
+        vec![true, false, false, true],
+    );
+    let actual: (Vec<bool>, Vec<bool>) = (
+        instances.iter().map(|i| sorted.is_valid(i)).collect(),
+        instances.iter().map(|i| unsorted.is_valid(i)).collect(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn required_unsorted_maps_give_the_same_errors() {
+    let s: JsonSchema = schema(r#"{"required":["b","a","b","z"]}"#);
+    let instance: Value = json!({"a": 1});
+    let expected: ValidationResult = compile(&s).validate(&instance);
+    let actual: ValidationResult = validate_unsorted(&s, &instance);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn no_additional_properties_sorted_walk_passes_known_members() {
+    let s: JsonSchema = schema(&closed_properties(3));
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compile(&s).validate(&json!({"p00": 1, "p02": 2}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn no_additional_properties_sorted_walk_reports_unknown_members() {
+    let s: JsonSchema = schema(&closed_properties(3));
+    let expected: ValidationResult = Err(vec![
+        disallowed_additional("a"),
+        disallowed_additional("p01x"),
+    ]);
+    let actual: ValidationResult = compile(&s).validate(&json!({"a": 0, "p00": 1, "p01x": 2}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn no_additional_properties_lookup_when_object_is_much_smaller_than_list() {
+    let s: JsonSchema = schema(&closed_properties(20));
+    let expected: ValidationResult = Err(vec![disallowed_additional("zz")]);
+    let actual: ValidationResult = compile(&s).validate(&json!({"p03": 1, "zz": 2}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn no_additional_properties_without_properties_rejects_every_member() {
+    let s: JsonSchema = schema(r#"{"additionalProperties":false}"#);
+    let expected: ValidationResult = Err(vec![disallowed_additional("a")]);
+    let actual: ValidationResult = compile(&s).validate(&json!({"a": 1}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn no_additional_properties_unsorted_maps_give_the_same_errors() {
+    let s: JsonSchema = schema(&closed_properties(20));
+    let instance: Value = json!({"a": 0, "p03": 1, "zz": 2});
+    let expected: ValidationResult = compile(&s).validate(&instance);
+    let actual: ValidationResult = validate_unsorted(&s, &instance);
+    assert_eq!(expected, actual);
+}
+
+// --- Fast paths of string keywords ---
+
+#[test]
+fn min_length_decided_from_byte_length_and_by_counting() {
+    let s: JsonSchema = schema(r#"{"minLength":2}"#);
+    let compiled: CompiledSchema = compile(&s);
+    let expected: Vec<ValidationResult> = vec![
+        Ok(()),
+        Ok(()),
+        Err(vec![ValidationError::TooShort {
+            instance_path: root(),
+            min_length: 2,
+            actual_length: 1,
+        }]),
+    ];
+    let actual: Vec<ValidationResult> = vec![
+        compiled.validate(&json!("abcdefgh")),
+        compiled.validate(&json!("éé")),
+        compiled.validate(&json!("😀")),
+    ];
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn simple_pattern_and_regex_fallback_report_alike() {
+    let s: JsonSchema = schema(r#"{"items":{"pattern":"^[a-z]+$"}}"#);
+    let expected: ValidationResult = Err(vec![
+        ValidationError::PatternMismatch {
+            instance_path: ptr("/1"),
+            pattern: "^[a-z]+$".to_string(),
+            value: "ab1".to_string(),
+        },
+        ValidationError::PatternMismatch {
+            instance_path: ptr("/3"),
+            pattern: "^[a-z]+$".to_string(),
+            value: "abé".to_string(),
+        },
+    ]);
+    let actual: ValidationResult = compile(&s).validate(&json!(["abc", "ab1", "ab", "abé"]));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn property_names_reuses_its_buffer_for_each_name() {
+    let s: JsonSchema = schema(r#"{"propertyNames":{"maxLength":2}}"#);
+    let expected: ValidationResult = Err(vec![
+        ValidationError::InvalidPropertyName {
+            instance_path: ptr("/abc"),
+            property: "abc".to_string(),
+        },
+        ValidationError::InvalidPropertyName {
+            instance_path: ptr("/long"),
+            property: "long".to_string(),
+        },
+    ]);
+    let actual: ValidationResult =
+        compile(&s).validate(&json!({"abc": 1, "ab": 2, "long": 3, "x": 4}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn shared_enum_list_reports_each_schema_alike() {
+    let s: JsonSchema = schema(r#"{"properties":{"a":{"enum":["x",1]},"b":{"enum":["x",1]}}}"#);
+    let not_in_enum = |path: &str| ValidationError::NotInEnum {
+        instance_path: ptr(path),
+        invalid_value: "2".to_string(),
+        allowed: vec!["\"x\"".to_string(), "1".to_string()],
+    };
+    let expected: ValidationResult = Err(vec![not_in_enum("/a"), not_in_enum("/b")]);
+    let actual: ValidationResult = compile(&s).validate(&json!({"a": 2, "b": 2}));
+    assert_eq!(expected, actual);
+}

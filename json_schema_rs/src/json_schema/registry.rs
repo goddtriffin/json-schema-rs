@@ -1782,6 +1782,15 @@ impl<'a> Registry<'a> {
         Ok(self.resolved(target))
     }
 
+    /// The target of every `$ref` the registry resolved (one per resource and reference string,
+    /// so a target may repeat): every schema [`Registry::resolve`] can return.
+    pub(crate) fn ref_targets(&self) -> impl Iterator<Item = Resolved<'_>> {
+        self.resources
+            .iter()
+            .flat_map(|resource| resource.refs.values())
+            .map(|target| self.resolved(target))
+    }
+
     /// Whether the resource `scope` is in declares the `$dynamicAnchor` `name` (resolvable in
     /// that scope as `#name`).
     pub(crate) fn has_dynamic_anchor(&self, scope: Scope, name: &str) -> bool {

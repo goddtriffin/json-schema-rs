@@ -8,6 +8,7 @@ mod compiled;
 mod error;
 mod eval;
 mod format;
+mod simple_pattern;
 #[cfg(test)]
 mod tests_keywords;
 

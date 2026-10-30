@@ -11,7 +11,10 @@
 //! in-place loop (a `$ref` re-entered at the same instance location without consuming any of
 //! the instance) fails that branch with [`ValidationError::RefCycle`].
 
-use super::compiled::{CompiledSchema, Keyword, KnownProperties, Node, NodeId};
+use super::compiled::{
+    CompiledSchema, Contains, DynamicRef, Keyword, KnownProperties, Node, NodeId, PrefixItems,
+    Required,
+};
 use super::error::{ValidationError, ValidationResult};
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{JsonType, Scope, TypeSet};
@@ -42,6 +45,14 @@ enum Step<'a> {
     Root,
     Key(&'a str),
     Index(usize),
+    /// A `$ref` (or dynamic reference) followed in place to `target`: the same instance, no
+    /// pointer segment. These steps are the in-place loop guard (see
+    /// [`CompiledSchema::follow`]), with how many resources declaring a dynamic anchor were in
+    /// the dynamic scope (see [`CompiledSchema::anchor_resources`]).
+    Ref {
+        target: NodeId,
+        anchors: usize,
+    },
 }
 
 impl<'a> Location<'a> {
@@ -65,11 +76,17 @@ impl<'a> Location<'a> {
     }
 
     fn pointer(&self) -> JsonPointer {
-        let mut segments: Vec<String> = Vec::new();
+        let mut count: usize = 0;
         let mut cursor: Option<&Location<'_>> = Some(self);
         while let Some(location) = cursor {
+            count += usize::from(matches!(location.step, Step::Key(_) | Step::Index(_)));
+            cursor = location.parent;
+        }
+        let mut segments: Vec<String> = Vec::with_capacity(count);
+        cursor = Some(self);
+        while let Some(location) = cursor {
             match location.step {
-                Step::Root => {}
+                Step::Root | Step::Ref { .. } => {}
                 Step::Key(key) => segments.push(key.to_string()),
                 Step::Index(index) => segments.push(index.to_string()),
             }
@@ -81,20 +98,28 @@ impl<'a> Location<'a> {
 }
 
 /// Which members (by position in the object) or items (by index) of the current instance some
-/// keyword evaluated: the annotations `unevaluatedProperties` / `unevaluatedItems` read.
+/// keyword evaluated: the annotations `unevaluatedProperties` / `unevaluatedItems` read. A bitset
+/// whose first word is inline, so instances of up to 64 members or items never allocate.
 #[derive(Default)]
 pub(crate) struct Evaluated {
     all: bool,
-    bits: Vec<u64>,
+    first: u64,
+    /// Words for indexes 64 and up.
+    rest: Vec<u64>,
 }
 
 impl Evaluated {
     fn mark(&mut self, index: usize) {
-        let word: usize = index / 64;
-        if self.bits.len() <= word {
-            self.bits.resize(word + 1, 0);
+        let bit: u64 = 1 << (index % 64);
+        match (index / 64).checked_sub(1) {
+            None => self.first |= bit,
+            Some(word) => {
+                if self.rest.len() <= word {
+                    self.rest.resize(word + 1, 0);
+                }
+                self.rest[word] |= bit;
+            }
         }
-        self.bits[word] |= 1 << (index % 64);
     }
 
     const fn mark_all(&mut self) {
@@ -102,19 +127,20 @@ impl Evaluated {
     }
 
     fn contains(&self, index: usize) -> bool {
-        self.all
-            || self
-                .bits
-                .get(index / 64)
-                .is_some_and(|word| word >> (index % 64) & 1 == 1)
+        let word: Option<u64> = match (index / 64).checked_sub(1) {
+            None => Some(self.first),
+            Some(word) => self.rest.get(word).copied(),
+        };
+        self.all || word.is_some_and(|word| word >> (index % 64) & 1 == 1)
     }
 
     fn merge(&mut self, other: &Evaluated) {
         self.all |= other.all;
-        if self.bits.len() < other.bits.len() {
-            self.bits.resize(other.bits.len(), 0);
+        self.first |= other.first;
+        if self.rest.len() < other.rest.len() {
+            self.rest.resize(other.rest.len(), 0);
         }
-        for (mine, theirs) in self.bits.iter_mut().zip(&other.bits) {
+        for (mine, theirs) in self.rest.iter_mut().zip(&other.rest) {
             *mine |= theirs;
         }
     }
@@ -125,11 +151,6 @@ impl Evaluated {
 struct Context {
     errors: Vec<ValidationError>,
     depth: usize,
-    /// `$ref` targets entered, with the instance they were entered at (by address): the
-    /// in-place loop guard.
-    /// With each, how many resources declaring a dynamic anchor were in the dynamic scope (see
-    /// [`CompiledSchema::anchor_resources`]).
-    refs: Vec<(NodeId, *const Value, usize)>,
     /// Schema resources entered, outermost first (only when a dynamic reference needs them).
     dynamic_scope: Vec<Scope>,
     /// Where the depth guard fired. Once set, every evaluation fails at once and the result is
@@ -196,6 +217,45 @@ fn first_duplicate(items: &[Value]) -> Option<&Value> {
     }
     let mut seen: HashSet<JsonEqKey<'_>> = HashSet::with_capacity(items.len());
     items.iter().find(|item| !seen.insert(JsonEqKey(item)))
+}
+
+/// A sorted walk over an object and a sorted name list pays off while neither has more than
+/// this many entries per entry of the other; past it, looking up the smaller side's entries in
+/// the larger one is cheaper.
+const MERGE_RATIO: usize = 4;
+
+/// Whether the object (its keys in sorted order) has every one of the sorted, distinct `names`:
+/// one walk over both.
+fn contains_all_names(object: &Map<String, Value>, names: &[Box<str>]) -> bool {
+    let mut keys: serde_json::map::Keys<'_> = object.keys();
+    'names: for name in names {
+        for key in keys.by_ref() {
+            match key.as_str().cmp(name) {
+                Ordering::Less => {}
+                Ordering::Equal => continue 'names,
+                Ordering::Greater => return false,
+            }
+        }
+        return false;
+    }
+    true
+}
+
+/// Whether every key of the object (in sorted order) is one of the sorted `names`: one walk over
+/// both.
+fn all_keys_known(object: &Map<String, Value>, names: &[(Box<str>, NodeId)]) -> bool {
+    let mut names: std::slice::Iter<'_, (Box<str>, NodeId)> = names.iter();
+    'keys: for key in object.keys() {
+        for (name, _) in names.by_ref() {
+            match (**name).cmp(key.as_str()) {
+                Ordering::Less => {}
+                Ordering::Equal => continue 'keys,
+                Ordering::Greater => return false,
+            }
+        }
+        return false;
+    }
+    true
 }
 
 /// Records an error in collect mode. Out of line and cold, so building the error (and its
@@ -372,7 +432,7 @@ impl CompiledSchema {
                     || Self::type_error::<COLLECT>(*types, at, cx)
             }
             (Keyword::Const(expected), _) => Self::const_check::<COLLECT>(expected, at, cx),
-            (Keyword::Enum(allowed), _) => Self::enum_check::<COLLECT>(allowed, at, cx),
+            (Keyword::Enum(id), _) => Self::enum_check::<COLLECT>(self.enum_values(*id), at, cx),
             (
                 Keyword::Minimum(_)
                 | Keyword::Maximum(_)
@@ -403,14 +463,12 @@ impl CompiledSchema {
             (Keyword::Ref { target, ref_str }, _) => {
                 self.follow::<COLLECT>(*target, ref_str, at, cx, evaluated)
             }
-            (
-                Keyword::DynamicRef {
+            (Keyword::DynamicRef(dynamic), _) => {
+                let DynamicRef {
                     fallback,
                     anchor,
                     ref_str,
-                },
-                _,
-            ) => {
+                } = &**dynamic;
                 let target: NodeId = self.dynamic_target(*fallback, anchor, cx);
                 self.follow::<COLLECT>(target, ref_str, at, cx, evaluated)
             }
@@ -422,8 +480,8 @@ impl CompiledSchema {
                     .unwrap_or(*fallback);
                 self.follow::<COLLECT>(target, ref_str, at, cx, evaluated)
             }
-            (Keyword::Properties(properties), Value::Object(object)) => {
-                self.properties::<COLLECT>(properties, object, at, cx, evaluated)
+            (Keyword::Properties(id), Value::Object(object)) => {
+                self.properties::<COLLECT>(self.property_list(*id), object, at, cx, evaluated)
             }
             (Keyword::PatternProperties(patterns), Value::Object(object)) => {
                 self.pattern_properties::<COLLECT>(patterns, object, at, cx, evaluated)
@@ -440,11 +498,15 @@ impl CompiledSchema {
             (Keyword::UnevaluatedProperties(node), Value::Object(object)) => {
                 self.unevaluated_properties::<COLLECT>(*node, object, at, cx, evaluated)
             }
-            (Keyword::Items { prefix, rest }, Value::Array(items)) => {
+            (Keyword::Items(rest), Value::Array(items)) => {
+                self.items::<COLLECT>(&[], Some(*rest), items, at, cx, evaluated)
+            }
+            (Keyword::PrefixItems(tuple), Value::Array(items)) => {
+                let PrefixItems { prefix, rest } = &**tuple;
                 self.items::<COLLECT>(prefix, *rest, items, at, cx, evaluated)
             }
-            (Keyword::Contains { .. }, Value::Array(items)) => {
-                self.contains::<COLLECT>(keyword, items, at, cx, evaluated)
+            (Keyword::Contains(contains), Value::Array(items)) => {
+                self.contains::<COLLECT>(contains, items, at, cx, evaluated)
             }
             (Keyword::UnevaluatedItems(node), Value::Array(items)) => {
                 self.unevaluated_items::<COLLECT>(*node, items, at, cx, evaluated)
@@ -486,8 +548,9 @@ impl CompiledSchema {
                 | Keyword::PropertyNames(_)
                 | Keyword::DependentSchemas(_)
                 | Keyword::UnevaluatedProperties(_)
-                | Keyword::Items { .. }
-                | Keyword::Contains { .. }
+                | Keyword::Items(_)
+                | Keyword::PrefixItems(_)
+                | Keyword::Contains(_)
                 | Keyword::UnevaluatedItems(_),
                 _,
             ) => true,
@@ -535,20 +598,30 @@ impl CompiledSchema {
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        let address: *const Value = at.instance;
-        // Entries for this instance location are the newest ones: a child location's entries
-        // are popped before its parent is evaluated further.
+        // The references followed at this instance location are the `Ref` steps directly above
+        // it: the step that entered the location (a key, an index, the root) ends them.
         // Re-entering under a dynamic scope with more anchor-declaring resources is not a
         // loop: a dynamic reference inside may now resolve elsewhere. That count only grows
         // along a path and is bounded by the number of resources, so the guard still ends
         // every loop.
         let anchors: usize = self.anchor_resources(cx);
-        let looping: bool = cx
-            .refs
-            .iter()
-            .rev()
-            .take_while(|(_, p, _)| std::ptr::eq(*p, address))
-            .any(|(node, _, seen)| *node == target && *seen == anchors);
+        let mut looping: bool = false;
+        let mut cursor: Option<&Location<'_>> = Some(at.location);
+        while let Some(Location {
+            parent,
+            step:
+                Step::Ref {
+                    target: seen_target,
+                    anchors: seen_anchors,
+                },
+        }) = cursor
+        {
+            if *seen_target == target && *seen_anchors == anchors {
+                looping = true;
+                break;
+            }
+            cursor = *parent;
+        }
         if looping {
             return fail!(
                 COLLECT,
@@ -559,10 +632,15 @@ impl CompiledSchema {
                 }
             );
         }
-        cx.refs.push((target, address, anchors));
-        let ok: bool = self.in_place::<COLLECT>(target, at, cx, evaluated);
-        cx.refs.pop();
-        ok
+        let entered: Location<'_> = Location {
+            parent: Some(at.location),
+            step: Step::Ref { target, anchors },
+        };
+        let at: At<'_, '_> = At {
+            instance: at.instance,
+            location: &entered,
+        };
+        self.in_place::<COLLECT>(target, at, cx, evaluated)
     }
 
     /// How many distinct resources in the dynamic scope declare a dynamic anchor a dynamic
@@ -733,6 +811,10 @@ impl CompiledSchema {
         // Lengths count Unicode code points; a string has at most as many as it has bytes.
         match keyword {
             Keyword::MinLength(min_length) => {
+                // A code point takes at most four bytes: enough bytes decide without counting.
+                if s.len() as u64 / 4 >= *min_length {
+                    return true;
+                }
                 let count: u64 = s.chars().count() as u64;
                 count >= *min_length
                     || fail!(
@@ -763,7 +845,7 @@ impl CompiledSchema {
             }
             Keyword::Pattern(id) => {
                 let pattern = self.pattern(*id);
-                pattern.regex.find(s).is_some()
+                pattern.is_match(s)
                     || fail!(
                         COLLECT,
                         cx,
@@ -840,11 +922,14 @@ impl CompiledSchema {
 
     /// Whether `name` is one `properties` or `patternProperties` covers.
     fn is_known(&self, known: &KnownProperties, name: &str) -> bool {
-        known.names.binary_search_by(|n| (**n).cmp(name)).is_ok()
-            || known
-                .patterns
-                .iter()
-                .any(|id| self.pattern(*id).regex.find(name).is_some())
+        known.names.is_some_and(|id| {
+            self.property_list(id)
+                .binary_search_by(|(n, _)| (**n).cmp(name))
+                .is_ok()
+        }) || known
+            .patterns
+            .iter()
+            .any(|id| self.pattern(*id).is_match(name))
     }
 
     fn object_assertion<const COLLECT: bool>(
@@ -856,16 +941,7 @@ impl CompiledSchema {
     ) -> bool {
         let count: u64 = object.len() as u64;
         match keyword {
-            Keyword::Required(names) => each!(COLLECT, names.iter(), |name| object
-                .contains_key(&**name)
-                || fail!(
-                    COLLECT,
-                    cx,
-                    ValidationError::MissingRequired {
-                        instance_path: at.location.key(name).pointer(),
-                        property: name.to_string(),
-                    }
-                )),
+            Keyword::Required(required) => self.required::<COLLECT>(required, object, at, cx),
             Keyword::MinProperties(min_properties) => {
                 count >= *min_properties
                     || fail!(
@@ -908,6 +984,23 @@ impl CompiledSchema {
                     )
             ),
             Keyword::NoAdditionalProperties(known) => {
+                // Without patterns and with a list about the object's size, one walk over the
+                // sorted names decides; the member by member check below then runs only to
+                // report the members that are not known.
+                let names: &[(Box<str>, NodeId)] =
+                    known.names.map_or(&[], |id| self.property_list(id));
+                if self.sorted_maps
+                    && known.patterns.is_empty()
+                    && object.len() <= MERGE_RATIO * names.len()
+                    && names.len() <= MERGE_RATIO * object.len()
+                {
+                    if all_keys_known(object, names) {
+                        return true;
+                    }
+                    if !COLLECT {
+                        return false;
+                    }
+                }
                 each!(COLLECT, object.keys(), |key| self.is_known(known, key)
                     || fail!(
                         COLLECT,
@@ -922,6 +1015,43 @@ impl CompiledSchema {
         }
     }
 
+    /// `required`: decided against the object's sorted keys in one pass when the maps are
+    /// sorted and the object is not much larger than the list; errors are built in schema order,
+    /// by looking each name up.
+    fn required<const COLLECT: bool>(
+        &self,
+        required: &Required,
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
+        let Required { names, sorted } = required;
+        if self.sorted_maps {
+            // More distinct names than members: some name is missing.
+            let decided: Option<bool> = if sorted.len() > object.len() {
+                Some(false)
+            } else if object.len() <= MERGE_RATIO * sorted.len() {
+                Some(contains_all_names(object, sorted))
+            } else {
+                None
+            };
+            match decided {
+                Some(true) => return true,
+                Some(false) if !COLLECT => return false,
+                Some(false) | None => {}
+            }
+        }
+        each!(COLLECT, names.iter(), |name| object.contains_key(&**name)
+            || fail!(
+                COLLECT,
+                cx,
+                ValidationError::MissingRequired {
+                    instance_path: at.location.key(name).pointer(),
+                    property: name.to_string(),
+                }
+            ))
+    }
+
     fn properties<const COLLECT: bool>(
         &self,
         properties: &[(Box<str>, NodeId)],
@@ -930,8 +1060,37 @@ impl CompiledSchema {
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        // Walk the shorter side: the schema's names (looking each up in the object) unless
-        // annotations need each member's position.
+        // Sorted maps and a list about the object's size: walk the members and the names
+        // together.
+        let comparable: bool = object.len() <= MERGE_RATIO * properties.len()
+            && properties.len() <= MERGE_RATIO * object.len();
+        if self.sorted_maps && comparable {
+            let mut next: usize = 0;
+            return each!(
+                COLLECT,
+                object.iter().enumerate().filter_map(|(i, (key, value))| {
+                    while let Some((name, node)) = properties.get(next) {
+                        match (**name).cmp(key.as_str()) {
+                            Ordering::Less => next += 1,
+                            Ordering::Equal => {
+                                next += 1;
+                                return Some((i, key, value, *node));
+                            }
+                            Ordering::Greater => return None,
+                        }
+                    }
+                    None
+                }),
+                |(i, key, value, node)| {
+                    if let Some(evaluated) = evaluated.as_deref_mut() {
+                        evaluated.mark(i);
+                    }
+                    self.eval::<COLLECT>(node, value, &at.location.key(key), cx, None)
+                }
+            );
+        }
+        // A much larger object: look each name up, unless annotations need each member's
+        // position.
         if evaluated.is_none() && properties.len() <= object.len() {
             return each!(
                 COLLECT,
@@ -947,22 +1106,28 @@ impl CompiledSchema {
                 )
             );
         }
+        // Otherwise binary-search each key; with sorted maps, only among the names after the
+        // previous key.
+        let mut rest: &[(Box<str>, NodeId)] = properties;
         each!(
             COLLECT,
             object.iter().enumerate(),
-            |(i, (key, value))| match properties.binary_search_by(|(n, _)| (**n).cmp(key)) {
-                Err(_) => true,
+            |(i, (key, value))| match rest.binary_search_by(|(n, _)| (**n).cmp(key)) {
+                Err(insert) => {
+                    if self.sorted_maps {
+                        rest = &rest[insert..];
+                    }
+                    true
+                }
                 Ok(found) => {
+                    let node: NodeId = rest[found].1;
+                    if self.sorted_maps {
+                        rest = &rest[found + 1..];
+                    }
                     if let Some(evaluated) = evaluated.as_deref_mut() {
                         evaluated.mark(i);
                     }
-                    self.eval::<COLLECT>(
-                        properties[found].1,
-                        value,
-                        &at.location.key(key),
-                        cx,
-                        None,
-                    )
+                    self.eval::<COLLECT>(node, value, &at.location.key(key), cx, None)
                 }
             }
         )
@@ -980,7 +1145,7 @@ impl CompiledSchema {
             COLLECT,
             object.iter().enumerate().flat_map(|(i, kv)| patterns
                 .iter()
-                .filter(|(pattern, _)| self.pattern(*pattern).regex.find(kv.0).is_some())
+                .filter(|(pattern, _)| self.pattern(*pattern).is_match(kv.0))
                 .map(move |(_, node)| (i, kv, node))),
             |(i, (key, value), node)| {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
@@ -1022,8 +1187,13 @@ impl CompiledSchema {
         at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
+        // One buffer holds each name in turn, so names are not allocated one by one.
+        let mut name: Value = Value::String(String::new());
         each!(COLLECT, object.keys(), |key| {
-            let name: Value = Value::String(key.clone());
+            if let Value::String(buffer) = &mut name {
+                buffer.clear();
+                buffer.push_str(key);
+            }
             let child: Location<'_> = at.location.key(key);
             self.eval::<false>(node, &name, &child, cx, None)
                 || fail!(
@@ -1124,21 +1294,18 @@ impl CompiledSchema {
 
     fn contains<const COLLECT: bool>(
         &self,
-        keyword: &Keyword,
+        contains: &Contains,
         items: &[Value],
         at: At<'_, '_>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        let Keyword::Contains {
+        let Contains {
             node,
             min,
             max,
             annotates,
-        } = keyword
-        else {
-            return true;
-        };
+        } = contains;
         let annotating: bool = *annotates && evaluated.is_some();
         let mut match_count: u64 = 0;
         for (i, item) in items.iter().enumerate() {
