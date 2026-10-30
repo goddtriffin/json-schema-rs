@@ -757,12 +757,30 @@ pub struct Registry<'a> {
     resources: Vec<Resource>,
 }
 
-/// A `$ref` waiting to be resolved: the scope it appears in, the reference as written, and the
-/// JSON Pointer (within its document) of the schema that has it.
+/// A `$ref` waiting to be resolved: the scope it appears in, the reference as written, and where
+/// the schema that has it is.
 struct PendingRef {
     scope: Scope,
     ref_str: String,
-    location: Vec<String>,
+    origin: RefOrigin,
+}
+
+/// Where a queued `$ref` is written.
+enum RefOrigin {
+    /// In a document walk: the walk and the node's visit number in it. The JSON Pointer is built
+    /// only if the `$ref` does not resolve (see [`Builder::replay`]), since most do.
+    Walk { walk: usize, visit: usize },
+    /// In a raw value discovered as a `$ref` target: its encoded JSON Pointer.
+    Located(String),
+}
+
+/// One discovery walk of a document from its root, kept so a failed `$ref`'s location can be
+/// found again by replaying it.
+struct Walk {
+    document: usize,
+    /// `(visit number, scope)` for each node whose scope differs from its parent's (a node with
+    /// `$id`): with these the replay visits the same nodes in the same order.
+    scope_changes: Vec<(usize, Scope)>,
 }
 
 /// Build-time state around the registry being built.
@@ -784,6 +802,8 @@ struct Builder<'a, 'b> {
     fetch_failed: HashMap<Uri, RegistryError>,
     /// Every problem found so far, in the order found.
     errors: Vec<RegistryError>,
+    /// Document walks, for [`Builder::replay`].
+    walks: Vec<Walk>,
 }
 
 impl<'a, 'b> Builder<'a, 'b> {
@@ -832,6 +852,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             pending: VecDeque::new(),
             fetch_failed: HashMap::new(),
             errors: Vec::new(),
+            walks: Vec::new(),
         })
     }
 
@@ -841,11 +862,23 @@ impl<'a, 'b> Builder<'a, 'b> {
     fn build(mut self, root: DocumentRoot<'a>) -> Result<Registry<'a>, RegistryErrors> {
         let base: Uri = self.root_base.clone();
         self.add_document(base, root, None);
+        // Failed `$ref`s whose location is still to be found: (error index, walk, visit).
+        let mut unlocated: Vec<(usize, usize, usize)> = Vec::new();
         while let Some(pending) = self.pending.pop_front() {
+            let walk_visit: Option<(usize, usize)> = match pending.origin {
+                RefOrigin::Walk { walk, visit } => Some((walk, visit)),
+                RefOrigin::Located(_) => None,
+            };
+            // Resolving may record other problems first (a document it loads), so the error's
+            // index is taken after.
             if let Err(error) = self.resolve_pending(pending) {
+                if let Some((walk, visit)) = walk_visit {
+                    unlocated.push((self.errors.len(), walk, visit));
+                }
                 self.errors.push(error);
             }
         }
+        self.locate_failed_refs(&unlocated);
         // A schema discovered twice (through the typed model and as a `$ref` target) reports
         // its problems twice; keep the first of each.
         let mut errors: Vec<RegistryError> = Vec::with_capacity(self.errors.len());
@@ -872,7 +905,12 @@ impl<'a, 'b> Builder<'a, 'b> {
         self.registry.documents.push(Document { root, scope });
         let node: Option<Node<'_>> = walked.schema_ref().as_object().map(Node::Typed);
         if let Some(node) = node {
-            self.discover(node, document, &[], scope);
+            let walk: usize = self.walks.len();
+            self.walks.push(Walk {
+                document,
+                scope_changes: Vec::new(),
+            });
+            self.discover(node, document, &[], scope, Some(walk));
         }
     }
 
@@ -1097,6 +1135,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         document: usize,
         base_pointer: &[String],
         parent_scope: Scope,
+        walk: Option<usize>,
     ) {
         // Path arena: each entry is (parent entry, segment); materialised only when needed.
         let mut paths: Vec<(usize, Segment<'_>)> = Vec::new();
@@ -1116,7 +1155,9 @@ impl<'a, 'b> Builder<'a, 'b> {
             out.extend(rev.into_iter().rev());
             out
         };
+        let mut visit: usize = 0;
         while let Some((node, path, parent_scope)) = stack.pop() {
+            visit += 1;
             let dialect: Dialect = self.registry.resources[parent_scope.0].dialect;
             let mut scope: Scope = parent_scope;
             if let Some(id) = node.effective_id(dialect) {
@@ -1167,6 +1208,11 @@ impl<'a, 'b> Builder<'a, 'b> {
                     self.add_anchor(scope, name, pointer, false);
                 }
             }
+            if let Some(walk) = walk
+                && scope != parent_scope
+            {
+                self.walks[walk].scope_changes.push((visit, scope));
+            }
             let dialect: Dialect = self.registry.resources[scope.0].dialect;
             if dialect.keyword("$anchor").is_some()
                 && let Some(name) = node.get_str("$anchor")
@@ -1181,24 +1227,75 @@ impl<'a, 'b> Builder<'a, 'b> {
                 self.add_anchor(scope, name, pointer, true);
             }
             if let Some(ref_str) = node.ref_() {
+                let origin: RefOrigin = match walk {
+                    Some(walk) => RefOrigin::Walk { walk, visit },
+                    None => RefOrigin::Located(encoded_pointer(base_pointer, &paths, path)),
+                };
                 self.pending.push_back(PendingRef {
                     scope,
                     ref_str: ref_str.to_string(),
-                    location: materialise(&paths, path),
+                    origin,
                 });
             }
-            let mut kids: Vec<(Node<'_>, Vec<Segment<'_>>)> = children(node, dialect);
-            // Reverse so children are visited in schema order (deterministic errors).
-            kids.reverse();
-            for (child, segments) in kids {
-                let mut at: usize = path.unwrap_or(usize::MAX);
-                for segment in segments {
-                    paths.push((at, segment));
-                    at = paths.len() - 1;
-                }
-                stack.push((child, Some(at), scope));
+            push_children(&mut stack, &mut paths, node, path, scope, dialect);
+        }
+    }
+
+    /// Fills in the location of each failed `$ref` in `unlocated` (error index, walk, visit) by
+    /// replaying its walk.
+    fn locate_failed_refs(&mut self, unlocated: &[(usize, usize, usize)]) {
+        let mut by_walk: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for &(_, walk, visit) in unlocated {
+            by_walk.entry(walk).or_default().push(visit);
+        }
+        let mut found: HashMap<(usize, usize), String> = HashMap::new();
+        for (walk, visits) in by_walk {
+            for (visit, location) in self.replay(walk, &visits) {
+                found.insert((walk, visit), location);
             }
         }
+        for &(index, walk, visit) in unlocated {
+            if let Some(location) = found.remove(&(walk, visit))
+                && let RegistryError::UnresolvableRef { location: at, .. }
+                | RegistryError::RefTargetNotSchema { location: at, .. } =
+                    &mut self.errors[index]
+            {
+                *at = location;
+            }
+        }
+    }
+
+    /// Walks a document again exactly as [`Builder::discover`] did (same children, same order,
+    /// the scopes it recorded) and returns the encoded JSON Pointer of each node whose visit
+    /// number is in `visits`.
+    fn replay(&self, walk: usize, visits: &[usize]) -> Vec<(usize, String)> {
+        let Walk {
+            document,
+            scope_changes,
+        } = &self.walks[walk];
+        let document: &Document<'a> = &self.registry.documents[*document];
+        let root: DocumentRoot<'a> = document.root.clone();
+        let Some(node) = root.schema_ref().as_object().map(Node::Typed) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(usize, String)> = Vec::new();
+        let mut changes = scope_changes.iter().peekable();
+        let mut paths: Vec<(usize, Segment<'_>)> = Vec::new();
+        let mut stack: Vec<(Node<'_>, Option<usize>, Scope)> = vec![(node, None, document.scope)];
+        let mut visit: usize = 0;
+        while let Some((node, path, parent_scope)) = stack.pop() {
+            visit += 1;
+            let scope: Scope = match changes.next_if(|(at, _)| *at == visit) {
+                Some((_, scope)) => *scope,
+                None => parent_scope,
+            };
+            if visits.contains(&visit) {
+                out.push((visit, encoded_pointer(&[], &paths, path)));
+            }
+            let dialect: Dialect = self.registry.resources[scope.0].dialect;
+            push_children(&mut stack, &mut paths, node, path, scope, dialect);
+        }
+        out
     }
 
     /// The resource already registered for `uri` at exactly this location (a second discovery
@@ -1231,7 +1328,11 @@ impl<'a, 'b> Builder<'a, 'b> {
             return Ok(());
         }
         let ref_str: &str = &pending.ref_str;
-        let location: String = JsonPointer::from(pending.location).to_string();
+        // A walk's `$ref` gets its location only if it fails (see `Builder::replay`).
+        let location: String = match pending.origin {
+            RefOrigin::Located(location) => location,
+            RefOrigin::Walk { .. } => String::new(),
+        };
         let target_uri: Uri = resolve_uri(&self.registry.resources[pending.scope.0].uri, ref_str)
             .map_err(|reason| RegistryError::UnresolvableRef {
             ref_str: ref_str.to_string(),
@@ -1429,10 +1530,78 @@ impl<'a, 'b> Builder<'a, 'b> {
         self.detached_at.insert(key, index);
         // Discover it so the `$ref`s inside a value no schema position reached are resolved.
         if let Value::Object(obj) = value {
-            self.discover(Node::Raw(obj), document, pointer, scope);
+            self.discover(Node::Raw(obj), document, pointer, scope, None);
         }
         Ok(index)
     }
+}
+
+/// Pushes `node`'s children (in `dialect`, at `path` in the arena) onto a discovery stack, in
+/// reverse so they are visited in schema order.
+fn push_children<'r>(
+    stack: &mut Vec<(Node<'r>, Option<usize>, Scope)>,
+    paths: &mut Vec<(usize, Segment<'r>)>,
+    node: Node<'r>,
+    path: Option<usize>,
+    scope: Scope,
+    dialect: Dialect,
+) {
+    let mut kids: Vec<(Node<'r>, Vec<Segment<'r>>)> = children(node, dialect);
+    kids.reverse();
+    for (child, segments) in kids {
+        let mut at: usize = path.unwrap_or(usize::MAX);
+        for segment in segments {
+            paths.push((at, segment));
+            at = paths.len() - 1;
+        }
+        stack.push((child, Some(at), scope));
+    }
+}
+
+/// The encoded JSON Pointer of path-arena entry `at` (`None` = `base` itself) under `base`, built
+/// in one allocation because discovery computes it for every `$ref`. The arena links each entry
+/// to its parent, so segments come leaf first: each is written with its bytes reversed (escapes
+/// included: `~0` as `0~`), then the whole buffer is reversed, which restores every segment's
+/// bytes (UTF-8 sequences too) in root-first order.
+fn encoded_pointer(base: &[String], paths: &[(usize, Segment<'_>)], at: Option<usize>) -> String {
+    fn push_reversed(out: &mut Vec<u8>, segment: &str) {
+        for c in segment.chars().rev() {
+            match c {
+                '~' => out.extend_from_slice(b"0~"),
+                '/' => out.extend_from_slice(b"1~"),
+                c => {
+                    let mut buf: [u8; 4] = [0; 4];
+                    out.extend(c.encode_utf8(&mut buf).bytes().rev());
+                }
+            }
+        }
+        out.push(b'/');
+    }
+    let mut out: Vec<u8> = Vec::new();
+    let mut cursor: Option<usize> = at;
+    while let Some(i) = cursor {
+        let (parent, segment) = paths[i];
+        match segment {
+            Segment::Key(key) => push_reversed(&mut out, key),
+            Segment::Index(mut index) => {
+                // Digits least significant first, which is the reversed order.
+                loop {
+                    out.push(b'0' + u8::try_from(index % 10).unwrap_or_default());
+                    index /= 10;
+                    if index == 0 {
+                        break;
+                    }
+                }
+                out.push(b'/');
+            }
+        }
+        cursor = (parent != usize::MAX).then_some(parent);
+    }
+    for segment in base.iter().rev() {
+        push_reversed(&mut out, segment);
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// One step of a JSON Pointer into a typed schema: the value `seg` (and, for maps and arrays,
@@ -2866,6 +3035,115 @@ mod tests {
                 reason,
             },
         ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dangling_refs_beside_and_inside_nested_resource_have_their_locations() {
+        let schema: JsonSchema = parse(&json!({
+            "$defs": {
+                "inner": {
+                    "$id": "https://example.com/inner.json",
+                    "properties": {"p": {"$ref": "#/$defs/missing"}}
+                }
+            },
+            "properties": {"q": {"$ref": "#/$defs/gone"}}
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/gone".to_string(),
+                location: "/properties/q".to_string(),
+                target: "json-schema:///#/$defs/gone".to_string(),
+                reason: "no such location".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: "/$defs/inner/properties/p".to_string(),
+                target: "https://example.com/inner.json#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn loaded_document_problems_come_before_the_ref_that_loaded_it() {
+        let schema: JsonSchema = parse(&json!({
+            "properties": {"a": {"$ref": "https://example.com/other.json"}}
+        }));
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
+            .document(
+                "https://example.com/other.json",
+                json!({
+                    "$defs": {"x": {"$anchor": "dup"}, "y": {"$anchor": "dup"}},
+                    "items": {"$ref": "#/$defs/missing"}
+                }),
+            )
+            .build(&schema)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::DuplicateAnchor {
+                uri: "https://example.com/other.json".to_string(),
+                anchor: "dup".to_string(),
+                first: "/$defs/x".to_string(),
+                second: "/$defs/y".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: "/items".to_string(),
+                target: "https://example.com/other.json#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dangling_ref_inside_raw_ref_target_has_its_location() {
+        let schema: JsonSchema = parse(&json!({
+            "x-defs": {"a": {"properties": {"b": {"$ref": "#/$defs/missing"}}}},
+            "$ref": "#/x-defs/a"
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: "/x-defs/a/properties/b".to_string(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ref_location_escapes_tilde_and_slash() {
+        let schema: JsonSchema = parse(&json!({
+            "properties": {"a/b~c": {"$ref": "#/$defs/missing"}}
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: "/properties/a~1b~0c".to_string(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn raw_ref_target_location_escapes_and_indexes() {
+        let schema: JsonSchema = parse(&json!({
+            "x-defs": {"é/1": {"anyOf": [{}, {"$ref": "#/$defs/missing"}]}},
+            "$ref": "#/x-defs/%C3%A9~11"
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: "/x-defs/é~11/anyOf/1".to_string(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }]);
         assert_eq!(expected, actual);
     }
 
