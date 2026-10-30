@@ -40,6 +40,14 @@ pub enum CompileError {
         /// The shape the keyword needs.
         expected: &'static str,
     },
+    /// A `format` this library does not know, under the `format-assertion` vocabulary, which
+    /// requires failing on unknown formats.
+    UnknownFormat {
+        /// JSON Pointer to the schema object holding the format, within its document.
+        location: String,
+        /// The format name.
+        format: String,
+    },
     /// A `$ref` the registry does not know: the schema was not part of the registry it was
     /// compiled from.
     UnknownRef {
@@ -79,6 +87,11 @@ impl fmt::Display for CompileError {
             } => write!(
                 f,
                 "{}: the value of \"{keyword}\" must be {expected}",
+                at(location)
+            ),
+            CompileError::UnknownFormat { location, format } => write!(
+                f,
+                "{}: unknown format \"{format}\" under the format-assertion vocabulary",
                 at(location)
             ),
             CompileError::UnknownRef { location, ref_str } => write!(
@@ -757,11 +770,21 @@ impl<'r, 'a> Compiler<'r, 'a> {
             })
         };
 
-        parts.dynamic_ref = get("$dynamicRef").and_then(Value::as_str);
-        parts.recursive_ref = get("$recursiveRef").and_then(Value::as_str);
+        let string_at = |name: &'static str, errors: &mut Vec<(&'static str, &'static str)>| {
+            get(name).and_then(|v| {
+                let s: Option<&'r str> = v.as_str();
+                if s.is_none() {
+                    errors.push((name, "a string"));
+                }
+                s
+            })
+        };
+
+        parts.dynamic_ref = string_at("$dynamicRef", &mut errors);
+        parts.recursive_ref = string_at("$recursiveRef", &mut errors);
         if is_raw {
-            parts.ref_ = source.raw("$ref").and_then(Value::as_str);
-            parts.format = source.raw("format").and_then(Value::as_str);
+            parts.ref_ = string_at("$ref", &mut errors);
+            parts.format = string_at("format", &mut errors);
         }
         if assertions {
             parts.min_properties = count_at("minProperties", &mut errors);
@@ -808,14 +831,17 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 parts.max_length = count_at("maxLength", &mut errors);
                 parts.min_items = count_at("minItems", &mut errors);
                 parts.max_items = count_at("maxItems", &mut errors);
-                parts.pattern = get("pattern").and_then(Value::as_str);
-                parts.unique_items = get("uniqueItems") == Some(&Value::Bool(true));
-                match get("required") {
-                    Some(Value::Array(names)) => {
-                        parts.required = names.iter().filter_map(Value::as_str).collect();
-                    }
-                    Some(_) => errors.push(("required", "an array of strings")),
+                parts.pattern = string_at("pattern", &mut errors);
+                match get("uniqueItems") {
+                    Some(Value::Bool(unique)) => parts.unique_items = *unique,
+                    Some(_) => errors.push(("uniqueItems", "a boolean")),
                     None => {}
+                }
+                if let Some(v) = get("required") {
+                    match strings(v) {
+                        Some(names) => parts.required = names,
+                        None => errors.push(("required", "an array of strings")),
+                    }
                 }
             }
         }
@@ -823,23 +849,24 @@ impl<'r, 'a> Compiler<'r, 'a> {
             parts.pattern_properties = map_at("patternProperties", &mut errors);
             parts.property_names = schema_at("propertyNames", &mut errors);
             parts.dependent_schemas = map_at("dependentSchemas", &mut errors);
-            if let Some(Value::Object(map)) = get("dependencies") {
-                for (name, value) in map {
-                    match value {
-                        Value::Array(names) if assertions => parts.dependent_required.push((
-                            name.as_str(),
-                            names.iter().filter_map(Value::as_str).collect(),
-                        )),
-                        Value::Array(_) => {}
-                        other => match Source::from_value(other) {
-                            Some(s) => parts.dependent_schemas.push((name.as_str(), s)),
-                            None => errors.push((
-                                "dependencies",
-                                "an object whose values are schemas or arrays of strings",
-                            )),
-                        },
+            let dependencies_shape: &'static str =
+                "an object whose values are schemas or arrays of strings";
+            match get("dependencies") {
+                Some(Value::Object(map)) => {
+                    for (name, value) in map {
+                        if let Some(s) = Source::from_value(value) {
+                            parts.dependent_schemas.push((name.as_str(), s));
+                        } else if let Some(names) = strings(value) {
+                            if assertions {
+                                parts.dependent_required.push((name.as_str(), names));
+                            }
+                        } else {
+                            errors.push(("dependencies", dependencies_shape));
+                        }
                     }
                 }
+                Some(_) => errors.push(("dependencies", dependencies_shape)),
+                None => {}
             }
             parts.contains = schema_at("contains", &mut errors);
             parts.not = schema_at("not", &mut errors);
@@ -985,10 +1012,8 @@ impl<'r, 'a> Compiler<'r, 'a> {
         {
             out.push(Keyword::Pattern(id));
         }
-        if dialect.format_mode == FormatMode::Assertion
-            && let Some(format) = parts.format.and_then(Format::from_name)
-        {
-            out.push(Keyword::Format(format));
+        if let Some(name) = parts.format {
+            self.lower_format(name, dialect, location, &mut out);
         }
         out.extend(parts.min_items.map(Keyword::MinItems));
         out.extend(parts.max_items.map(Keyword::MaxItems));
@@ -1223,6 +1248,35 @@ impl<'r, 'a> Compiler<'r, 'a> {
         out
     }
 
+    /// Compiles `format`: a check when the dialect asserts formats and defines this one. Under
+    /// the `format-assertion` vocabulary an unknown format is an error (2020-12 validation
+    /// §7.2.3); otherwise it is ignored.
+    fn lower_format(
+        &mut self,
+        name: &str,
+        dialect: Dialect,
+        location: usize,
+        out: &mut Vec<Keyword>,
+    ) {
+        let format: Option<Format> = dialect
+            .defines_format(name)
+            .then(|| Format::from_name(name))
+            .flatten();
+        match format {
+            Some(format) if dialect.format_mode == FormatMode::Assertion => {
+                out.push(Keyword::Format(format));
+            }
+            None if dialect.vocabulary_active(VocabularyKind::FormatAssertion) => {
+                let location: String = self.location_string(location);
+                self.errors.push(CompileError::UnknownFormat {
+                    location,
+                    format: name.to_string(),
+                });
+            }
+            Some(_) | None => {}
+        }
+    }
+
     /// Compiles a `$dynamicRef`: dynamic when its initial target declares the `$dynamicAnchor`
     /// its fragment names, otherwise an ordinary `$ref`.
     fn dynamic_ref(&mut self, ref_str: &'r str, scope: Scope, location: usize) -> Option<Keyword> {
@@ -1254,6 +1308,14 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 ref_str: Box::from(ref_str),
             }),
         }
+    }
+}
+
+/// An array of strings, or `None` when `value` is anything else.
+fn strings(value: &Value) -> Option<Vec<&str>> {
+    match value {
+        Value::Array(items) => items.iter().map(Value::as_str).collect(),
+        _ => None,
     }
 }
 
