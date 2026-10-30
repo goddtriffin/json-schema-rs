@@ -126,10 +126,12 @@ fn compile_error(error: &CompileError) -> ValidationError {
             ref_str: ref_str.clone(),
             reason: error.to_string(),
         },
-        CompileError::InvalidKeywordValue { .. } => ValidationError::InvalidSchema {
-            instance_path,
-            reason: error.to_string(),
-        },
+        CompileError::InvalidKeywordValue { .. } | CompileError::UnknownFormat { .. } => {
+            ValidationError::InvalidSchema {
+                instance_path,
+                reason: error.to_string(),
+            }
+        }
     }
 }
 
@@ -4500,26 +4502,27 @@ mod tests {
 
     // --- `format` follows the dialect: asserted in drafts 4/6/7, annotation in 2019-09/2020-12 ---
 
-    fn validate_not_a_uuid(
+    /// Validates the string `"not-valid"`, which no format accepts, against `schema_json`.
+    fn validate_not_valid(
         schema_json: &str,
         settings: &crate::JsonSchemaSettings,
     ) -> ValidationResult {
         let schema: JsonSchema = JsonSchema::new_from_str(schema_json, settings).expect("parse");
-        validate(&schema, &json!("not-a-uuid"))
+        validate(&schema, &json!("not-valid"))
     }
 
-    fn invalid_uuid_errors() -> ValidationResult {
+    fn invalid_format_errors(format: &str) -> ValidationResult {
         Err(vec![ValidationError::InvalidFormat {
             instance_path: JsonPointer::root(),
-            format: "uuid".to_string(),
-            value: "not-a-uuid".to_string(),
+            format: format.to_string(),
+            value: "not-valid".to_string(),
         }])
     }
 
     #[test]
     fn validate_uuid_format_is_annotation_by_default_in_2020_12() {
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate_not_a_uuid(
+        let actual: ValidationResult = validate_not_valid(
             r#"{"type":"string","format":"uuid"}"#,
             &crate::JsonSchemaSettings::default(),
         );
@@ -4529,7 +4532,7 @@ mod tests {
     #[test]
     fn validate_uuid_format_is_annotation_by_default_in_2019_09() {
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate_not_a_uuid(
+        let actual: ValidationResult = validate_not_valid(
             r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"string","format":"uuid"}"#,
             &crate::JsonSchemaSettings::default(),
         );
@@ -4537,20 +4540,20 @@ mod tests {
     }
 
     #[test]
-    fn validate_uuid_format_asserted_by_default_in_draft7() {
-        let expected: ValidationResult = invalid_uuid_errors();
-        let actual: ValidationResult = validate_not_a_uuid(
-            r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"string","format":"uuid"}"#,
+    fn validate_format_asserted_by_default_in_draft7() {
+        let expected: ValidationResult = invalid_format_errors("ipv4");
+        let actual: ValidationResult = validate_not_valid(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"string","format":"ipv4"}"#,
             &crate::JsonSchemaSettings::default(),
         );
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn validate_uuid_format_asserted_by_default_in_draft4() {
-        let expected: ValidationResult = invalid_uuid_errors();
-        let actual: ValidationResult = validate_not_a_uuid(
-            r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"string","format":"uuid"}"#,
+    fn validate_format_asserted_by_default_in_draft4() {
+        let expected: ValidationResult = invalid_format_errors("ipv4");
+        let actual: ValidationResult = validate_not_valid(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"string","format":"ipv4"}"#,
             &crate::JsonSchemaSettings::default(),
         );
         assert_eq!(expected, actual);
@@ -4561,9 +4564,9 @@ mod tests {
         let settings: crate::JsonSchemaSettings = crate::JsonSchemaSettings::builder()
             .format_mode(crate::FormatMode::Assertion)
             .build();
-        let expected: ValidationResult = invalid_uuid_errors();
+        let expected: ValidationResult = invalid_format_errors("uuid");
         let actual: ValidationResult =
-            validate_not_a_uuid(r#"{"type":"string","format":"uuid"}"#, &settings);
+            validate_not_valid(r#"{"type":"string","format":"uuid"}"#, &settings);
         assert_eq!(expected, actual);
     }
 
@@ -4573,7 +4576,7 @@ mod tests {
             .format_mode(crate::FormatMode::Annotation)
             .build();
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate_not_a_uuid(
+        let actual: ValidationResult = validate_not_valid(
             r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"string","format":"uuid"}"#,
             &settings,
         );
@@ -4581,23 +4584,33 @@ mod tests {
     }
 
     #[test]
-    fn validate_uuid_format_asserted_when_spec_version_pinned_to_draft7() {
-        let expected: ValidationResult = invalid_uuid_errors();
-        let actual: ValidationResult = validate_not_a_uuid(
-            r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"uuid"}"#,
+    fn validate_format_asserted_when_spec_version_pinned_to_draft7() {
+        let expected: ValidationResult = invalid_format_errors("ipv4");
+        let actual: ValidationResult = validate_not_valid(
+            r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,
             &crate::SpecVersion::Draft07.default_schema_settings(),
         );
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn validate_uuid_format_asserted_inside_any_of_in_draft7() {
+    fn validate_format_asserted_inside_any_of_in_draft7() {
         let expected: ValidationResult = Err(vec![ValidationError::NoSubschemaMatched {
             instance_path: JsonPointer::root(),
             subschema_count: 1,
         }]);
-        let actual: ValidationResult = validate_not_a_uuid(
-            r#"{"$schema":"http://json-schema.org/draft-07/schema#","anyOf":[{"type":"string","format":"uuid"}]}"#,
+        let actual: ValidationResult = validate_not_valid(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","anyOf":[{"type":"string","format":"ipv4"}]}"#,
+            &crate::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_format_ignored_in_a_draft_that_does_not_define_it() {
+        let expected: ValidationResult = Ok(());
+        let actual: ValidationResult = validate_not_valid(
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"string","format":"uuid"}"#,
             &crate::JsonSchemaSettings::default(),
         );
         assert_eq!(expected, actual);

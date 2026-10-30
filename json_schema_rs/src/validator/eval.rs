@@ -21,13 +21,13 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 
 /// How deeply schemas may nest during one evaluation (each subschema entered, in place or at a
-/// child instance, is one level). A crash guard, not a policy limit: measured on a 2 MiB thread
-/// stack (the default for spawned threads), the costliest recursion shapes (an
-/// `unevaluatedProperties` node re-entered through `allOf` and `$ref`, an `anyOf` branch
-/// re-entered through `items` and `$ref`) overflow after about 1,200 levels in a debug build and
-/// several thousand in a release build, so 512 keeps a margin of more than two in either.
+/// child instance, is one level). A crash guard, not a policy limit, sized per build profile
+/// from a measurement on a 2 MiB thread stack (the default for spawned threads): the costliest
+/// recursion shapes (an `unevaluatedProperties` node re-entered through `allOf` and `$ref`, an
+/// `items` / `$ref` chain collecting errors) overflow after about 4,600 levels in a release build
+/// and 1,200 in a debug build, so 2,048 and 512 keep a margin of more than two.
 /// `depth_guard_fits_two_mib_thread` checks the guard fires first on such a thread.
-pub(crate) const DEPTH_LIMIT: usize = 512;
+pub(crate) const DEPTH_LIMIT: usize = if cfg!(debug_assertions) { 512 } else { 2048 };
 
 /// An instance location: a linked list on the native stack, encoded as a [`JsonPointer`] only
 /// when an error is created.
@@ -127,7 +127,9 @@ struct Context {
     depth: usize,
     /// `$ref` targets entered, with the instance they were entered at (by address): the
     /// in-place loop guard.
-    refs: Vec<(NodeId, *const Value)>,
+    /// With each, how many resources declaring a dynamic anchor were in the dynamic scope (see
+    /// [`CompiledSchema::anchor_resources`]).
+    refs: Vec<(NodeId, *const Value, usize)>,
     /// Schema resources entered, outermost first (only when a dynamic reference needs them).
     dynamic_scope: Vec<Scope>,
     /// Where the depth guard fired. Once set, every evaluation fails at once and the result is
@@ -536,12 +538,17 @@ impl CompiledSchema {
         let address: *const Value = at.instance;
         // Entries for this instance location are the newest ones: a child location's entries
         // are popped before its parent is evaluated further.
+        // Re-entering under a dynamic scope with more anchor-declaring resources is not a
+        // loop: a dynamic reference inside may now resolve elsewhere. That count only grows
+        // along a path and is bounded by the number of resources, so the guard still ends
+        // every loop.
+        let anchors: usize = self.anchor_resources(cx);
         let looping: bool = cx
             .refs
             .iter()
             .rev()
-            .take_while(|(_, p)| std::ptr::eq(*p, address))
-            .any(|(node, _)| *node == target);
+            .take_while(|(_, p, _)| std::ptr::eq(*p, address))
+            .any(|(node, _, seen)| *node == target && *seen == anchors);
         if looping {
             return fail!(
                 COLLECT,
@@ -552,10 +559,27 @@ impl CompiledSchema {
                 }
             );
         }
-        cx.refs.push((target, address));
+        cx.refs.push((target, address, anchors));
         let ok: bool = self.in_place::<COLLECT>(target, at, cx, evaluated);
         cx.refs.pop();
         ok
+    }
+
+    /// How many distinct resources in the dynamic scope declare a dynamic anchor a dynamic
+    /// reference can resolve to (`$dynamicAnchor`, or a root `$recursiveAnchor: true`): what
+    /// decides where dynamic references resolve. Zero when no schema uses one.
+    fn anchor_resources(&self, cx: &Context) -> usize {
+        if !self.uses_dynamic_scope {
+            return 0;
+        }
+        let declares = |scope: &Scope| {
+            self.dynamic_anchors.contains_key(scope) || self.recursive_anchors.contains_key(scope)
+        };
+        cx.dynamic_scope
+            .iter()
+            .enumerate()
+            .filter(|(i, scope)| declares(scope) && !cx.dynamic_scope[..*i].contains(scope))
+            .count()
     }
 
     /// The target of a dynamic `$dynamicRef`: the outermost resource in the dynamic scope that

@@ -3425,13 +3425,13 @@ fn cli_validate_format_mode_assertion_flag_checks_uuid() {
 #[test]
 fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
     let (_, actual): (String, (bool, String)) = run_cli_validate(
-        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"uuid"}"#,
-        r#""not-a-uuid""#,
+        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,
+        r#""not-valid""#,
         &["--jss-forced-spec-version", "draft-07"],
     );
     let expected: (bool, String) = (
         false,
-        "root: string \"not-a-uuid\" is not a valid uuid\nerror: validation failed with 1 error(s)\n"
+        "root: string \"not-valid\" is not a valid ipv4\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
     assert_eq!(expected, actual);

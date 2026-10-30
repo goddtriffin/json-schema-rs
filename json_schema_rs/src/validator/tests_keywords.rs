@@ -2558,3 +2558,162 @@ fn escaped_pointer_segments_round_trip() {
     let expected: JsonPointer = ptr("/a~1b/m~0n");
     assert_eq!(expected, actual);
 }
+
+// --- Review fixes: dynamic re-entry, unknown formats, raw keyword shapes ---
+
+/// A `$ref` re-entered at the same instance after the dynamic scope gained a resource declaring
+/// the anchor resolves `$dynamicRef` elsewhere, so it is not a loop: the second visit passes.
+#[test]
+fn ref_reentry_with_grown_dynamic_scope_is_not_a_cycle() {
+    let schema: JsonSchema = schema(
+        r#"{"$id":"https://ex.com/R","$ref":"T","$defs":{
+            "T":{"$id":"https://ex.com/T","if":{"$dynamicRef":"Y#y"},"else":{"$ref":"W"}},
+            "Y":{"$id":"https://ex.com/Y","$dynamicAnchor":"y","not":{}},
+            "W":{"$id":"https://ex.com/W","$ref":"T","$defs":{"a":{"$dynamicAnchor":"y","type":"integer"}}}}}"#,
+    );
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compile(&schema).validate(&json!(1));
+    assert_eq!(expected, actual);
+}
+
+/// The same chain still ends in `RefCycle` when the dynamic scope gains nothing new.
+#[test]
+fn ref_reentry_with_unchanged_dynamic_scope_is_a_cycle() {
+    let schema: JsonSchema = schema(
+        r#"{"$id":"https://ex.com/R","$ref":"T","$defs":{
+            "T":{"$id":"https://ex.com/T","if":{"$dynamicRef":"Y#y"},"else":{"$ref":"W"}},
+            "Y":{"$id":"https://ex.com/Y","$dynamicAnchor":"y","not":{}},
+            "W":{"$id":"https://ex.com/W","$ref":"T","$defs":{"a":{"$dynamicAnchor":"y","not":{}}}}}}"#,
+    );
+    let expected: ValidationResult = Err(vec![ValidationError::RefCycle {
+        instance_path: root(),
+        ref_str: "T".to_string(),
+    }]);
+    let actual: ValidationResult = compile(&schema).validate(&json!(1));
+    assert_eq!(expected, actual);
+}
+
+/// The 2020-12 `format-assertion` vocabulary requires failing on an unknown format.
+#[test]
+fn unknown_format_under_format_assertion_vocabulary_fails_to_compile() {
+    let meta: Value = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://ex.com/meta",
+        "$vocabulary": {
+            "https://json-schema.org/draft/2020-12/vocab/core": true,
+            "https://json-schema.org/draft/2020-12/vocab/format-assertion": true
+        }
+    });
+    let schema: JsonSchema =
+        schema(r#"{"$schema":"https://ex.com/meta","format":"not-a-real-format"}"#);
+    let registry: Registry<'_> = Registry::builder()
+        .document("https://ex.com/meta", meta)
+        .build(&schema)
+        .expect("build registry");
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::UnknownFormat {
+            location: String::new(),
+            format: "not-a-real-format".to_string(),
+        }));
+    let actual: Result<(), CompileErrors> = CompiledSchema::new(&registry).map(|_| ());
+    assert_eq!(expected, actual);
+}
+
+/// Outside that vocabulary an unknown format is ignored, even when formats are asserted.
+#[test]
+fn unknown_format_is_ignored_when_asserting() {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .format_mode(FormatMode::Assertion)
+        .build();
+    let schema: JsonSchema = schema_with(r#"{"format":"not-a-real-format"}"#, &settings);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compile(&schema).validate(&json!("x"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn unknown_format_error_display() {
+    let error: CompileError = CompileError::UnknownFormat {
+        location: "/not".to_string(),
+        format: "colour".to_string(),
+    };
+    let expected: String =
+        "/not: unknown format \"colour\" under the format-assertion vocabulary".to_string();
+    let actual: String = error.to_string();
+    assert_eq!(expected, actual);
+}
+
+/// The compile errors for a raw keyword with a value of the wrong shape, by keyword.
+fn raw_shape_error(schema_json: &str, keyword: &str, expected: &'static str) {
+    let expected_result: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidKeywordValue {
+            location: "/not".to_string(),
+            keyword: keyword.to_string(),
+            expected,
+        }));
+    let actual: Result<(), CompileErrors> = compile_result(&schema(schema_json));
+    assert_eq!(expected_result, actual);
+}
+
+#[test]
+fn raw_required_with_non_string_entry_fails_to_compile() {
+    raw_shape_error(
+        r#"{"not":{"required":["a",1]}}"#,
+        "required",
+        "an array of strings",
+    );
+}
+
+#[test]
+fn raw_unique_items_non_boolean_fails_to_compile() {
+    raw_shape_error(
+        r#"{"not":{"uniqueItems":"yes"}}"#,
+        "uniqueItems",
+        "a boolean",
+    );
+}
+
+#[test]
+fn raw_pattern_non_string_fails_to_compile() {
+    raw_shape_error(r#"{"not":{"pattern":5}}"#, "pattern", "a string");
+}
+
+#[test]
+fn raw_ref_non_string_fails_to_compile() {
+    raw_shape_error(r#"{"not":{"$ref":5}}"#, "$ref", "a string");
+}
+
+#[test]
+fn raw_format_non_string_fails_to_compile() {
+    raw_shape_error(r#"{"not":{"format":5}}"#, "format", "a string");
+}
+
+#[test]
+fn raw_dependencies_non_object_fails_to_compile() {
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidKeywordValue {
+            location: "/not".to_string(),
+            keyword: "dependencies".to_string(),
+            expected: "an object whose values are schemas or arrays of strings",
+        }));
+    let actual: Result<(), CompileErrors> = compile_result(&schema_in(
+        r#"{"not":{"dependencies":5}}"#,
+        SpecVersion::Draft07,
+    ));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn raw_dependencies_array_with_non_string_fails_to_compile() {
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidKeywordValue {
+            location: "/not".to_string(),
+            keyword: "dependencies".to_string(),
+            expected: "an object whose values are schemas or arrays of strings",
+        }));
+    let actual: Result<(), CompileErrors> = compile_result(&schema_in(
+        r#"{"not":{"dependencies":{"a":["b",1]}}}"#,
+        SpecVersion::Draft07,
+    ));
+    assert_eq!(expected, actual);
+}
