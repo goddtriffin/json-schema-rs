@@ -23,7 +23,12 @@
 //!
 //! Errors are typed and found at build time: a duplicate `$id` or anchor, a `$ref` that
 //! resolves to nothing or to a location that is not a schema, a document that cannot be
-//! retrieved or parsed, and a custom metaschema that requires an unknown vocabulary.
+//! retrieved or parsed, and a custom metaschema that requires an unknown vocabulary. Building
+//! does not stop at the first: it reports every problem, one [`RegistryError`] each, in the
+//! order found ([`RegistryErrors`]). After a problem it carries on with what does not depend on
+//! it: a duplicate `$id` keeps the first declaration under that URI, a duplicate anchor the
+//! first location, a `$id` that is not a URI leaves its subschema in the parent resource, and an
+//! unsupported vocabulary leaves the resource in its fallback dialect.
 //!
 //! **Scopes.** A consumer walking a schema carries the [`Scope`] (resource) it is in. Before
 //! looking at a node it calls [`Registry::enter`], which moves into the node's own resource when
@@ -34,10 +39,11 @@ use super::dialect::{Dialect, FormatMode, RefSiblings, SubschemaPosition, Vocabu
 use super::json_schema::{JsonSchema, Schema, SchemaRef};
 use super::settings::{DialectSettings, JsonSchemaSettings};
 use super::spec_version::SpecVersion;
+use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use fluent_uri::{Iri, IriRef};
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::hash::BuildHasher;
 use std::sync::Arc;
@@ -226,6 +232,9 @@ impl Retrieve for BTreeMap<String, Value> {
     }
 }
 
+/// Every problem building one [`Registry`] found, one [`RegistryError`] each.
+pub type RegistryErrors = ErrorList<RegistryError>;
+
 /// Why a [`Registry`] could not be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {
@@ -252,11 +261,17 @@ pub enum RegistryError {
         uri: String,
         /// The anchor name.
         anchor: String,
+        /// JSON Pointer (within its document) of the schema that declared it first.
+        first: String,
+        /// JSON Pointer (within its document) of the schema that declared it again.
+        second: String,
     },
     /// A `$ref` does not resolve to any schema.
     UnresolvableRef {
         /// The `$ref` as written.
         ref_str: String,
+        /// JSON Pointer (within its document) of the schema that has the `$ref`.
+        location: String,
         /// The absolute URI it resolved to.
         target: String,
         /// Why nothing is there.
@@ -266,6 +281,8 @@ pub enum RegistryError {
     RefTargetNotSchema {
         /// The `$ref` as written.
         ref_str: String,
+        /// JSON Pointer (within its document) of the schema that has the `$ref`.
+        location: String,
         /// The absolute URI it resolved to.
         target: String,
     },
@@ -320,23 +337,33 @@ impl fmt::Display for RegistryError {
                 f,
                 "duplicate schema resource \"{uri}\": declared at \"{first}\" and at \"{second}\""
             ),
-            RegistryError::DuplicateAnchor { uri, anchor } => {
-                write!(
-                    f,
-                    "duplicate anchor \"{anchor}\" in schema resource \"{uri}\""
-                )
-            }
+            RegistryError::DuplicateAnchor {
+                uri,
+                anchor,
+                first,
+                second,
+            } => write!(
+                f,
+                "duplicate anchor \"{anchor}\" in schema resource \"{uri}\": declared at \"{first}\" and at \"{second}\""
+            ),
             RegistryError::UnresolvableRef {
                 ref_str,
+                location,
                 target,
                 reason,
             } => write!(
                 f,
-                "$ref \"{ref_str}\" (\"{target}\") does not resolve: {reason}"
+                "$ref \"{ref_str}\" at {} (\"{target}\") does not resolve: {reason}",
+                display_location(location)
             ),
-            RegistryError::RefTargetNotSchema { ref_str, target } => write!(
+            RegistryError::RefTargetNotSchema {
+                ref_str,
+                location,
+                target,
+            } => write!(
                 f,
-                "$ref \"{ref_str}\" (\"{target}\") points at a value that is not a schema"
+                "$ref \"{ref_str}\" at {} (\"{target}\") points at a value that is not a schema",
+                display_location(location)
             ),
             RegistryError::Retrieve { uri, reason } => {
                 write!(f, "could not retrieve \"{uri}\": {reason}")
@@ -356,6 +383,11 @@ impl fmt::Display for RegistryError {
 }
 
 impl std::error::Error for RegistryError {}
+
+/// A JSON Pointer as shown in messages: `root` for the empty pointer.
+fn display_location(pointer: &str) -> &str {
+    if pointer.is_empty() { "root" } else { pointer }
+}
 
 /// A schema resource a consumer is evaluating in: the base URI for relative `$ref`s and the
 /// dialect that applies. Obtained from [`Registry::root_scope`] and carried through
@@ -697,10 +729,12 @@ impl<'b> RegistryBuilder<'b> {
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError`] when a `$ref` does not resolve, a resource or anchor is
-    /// declared twice, a referenced document cannot be retrieved or parsed, or a custom
-    /// metaschema requires an unknown vocabulary.
-    pub fn build<'a>(self, root: impl Into<SchemaRef<'a>>) -> Result<Registry<'a>, RegistryError> {
+    /// Returns every problem found ([`RegistryErrors`], one [`RegistryError`] each, in the
+    /// order found): a `$ref` that does not resolve, a resource or anchor declared twice, a
+    /// referenced document that cannot be retrieved or parsed, a custom metaschema that requires
+    /// an unknown vocabulary. A base or document URI given to the builder that is not an
+    /// absolute URI is reported before the root is looked at, as the only errors.
+    pub fn build<'a>(self, root: impl Into<SchemaRef<'a>>) -> Result<Registry<'a>, RegistryErrors> {
         Builder::new(self)?.build(DocumentRoot::Borrowed(root.into()))
     }
 
@@ -709,7 +743,7 @@ impl<'b> RegistryBuilder<'b> {
     /// # Errors
     ///
     /// See [`RegistryBuilder::build`].
-    pub fn build_owned(self, root: Schema) -> Result<Registry<'static>, RegistryError> {
+    pub fn build_owned(self, root: Schema) -> Result<Registry<'static>, RegistryErrors> {
         Builder::new(self)?.build(DocumentRoot::Owned(Arc::new(root)))
     }
 }
@@ -723,10 +757,30 @@ pub struct Registry<'a> {
     resources: Vec<Resource>,
 }
 
-/// A `$ref` waiting to be resolved: the scope it appears in and the reference as written.
+/// A `$ref` waiting to be resolved: the scope it appears in, the reference as written, and where
+/// the schema that has it is.
 struct PendingRef {
     scope: Scope,
     ref_str: String,
+    origin: RefOrigin,
+}
+
+/// Where a queued `$ref` is written.
+enum RefOrigin {
+    /// In a document walk: the walk and the node's visit number in it. The JSON Pointer is built
+    /// only if the `$ref` does not resolve (see [`Builder::replay`]), since most do.
+    Walk { walk: usize, visit: usize },
+    /// In a raw value discovered as a `$ref` target: its encoded JSON Pointer.
+    Located(String),
+}
+
+/// One discovery walk of a document from its root, kept so a failed `$ref`'s location can be
+/// found again by replaying it.
+struct Walk {
+    document: usize,
+    /// `(visit number, scope)` for each node whose scope differs from its parent's (a node with
+    /// `$id`): with these the replay visits the same nodes in the same order.
+    scope_changes: Vec<(usize, Scope)>,
 }
 
 /// Build-time state around the registry being built.
@@ -742,23 +796,46 @@ struct Builder<'a, 'b> {
     fetched: HashMap<Uri, Arc<Schema>>,
     /// Detached schemas by `(document, pointer)`.
     detached_at: HashMap<(usize, Vec<String>), usize>,
-    pending: Vec<PendingRef>,
+    /// `$ref`s waiting to be resolved, in discovery order.
+    pending: VecDeque<PendingRef>,
+    /// Documents that could not be fetched, by URI, so each is tried once.
+    fetch_failed: HashMap<Uri, RegistryError>,
+    /// Every problem found so far, in the order found.
+    errors: Vec<RegistryError>,
+    /// Document walks, for [`Builder::replay`].
+    walks: Vec<Walk>,
 }
 
 impl<'a, 'b> Builder<'a, 'b> {
-    fn new(options: RegistryBuilder<'b>) -> Result<Self, RegistryError> {
+    /// Checks the builder's URIs; every one that is not an absolute URI is an error.
+    fn new(options: RegistryBuilder<'b>) -> Result<Self, RegistryErrors> {
         let invalid = |value: &str, reason: String| RegistryError::InvalidUri {
             value: value.to_string(),
             reason,
         };
+        let mut errors: Vec<RegistryError> = Vec::new();
         let base_text: &str = options.base_uri.as_deref().unwrap_or(DEFAULT_BASE_URI);
-        let root_base: Uri =
-            without_fragment(&parse_uri(base_text).map_err(|e| invalid(base_text, e))?);
-        let mut documents: HashMap<String, Value> = HashMap::new();
-        for (uri, document) in options.documents {
-            let parsed: Uri = parse_uri(&uri).map_err(|e| invalid(&uri, e))?;
-            documents.insert(without_fragment(&parsed).to_string(), document);
+        let root_base: Result<Uri, String> = parse_uri(base_text).map(|uri| without_fragment(&uri));
+        if let Err(reason) = &root_base {
+            errors.push(invalid(base_text, reason.clone()));
         }
+        // Sorted, so invalid document URIs are reported in a stable order.
+        let mut given: Vec<(String, Value)> = options.documents.into_iter().collect();
+        given.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let mut documents: HashMap<String, Value> = HashMap::new();
+        for (uri, document) in given {
+            match parse_uri(&uri) {
+                Ok(parsed) => {
+                    documents.insert(without_fragment(&parsed).to_string(), document);
+                }
+                Err(reason) => errors.push(invalid(&uri, reason)),
+            }
+        }
+        if let Some(errors) = ErrorList::from_vec(errors) {
+            return Err(errors);
+        }
+        let root_base: Uri =
+            root_base.map_err(|reason| ErrorList::new(invalid(base_text, reason)))?;
         Ok(Builder {
             registry: Registry {
                 documents: Vec::new(),
@@ -772,76 +849,99 @@ impl<'a, 'b> Builder<'a, 'b> {
             settings: options.settings,
             fetched: HashMap::new(),
             detached_at: HashMap::new(),
-            pending: Vec::new(),
+            pending: VecDeque::new(),
+            fetch_failed: HashMap::new(),
+            errors: Vec::new(),
+            walks: Vec::new(),
         })
     }
 
-    fn build(mut self, root: DocumentRoot<'a>) -> Result<Registry<'a>, RegistryError> {
+    /// Discovers the root, then resolves every `$ref` (loading and discovering the documents
+    /// they name) until none is left. Each problem is recorded and building carries on; the
+    /// registry is returned only when there was none.
+    fn build(mut self, root: DocumentRoot<'a>) -> Result<Registry<'a>, RegistryErrors> {
         let base: Uri = self.root_base.clone();
-        self.add_document(base, root, None)?;
-        while let Some(pending) = self.pending.pop() {
-            self.resolve_pending(pending)?;
+        self.add_document(base, root, None);
+        // Failed `$ref`s whose location is still to be found: (error index, walk, visit).
+        let mut unlocated: Vec<(usize, usize, usize)> = Vec::new();
+        while let Some(pending) = self.pending.pop_front() {
+            let walk_visit: Option<(usize, usize)> = match pending.origin {
+                RefOrigin::Walk { walk, visit } => Some((walk, visit)),
+                RefOrigin::Located(_) => None,
+            };
+            // Resolving may record other problems first (a document it loads), so the error's
+            // index is taken after.
+            if let Err(error) = self.resolve_pending(pending) {
+                if let Some((walk, visit)) = walk_visit {
+                    unlocated.push((self.errors.len(), walk, visit));
+                }
+                self.errors.push(error);
+            }
         }
-        Ok(self.registry)
+        self.locate_failed_refs(&unlocated);
+        // A schema discovered twice (through the typed model and as a `$ref` target) reports
+        // its problems twice; keep the first of each.
+        let mut errors: Vec<RegistryError> = Vec::with_capacity(self.errors.len());
+        for error in self.errors {
+            if !errors.contains(&error) {
+                errors.push(error);
+            }
+        }
+        match ErrorList::from_vec(errors) {
+            Some(errors) => Err(errors),
+            None => Ok(self.registry),
+        }
     }
 
     /// Adds a document under its retrieval `uri` and discovers it.
-    fn add_document(
-        &mut self,
-        uri: Uri,
-        root: DocumentRoot<'a>,
-        inherited: Option<Dialect>,
-    ) -> Result<(), RegistryError> {
+    fn add_document(&mut self, uri: Uri, root: DocumentRoot<'a>, inherited: Option<Dialect>) {
         let document: usize = self.registry.documents.len();
         let dialect: Dialect = match root.schema_ref() {
-            SchemaRef::Object(schema) => self.document_dialect(schema, inherited)?,
+            SchemaRef::Object(schema) => self.document_dialect(schema, inherited),
             SchemaRef::Bool(_) => inherited.unwrap_or_default(),
         };
-        let scope: Scope = self.add_resource(uri, document, Vec::new(), dialect)?;
+        let scope: Scope = self.add_resource(uri, document, Vec::new(), dialect);
         let walked: DocumentRoot<'a> = root.clone();
         self.registry.documents.push(Document { root, scope });
         let node: Option<Node<'_>> = walked.schema_ref().as_object().map(Node::Typed);
         if let Some(node) = node {
-            self.discover(node, document, &[], scope)?;
+            let walk: usize = self.walks.len();
+            self.walks.push(Walk {
+                document,
+                scope_changes: Vec::new(),
+            });
+            self.discover(node, document, &[], scope, Some(walk));
         }
-        Ok(())
     }
 
     /// The dialect of a document root: the forced draft when its parse settings force one;
     /// else its `$schema` (a custom metaschema is loaded for its `$vocabulary`); else `inherited`
     /// (the referencing resource's) for a loaded document without `$schema`, or the default draft
     /// for the root document. The document's per-flag overrides apply on top.
-    fn document_dialect(
-        &mut self,
-        schema: &JsonSchema,
-        inherited: Option<Dialect>,
-    ) -> Result<Dialect, RegistryError> {
+    fn document_dialect(&mut self, schema: &JsonSchema, inherited: Option<Dialect>) -> Dialect {
         let settings: DialectSettings = schema.dialect_settings.unwrap_or_default();
         if settings.forced_spec_version.is_some() {
-            return Ok(schema.dialect());
+            return schema.dialect();
         }
         let dialect: Dialect = match (schema.schema.as_deref(), inherited) {
             (None, Some(dialect)) => dialect,
-            (uri, _) => self.dialect_for_schema_uri(uri, schema.dialect())?,
+            (uri, _) => self.dialect_for_schema_uri(uri, schema.dialect()),
         };
-        Ok(settings.apply_overrides(dialect))
+        settings.apply_overrides(dialect)
     }
 
     /// The dialect `$schema: uri` selects; `fallback` when absent or when a custom metaschema
-    /// cannot be loaded.
-    fn dialect_for_schema_uri(
-        &mut self,
-        uri: Option<&str>,
-        fallback: Dialect,
-    ) -> Result<Dialect, RegistryError> {
+    /// cannot be loaded. A required vocabulary this library does not know is
+    /// [`RegistryError::UnsupportedVocabulary`]; the dialect is then built without it.
+    fn dialect_for_schema_uri(&mut self, uri: Option<&str>, fallback: Dialect) -> Dialect {
         let Some(uri) = uri else {
-            return Ok(fallback);
+            return fallback;
         };
         if let Some(version) = SpecVersion::from_schema_uri(uri) {
-            return Ok(Dialect::for_spec_version(version));
+            return Dialect::for_spec_version(version);
         }
         let Ok(meta_uri) = parse_uri(uri).map(|u| without_fragment(&u)) else {
-            return Ok(fallback);
+            return fallback;
         };
         let metaschema: Arc<Schema> = match self.fetch(&meta_uri, None) {
             Ok(m) => m,
@@ -849,11 +949,11 @@ impl<'a, 'b> Builder<'a, 'b> {
                 log::debug!(
                     "custom metaschema \"{uri}\" could not be loaded ({e}); using {fallback:?}"
                 );
-                return Ok(fallback);
+                return fallback;
             }
         };
         let Some(meta) = metaschema.as_object() else {
-            return Ok(fallback);
+            return fallback;
         };
         // The metaschema's own `$schema` decides the base draft (following a chain of custom
         // metaschemas until a standard one).
@@ -884,7 +984,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 match VocabularyKind::from_uri(vocabulary) {
                     Some(kind) => active.insert(kind),
                     None if required.as_bool() == Some(true) => {
-                        return Err(RegistryError::UnsupportedVocabulary {
+                        self.errors.push(RegistryError::UnsupportedVocabulary {
                             metaschema: meta_uri.to_string(),
                             vocabulary: vocabulary.clone(),
                         });
@@ -898,7 +998,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 dialect.format_mode = FormatMode::Assertion;
             }
         }
-        Ok(dialect)
+        dialect
     }
 
     /// Fetches and parses the document at `uri` (embedded metaschema, given document, or
@@ -911,6 +1011,27 @@ impl<'a, 'b> Builder<'a, 'b> {
         if let Some(schema) = self.fetched.get(uri) {
             return Ok(Arc::clone(schema));
         }
+        if let Some(error) = self.fetch_failed.get(uri) {
+            return Err(error.clone());
+        }
+        let fetched: Result<Arc<Schema>, RegistryError> = self.fetch_uncached(uri, draft);
+        match &fetched {
+            Ok(schema) => {
+                self.fetched.insert(uri.clone(), Arc::clone(schema));
+            }
+            Err(error) => {
+                self.fetch_failed.insert(uri.clone(), error.clone());
+            }
+        }
+        fetched
+    }
+
+    /// Retrieves and parses the document at `uri`; see [`Builder::fetch`].
+    fn fetch_uncached(
+        &self,
+        uri: &Uri,
+        draft: Option<SpecVersion>,
+    ) -> Result<Arc<Schema>, RegistryError> {
         let value: Value =
             if let Some((_, text)) = METASCHEMAS.iter().find(|(known, _)| *known == uri.as_str()) {
                 serde_json::from_str(text).map_err(|e| RegistryError::Parse {
@@ -938,31 +1059,33 @@ impl<'a, 'b> Builder<'a, 'b> {
                 uri: uri.to_string(),
                 reason: e.to_string(),
             })?;
-        let schema: Arc<Schema> = Arc::new(schema);
-        self.fetched.insert(uri.clone(), Arc::clone(&schema));
-        Ok(schema)
+        Ok(Arc::new(schema))
     }
 
-    /// Registers a resource; a URI declared at another location is a duplicate.
+    /// Registers a resource. A URI declared at another location is a duplicate
+    /// ([`RegistryError::DuplicateId`]): the duplicate still gets a resource of its own (its
+    /// anchors and relative `$ref`s are its own), but the URI keeps naming the first.
     fn add_resource(
         &mut self,
         uri: Uri,
         document: usize,
         pointer: Vec<String>,
         dialect: Dialect,
-    ) -> Result<Scope, RegistryError> {
+    ) -> Scope {
+        let mut duplicate: bool = false;
         if let Some(existing) = self.by_uri.get(&uri).copied() {
             let resource: &Resource = &self.registry.resources[existing.0];
             if resource.document != document || resource.pointer != pointer {
-                return Err(RegistryError::DuplicateId {
+                self.errors.push(RegistryError::DuplicateId {
                     uri: uri.to_string(),
                     first: JsonPointer::from(resource.pointer.clone()).to_string(),
-                    second: JsonPointer::from(pointer).to_string(),
+                    second: JsonPointer::from(pointer.clone()).to_string(),
                 });
+                duplicate = true;
             }
-            // The same location again: a document root whose `$id` is its retrieval URI. The
-            // `$id` resource replaces the retrieval one under that URI, so the root's anchors
-            // are found there.
+            // Otherwise the same location again: a document root whose `$id` is its retrieval
+            // URI. The `$id` resource replaces the retrieval one under that URI, so the root's
+            // anchors are found there.
         }
         let scope: Scope = Scope(self.registry.resources.len());
         self.registry.resources.push(Resource {
@@ -975,26 +1098,26 @@ impl<'a, 'b> Builder<'a, 'b> {
             child_ids: HashMap::new(),
             refs: HashMap::new(),
         });
-        self.by_uri.insert(uri, scope);
-        Ok(scope)
+        if !duplicate {
+            self.by_uri.insert(uri, scope);
+        }
+        scope
     }
 
-    /// Records an anchor in `scope`; the same name at another location is a duplicate.
-    fn add_anchor(
-        &mut self,
-        scope: Scope,
-        name: &str,
-        pointer: Vec<String>,
-        dynamic: bool,
-    ) -> Result<(), RegistryError> {
+    /// Records an anchor in `scope`. The same name at another location is a duplicate
+    /// ([`RegistryError::DuplicateAnchor`]); the name keeps the first location.
+    fn add_anchor(&mut self, scope: Scope, name: &str, pointer: Vec<String>, dynamic: bool) {
         let resource: &mut Resource = &mut self.registry.resources[scope.0];
         if let Some(existing) = resource.anchors.get(name)
             && *existing != pointer
         {
-            return Err(RegistryError::DuplicateAnchor {
+            self.errors.push(RegistryError::DuplicateAnchor {
                 uri: resource.uri.to_string(),
                 anchor: name.to_string(),
+                first: JsonPointer::from(existing.clone()).to_string(),
+                second: JsonPointer::from(pointer).to_string(),
             });
+            return;
         }
         if dynamic {
             resource
@@ -1002,7 +1125,6 @@ impl<'a, 'b> Builder<'a, 'b> {
                 .insert(name.to_string(), pointer.clone());
         }
         resource.anchors.insert(name.to_string(), pointer);
-        Ok(())
     }
 
     /// Walks every schema position under `node` (at `base_pointer` in `document`, whose parent
@@ -1013,7 +1135,8 @@ impl<'a, 'b> Builder<'a, 'b> {
         document: usize,
         base_pointer: &[String],
         parent_scope: Scope,
-    ) -> Result<(), RegistryError> {
+        walk: Option<usize>,
+    ) {
         // Path arena: each entry is (parent entry, segment); materialised only when needed.
         let mut paths: Vec<(usize, Segment<'_>)> = Vec::new();
         let mut stack: Vec<(Node<'_>, Option<usize>, Scope)> = vec![(node, None, parent_scope)];
@@ -1032,7 +1155,9 @@ impl<'a, 'b> Builder<'a, 'b> {
             out.extend(rev.into_iter().rev());
             out
         };
+        let mut visit: usize = 0;
         while let Some((node, path, parent_scope)) = stack.pop() {
+            visit += 1;
             let dialect: Dialect = self.registry.resources[parent_scope.0].dialect;
             let mut scope: Scope = parent_scope;
             if let Some(id) = node.effective_id(dialect) {
@@ -1040,26 +1165,34 @@ impl<'a, 'b> Builder<'a, 'b> {
                     Some((resource_part, fragment)) => (resource_part, Some(fragment)),
                     None => (id, None),
                 };
-                if !resource_part.is_empty() {
-                    let base: &Uri = &self.registry.resources[parent_scope.0].uri;
-                    let uri: Uri = resolve_uri(base, resource_part)
-                        .map(|u| without_fragment(&u))
-                        .map_err(|reason| RegistryError::InvalidUri {
-                            value: id.to_string(),
-                            reason,
-                        })?;
+                let base: &Uri = &self.registry.resources[parent_scope.0].uri;
+                let resolved: Option<Uri> = if resource_part.is_empty() {
+                    None
+                } else {
+                    match resolve_uri(base, resource_part) {
+                        Ok(uri) => Some(without_fragment(&uri)),
+                        Err(reason) => {
+                            // The subschema stays in its parent's resource.
+                            self.errors.push(RegistryError::InvalidUri {
+                                value: id.to_string(),
+                                reason,
+                            });
+                            None
+                        }
+                    }
+                };
+                if let Some(uri) = resolved {
                     let settings: DialectSettings = self.dialect_settings(document);
                     let node_dialect: Dialect = if settings.forced_spec_version.is_some() {
                         dialect
                     } else {
-                        let own: Dialect =
-                            self.dialect_for_schema_uri(node.schema_uri(), dialect)?;
+                        let own: Dialect = self.dialect_for_schema_uri(node.schema_uri(), dialect);
                         settings.apply_overrides(own)
                     };
                     let pointer: Vec<String> = materialise(&paths, path);
                     scope = match self.existing_at(&uri, document, &pointer) {
                         Some(existing) => existing,
-                        None => self.add_resource(uri, document, pointer, node_dialect)?,
+                        None => self.add_resource(uri, document, pointer, node_dialect),
                     };
                     self.registry.resources[parent_scope.0]
                         .child_ids
@@ -1072,41 +1205,97 @@ impl<'a, 'b> Builder<'a, 'b> {
                     && !name.starts_with('/')
                 {
                     let pointer: Vec<String> = materialise(&paths, path);
-                    self.add_anchor(scope, name, pointer, false)?;
+                    self.add_anchor(scope, name, pointer, false);
                 }
+            }
+            if let Some(walk) = walk
+                && scope != parent_scope
+            {
+                self.walks[walk].scope_changes.push((visit, scope));
             }
             let dialect: Dialect = self.registry.resources[scope.0].dialect;
             if dialect.keyword("$anchor").is_some()
                 && let Some(name) = node.get_str("$anchor")
             {
                 let pointer: Vec<String> = materialise(&paths, path);
-                self.add_anchor(scope, name, pointer, false)?;
+                self.add_anchor(scope, name, pointer, false);
             }
             if dialect.keyword("$dynamicAnchor").is_some()
                 && let Some(name) = node.get_str("$dynamicAnchor")
             {
                 let pointer: Vec<String> = materialise(&paths, path);
-                self.add_anchor(scope, name, pointer, true)?;
+                self.add_anchor(scope, name, pointer, true);
             }
             if let Some(ref_str) = node.ref_() {
-                self.pending.push(PendingRef {
+                let origin: RefOrigin = match walk {
+                    Some(walk) => RefOrigin::Walk { walk, visit },
+                    None => RefOrigin::Located(encoded_pointer(base_pointer, &paths, path)),
+                };
+                self.pending.push_back(PendingRef {
                     scope,
                     ref_str: ref_str.to_string(),
+                    origin,
                 });
             }
-            let mut kids: Vec<(Node<'_>, Vec<Segment<'_>>)> = children(node, dialect);
-            // Reverse so children are visited in schema order (deterministic errors).
-            kids.reverse();
-            for (child, segments) in kids {
-                let mut at: usize = path.unwrap_or(usize::MAX);
-                for segment in segments {
-                    paths.push((at, segment));
-                    at = paths.len() - 1;
-                }
-                stack.push((child, Some(at), scope));
+            push_children(&mut stack, &mut paths, node, path, scope, dialect);
+        }
+    }
+
+    /// Fills in the location of each failed `$ref` in `unlocated` (error index, walk, visit) by
+    /// replaying its walk.
+    fn locate_failed_refs(&mut self, unlocated: &[(usize, usize, usize)]) {
+        let mut by_walk: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for &(_, walk, visit) in unlocated {
+            by_walk.entry(walk).or_default().push(visit);
+        }
+        let mut found: HashMap<(usize, usize), String> = HashMap::new();
+        for (walk, visits) in by_walk {
+            for (visit, location) in self.replay(walk, &visits) {
+                found.insert((walk, visit), location);
             }
         }
-        Ok(())
+        for &(index, walk, visit) in unlocated {
+            if let Some(location) = found.remove(&(walk, visit))
+                && let RegistryError::UnresolvableRef { location: at, .. }
+                | RegistryError::RefTargetNotSchema { location: at, .. } =
+                    &mut self.errors[index]
+            {
+                *at = location;
+            }
+        }
+    }
+
+    /// Walks a document again exactly as [`Builder::discover`] did (same children, same order,
+    /// the scopes it recorded) and returns the encoded JSON Pointer of each node whose visit
+    /// number is in `visits`.
+    fn replay(&self, walk: usize, visits: &[usize]) -> Vec<(usize, String)> {
+        let Walk {
+            document,
+            scope_changes,
+        } = &self.walks[walk];
+        let document: &Document<'a> = &self.registry.documents[*document];
+        let root: DocumentRoot<'a> = document.root.clone();
+        let Some(node) = root.schema_ref().as_object().map(Node::Typed) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(usize, String)> = Vec::new();
+        let mut changes = scope_changes.iter().peekable();
+        let mut paths: Vec<(usize, Segment<'_>)> = Vec::new();
+        let mut stack: Vec<(Node<'_>, Option<usize>, Scope)> = vec![(node, None, document.scope)];
+        let mut visit: usize = 0;
+        while let Some((node, path, parent_scope)) = stack.pop() {
+            visit += 1;
+            let scope: Scope = match changes.next_if(|(at, _)| *at == visit) {
+                Some((_, scope)) => *scope,
+                None => parent_scope,
+            };
+            if visits.contains(&visit) {
+                out.push((visit, encoded_pointer(&[], &paths, path)));
+            }
+            let dialect: Dialect = self.registry.resources[scope.0].dialect;
+            push_children(&mut stack, &mut paths, node, path, scope, dialect);
+        }
+        out
     }
 
     /// The resource already registered for `uri` at exactly this location (a second discovery
@@ -1129,6 +1318,8 @@ impl<'a, 'b> Builder<'a, 'b> {
             .unwrap_or_default()
     }
 
+    /// Resolves one queued `$ref` (once per resource and `$ref` string), loading the document
+    /// it names when no resource has that URI yet.
     fn resolve_pending(&mut self, pending: PendingRef) -> Result<(), RegistryError> {
         if self.registry.resources[pending.scope.0]
             .refs
@@ -1137,15 +1328,22 @@ impl<'a, 'b> Builder<'a, 'b> {
             return Ok(());
         }
         let ref_str: &str = &pending.ref_str;
+        // A walk's `$ref` gets its location only if it fails (see `Builder::replay`).
+        let location: String = match pending.origin {
+            RefOrigin::Located(location) => location,
+            RefOrigin::Walk { .. } => String::new(),
+        };
         let target_uri: Uri = resolve_uri(&self.registry.resources[pending.scope.0].uri, ref_str)
             .map_err(|reason| RegistryError::UnresolvableRef {
             ref_str: ref_str.to_string(),
+            location: location.clone(),
             target: ref_str.to_string(),
             reason: format!("it is not a valid URI reference: {reason}"),
         })?;
         let resource_uri: Uri = without_fragment(&target_uri);
         let unresolvable = |reason: String| RegistryError::UnresolvableRef {
             ref_str: ref_str.to_string(),
+            location: location.clone(),
             target: target_uri.to_string(),
             reason,
         };
@@ -1162,7 +1360,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                     resource_uri.clone(),
                     DocumentRoot::Owned(schema),
                     Some(referrer),
-                )?;
+                );
                 self.by_uri
                     .get(&resource_uri)
                     .copied()
@@ -1196,29 +1394,33 @@ impl<'a, 'b> Builder<'a, 'b> {
                     unresolvable(format!("no anchor \"{fragment}\" in \"{resource_uri}\""))
                 })?
         };
-        let target: Target = self.locate(document, pointer, ref_str, &target_uri)?;
+        let target: Target = self.locate(document, pointer, ref_str, &location, &target_uri)?;
         self.registry.resources[pending.scope.0]
             .refs
             .insert(pending.ref_str, target);
         Ok(())
     }
 
-    /// Walks `pointer` from `document`'s root, tracking the scope, and returns the target.
+    /// Walks `pointer` from `document`'s root, tracking the scope, and returns the target of
+    /// `ref_str` (at `location`).
     fn locate(
         &mut self,
         document: usize,
         pointer: Vec<String>,
         ref_str: &str,
+        location: &str,
         target_uri: &Uri,
     ) -> Result<Target, RegistryError> {
         let root: DocumentRoot<'a> = self.registry.documents[document].root.clone();
         let not_found = |reason: &str| RegistryError::UnresolvableRef {
             ref_str: ref_str.to_string(),
+            location: location.to_string(),
             target: target_uri.to_string(),
             reason: reason.to_string(),
         };
         let not_schema = || RegistryError::RefTargetNotSchema {
             ref_str: ref_str.to_string(),
+            location: location.to_string(),
             target: target_uri.to_string(),
         };
         let mut scope_before: Scope = self.registry.documents[document].scope;
@@ -1328,10 +1530,78 @@ impl<'a, 'b> Builder<'a, 'b> {
         self.detached_at.insert(key, index);
         // Discover it so the `$ref`s inside a value no schema position reached are resolved.
         if let Value::Object(obj) = value {
-            self.discover(Node::Raw(obj), document, pointer, scope)?;
+            self.discover(Node::Raw(obj), document, pointer, scope, None);
         }
         Ok(index)
     }
+}
+
+/// Pushes `node`'s children (in `dialect`, at `path` in the arena) onto a discovery stack, in
+/// reverse so they are visited in schema order.
+fn push_children<'r>(
+    stack: &mut Vec<(Node<'r>, Option<usize>, Scope)>,
+    paths: &mut Vec<(usize, Segment<'r>)>,
+    node: Node<'r>,
+    path: Option<usize>,
+    scope: Scope,
+    dialect: Dialect,
+) {
+    let mut kids: Vec<(Node<'r>, Vec<Segment<'r>>)> = children(node, dialect);
+    kids.reverse();
+    for (child, segments) in kids {
+        let mut at: usize = path.unwrap_or(usize::MAX);
+        for segment in segments {
+            paths.push((at, segment));
+            at = paths.len() - 1;
+        }
+        stack.push((child, Some(at), scope));
+    }
+}
+
+/// The encoded JSON Pointer of path-arena entry `at` (`None` = `base` itself) under `base`, built
+/// in one allocation because discovery computes it for every `$ref`. The arena links each entry
+/// to its parent, so segments come leaf first: each is written with its bytes reversed (escapes
+/// included: `~0` as `0~`), then the whole buffer is reversed, which restores every segment's
+/// bytes (UTF-8 sequences too) in root-first order.
+fn encoded_pointer(base: &[String], paths: &[(usize, Segment<'_>)], at: Option<usize>) -> String {
+    fn push_reversed(out: &mut Vec<u8>, segment: &str) {
+        for c in segment.chars().rev() {
+            match c {
+                '~' => out.extend_from_slice(b"0~"),
+                '/' => out.extend_from_slice(b"1~"),
+                c => {
+                    let mut buf: [u8; 4] = [0; 4];
+                    out.extend(c.encode_utf8(&mut buf).bytes().rev());
+                }
+            }
+        }
+        out.push(b'/');
+    }
+    let mut out: Vec<u8> = Vec::new();
+    let mut cursor: Option<usize> = at;
+    while let Some(i) = cursor {
+        let (parent, segment) = paths[i];
+        match segment {
+            Segment::Key(key) => push_reversed(&mut out, key),
+            Segment::Index(mut index) => {
+                // Digits least significant first, which is the reversed order.
+                loop {
+                    out.push(b'0' + u8::try_from(index % 10).unwrap_or_default());
+                    index /= 10;
+                    if index == 0 {
+                        break;
+                    }
+                }
+                out.push(b'/');
+            }
+        }
+        cursor = (parent != usize::MAX).then_some(parent);
+    }
+    for segment in base.iter().rev() {
+        push_reversed(&mut out, segment);
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// One step of a JSON Pointer into a typed schema: the value `seg` (and, for maps and arrays,
@@ -1401,7 +1671,7 @@ impl<'a> Registry<'a> {
     /// # Errors
     ///
     /// See [`RegistryBuilder::build`].
-    pub fn new(root: impl Into<SchemaRef<'a>>) -> Result<Registry<'a>, RegistryError> {
+    pub fn new(root: impl Into<SchemaRef<'a>>) -> Result<Registry<'a>, RegistryErrors> {
         RegistryBuilder::default().build(root)
     }
 
@@ -1521,7 +1791,7 @@ impl<'a> Registry<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Registry, RegistryError, Resolved, Scope, UnknownRef};
+    use super::{Registry, RegistryError, RegistryErrors, Resolved, Scope, UnknownRef};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::dialect::{Dialect, FormatMode, VocabularyKind, VocabularySet};
     use crate::json_schema::json_schema::{JsonSchema, Schema, SchemaRef};
@@ -1537,8 +1807,10 @@ mod tests {
     }
 
     /// The build error of a registry for `schema` with the defaults.
-    fn build_error(schema: &JsonSchema) -> Result<(), RegistryError> {
-        Registry::new(schema).map(|_| ())
+    fn build_error(schema: &JsonSchema) -> Result<(), Vec<RegistryError>> {
+        Registry::new(schema)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec)
     }
 
     /// Validates `instance` against `schema` through a registry with the defaults.
@@ -1562,12 +1834,12 @@ mod tests {
                 "b": {"$id": "https://example.com/s.json"}
             }
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::DuplicateId {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::DuplicateId {
             uri: "https://example.com/s.json".to_string(),
             first: "/$defs/a".to_string(),
             second: "/$defs/b".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1579,11 +1851,13 @@ mod tests {
                 "b": {"$anchor": "x"}
             }
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::DuplicateAnchor {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::DuplicateAnchor {
             uri: "json-schema:///".to_string(),
             anchor: "x".to_string(),
-        });
+            first: "/$defs/a".to_string(),
+            second: "/$defs/b".to_string(),
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1595,22 +1869,23 @@ mod tests {
                 "b": {"$id": "b.json", "$anchor": "x"}
             }
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Ok(());
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Ok(());
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn relative_base_uri_is_a_build_error() {
         let schema: JsonSchema = parse(&json!({}));
-        let actual: Result<(), RegistryError> = Registry::builder()
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
             .base_uri("relative/schema.json")
             .build(&schema)
-            .map(|_| ());
-        let expected: Result<(), RegistryError> = Err(RegistryError::InvalidUri {
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::InvalidUri {
             value: "relative/schema.json".to_string(),
             reason: "it has no scheme (it is a relative reference)".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1620,36 +1895,39 @@ mod tests {
     fn ref_to_missing_entry_of_present_defs_is_unresolvable() {
         let schema: JsonSchema =
             parse(&json!({"$defs": {"present": {}}, "$ref": "#/$defs/missing"}));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "#/$defs/missing".to_string(),
+            location: String::new(),
             target: "json-schema:///#/$defs/missing".to_string(),
             reason: "no such location".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn ref_into_absent_defs_is_unresolvable() {
         let schema: JsonSchema = parse(&json!({"$ref": "#/$defs/missing"}));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "#/$defs/missing".to_string(),
+            location: String::new(),
             target: "json-schema:///#/$defs/missing".to_string(),
             reason: "no such location".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn ref_to_unknown_anchor_is_unresolvable() {
         let schema: JsonSchema = parse(&json!({"$ref": "#nope"}));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "#nope".to_string(),
+            location: String::new(),
             target: "json-schema:///#nope".to_string(),
             reason: "no anchor \"nope\" in \"json-schema:///\"".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1659,11 +1937,13 @@ mod tests {
             "required": ["a"],
             "properties": {"p": {"$ref": "#/required"}}
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::RefTargetNotSchema {
-            ref_str: "#/required".to_string(),
-            target: "json-schema:///#/required".to_string(),
-        });
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> =
+            Err(vec![RegistryError::RefTargetNotSchema {
+                ref_str: "#/required".to_string(),
+                location: "/properties/p".to_string(),
+                target: "json-schema:///#/required".to_string(),
+            }]);
         assert_eq!(expected, actual);
     }
 
@@ -1672,11 +1952,13 @@ mod tests {
         let schema: JsonSchema = parse(&json!({
             "properties": {"p": {"$ref": "#/properties"}}
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::RefTargetNotSchema {
-            ref_str: "#/properties".to_string(),
-            target: "json-schema:///#/properties".to_string(),
-        });
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> =
+            Err(vec![RegistryError::RefTargetNotSchema {
+                ref_str: "#/properties".to_string(),
+                location: "/properties/p".to_string(),
+                target: "json-schema:///#/properties".to_string(),
+            }]);
         assert_eq!(expected, actual);
     }
 
@@ -1686,24 +1968,27 @@ mod tests {
             "x-defs": {"n": 5},
             "properties": {"p": {"$ref": "#/x-defs/n"}}
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::RefTargetNotSchema {
-            ref_str: "#/x-defs/n".to_string(),
-            target: "json-schema:///#/x-defs/n".to_string(),
-        });
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> =
+            Err(vec![RegistryError::RefTargetNotSchema {
+                ref_str: "#/x-defs/n".to_string(),
+                location: "/properties/p".to_string(),
+                target: "json-schema:///#/x-defs/n".to_string(),
+            }]);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn ref_with_malformed_percent_escape_is_unresolvable() {
         let schema: JsonSchema = parse(&json!({"$ref": "#/$defs/a%zz"}));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "#/$defs/a%zz".to_string(),
+            location: String::new(),
             target: "#/$defs/a%zz".to_string(),
             reason: "it is not a valid URI reference: invalid percent-encoded octet at index 9"
                 .to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1772,16 +2057,17 @@ mod tests {
             "enum": [{"$id": "https://example.com/e.json"}],
             "properties": {"p": {"$ref": "https://example.com/e.json"}}
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "https://example.com/e.json".to_string(),
+            location: "/properties/p".to_string(),
             target: "https://example.com/e.json".to_string(),
             reason: RegistryError::Retrieve {
                 uri: "https://example.com/e.json".to_string(),
                 reason: "retrieval is disabled; no document was given for \"https://example.com/e.json\"".to_string(),
             }
             .to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1791,16 +2077,17 @@ mod tests {
             "const": {"$id": "https://example.com/c.json"},
             "properties": {"p": {"$ref": "https://example.com/c.json"}}
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "https://example.com/c.json".to_string(),
+            location: "/properties/p".to_string(),
             target: "https://example.com/c.json".to_string(),
             reason: RegistryError::Retrieve {
                 uri: "https://example.com/c.json".to_string(),
                 reason: "retrieval is disabled; no document was given for \"https://example.com/c.json\"".to_string(),
             }
             .to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1917,25 +2204,26 @@ mod tests {
     #[test]
     fn relative_path_ref_against_urn_base_is_unresolvable() {
         let root: JsonSchema = parse(&json!({"$id": "urn:example:root", "$ref": "other.json"}));
-        let actual: Result<(), RegistryError> = build_error(&root);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&root);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "other.json".to_string(),
+            location: String::new(),
             target: "other.json".to_string(),
             reason: "it is not a valid URI reference: when base has a rootless path and no \
                      authority, reference should either have scheme, be empty or start with '#'"
                 .to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn id_with_invalid_syntax_is_a_build_error() {
         let root: JsonSchema = parse(&json!({"$defs": {"a": {"$id": "a b.json"}}}));
-        let actual: Result<(), RegistryError> = build_error(&root);
-        let expected: Result<(), RegistryError> = Err(RegistryError::InvalidUri {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&root);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::InvalidUri {
             value: "a b.json".to_string(),
             reason: "unexpected character at index 1".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -1955,42 +2243,47 @@ mod tests {
     fn hash_map_retriever_without_document_is_unresolvable() {
         let root: JsonSchema = parse(&json!({"$ref": "https://example.com/remote.json"}));
         let documents: HashMap<String, Value> = HashMap::new();
-        let actual: Result<(), RegistryError> = Registry::builder()
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
             .retriever(documents)
             .build(&root)
-            .map(|_| ());
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "https://example.com/remote.json".to_string(),
+            location: String::new(),
             target: "https://example.com/remote.json".to_string(),
             reason: "could not retrieve \"https://example.com/remote.json\": no in-memory document for \"https://example.com/remote.json\"".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn offline_retriever_makes_remote_ref_unresolvable() {
         let root: JsonSchema = parse(&json!({"$ref": "https://example.com/remote.json#/$defs/a"}));
-        let actual: Result<(), RegistryError> = build_error(&root);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&root);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "https://example.com/remote.json#/$defs/a".to_string(),
+            location: String::new(),
             target: "https://example.com/remote.json#/$defs/a".to_string(),
             reason: "could not retrieve \"https://example.com/remote.json\": retrieval is disabled; no document was given for \"https://example.com/remote.json\"".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn document_that_is_not_a_schema_is_unresolvable() {
         let root: JsonSchema = parse(&json!({"$ref": "https://example.com/bad.json"}));
-        let actual: Result<(), RegistryError> = Registry::builder()
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
             .document("https://example.com/bad.json", json!(5))
             .build(&root)
-            .map(|_| ());
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "https://example.com/bad.json".to_string(),
+            location: String::new(),
             target: "https://example.com/bad.json".to_string(),
             reason: "\"https://example.com/bad.json\" is not a valid schema: invalid JSON Schema: invalid type: integer `5`, expected a schema (an object or a boolean)".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -2063,12 +2356,13 @@ mod tests {
                 "b": {"$id": "b.json", "type": "integer"}
             }
         }));
-        let actual: Result<(), RegistryError> = build_error(&schema);
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnresolvableRef {
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
             ref_str: "b.json".to_string(),
+            location: "/$defs/a".to_string(),
             target: "https://example.com/other/b.json".to_string(),
             reason: "could not retrieve \"https://example.com/other/b.json\": retrieval is disabled; no document was given for \"https://example.com/other/b.json\"".to_string(),
-        });
+        }]);
         assert_eq!(expected, actual);
     }
 
@@ -2237,7 +2531,7 @@ mod tests {
     #[test]
     fn custom_metaschema_requiring_unknown_vocabulary_is_a_build_error() {
         let root: JsonSchema = custom_meta_root();
-        let actual: Result<(), RegistryError> = Registry::builder()
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
             .document(
                 "https://example.com/meta",
                 custom_metaschema(&json!({
@@ -2246,11 +2540,13 @@ mod tests {
                 })),
             )
             .build(&root)
-            .map(|_| ());
-        let expected: Result<(), RegistryError> = Err(RegistryError::UnsupportedVocabulary {
-            metaschema: "https://example.com/meta".to_string(),
-            vocabulary: "https://example.com/vocab/x".to_string(),
-        });
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> =
+            Err(vec![RegistryError::UnsupportedVocabulary {
+                metaschema: "https://example.com/meta".to_string(),
+                vocabulary: "https://example.com/vocab/x".to_string(),
+            }]);
         assert_eq!(expected, actual);
     }
 
@@ -2531,6 +2827,372 @@ mod tests {
             .expect("build registry");
         let actual: SchemaRef<'_> = registry.root();
         let expected: SchemaRef<'_> = SchemaRef::from(&schema);
+        assert_eq!(expected, actual);
+    }
+
+    // --- Every problem is reported ---
+
+    #[test]
+    fn every_dangling_ref_and_duplicate_id_is_reported_in_discovery_order() {
+        let schema: JsonSchema = parse(&json!({
+            "$defs": {
+                "a": {"$id": "https://example.com/s.json"},
+                "b": {"$id": "https://example.com/s.json"}
+            },
+            "properties": {
+                "x": {"$ref": "#/$defs/missing"},
+                "y": {"items": {"$ref": "#nope"}}
+            }
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::DuplicateId {
+                uri: "https://example.com/s.json".to_string(),
+                first: "/$defs/a".to_string(),
+                second: "/$defs/b".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: "/properties/x".to_string(),
+                target: "json-schema:///#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#nope".to_string(),
+                location: "/properties/y/items".to_string(),
+                target: "json-schema:///#nope".to_string(),
+                reason: "no anchor \"nope\" in \"json-schema:///\"".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn same_dangling_ref_at_two_locations_is_two_errors() {
+        let schema: JsonSchema = parse(&json!({
+            "properties": {
+                "a": {"$ref": "#/$defs/missing"},
+                "b": {"$ref": "#/$defs/missing"}
+            }
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: "/properties/a".to_string(),
+                target: "json-schema:///#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: "/properties/b".to_string(),
+                target: "json-schema:///#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ref_that_resolves_is_not_reported_next_to_one_that_does_not() {
+        let schema: JsonSchema = parse(&json!({
+            "$defs": {"present": {}},
+            "properties": {
+                "a": {"$ref": "#/$defs/present"},
+                "b": {"$ref": "#/$defs/missing"}
+            }
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: "/properties/b".to_string(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn anchor_declared_three_times_is_two_errors_against_the_first() {
+        let schema: JsonSchema = parse(&json!({
+            "$defs": {
+                "a": {"$anchor": "x"},
+                "b": {"$anchor": "x"},
+                "c": {"$anchor": "x"}
+            }
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::DuplicateAnchor {
+                uri: "json-schema:///".to_string(),
+                anchor: "x".to_string(),
+                first: "/$defs/a".to_string(),
+                second: "/$defs/b".to_string(),
+            },
+            RegistryError::DuplicateAnchor {
+                uri: "json-schema:///".to_string(),
+                anchor: "x".to_string(),
+                first: "/$defs/a".to_string(),
+                second: "/$defs/c".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn duplicate_id_resource_keeps_its_own_anchors() {
+        let schema: JsonSchema = parse(&json!({
+            "$defs": {
+                "a": {"$id": "https://example.com/s.json", "$anchor": "x"},
+                "b": {"$id": "https://example.com/s.json", "$anchor": "x"}
+            }
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::DuplicateId {
+            uri: "https://example.com/s.json".to_string(),
+            first: "/$defs/a".to_string(),
+            second: "/$defs/b".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn invalid_id_does_not_hide_later_problems() {
+        let schema: JsonSchema = parse(&json!({
+            "$defs": {"a": {"$id": "http://[invalid"}},
+            "$ref": "#/$defs/missing"
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::InvalidUri {
+                value: "http://[invalid".to_string(),
+                reason: "unexpected character at index 8".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: String::new(),
+                target: "json-schema:///#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unsupported_vocabulary_does_not_hide_dangling_ref() {
+        let root: JsonSchema = parse(&json!({
+            "$schema": "https://example.com/meta",
+            "$ref": "#/$defs/missing"
+        }));
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
+            .document(
+                "https://example.com/meta",
+                custom_metaschema(&json!({
+                    "https://json-schema.org/draft/2020-12/vocab/core": true,
+                    "https://example.com/vocab/x": true
+                })),
+            )
+            .build(&root)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::UnsupportedVocabulary {
+                metaschema: "https://example.com/meta".to_string(),
+                vocabulary: "https://example.com/vocab/x".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: String::new(),
+                target: "json-schema:///#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn every_invalid_builder_uri_is_reported() {
+        let schema: JsonSchema = parse(&json!({}));
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
+            .base_uri("relative/schema.json")
+            .document("b.json", json!({}))
+            .document("a.json", json!({}))
+            .build(&schema)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let reason: String = "it has no scheme (it is a relative reference)".to_string();
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::InvalidUri {
+                value: "relative/schema.json".to_string(),
+                reason: reason.clone(),
+            },
+            RegistryError::InvalidUri {
+                value: "a.json".to_string(),
+                reason: reason.clone(),
+            },
+            RegistryError::InvalidUri {
+                value: "b.json".to_string(),
+                reason,
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dangling_refs_beside_and_inside_nested_resource_have_their_locations() {
+        let schema: JsonSchema = parse(&json!({
+            "$defs": {
+                "inner": {
+                    "$id": "https://example.com/inner.json",
+                    "properties": {"p": {"$ref": "#/$defs/missing"}}
+                }
+            },
+            "properties": {"q": {"$ref": "#/$defs/gone"}}
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/gone".to_string(),
+                location: "/properties/q".to_string(),
+                target: "json-schema:///#/$defs/gone".to_string(),
+                reason: "no such location".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: "/$defs/inner/properties/p".to_string(),
+                target: "https://example.com/inner.json#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn loaded_document_problems_come_before_the_ref_that_loaded_it() {
+        let schema: JsonSchema = parse(&json!({
+            "properties": {"a": {"$ref": "https://example.com/other.json"}}
+        }));
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
+            .document(
+                "https://example.com/other.json",
+                json!({
+                    "$defs": {"x": {"$anchor": "dup"}, "y": {"$anchor": "dup"}},
+                    "items": {"$ref": "#/$defs/missing"}
+                }),
+            )
+            .build(&schema)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![
+            RegistryError::DuplicateAnchor {
+                uri: "https://example.com/other.json".to_string(),
+                anchor: "dup".to_string(),
+                first: "/$defs/x".to_string(),
+                second: "/$defs/y".to_string(),
+            },
+            RegistryError::UnresolvableRef {
+                ref_str: "#/$defs/missing".to_string(),
+                location: "/items".to_string(),
+                target: "https://example.com/other.json#/$defs/missing".to_string(),
+                reason: "no such location".to_string(),
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dangling_ref_inside_raw_ref_target_has_its_location() {
+        let schema: JsonSchema = parse(&json!({
+            "x-defs": {"a": {"properties": {"b": {"$ref": "#/$defs/missing"}}}},
+            "$ref": "#/x-defs/a"
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: "/x-defs/a/properties/b".to_string(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ref_location_escapes_tilde_and_slash() {
+        let schema: JsonSchema = parse(&json!({
+            "properties": {"a/b~c": {"$ref": "#/$defs/missing"}}
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: "/properties/a~1b~0c".to_string(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn raw_ref_target_location_escapes_and_indexes() {
+        let schema: JsonSchema = parse(&json!({
+            "x-defs": {"é/1": {"anyOf": [{}, {"$ref": "#/$defs/missing"}]}},
+            "$ref": "#/x-defs/%C3%A9~11"
+        }));
+        let actual: Result<(), Vec<RegistryError>> = build_error(&schema);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: "/x-defs/é~11/anyOf/1".to_string(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    /// A retriever that counts its calls and retrieves nothing.
+    struct CountingRetriever {
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl super::Retrieve for CountingRetriever {
+        fn retrieve(&self, uri: &str) -> Result<Value, super::RetrieveError> {
+            self.calls.set(self.calls.get() + 1);
+            Err(super::RetrieveError {
+                reason: format!("no document for \"{uri}\""),
+            })
+        }
+    }
+
+    #[test]
+    fn unretrievable_document_is_retrieved_once_for_many_refs() {
+        let schema: JsonSchema = parse(&json!({
+            "properties": {
+                "a": {"$ref": "https://example.com/remote.json#/$defs/a"},
+                "b": {"$ref": "https://example.com/remote.json#/$defs/b"}
+            }
+        }));
+        let retriever: CountingRetriever = CountingRetriever {
+            calls: std::cell::Cell::new(0),
+        };
+        let _errors: Result<Registry<'_>, RegistryErrors> =
+            Registry::builder().retriever(&retriever).build(&schema);
+        let expected: usize = 1;
+        let actual: usize = retriever.calls.get();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn registry_errors_display_one_problem_per_line() {
+        let schema: JsonSchema = parse(&json!({
+            "properties": {
+                "a": {"$ref": "#/$defs/missing"},
+                "b": {"$ref": "#/required"}
+            },
+            "required": ["a"]
+        }));
+        let expected: &str = "$ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\n$ref \"#/required\" at /properties/b (\"json-schema:///#/required\") points at a value that is not a schema";
+        let actual: String = Registry::new(&schema)
+            .map(|_| ())
+            .expect_err("dangling refs")
+            .to_string();
         assert_eq!(expected, actual);
     }
 }

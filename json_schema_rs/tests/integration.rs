@@ -3612,3 +3612,54 @@ fn type_array_rejects_unlisted_type() {
         public_api_is_valid(r#"{"type":["integer","string"]}"#, &serde_json::json!(true));
     assert_eq!(expected, actual);
 }
+
+#[test]
+fn cli_generate_strict_lists_every_unknown_key() {
+    let schema_json = r#"{"type":"object","bogus":1,"properties":{"a":{"type":"string","zzz":2}}}"#;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(&schema_path, schema_json).expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "--jss-disallow-unknown-fields",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    // The CLI names the file by its canonical path (macOS temp dirs sit behind a symlink).
+    let path: String = std::fs::canonicalize(&schema_path)
+        .expect("canonical schema path")
+        .display()
+        .to_string();
+    let expected: String = format!(
+        "error: {path}: unknown keyword \"bogus\" at root\nerror: {path}: unknown keyword \"zzz\" at /properties/a\nerror: schema ingestion failed with 1 error(s); no output written\n"
+    );
+    let actual: String = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_lists_every_registry_problem() {
+    let schema_json =
+        r##"{"properties":{"a":{"$ref":"#/$defs/missing"},"b":{"$ref":"#/$defs/gone"}}}"##;
+    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
+    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
+    schema_file.flush().expect("flush schema");
+    let mut child = Command::new(jsonschemars_bin())
+        .args(["validate", "-s", schema_file.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn jsonschemars");
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"{}").expect("write payload");
+    let output = child.wait_with_output().expect("wait jsonschemars");
+    let expected: &str = "root: could not resolve $ref \"#/$defs/missing\": $ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nroot: could not resolve $ref \"#/$defs/gone\": $ref \"#/$defs/gone\" at /properties/b (\"json-schema:///#/$defs/gone\") does not resolve: no such location\nerror: validation failed with 2 error(s)\n";
+    let actual: String = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert_eq!(expected, actual);
+}

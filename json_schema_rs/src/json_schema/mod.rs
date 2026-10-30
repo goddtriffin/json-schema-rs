@@ -13,11 +13,11 @@ pub use dialect::{
     Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, Keyword, RefSiblings,
     ResolvedDialect, SubschemaPosition, Vocabulary, VocabularyKind, VocabularySet,
 };
-pub use error::{JsonSchemaParseError, JsonSchemaParseResult};
+pub use error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
 pub use json_schema::{JsonSchema, Schema, SchemaRef};
 pub use registry::{
-    DEFAULT_BASE_URI, OfflineRetriever, Registry, RegistryBuilder, RegistryError, Resolved,
-    Retrieve, RetrieveError, Scope, UnknownRef,
+    DEFAULT_BASE_URI, OfflineRetriever, Registry, RegistryBuilder, RegistryError, RegistryErrors,
+    Resolved, Retrieve, RetrieveError, Scope, UnknownRef,
 };
 pub use settings::{
     DialectSettings, JsonSchemaSettings, JsonSchemaSettingsBuilder, UnknownSchemaUri,
