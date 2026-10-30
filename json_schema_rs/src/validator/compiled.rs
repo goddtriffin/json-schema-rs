@@ -8,16 +8,20 @@
 //! distinct pattern.
 
 use super::format::Format;
+use super::simple_pattern::SimplePattern;
 use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
     Dialect, FormatMode, IntegerSemantics, JsonSchema, Keyword as DialectKeyword, RefSiblings,
     Registry, Schema, SchemaRef, Scope, TypeSet, VocabularyKind,
 };
+use crate::number;
 use serde::Deserialize;
 use serde_json::{Map, Number, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// A problem that keeps a schema from compiling, with its location.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,11 +123,36 @@ impl NodeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RegexId(u32);
 
+/// The index of an interned `enum` list in a [`CompiledSchema`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EnumId(u32);
+
+/// The index of a `properties` list in a [`CompiledSchema`], shared by the node's
+/// `additionalProperties`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PropertiesId(u32);
+
 /// A compiled regular expression and its source.
 #[derive(Debug)]
 pub(crate) struct Pattern {
     pub(crate) source: String,
     pub(crate) regex: regress::Regex,
+    /// The greedy matcher, when the pattern is in the subset it decides exactly.
+    pub(crate) simple: Option<SimplePattern>,
+}
+
+impl Pattern {
+    /// Whether the pattern matches somewhere in `text` (ECMA-262 search semantics).
+    pub(crate) fn is_match(&self, text: &str) -> bool {
+        match self
+            .simple
+            .as_ref()
+            .and_then(|simple| simple.is_match(text))
+        {
+            Some(matched) => matched,
+            None => self.regex.find(text).is_some(),
+        }
+    }
 }
 
 /// One schema object: its keywords and the resource it sits in.
@@ -141,15 +170,53 @@ pub(crate) struct Node {
 /// and the patterns `patternProperties` lists, which `additionalProperties` skips.
 #[derive(Debug)]
 pub(crate) struct KnownProperties {
-    /// Sorted, for binary search.
-    pub(crate) names: Box<[Box<str>]>,
+    /// The node's `properties` list (sorted by name), when it has one.
+    pub(crate) names: Option<PropertiesId>,
     pub(crate) patterns: Box<[RegexId]>,
 }
+
+/// A `properties` list: each name and its schema, sorted by name.
+pub(crate) type PropertyList = Box<[(Box<str>, NodeId)]>;
 
 /// A `dependentRequired` entry: a property and the names it requires when present.
 pub(crate) type Dependency = (Box<str>, Box<[Box<str>]>);
 
-/// One keyword, compiled.
+/// The names `required` lists.
+#[derive(Debug)]
+pub(crate) struct Required {
+    /// In schema order, duplicates kept: one error per name, in that order.
+    pub(crate) names: Box<[Box<str>]>,
+    /// Sorted and deduplicated, to check against an object's sorted keys in one pass.
+    pub(crate) sorted: Box<[Box<str>]>,
+}
+
+/// A `$dynamicRef` whose initial target declares the matching `$dynamicAnchor`.
+#[derive(Debug)]
+pub(crate) struct DynamicRef {
+    pub(crate) fallback: NodeId,
+    pub(crate) anchor: Box<str>,
+    pub(crate) ref_str: Box<str>,
+}
+
+/// Item schemas by position, then one for every later item.
+#[derive(Debug)]
+pub(crate) struct PrefixItems {
+    pub(crate) prefix: Box<[NodeId]>,
+    pub(crate) rest: Option<NodeId>,
+}
+
+/// `contains` with its bounds.
+#[derive(Debug)]
+pub(crate) struct Contains {
+    pub(crate) node: NodeId,
+    pub(crate) min: u64,
+    pub(crate) max: Option<u64>,
+    /// Whether matched items count as evaluated for `unevaluatedItems` (2020-12).
+    pub(crate) annotates: bool,
+}
+
+/// One keyword, compiled. Rare or large payloads are boxed (or kept in a side table of the
+/// [`CompiledSchema`]), so the common keywords stay small.
 #[derive(Debug)]
 pub(crate) enum Keyword {
     /// The boolean schema `false`.
@@ -158,8 +225,8 @@ pub(crate) enum Keyword {
         types: TypeSet,
         integer_semantics: IntegerSemantics,
     },
-    Const(Value),
-    Enum(Box<[Value]>),
+    Const(Box<Value>),
+    Enum(EnumId),
     Minimum(Number),
     Maximum(Number),
     ExclusiveMinimum(Number),
@@ -172,13 +239,13 @@ pub(crate) enum Keyword {
     MinItems(u64),
     MaxItems(u64),
     UniqueItems,
-    Required(Box<[Box<str>]>),
+    Required(Box<Required>),
     MinProperties(u64),
     MaxProperties(u64),
     /// `dependentRequired` and the array form of `dependencies`: (property, names it requires).
     DependentRequired(Box<[Dependency]>),
     /// `additionalProperties: false`: every member outside `known` is an error of its own.
-    NoAdditionalProperties(KnownProperties),
+    NoAdditionalProperties(Box<KnownProperties>),
     /// `$ref`: evaluated in place, with the in-place loop guard.
     Ref {
         target: NodeId,
@@ -186,40 +253,30 @@ pub(crate) enum Keyword {
     },
     /// `$dynamicRef` whose initial target declares the matching `$dynamicAnchor`: the outermost
     /// resource in the dynamic scope that declares `anchor` wins, else `fallback`.
-    DynamicRef {
-        fallback: NodeId,
-        anchor: Box<str>,
-        ref_str: Box<str>,
-    },
+    DynamicRef(Box<DynamicRef>),
     /// `$recursiveRef` whose initial target has `$recursiveAnchor: true`: the outermost resource
     /// in the dynamic scope whose root has it wins, else `fallback`.
     RecursiveRef {
         fallback: NodeId,
         ref_str: Box<str>,
     },
-    /// Sorted by name, for binary search.
-    Properties(Box<[(Box<str>, NodeId)]>),
+    /// The `properties` list, sorted by name.
+    Properties(PropertiesId),
     PatternProperties(Box<[(RegexId, NodeId)]>),
     AdditionalProperties {
         node: NodeId,
-        known: KnownProperties,
+        known: Box<KnownProperties>,
     },
     PropertyNames(NodeId),
     /// `dependentSchemas` and the schema form of `dependencies`.
     DependentSchemas(Box<[(Box<str>, NodeId)]>),
-    /// `prefixItems` + `items` (2020-12), or array-form `items` + `additionalItems` and
-    /// single-schema `items` (earlier drafts), normalised to one tuple node.
-    Items {
-        prefix: Box<[NodeId]>,
-        rest: Option<NodeId>,
-    },
-    Contains {
-        node: NodeId,
-        min: u64,
-        max: Option<u64>,
-        /// Whether matched items count as evaluated for `unevaluatedItems` (2020-12).
-        annotates: bool,
-    },
+    /// One schema for every item: single-schema `items` (every draft), or 2020-12 `items`
+    /// without `prefixItems`.
+    Items(NodeId),
+    /// `prefixItems` + `items` (2020-12), or array-form `items` + `additionalItems` (earlier
+    /// drafts), normalised to one tuple.
+    PrefixItems(Box<PrefixItems>),
+    Contains(Box<Contains>),
     AllOf(Box<[NodeId]>),
     AnyOf(Box<[NodeId]>),
     OneOf(Box<[NodeId]>),
@@ -238,9 +295,13 @@ pub(crate) enum Keyword {
 /// It owns everything it needs: the registry it was compiled from can be dropped.
 #[derive(Debug)]
 pub struct CompiledSchema {
-    pub(crate) nodes: Vec<Node>,
+    pub(crate) nodes: Box<[Node]>,
     pub(crate) root: NodeId,
     pub(crate) patterns: Vec<Pattern>,
+    /// Distinct `enum` lists.
+    pub(crate) enums: Box<[Box<[Value]>]>,
+    /// `properties` lists, each sorted by name.
+    pub(crate) properties: Box<[PropertyList]>,
     /// `$dynamicAnchor` targets: resource → (anchor name, node) for every anchor name a dynamic
     /// `$dynamicRef` uses.
     pub(crate) dynamic_anchors: HashMap<Scope, Vec<(Box<str>, NodeId)>>,
@@ -248,6 +309,19 @@ pub struct CompiledSchema {
     pub(crate) recursive_anchors: HashMap<Scope, NodeId>,
     /// Whether any dynamic reference needs the dynamic scope tracked while evaluating.
     pub(crate) uses_dynamic_scope: bool,
+    /// Whether an object's members iterate in key order (see [`maps_are_sorted`]), so the
+    /// property keywords can walk them together with their sorted name lists.
+    pub(crate) sorted_maps: bool,
+}
+
+/// Whether [`serde_json::Map`] iterates its keys in sorted (byte) order: it does unless some
+/// crate in the build enables `serde_json`'s `preserve_order` feature, which keeps insertion
+/// order.
+pub(crate) fn maps_are_sorted() -> bool {
+    let mut map: Map<String, Value> = Map::new();
+    map.insert("b".to_string(), Value::Null);
+    map.insert("a".to_string(), Value::Null);
+    map.keys().next().map(String::as_str) == Some("a")
 }
 
 impl CompiledSchema {
@@ -267,6 +341,14 @@ impl CompiledSchema {
 
     pub(crate) fn pattern(&self, id: RegexId) -> &Pattern {
         &self.patterns[id.0 as usize]
+    }
+
+    pub(crate) fn enum_values(&self, id: EnumId) -> &[Value] {
+        &self.enums[id.0 as usize]
+    }
+
+    pub(crate) fn property_list(&self, id: PropertiesId) -> &[(Box<str>, NodeId)] {
+        &self.properties[id.0 as usize]
     }
 }
 
@@ -336,19 +418,102 @@ struct Pending<'r> {
     location: usize,
 }
 
+/// A multiplicative hasher for the compiler's maps keyed by integers (schema addresses, scopes,
+/// location entries, precomputed hashes). Their keys come from the process itself, never from
+/// input an attacker chooses, so the flooding resistance of the default `SipHash` buys nothing and
+/// its cost shows on large schemas.
+#[derive(Debug, Clone, Copy, Default)]
+struct IntHasher(u64);
+
+impl Hasher for IntHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.write_u64(u64::from(*byte));
+        }
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        // FxHash's step: mix the word in, then multiply by a large odd constant.
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+
+/// A hash map keyed by integers, hashed with [`IntHasher`].
+type IntMap<K, V> = HashMap<K, V, BuildHasherDefault<IntHasher>>;
+
+/// A hash set of integers, hashed with [`IntHasher`].
+type IntSet<K> = HashSet<K, BuildHasherDefault<IntHasher>>;
+
+/// What compiling a node needs to know about its dialect, worked out once per dialect.
+#[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent yes/no facts, each read on its own"
+)]
+struct DialectFacts {
+    applicators: bool,
+    assertions: bool,
+    unevaluated: bool,
+    /// Whether `items` takes the tuple form (no `prefixItems`, drafts before 2020-12).
+    tuple_items: bool,
+    /// Whether the schema form of `dependencies` is spelled `dependentSchemas`.
+    dependent_schemas: bool,
+}
+
+impl DialectFacts {
+    fn of(dialect: Dialect) -> DialectFacts {
+        let applicators: bool = dialect.vocabulary_active(VocabularyKind::Applicator);
+        // Drafts without vocabularies keep `unevaluated*` with the applicators.
+        let unevaluated: bool = dialect.vocabulary_active(VocabularyKind::Unevaluated)
+            || (applicators
+                && !dialect
+                    .vocabularies()
+                    .iter()
+                    .any(|v| VocabularyKind::from_uri(v.uri) == Some(VocabularyKind::Unevaluated)));
+        DialectFacts {
+            applicators,
+            assertions: dialect.vocabulary_active(VocabularyKind::Validation),
+            unevaluated,
+            tuple_items: dialect.keyword("prefixItems").is_none(),
+            dependent_schemas: dialect.keyword("dependentSchemas").is_some(),
+        }
+    }
+}
+
 /// Build-time state.
 struct Compiler<'r, 'a> {
     registry: &'r Registry<'a>,
     nodes: Vec<Option<Node>>,
-    by_source: HashMap<(usize, Scope), NodeId>,
+    /// Nodes that may be reached more than once (boolean schemas and `$ref` targets), by
+    /// source address and scope.
+    by_source: IntMap<(usize, Scope), NodeId>,
+    /// Every `$ref` target of the registry, by address and scope: the subschemas that can be
+    /// reached other than from their parent.
+    ref_targets: IntSet<(usize, Scope)>,
     queue: Vec<Pending<'r>>,
     /// Location arena: (parent entry, step); entry 0 is a document root.
     locations: Vec<(usize, Option<Step<'r>>)>,
     /// The pointer segments of `$ref` targets, by location entry, so their locations start at
     /// the target rather than at the referrer.
-    location_bases: HashMap<usize, &'r [String]>,
+    location_bases: IntMap<usize, &'r [String]>,
     patterns: Vec<Pattern>,
     pattern_ids: HashMap<&'r str, RegexId>,
+    enums: Vec<Box<[Value]>>,
+    /// Interned `enum` lists by the hash of their values.
+    enum_ids: IntMap<u64, Vec<EnumId>>,
+    properties: Vec<PropertyList>,
+    /// [`DialectFacts`] of each dialect met so far.
+    facts: Vec<(Dialect, DialectFacts)>,
+    /// See [`maps_are_sorted`].
+    sorted_maps: bool,
     dynamic_names: BTreeSet<&'r str>,
     uses_recursive_ref: bool,
     uses_dynamic_scope: bool,
@@ -441,15 +606,25 @@ fn count(value: &Value) -> Option<u64> {
 
 impl<'r, 'a> Compiler<'r, 'a> {
     fn new(registry: &'r Registry<'a>) -> Self {
+        let ref_targets: IntSet<(usize, Scope)> = registry
+            .ref_targets()
+            .map(|target| (Source::from_schema_ref(target.schema).key(), target.scope))
+            .collect();
         Compiler {
             registry,
             nodes: Vec::new(),
-            by_source: HashMap::new(),
+            by_source: IntMap::default(),
+            ref_targets,
             queue: Vec::new(),
             locations: vec![(usize::MAX, None)],
-            location_bases: HashMap::new(),
+            location_bases: IntMap::default(),
             patterns: Vec::new(),
             pattern_ids: HashMap::new(),
+            enums: Vec::new(),
+            enum_ids: IntMap::default(),
+            properties: Vec::new(),
+            facts: Vec::new(),
+            sorted_maps: maps_are_sorted(),
             dynamic_names: BTreeSet::new(),
             uses_recursive_ref: false,
             uses_dynamic_scope: false,
@@ -478,14 +653,17 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if let Some(errors) = ErrorList::from_vec(std::mem::take(&mut self.errors)) {
             return Err(errors);
         }
-        let nodes: Vec<Node> = self.nodes.into_iter().flatten().collect();
+        let nodes: Box<[Node]> = self.nodes.into_iter().flatten().collect();
         Ok(CompiledSchema {
             nodes,
             root,
             patterns: self.patterns,
+            enums: self.enums.into_boxed_slice(),
+            properties: self.properties.into_boxed_slice(),
             dynamic_anchors,
             recursive_anchors,
             uses_dynamic_scope: self.uses_dynamic_scope,
+            sorted_maps: self.sorted_maps,
         })
     }
 
@@ -580,13 +758,19 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if let Some(id) = self.by_source.get(&key) {
             return *id;
         }
+        let id: NodeId = self.new_node(source, scope, location);
+        self.by_source.insert(key, id);
+        id
+    }
+
+    /// Queues `source` in `scope` as a new node.
+    fn new_node(&mut self, source: Source<'r>, scope: Scope, location: usize) -> NodeId {
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a schema with more than u32::MAX nodes cannot be held in memory"
         )]
         let id: NodeId = NodeId(self.nodes.len() as u32);
         self.nodes.push(None);
-        self.by_source.insert(key, id);
         self.queue.push(Pending {
             id,
             source,
@@ -636,6 +820,15 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
     }
 
+    fn facts(&mut self, dialect: Dialect) -> DialectFacts {
+        if let Some((_, facts)) = self.facts.iter().find(|(known, _)| *known == dialect) {
+            return *facts;
+        }
+        let facts: DialectFacts = DialectFacts::of(dialect);
+        self.facts.push((dialect, facts));
+        facts
+    }
+
     fn invalid(&mut self, location: usize, keyword: &str, expected: &'static str) {
         let location: String = self.location_string(location);
         self.errors.push(CompileError::InvalidKeywordValue {
@@ -653,14 +846,13 @@ impl<'r, 'a> Compiler<'r, 'a> {
     fn read_parts(&mut self, source: Source<'r>, dialect: Dialect, location: usize) -> Parts<'r> {
         let defined = |name: &str| -> Option<&'static DialectKeyword> { dialect.keyword(name) };
         let mut parts: Parts<'r> = Parts::default();
-        let applicators: bool = dialect.vocabulary_active(VocabularyKind::Applicator);
-        let assertions: bool = dialect.vocabulary_active(VocabularyKind::Validation);
-        let unevaluated: bool = dialect.vocabulary_active(VocabularyKind::Unevaluated)
-            || (applicators
-                && !dialect
-                    .vocabularies()
-                    .iter()
-                    .any(|v| VocabularyKind::from_uri(v.uri) == Some(VocabularyKind::Unevaluated)));
+        let DialectFacts {
+            applicators,
+            assertions,
+            unevaluated,
+            tuple_items,
+            ..
+        } = self.facts(dialect);
 
         // Keywords the typed model holds.
         if let Source::Typed(s) = source {
@@ -882,7 +1074,6 @@ impl<'r, 'a> Compiler<'r, 'a> {
             }
             // `items`: 2020-12 splits the tuple form out as `prefixItems`; earlier drafts take
             // an array (with `additionalItems` for the rest) or one schema.
-            let tuple_items: bool = defined("prefixItems").is_none();
             let items_value: Option<&'r Value> = get("items");
             if tuple_items && let Some(Value::Array(_)) = items_value {
                 parts.prefix_items = list_at("items", &mut errors).unwrap_or_default();
@@ -923,6 +1114,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 self.patterns.push(Pattern {
                     source: pattern.to_string(),
                     regex,
+                    simple: SimplePattern::parse(pattern),
                 });
                 self.pattern_ids.insert(pattern, id);
                 Some(id)
@@ -939,6 +1131,36 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
     }
 
+    /// The id of the `enum` list `values`, interning it: schemas often repeat one list (a
+    /// shared vocabulary of names in every definition), and it is kept once. Lists are shared
+    /// only when equal value for value as written (`1` and `1.0` are not), so error messages
+    /// show each list exactly as its schema wrote it.
+    fn intern_enum(&mut self, values: &[Value]) -> EnumId {
+        let mut hasher: DefaultHasher = DefaultHasher::new();
+        hasher.write_usize(values.len());
+        for value in values {
+            number::json_hash(value, &mut hasher);
+        }
+        let hash: u64 = hasher.finish();
+        let candidates: &mut Vec<EnumId> = self.enum_ids.entry(hash).or_default();
+        // Equal objects can be written in different key orders, which unsorted maps keep.
+        let written = |list: &[Value]| serde_json::to_string(list).ok();
+        if let Some(id) = candidates.iter().find(|id| {
+            let interned: &[Value] = &self.enums[id.0 as usize];
+            *interned == *values && (self.sorted_maps || written(interned) == written(values))
+        }) {
+            return *id;
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "fewer than u32::MAX distinct lists fit in memory"
+        )]
+        let id: EnumId = EnumId(self.enums.len() as u32);
+        candidates.push(id);
+        self.enums.push(values.into());
+        id
+    }
+
     /// Queues a subschema found under `keyword` (and `step`) of the schema at `location`.
     fn child(&mut self, child: Child<'r>, scope: Scope, location: usize) -> NodeId {
         let (source, keyword, step) = child;
@@ -946,7 +1168,14 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if let Some(step) = step {
             entry = self.child_location(entry, step);
         }
-        self.node_for(source, scope, entry)
+        // A subschema no reference targets is reached only from its parent, which is compiled
+        // once: it needs no entry in `by_source`.
+        let key: (usize, Scope) = (source.key(), scope);
+        if matches!(source, Source::Bool(_)) || self.ref_targets.contains(&key) {
+            self.node_for(source, scope, entry)
+        } else {
+            self.new_node(source, scope, entry)
+        }
     }
 
     /// Resolves a reference written in `scope` to its node.
@@ -988,10 +1217,10 @@ impl<'r, 'a> Compiler<'r, 'a> {
             });
         }
         if let Some(value) = parts.const_value {
-            out.push(Keyword::Const(value.clone()));
+            out.push(Keyword::Const(Box::new(value.clone())));
         }
         if let Some(values) = parts.enum_values {
-            out.push(Keyword::Enum(values.to_vec().into_boxed_slice()));
+            out.push(Keyword::Enum(self.intern_enum(values)));
         }
         let numbers: [NumericKeyword<'_>; 5] = [
             (parts.minimum, Keyword::Minimum),
@@ -1021,9 +1250,13 @@ impl<'r, 'a> Compiler<'r, 'a> {
             out.push(Keyword::UniqueItems);
         }
         if !parts.required.is_empty() {
-            out.push(Keyword::Required(
-                parts.required.iter().map(|n| Box::from(*n)).collect(),
-            ));
+            let mut sorted: Vec<&str> = parts.required.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            out.push(Keyword::Required(Box::new(Required {
+                names: parts.required.iter().map(|n| Box::from(*n)).collect(),
+                sorted: sorted.into_iter().map(Box::from).collect(),
+            })));
         }
         out.extend(parts.min_properties.map(Keyword::MinProperties));
         out.extend(parts.max_properties.map(Keyword::MaxProperties));
@@ -1078,16 +1311,6 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
 
         // Object applicators.
-        let known_names: Box<[Box<str>]> = {
-            let mut names: Vec<Box<str>> = parts
-                .properties
-                .iter()
-                .map(|(n, _)| Box::from(*n))
-                .collect();
-            names.sort();
-            names.dedup();
-            names.into_boxed_slice()
-        };
         let mut known_patterns: Vec<RegexId> = Vec::new();
         let mut pattern_properties: Vec<(RegexId, NodeId)> = Vec::new();
         for (pattern, source) in &parts.pattern_properties {
@@ -1102,26 +1325,34 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 pattern_properties.push((id, node));
             }
         }
-        if let Some(Source::Bool(false)) = parts.additional_properties {
-            out.push(Keyword::NoAdditionalProperties(KnownProperties {
-                names: known_names.clone(),
-                patterns: known_patterns.clone().into_boxed_slice(),
-            }));
+        let mut properties: Vec<(Box<str>, NodeId)> = Vec::new();
+        for (name, source) in &parts.properties {
+            let node: NodeId = self.child(
+                (*source, "properties", Some(Step::Key(name))),
+                scope,
+                location,
+            );
+            properties.push((Box::from(*name), node));
         }
-        if !parts.properties.is_empty() {
-            let mut properties: Vec<(Box<str>, NodeId)> = Vec::new();
-            for (name, source) in &parts.properties {
-                let node: NodeId = self.child(
-                    (*source, "properties", Some(Step::Key(name))),
-                    scope,
-                    location,
-                );
-                properties.push((Box::from(*name), node));
-            }
+        // The list is kept once and shared with `additionalProperties`, which skips its names.
+        let properties: Option<PropertiesId> = (!properties.is_empty()).then(|| {
             properties.sort_by(|a, b| a.0.cmp(&b.0));
             properties.dedup_by(|a, b| a.0 == b.0);
-            out.push(Keyword::Properties(properties.into_boxed_slice()));
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "fewer than u32::MAX lists fit in memory"
+            )]
+            let id: PropertiesId = PropertiesId(self.properties.len() as u32);
+            self.properties.push(properties.into_boxed_slice());
+            id
+        });
+        if let Some(Source::Bool(false)) = parts.additional_properties {
+            out.push(Keyword::NoAdditionalProperties(Box::new(KnownProperties {
+                names: properties,
+                patterns: known_patterns.clone().into_boxed_slice(),
+            })));
         }
+        out.extend(properties.map(Keyword::Properties));
         if !pattern_properties.is_empty() {
             out.push(Keyword::PatternProperties(
                 pattern_properties.into_boxed_slice(),
@@ -1134,10 +1365,10 @@ impl<'r, 'a> Compiler<'r, 'a> {
                     self.child((source, "additionalProperties", None), scope, location);
                 out.push(Keyword::AdditionalProperties {
                     node,
-                    known: KnownProperties {
-                        names: known_names,
+                    known: Box::new(KnownProperties {
+                        names: properties,
                         patterns: known_patterns.into_boxed_slice(),
-                    },
+                    }),
                 });
             }
         }
@@ -1145,14 +1376,15 @@ impl<'r, 'a> Compiler<'r, 'a> {
             let node: NodeId = self.child((source, "propertyNames", None), scope, location);
             out.push(Keyword::PropertyNames(node));
         }
+        let facts: DialectFacts = self.facts(dialect);
         if !parts.dependent_schemas.is_empty() {
+            let keyword: &'static str = if facts.dependent_schemas {
+                "dependentSchemas"
+            } else {
+                "dependencies"
+            };
             let mut dependent: Vec<(Box<str>, NodeId)> = Vec::new();
             for (name, source) in &parts.dependent_schemas {
-                let keyword: &'static str = if dialect.keyword("dependentSchemas").is_some() {
-                    "dependentSchemas"
-                } else {
-                    "dependencies"
-                };
                 let node: NodeId =
                     self.child((*source, keyword, Some(Step::Key(name))), scope, location);
                 dependent.push((Box::from(*name), node));
@@ -1161,7 +1393,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
 
         // Array applicators.
-        let tuple_items: bool = dialect.keyword("prefixItems").is_none();
+        let tuple_items: bool = facts.tuple_items;
         let (prefix_keyword, rest_keyword): (&'static str, &'static str) =
             if tuple_items && !parts.prefix_items.is_empty() {
                 ("items", "additionalItems")
@@ -1183,20 +1415,22 @@ impl<'r, 'a> Compiler<'r, 'a> {
         let rest: Option<NodeId> = parts
             .items
             .map(|source| self.child((source, rest_keyword, None), scope, location));
-        if !prefix.is_empty() || rest.is_some() {
-            out.push(Keyword::Items {
+        match (prefix.is_empty(), rest) {
+            (true, None) => {}
+            (true, Some(rest)) => out.push(Keyword::Items(rest)),
+            (false, rest) => out.push(Keyword::PrefixItems(Box::new(PrefixItems {
                 prefix: prefix.into_boxed_slice(),
                 rest,
-            });
+            }))),
         }
         if let Some(source) = parts.contains {
             let node: NodeId = self.child((source, "contains", None), scope, location);
-            out.push(Keyword::Contains {
+            out.push(Keyword::Contains(Box::new(Contains {
                 node,
                 min: parts.min_contains.unwrap_or(1),
                 max: parts.max_contains,
                 annotates: !tuple_items,
-            });
+            })));
         }
 
         // In-place applicators.
@@ -1297,11 +1531,11 @@ impl<'r, 'a> Compiler<'r, 'a> {
             Some(anchor) if bookended => {
                 self.dynamic_names.insert(anchor);
                 self.uses_dynamic_scope = true;
-                Some(Keyword::DynamicRef {
+                Some(Keyword::DynamicRef(Box::new(DynamicRef {
                     fallback,
                     anchor: Box::from(anchor),
                     ref_str: Box::from(ref_str),
-                })
+                })))
             }
             _ => Some(Keyword::Ref {
                 target: fallback,
@@ -1334,4 +1568,124 @@ fn dependent_required(value: &Value) -> Option<Vec<(&str, Vec<&str>)>> {
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompiledSchema, Compiler, EnumId, Keyword, Node};
+    use crate::json_schema::{Registry, Schema};
+    use serde_json::{Value, json};
+
+    fn compile(schema: &Value) -> CompiledSchema {
+        let schema: Schema = serde_json::from_value(schema.clone()).expect("test schema parses");
+        let registry: Registry<'static> = Registry::builder()
+            .build_owned(schema)
+            .expect("test registry builds");
+        CompiledSchema::new(&registry).expect("test schema compiles")
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn keyword_and_node_stay_small() {
+        let expected: (usize, usize) = (24, 32);
+        let actual: (usize, usize) = (size_of::<Keyword>(), size_of::<Node>());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn reference_targets_compile_once() {
+        let compiled: CompiledSchema = compile(&json!({
+            "$defs": {"name": {"type": "string"}},
+            "properties": {
+                "a": {"$ref": "#/$defs/name"},
+                "b": {"$ref": "#/$defs/name"},
+                "c": {"minLength": 1},
+                "d": {"$ref": "#/properties/c"}
+            }
+        }));
+        // The root, `a` to `d`, and `name`: `c` is a child and a target, and is one node.
+        let expected: usize = 6;
+        let actual: usize = compiled.nodes.len();
+        assert_eq!(expected, actual);
+    }
+
+    /// Every interned `enum` list, serialised and sorted.
+    fn interned_enums(compiled: &CompiledSchema) -> Vec<Vec<String>> {
+        let mut lists: Vec<Vec<String>> = compiled
+            .enums
+            .iter()
+            .map(|list| list.iter().map(Value::to_string).collect())
+            .collect();
+        lists.sort();
+        lists
+    }
+
+    #[test]
+    fn equal_enum_lists_are_interned_once() {
+        let compiled: CompiledSchema = compile(&json!({
+            "properties": {
+                "a": {"enum": ["x", {"k": [1, null]}]},
+                "b": {"enum": ["x", {"k": [1, null]}]},
+                "c": {"items": {"enum": ["x", {"k": [1, null]}]}}
+            }
+        }));
+        let expected: Vec<Vec<String>> =
+            vec![vec!["\"x\"".to_string(), "{\"k\":[1,null]}".to_string()]];
+        let actual: Vec<Vec<String>> = interned_enums(&compiled);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn equal_enum_lists_are_interned_once_with_unsorted_maps() {
+        let schema: Schema = serde_json::from_value(json!(true)).expect("test schema parses");
+        let registry: Registry<'static> = Registry::builder()
+            .build_owned(schema)
+            .expect("test registry builds");
+        let mut compiler: Compiler<'_, '_> = Compiler::new(&registry);
+        compiler.sorted_maps = false;
+        let first: Vec<Value> = vec![json!({"b": 1, "a": [2]}), json!("x")];
+        let second: Vec<Value> = vec![json!({"a": [2], "b": 1}), json!("x")];
+        let expected: (EnumId, EnumId, EnumId) = (EnumId(0), EnumId(0), EnumId(1));
+        let actual: (EnumId, EnumId, EnumId) = (
+            compiler.intern_enum(&first),
+            compiler.intern_enum(&second),
+            compiler.intern_enum(&[json!("x")]),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn enum_lists_differing_as_written_are_kept_apart() {
+        let compiled: CompiledSchema = compile(&json!({
+            "properties": {
+                "a": {"enum": [1]},
+                "b": {"enum": [1.0]},
+                "c": {"enum": [1, 2]},
+                "d": {"enum": [2, 1]}
+            }
+        }));
+        let expected: Vec<Vec<String>> = vec![
+            vec!["1".to_string()],
+            vec!["1".to_string(), "2".to_string()],
+            vec!["1.0".to_string()],
+            vec!["2".to_string(), "1".to_string()],
+        ];
+        let actual: Vec<Vec<String>> = interned_enums(&compiled);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn properties_list_is_shared_with_additional_properties() {
+        let compiled: CompiledSchema = compile(&json!({
+            "properties": {"b": true, "a": true},
+            "additionalProperties": false
+        }));
+        let expected: Vec<Vec<String>> = vec![vec!["a".to_string(), "b".to_string()]];
+        let actual: Vec<Vec<String>> = compiled
+            .properties
+            .iter()
+            .map(|list| list.iter().map(|(name, _)| name.to_string()).collect())
+            .collect();
+        assert_eq!(expected, actual);
+    }
 }
