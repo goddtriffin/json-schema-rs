@@ -3,6 +3,7 @@
 #![cfg(feature = "uuid")]
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(
     r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#
@@ -11,7 +12,10 @@ json_schema_to_rust!(
 #[test]
 fn uuid_field_is_uuid_type() {
     let id = uuid::Uuid::new_v4();
-    let root = schema_0::Root { id };
+    let root = schema_0::Root {
+        id,
+        additional: BTreeMap::new(),
+    };
     assert_eq!(root.id, id);
 }
 
@@ -20,8 +24,9 @@ fn uuid_macro_round_trip() {
     let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     let json = format!(r#"{{"id":"{id}"}}"#);
     let root: schema_0::Root = serde_json::from_str(&json).unwrap();
-    assert_eq!(root.id, id);
     let serialized = serde_json::to_string(&root).unwrap();
     let parsed: schema_0::Root = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(parsed.id, id);
+    let expected: (uuid::Uuid, String) = (id, json);
+    let actual: (uuid::Uuid, String) = (parsed.id, serialized);
+    assert_eq!(expected, actual);
 }

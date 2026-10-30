@@ -1,6 +1,7 @@
 //! Integration test: `json_schema_to_rust!` with a schema that has an integer property with minimum and maximum (0..=255) producing u8.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(
     r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"]}"#
@@ -8,7 +9,10 @@ json_schema_to_rust!(
 
 #[test]
 fn expanded_code_compiles_and_root_exists() {
-    let root = schema_0::Root { byte: 42 };
+    let root = schema_0::Root {
+        byte: 42,
+        additional: BTreeMap::new(),
+    };
     let expected: u8 = 42;
     let actual: u8 = root.byte;
     assert_eq!(expected, actual);

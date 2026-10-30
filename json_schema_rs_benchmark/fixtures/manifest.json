@@ -30,10 +30,10 @@
       "small/prettierrc/instances/invalid/wrong-type-semi.json",
       "small/prettierrc/instances/invalid/wrong-type-tabwidth.json"
     ],
-    "apples_to_apples": false,
+    "apples_to_apples": true,
     "source": "https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/prettierrc.json",
     "license": "Apache-2.0 (SchemaStore)",
-    "notes": "Real-world Prettier config schema. Our lib PARSES and VALIDATES it correctly, but codegen fails (allOf-of-$ref not treated as object-like). Kept out of apples set; still useful for validation benchmarking."
+    "notes": "Real-world Prettier config schema (allOf of $ref, oneOf of string consts, if/then/else). Parses, validates, and codegens with our lib."
   },
   {
     "id": "medium/user-profile",
