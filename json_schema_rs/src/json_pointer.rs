@@ -32,9 +32,25 @@ impl fmt::Display for JsonPointerError {
 
 impl std::error::Error for JsonPointerError {}
 
-/// Encode one segment for RFC 6901: `~` → `~0`, `/` → `~1`.
-fn encode_segment(segment: &str) -> String {
-    segment.replace('~', "~0").replace('/', "~1")
+/// Appends one segment to `out`, encoded for RFC 6901: `~` → `~0`, `/` → `~1`.
+fn encode_segment(segment: &str, out: &mut String) {
+    for c in segment.chars() {
+        match c {
+            '~' => out.push_str("~0"),
+            '/' => out.push_str("~1"),
+            c => out.push(c),
+        }
+    }
+}
+
+/// The RFC 6901 string of `segments` ("" for none, "/a/b" otherwise), built in one buffer.
+fn encode(segments: &[String]) -> String {
+    let mut out: String = String::with_capacity(segments.iter().map(|s| s.len() + 1).sum());
+    for segment in segments {
+        out.push('/');
+        encode_segment(segment, &mut out);
+    }
+    out
 }
 
 /// Decode one reference token: first `~1` → `/`, then `~0` → `~`.
@@ -88,19 +104,7 @@ impl JsonPointer {
     pub fn push(&self, segment: &str) -> Self {
         let mut new_segments = self.segments.clone();
         new_segments.push(segment.to_string());
-        let encoded = if new_segments.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "/{}",
-                new_segments
-                    .iter()
-                    .map(String::as_str)
-                    .map(encode_segment)
-                    .collect::<Vec<_>>()
-                    .join("/")
-            )
-        };
+        let encoded: String = encode(&new_segments);
         Self {
             segments: new_segments,
             encoded,
@@ -115,18 +119,7 @@ impl JsonPointer {
         }
         let mut segs = self.segments.clone();
         segs.pop();
-        let enc = if segs.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "/{}",
-                segs.iter()
-                    .map(String::as_str)
-                    .map(encode_segment)
-                    .collect::<Vec<_>>()
-                    .join("/")
-            )
-        };
+        let enc: String = encode(&segs);
         Self {
             segments: segs,
             encoded: enc,
@@ -146,18 +139,7 @@ impl JsonPointer {
             return self.clone();
         }
         let segs: Vec<String> = self.segments[..len].to_vec();
-        let enc = if segs.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "/{}",
-                segs.iter()
-                    .map(String::as_str)
-                    .map(encode_segment)
-                    .collect::<Vec<_>>()
-                    .join("/")
-            )
-        };
+        let enc: String = encode(&segs);
         Self {
             segments: segs,
             encoded: enc,
@@ -201,18 +183,7 @@ impl JsonPointer {
         }
         let mut segs = self.segments.clone();
         segs.remove(index);
-        let enc = if segs.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "/{}",
-                segs.iter()
-                    .map(String::as_str)
-                    .map(encode_segment)
-                    .collect::<Vec<_>>()
-                    .join("/")
-            )
-        };
+        let enc: String = encode(&segs);
         Self {
             segments: segs,
             encoded: enc,
@@ -298,19 +269,7 @@ impl TryFrom<Vec<u8>> for JsonPointer {
 
 impl From<Vec<String>> for JsonPointer {
     fn from(segments: Vec<String>) -> Self {
-        let encoded = if segments.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "/{}",
-                segments
-                    .iter()
-                    .map(String::as_str)
-                    .map(encode_segment)
-                    .collect::<Vec<_>>()
-                    .join("/")
-            )
-        };
+        let encoded: String = encode(&segments);
         Self { segments, encoded }
     }
 }
@@ -613,5 +572,33 @@ mod tests {
         assert_eq!(one.len(), 1);
         let three = one.push("b").push("c");
         assert_eq!(three.len(), 3);
+    }
+
+    #[test]
+    fn from_segments_encodes_tilde_and_slash() {
+        let pointer: JsonPointer = JsonPointer::from(vec![
+            "a~b".to_string(),
+            "c/d".to_string(),
+            "~/".to_string(),
+            "é".to_string(),
+        ]);
+        let expected: &str = "/a~0b/c~1d/~0~1/é";
+        let actual: &str = pointer.as_str();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn from_no_segments_is_root() {
+        let expected: JsonPointer = JsonPointer::root();
+        let actual: JsonPointer = JsonPointer::from(Vec::<String>::new());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn from_empty_segment_keeps_its_slash() {
+        let pointer: JsonPointer = JsonPointer::from(vec![String::new(), "a".to_string()]);
+        let expected: &str = "//a";
+        let actual: &str = pointer.as_str();
+        assert_eq!(expected, actual);
     }
 }
