@@ -8,8 +8,8 @@
 //!   `jsonschema`, `boon`).
 //! * [`validate`] — compiled schema + parsed instance -> verdict, through each tool's full
 //!   error-report entry point:
-//!   - `jsonschemars`: `json_schema_rs::validate_with_registry` (collects every error) on the
-//!     registry built at compile time;
+//!   - `jsonschemars`: `CompiledSchema::validate` (collects every error) on the schema
+//!     compiled at compile time (registry built, then compiled);
 //!   - `jsonschema`: `Validator::iter_errors` collected into a `Vec`;
 //!   - `boon`: `Schemas::validate` (builds the full error tree).
 //!
@@ -23,7 +23,8 @@
 
 use crate::fixtures::Fixture;
 use json_schema_rs::{
-    CodeGenSettings, GenerateRustOutput, JsonSchema, Registry, Schema, generate_rust,
+    CodeGenSettings, CompiledSchema, GenerateRustOutput, JsonSchema, Registry, Schema,
+    generate_rust,
 };
 use serde_json::Value;
 use std::any::Any;
@@ -141,9 +142,8 @@ impl fmt::Display for Operation {
 /// Variants hold each tool's native compiled value unboxed so compile timings include no
 /// adapter-added allocation.
 pub enum Compiled {
-    /// `json-schema-rs` parsed schema document (an object or a boolean schema) in its `$ref`
-    /// registry.
-    JsonSchemaRs(Registry<'static>),
+    /// `json-schema-rs` compiled schema (built through its `$ref` registry).
+    JsonSchemaRs(CompiledSchema),
     /// `jsonschema` validator.
     Jsonschema(jsonschema::Validator),
     /// `boon` schema collection and the root schema's index.
@@ -249,8 +249,10 @@ pub fn compile(tool: Tool, schema_text: &str) -> Result<Compiled, AdapterError> 
         Tool::JsonSchemaRs => {
             let schema: Schema = serde_json::from_str::<Schema>(schema_text)
                 .map_err(|e: serde_json::Error| AdapterError::SchemaParse(e.to_string()))?;
-            Registry::builder()
+            let registry: Registry<'static> = Registry::builder()
                 .build_owned(schema)
+                .map_err(|e| AdapterError::Compile(e.to_string()))?;
+            CompiledSchema::new(&registry)
                 .map(Compiled::JsonSchemaRs)
                 .map_err(|e| AdapterError::Compile(e.to_string()))
         }
@@ -303,9 +305,7 @@ fn parse_schema_value(schema_text: &str) -> Result<Value, AdapterError> {
 #[must_use]
 pub fn validate(compiled: &Compiled, instance: &Value) -> bool {
     match compiled {
-        Compiled::JsonSchemaRs(registry) => {
-            json_schema_rs::validate_with_registry(registry, instance).is_ok()
-        }
+        Compiled::JsonSchemaRs(compiled) => compiled.validate(instance).is_ok(),
         Compiled::Jsonschema(validator) => {
             let errors: Vec<jsonschema::ValidationError<'_>> =
                 validator.iter_errors(instance).collect();

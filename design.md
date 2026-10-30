@@ -5,7 +5,7 @@ This document is the **design and architecture knowledge bank** for the json-sch
 - **One section per feature/keyword** (or sub-sections for related keywords). Research uses **only** the local specs under `specs/` (draft-00 through 2020-12)—download them with `make vendor_specs`; they are gitignored and not in the repo. No reliance on the web.
 - Related features are grouped (e.g. string constraints under Strings, number constraints under Numbers). Each section can have **Spec version quirks** sub-sections for differences between drafts; we implement per the latest supported spec and may expose version-based config where behavior differs.
 
-Implemented keywords: type (object, string, integer, number, boolean, array), properties, required, title, enum, const, items, additionalProperties, uniqueItems, minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf. Other keywords are documented in the sections below. Every schema position accepts a boolean schema (`true` / `false`). Keys the model does not hold (unimplemented keywords, `x-` extensions, unknown keys) are kept in `JsonSchema::extensions` and round-trip; they do not cause an error. Properties whose schema does not map to a Rust type are omitted from generated structs.
+Implemented keywords: the validator implements every assertion and applicator keyword of drafts 4 to 2020-12, dynamic references and the specified `format`s (see *JSON Schema validator*); codegen and reverse codegen implement type (object, string, integer, number, boolean, array), properties, required, title, enum, const, items, additionalProperties, uniqueItems, minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, allOf, anyOf, oneOf. Other keywords are documented in the sections below. Every schema position accepts a boolean schema (`true` / `false`). Keys the model does not hold (unimplemented keywords, `x-` extensions, unknown keys) are kept in `JsonSchema::extensions` and round-trip; they do not cause an error. Properties whose schema does not map to a Rust type are omitted from generated structs.
 
 ---
 
@@ -23,9 +23,19 @@ We have three separate pipelines: Schema→Rust, Rust→Schema, and the validato
 
 ### JSON Schema validator
 
-The validator takes the same schema model used by codegen and a JSON instance (`serde_json::Value`) and returns `Result<(), Vec<ValidationError>>` (type alias **ValidationResult**). It collects **all** validation errors (no fail-fast) and returns them at the end. Inputs: anything that converts to a `SchemaRef` (`&Schema`, which may be a boolean document, or `&JsonSchema`) and `&Value`. Output: `Ok(())` when valid, `Err(errors)` when invalid. `validate` builds the schema's `Registry` on every call; `validate_with_registry(&registry, instance)` reuses one built once (and is the only way to give `$ref` other documents). A schema whose registry cannot be built fails every instance with one error at the root: `InvalidRef` for a `$ref` that does not resolve, `InvalidSchema` for anything else (a duplicate `$id`, a metaschema requiring an unknown vocabulary).
+The validator compiles a schema once and validates any number of instances against it. `CompiledSchema::new(&registry)` builds the compiled form from a [`Registry`](#schema-registry-ref-resolution); `compiled.validate(&instance)` returns `Result<(), Vec<ValidationError>>` (type alias **ValidationResult**) with **all** errors, and `compiled.is_valid(&instance)` returns the verdict alone, stopping at the first failure. `validate(schema, instance)` and `validate_with_registry(&registry, instance)` build what they need and compile on every call (convenience paths). A schema whose registry cannot be built, or that cannot be compiled, fails every instance with one error per problem at the root: `InvalidRef` for a `$ref` that does not resolve, `InvalidPatternInSchema` for a pattern that does not compile, `InvalidSchema` for anything else (a duplicate `$id`, a raw keyword with a value of the wrong shape, a metaschema requiring an unknown vocabulary). `CompiledSchema` owns everything it needs; the registry can be dropped.
 
-**Supported keywords:** `$schema` (per resource, including custom metaschemas and their `$vocabulary`), `$id` / draft-4 `id` (resources and base URIs), `$anchor` and `$dynamicAnchor` (as plain anchors), `$ref` (any URI reference, resolved through the [schema registry](#schema-registry-ref-resolution); keywords next to `$ref` are not evaluated yet, #28), `$defs` / `definitions` (container only), `type` (all seven types, as a set), boolean schemas at every position, `required`, `properties` (recursive), `additionalProperties` (boolean or schema), `enum`, `const`, `allOf`, `anyOf`, `oneOf`, `pattern`, numeric bounds (`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, compared exactly; see *8. Numbers*), length bounds, `uniqueItems`, and selected `format`s. Type-specific keywords apply by the instance's kind, whatever `type` says or whether it is present: `required`/`properties`/`additionalProperties` to objects, length/`pattern`/`format` to strings, `items`/count bounds to arrays, numeric keywords to numbers, `uniqueItems` to arrays. A `type` mismatch is reported next to every other keyword the instance breaks (all errors, no fail-fast). The validator and codegen reuse the same `JsonSchema` struct; one parse, one model. A compiled validator (e.g. tree of validator nodes) can be added for performance; the same schema model would be used. **Current performance:** in the benchmark harness our validator is the fastest in none of the 22 in-process validation time cells; the `jsonschema` crate wins 21 and ties 1, and is typically 5–60× faster (e.g. 148 ms vs 7.5 ms on a 6 MB instance), because `validate` re-walks the parsed schema on every call; the compiled-schema IR (#8) addresses this.
+**Compiled form** (`validator/compiled.rs`). An arena `Vec<Node>` linked by `NodeId(u32)` (boon / Blaze style). A node holds one schema object's keywords as a closed enum (`Keyword`), matched exhaustively, ordered so cheap assertions run first (`type`, `const`, `enum`, numeric, string, array and object assertions), then references, then the object, array and in-place applicators, and `unevaluatedProperties` / `unevaluatedItems` last. Each node also records its schema resource (`Scope`) and whether it has an `unevaluated*` keyword. Compilation is an iterative worklist over the typed model and, for keywords the model keeps raw in `extensions` (`not`, `if`, `prefixItems`, `contains`, `patternProperties`, ...), over the raw JSON in place (no re-parse), reading each keyword only when the resource's dialect defines it and its vocabulary is active. Every `$ref` is resolved through the registry to a `NodeId` at compile time; a schema reached twice (two `$ref`s to one definition, recursion) is one node, keyed by its address and scope, so cycles compile to cycles and nothing is ever rejected for being recursive. Each distinct regular expression is compiled once (`regress`, `u` flag) and interned; an invalid one is a `CompileError::InvalidPattern` with its location. Draft differences are lowered here, so evaluation never branches on the draft: `ref_siblings: Ignored` (drafts 4–7) keeps only `$ref` on a node that has one; tuple `items` + `additionalItems` (drafts 4–2019-09) and `prefixItems` + `items` (2020-12) become one `Items { prefix, rest }`; `dependencies` splits into `DependentRequired` / `DependentSchemas`; `format` becomes a checker only when the dialect asserts formats. Compile errors are collected (`CompileErrors`, every problem with its JSON Pointer location).
+
+**Evaluator** (`validator/eval.rs`). One evaluator, generic over `const COLLECT: bool`: the verdict mode (`is_valid`) stops at the first failing keyword and allocates nothing for errors; the collect mode (`validate`) evaluates every keyword and records one `ValidationError` per problem. Branches whose outcome is all that matters (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) always run in the verdict mode; `oneOf` stops at the second match in the verdict mode and counts every match when collecting. Instance locations are a linked list on the native stack, encoded as a `JsonPointer` only when an error is created. Errors are built in a cold, out-of-line helper so they take no room in the recursive frames, and each keyword is its own function so a recursive evaluation holds only the frames of the keywords it passes through. The suite gate runs both modes on every case and fails when they disagree.
+
+**Recursion and loops.** The evaluator recurses, which every fast validator does (`research/synthesis.md` O7), with a depth counter: at `DEPTH_LIMIT` (512 nested subschemas) evaluation stops and the result is exactly one `DepthLimitExceeded` (a branch cut short by the guard must not read as a branch that failed, which would make `not` pass). The limit is a crash guard sized from a measurement on a 2 MiB thread (the default for spawned threads): the costliest shapes overflow after about 1,200 levels in a debug build and several thousand in release. In-place loops (spec 2020-12 core §9.4.1: undefined, must terminate) are detected at run time, boon's rule: re-entering the same `$ref` target at the same instance location (by address) on the current path fails that branch with `RefCycle`, so `{"anyOf":[{"type":"string"},{"$ref":"#"}]}` gives a normal error for `{"x":1}` and still accepts `"hi"`. Productive recursion (a tree schema against a nested instance) is unaffected, since each step moves to a child location.
+
+**Annotations for `unevaluated*`.** A node with `unevaluatedProperties` / `unevaluatedItems` collects which members (by position in the object) or items (by index) its other keywords evaluated, as a bitset (`Evaluated`); only such nodes ask for annotations, so schemas without `unevaluated*` pay nothing. In-place applicators (`allOf`, `anyOf`, `oneOf`, `if`/`then`/`else`, `dependentSchemas`, `$ref`, `$dynamicRef`, `$recursiveRef`) pass annotations up only from subschemas that pass; `not` passes none; `anyOf` evaluates every branch when annotations are wanted. `properties`, `patternProperties`, `additionalProperties`, `prefixItems`, `items` and (2020-12 only) `contains` produce them.
+
+**Dynamic references.** `$dynamicRef` (2020-12) whose initial target declares the matching `$dynamicAnchor` (the "bookend"), and `$recursiveRef` (2019-09) whose initial target has `$recursiveAnchor: true`, are resolved at run time against the dynamic scope: the stack of schema resources entered, kept only when a schema uses such a reference. The outermost resource that declares the anchor (or, for `$recursiveRef`, whose root has `$recursiveAnchor: true`) wins; otherwise the reference acts as `$ref`. Their targets per resource are compiled ahead (a table `(resource, anchor) → NodeId`), from the registry, which resolves `#name` in every resource that declares a `$dynamicAnchor` and `#` in every resource with `$recursiveAnchor`.
+
+**Keywords.** Every assertion and applicator of drafts 4, 6, 7, 2019-09 and 2020-12 (see the per-keyword sections), boolean schemas at every position, and the `format`s the specifications define. Type-specific keywords apply by the instance's kind, whatever `type` says or whether it is present; a `type` mismatch is reported next to every other keyword the instance breaks. `const` / `enum` no longer stop the evaluation of their siblings. Not implemented: the content keywords as assertions (draft 7's optional `content.json`), user-defined formats, and schema paths / nested causes on errors (output formats beyond the error list).
 
 **Validation errors:** Each `ValidationError` variant includes instance context (actual value, count, length, or "got" type) and the schema constraint where applicable. Display messages are one line per error and actionable (e.g. `/: value "pending" not in enum (allowed: "open", "closed")`; `/: array has 2 item(s), minimum is 3`; `/: value 15 is above maximum 10`). Messages are never truncated; full allowed sets, values, and lengths are shown.
 
@@ -43,7 +53,7 @@ We run the [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Sche
 
 ### Known failures
 
-Every open bug issue has at least one regression test that asserts the **correct** behaviour, so the refactor is measured by those tests flipping, and nothing that passes today can silently break. Validator, parser and codegen bugs live in `json_schema_rs/tests/known_failures.rs`; derive bugs in `json_schema_rs_macro/tests/known_failures.rs` (separate crates, so each file carries its own copy of the helpers it needs; while no derive bug has a test, its helper carries `#[expect(dead_code)]`, which turns into an error once a test uses it, so the attribute gets removed). Bugs the official suite also covers (#28, #31, #32) have both a dedicated test and manifest entries.
+Every open bug issue has at least one regression test that asserts the **correct** behaviour, so the refactor is measured by those tests flipping, and nothing that passes today can silently break. Validator, parser and codegen bugs live in `json_schema_rs/tests/known_failures.rs`; derive bugs in `json_schema_rs_macro/tests/known_failures.rs` (separate crates, so each file carries its own copy of the helpers it needs; while no derive bug has a test, its helper carries `#[expect(dead_code)]`, which turns into an error once a test uses it, so the attribute gets removed). Bugs the official suite also covers have both a dedicated test and manifest entries.
 
 - `known_failure(issue, body)` runs the body under `catch_unwind`: the test passes while the body panics and fails with "#N now behaves correctly" as soon as it completes, the same "unexpected pass" rule as the suite manifest.
 - `known_failure_in_child_process(issue, name, body)` is for bugs that abort the process (stack overflow: #4, #36) or never terminate (codegen hang: #35). The test re-runs itself as a child process filtered to `name` (selected by `JSON_SCHEMA_RS_KNOWN_FAILURE_CHILD`), with a 10 s timeout. A crash, a non-zero exit, or a timeout is "still failing"; a clean exit that printed the pass marker is an unexpected pass; a clean exit without the marker (a wrong `name`) fails the test rather than counting as "still failing". Two harness tests pin both of those outcomes.
@@ -290,7 +300,7 @@ Behaviour that differs between drafts lives in one place: a **`Dialect`** (`json
 | vocabularies | — | — | — | metaschema's six (format `false`) | metaschema's seven (all `true`) |
 
   Drafts 00–03 have no table of their own and use draft 4's rules with a `DialectWarning::UnsupportedDraft`; draft 5 is draft 4 (editorial changes only).
-- **Who reads each flag.** `format_mode` gates every format check in the validator (today `uuid`, behind the `uuid` feature). `integer_semantics` is read by the validator's `type: "integer"` check. `exclusive_bounds` is read at parse time: under `BooleanModifier` the draft-4 boolean form is normalised to the numeric one, like `id` (see *exclusiveMinimum*). `ref_siblings` decides whether an `$id` next to `$ref` changes the base URI (the registry; drafts 4–7 ignore it), and is read by the compiled validator in #8 for sibling keywords (#28). The id keyword drives draft-4 `id` normalisation and the registry's resource discovery. `active_vocabularies` (a `VocabularySet`) is `VocabularySet::standard()` (every vocabulary but `format-assertion`) for every draft; only a custom metaschema changes it, and the validator skips the `validation` and `applicator` keywords when their vocabulary is not in force.
+- **Who reads each flag.** `format_mode` decides whether the validator compiles `format` into a check. `integer_semantics` is read by the validator's `type: "integer"` check. `exclusive_bounds` is read at parse time: under `BooleanModifier` the draft-4 boolean form is normalised to the numeric one, like `id` (see *exclusiveMinimum*). `ref_siblings` decides whether an `$id` next to `$ref` changes the base URI (the registry; drafts 4–7 ignore it), and decides whether the validator evaluates the keywords next to `$ref` (`Ignored`: the node keeps only `$ref`). The id keyword drives draft-4 `id` normalisation and the registry's resource discovery. `active_vocabularies` (a `VocabularySet`) is `VocabularySet::standard()` (every vocabulary but `format-assertion`) for every draft; only a custom metaschema changes it, and the validator skips the `validation` and `applicator` keywords when their vocabulary is not in force.
 - **Two draft settings, two use cases.** `default_spec_version` is the draft for a document whose root has no `$schema` (the spec leaves that "implementation-defined", 2020-12 core §8.1.1) or whose `$schema` cannot be loaded; an explicit `$schema` always wins, and an embedded resource without `$schema` takes its enclosing resource's draft (the spec's MUST, §9.3.2). The test harnesses use it (the suite directory's draft, Bowtie's `dialect` command). `forced_spec_version` overrides every `$schema` of the document, the root's and each embedded resource's, for documents whose `$schema` is wrong or missing in places; documents a `$ref` loads are not the caller's and still follow their own `$schema`. When both are set, the forced draft wins. Competitors: boon's `set_default_draft` is a default only; jsonschema-rs's `with_draft` forces the root's draft while embedded resources still follow their own `$schema`.
 - **Resolution order** (`resolve_dialect(&schema, &settings)`): `JsonSchemaSettings::forced_spec_version` when set; otherwise the root's `$schema` when it is a recognised metaschema URI (`SpecVersion::from_schema_uri`); otherwise `default_spec_version`, or **Draft 2020-12** when unset. The settings' per-flag overrides are then applied to that draft's defaults: `format_mode`, `integer_semantics`, `exclusive_bounds` and `ref_siblings` each have one. Settings whose values are modes are enums (`FormatMode`, `IntegerSemantics`, `ExclusiveBounds`, `RefSiblings`), not booleans. Parsing chooses the draft for the document root; the [registry](#schema-registry-ref-resolution) gives every embedded resource (a subschema with `$id`) the dialect of its own `$schema`, or its parent resource's when it has none. Parsing records the dialect settings on the root (`JsonSchema::dialect_settings`, `Some` when any is set; a `DialectSettings` value), and the registry applies them per resource: under a forced draft every resource of the document gets the root's dialect; otherwise each resource follows its own `$schema`, and the per-flag overrides (`format_mode`, `integer_semantics`, `exclusive_bounds`, `ref_siblings`) are applied on top of each resource's draft.
 - **Unknown `$schema`.** Permissive by default (`UnknownSchemaUri::Fallback`): the schema uses the default draft (`default_spec_version`, else Draft 2020-12) and the result carries a `DialectWarning::UnknownSchemaUri { uri, fallback }`. `UnknownSchemaUri::Reject` turns that into `JsonSchemaParseError::UnknownSchemaUri`. A forced draft ignores `$schema`, so it never warns or errors. **Custom metaschemas.** At parse time an unrecognised URI is "unknown" (no documents are known yet). The registry then looks it up like any document (given documents, then the retriever): when found, its `$vocabulary` decides the active vocabularies (`core` always; a known vocabulary is active whether marked `true` or `false`; an unknown one marked `true` is refused with `RegistryError::UnsupportedVocabulary`, which the spec requires; an unknown optional one is ignored), the `format-assertion` vocabulary makes `format_mode` `Assertion`, and the metaschema's own `$schema` (followed through further custom metaschemas until a standard one) decides the base draft. Only when it cannot be loaded does the fallback above apply (logged at `debug`). `UnknownSchemaUri::Reject` refuses at parse time, before any registry exists, so a custom metaschema needs `Fallback` (the default).
@@ -321,13 +331,13 @@ Behaviour that differs between drafts lives in one place: a **`Dialect`** (`json
 
 ### $dynamicAnchor
 
-**Our implementation:** Recorded by the registry like `$anchor` (2020-12 defines that a `$dynamicAnchor` is also a plain anchor), and kept separately per resource (`dynamic_anchors`) for `$dynamicRef`.
+**Our implementation:** Recorded by the registry like `$anchor` (2020-12 defines that a `$dynamicAnchor` is also a plain anchor), and kept separately per resource (`dynamic_anchors`) for `$dynamicRef`; the registry resolves `#name` in each resource that declares one, so the compiled validator can compile every resource's target.
 
-**Spec version quirks:** 2020-12 only (2019-09 has the boolean `$recursiveAnchor`, which is not resolved).
+**Spec version quirks:** 2020-12 only (2019-09 has the boolean `$recursiveAnchor`, honoured on resource roots by `$recursiveRef`).
 
 ### $dynamicRef
 
-Not resolved dynamically. `$dynamicRef` and 2019-09's `$recursiveRef` stay in `JsonSchema::extensions` and are not evaluated (the suite's `dynamicRef.json` / `recursiveRef.json` cases are known failures). The registry already keeps each resource's dynamic anchors; dynamic scope belongs to the compiled validator (#8; research/synthesis.md §3, item 4).
+**Our implementation:** Validator only (the values stay in `JsonSchema::extensions`; codegen does not read them). The registry resolves the reference like `$ref` (its initial target). When that target declares the `$dynamicAnchor` the fragment names, the compiled validator resolves it at run time to the outermost resource in the dynamic scope that declares that anchor; otherwise it is a plain `$ref`. 2019-09's `$recursiveRef` works the same way with `$recursiveAnchor: true` on resource roots. See *JSON Schema validator*, *Dynamic references*.
 
 **Spec version quirks:** 2020-12 `$dynamicRef` / `$dynamicAnchor`; 2019-09 `$recursiveRef` / `$recursiveAnchor`.
 
@@ -357,15 +367,15 @@ The JSON Schema `$ref` keyword references another schema by URI. Full resolution
 
 - **Resolution** goes through the [schema registry](#schema-registry-ref-resolution), shared by the validator and codegen. A `$ref` is resolved against the base URI of the resource it appears in (RFC 3986); the fragment is a JSON Pointer from the target resource's root (percent-decoded, then RFC 6901-unescaped; empty tokens are keys) or an anchor name. Every `$ref` in every reachable document is resolved once, when the registry is built; a dangling one is `RegistryError::UnresolvableRef`, and a pointer to a value that is not a schema (`#/properties`, `#/required`, `#/title`) is `RegistryError::RefTargetNotSchema`. A pointer may go anywhere a schema can be: typed fields, keywords the model keeps raw (`not`, `if`, `patternProperties`), unknown keywords (`#/x-defs/a`) and data keywords (`#/examples/0`); a raw target is parsed once into a schema the registry keeps.
 - **Schema model:** `$ref` is stored and round-tripped as `ref_: Option<String>` on [`JsonSchema`] (serde `rename = "$ref"`).
-- **Validator:** each work item carries its registry `Scope`. On popping a schema, the validator follows its `$ref` chain (`follow_refs`: enter the node's scope, resolve, repeat), detecting a chain that returns to the same `(scope, $ref)` as an `InvalidRef` (an in-place loop through `anyOf` / `allOf` is #36, fixed by #8). It then validates against the final target only: keywords next to `$ref` are not evaluated in any draft yet (#28, #8), even though 2019-09 and later require it.
+- **Validator:** each `$ref` is resolved once, at compile time, to the target's node and evaluated in place next to the node's other keywords (2019-09 and later) or alone (drafts 4–7, `ref_siblings`). A chain or loop that re-enters the same target at the same instance location fails that branch with `RefCycle` (see *JSON Schema validator*, *Recursion and loops*).
 - **Codegen (forward, JSON Schema → Rust):** codegen walks copies and merges of subschemas (`allOf` merging), so it cannot carry scopes; it resolves each `$ref` with `Registry::resolve_anywhere` (the root resource's resolution of that `$ref`, else the first resource where it appears). That is exact for every document whose `$ref`s mean the same in every resource; per-scope resolution in codegen comes with #9's TypeGraph walk. A target that is a `$defs` / `definitions` entry names its struct by the entry key (`Resolved::definition_name`). Failures are `CodeGenError::RefResolution { ref_str, reason }` (or `CodeGenError::Registry` for a registry error not about one `$ref`); there is no fallback to `serde_json::Value`.
 - **Reverse codegen:** `ToJsonSchema` and the derive macro emit `$defs` and `$ref` for nested custom types. Shared types (e.g. two fields with the same struct type) are placed in `$defs` and referenced via `$ref` at use sites. Recursive types, including mutual recursion and longer cycles, terminate through the generator's pending set: a type being built returns its `$ref` immediately (see *Rust struct → JSON Schema*, *Generator context*).
 
 **Spec version quirks:**
 
-- **Siblings:** drafts 4, 6 and 7 ignore keywords next to `$ref` (including `$id`, so a sibling `$id` does not change the base URI; the registry follows this); 2019-09 and 2020-12 evaluate them. The validator ignores sibling assertions in every draft until #8 reads `ref_siblings` (#28).
+- **Siblings:** drafts 4, 6 and 7 ignore keywords next to `$ref` (including `$id`, so a sibling `$id` does not change the base URI; the registry follows this); 2019-09 and 2020-12 evaluate them. The validator follows `ref_siblings` (overridable with `JsonSchemaSettings::ref_siblings` / `--jss-ref-siblings`).
 - **Containers:** drafts 4–7 use `#/definitions/...`, 2019-09 and 2020-12 `#/$defs/...`. A JSON Pointer is followed as written, so either container works in every draft.
-- **Dynamic references:** `$dynamicRef` (2020-12) and `$recursiveRef` (2019-09) are not resolved (see *$dynamicRef*).
+- **Dynamic references:** `$dynamicRef` (2020-12) and `$recursiveRef` (2019-09) are resolved by the validator against the dynamic scope (see *$dynamicRef*).
 
 ### $defs
 
@@ -480,15 +490,15 @@ The JSON Schema `oneOf` keyword is an array of schemas; an instance validates if
 
 ### not
 
-TODO.
+**Our implementation:** Validator only (kept raw in `extensions`). The instance must not match the subschema, evaluated in the verdict mode; a match is `NotSchemaMatched`. Annotations from inside `not` never count for `unevaluated*`. A branch cut short by the depth guard does not make `not` pass.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** the same in every draft from 4.
 
 ### if / then / else
 
-TODO.
+**Our implementation:** Validator only. `if` is evaluated in the verdict mode; when it passes `then` applies, otherwise `else`; a missing branch passes. The errors are those of the applied branch. `if`'s annotations count for `unevaluated*` when it passes. `then` / `else` without `if` do nothing.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** from draft 7; ignored as unknown keywords in drafts 4 and 6.
 
 ---
 
@@ -577,39 +587,39 @@ The `required` array lists property names that are required at that object level
 
 ### patternProperties
 
-TODO.
+**Our implementation:** Validator only. Each member whose name matches a pattern (ECMA-262 via `regress`, unanchored, compiled once) is validated against that pattern's schema; a member can match several. Matched members are not "additional" for `additionalProperties`, and count as evaluated for `unevaluatedProperties`.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** the same in every draft from 4.
 
 ### propertyNames
 
-TODO.
+**Our implementation:** Validator only. Every member name is validated (as a string instance, verdict mode) against the subschema; each failing name is one `InvalidPropertyName` at that member. It produces no annotations.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** from draft 6.
 
 ### minProperties / maxProperties
 
-TODO.
+**Our implementation:** Validator only. Member counts outside the bounds are `TooFewProperties` / `TooManyProperties`. Values are read as non-negative integers (`2.0` accepted from draft 6, see *Numbers*).
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** the same in every draft from 4.
 
 ### dependentRequired
 
-TODO.
+**Our implementation:** Validator only. When a listed property is present, each name it requires that is absent is one `MissingDependentProperty`. Draft 4–7 `dependencies` with an array value compiles to the same check (and is also honoured in 2019-09 / 2020-12, whose metaschemas keep `dependencies` for compatibility).
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** `dependentRequired` from 2019-09; earlier drafts use the array form of `dependencies`.
 
 ### dependentSchemas
 
-TODO.
+**Our implementation:** Validator only. When a listed property is present, the whole object is validated in place against its schema (annotations count for `unevaluatedProperties`). Draft 4–7 `dependencies` with a schema value compiles to the same check.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** `dependentSchemas` from 2019-09; earlier drafts use the schema form of `dependencies`.
 
 ### unevaluatedProperties
 
-TODO.
+**Our implementation:** Validator only. Runs after every other keyword of its node and applies to each member no keyword of the node, or of a passing in-place subschema, evaluated (see *JSON Schema validator*, *Annotations for `unevaluated*`*). `false` reports each such member as `DisallowedUnevaluatedProperty`; a schema validates each. Afterwards every member counts as evaluated, for an enclosing `unevaluatedProperties`.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** from 2019-09 (part of the applicator vocabulary there, its own `unevaluated` vocabulary in 2020-12).
 
 ---
 
@@ -625,7 +635,7 @@ When a schema has `"type": "array"`, the instance must be a JSON array. This mea
 
 The `items` keyword defines the schema that all array elements must validate against when it is a **single schema** (object). We support only the single-schema form; we do not support `items` as an array of schemas (tuple typing) or draft 2020-12 `prefixItems` in this implementation.
 
-**Our implementation:** We parse and store `items` as `Option<Schema>` (a schema object or a boolean schema; `true` reads as `{}` in codegen, so it emits `Vec<serde_json::Value>`; `false` rejects every element in the validator). When present with `type: "array"`, codegen emits `Vec<T>` (or `Option<Vec<T>>`) where `T` is the Rust type for the item schema (string → `String`, integer → `i64`, number → `f64`, object with properties → struct name, string enum → enum name, array with items → `Vec<Inner>`). Unsupported item types (e.g. `null`, `boolean` only) emit `Vec<serde_json::Value>`. The validator, when `items` is present and the instance is an array, validates each array element against the item schema (iterative stack, no recursion). Reverse codegen: `Vec<T>::json_schema()` returns `type: "array"` and `items: Some(Schema::from(T::json_schema()))`. `serde_json::Value` implements `ToJsonSchema` as the empty schema `{}`, so generated code with a `Vec<serde_json::Value>` field (`"items": true` or an untyped item schema) compiles with the `ToJsonSchema` derive. We support minItems, maxItems, and uniqueItems (see their subsections). prefixItems, contains, unevaluatedItems, etc. are not implemented; see the TODO subsections below.
+**Our implementation:** We parse and store `items` as `Option<Schema>` (a schema object or a boolean schema; `true` reads as `{}` in codegen, so it emits `Vec<serde_json::Value>`; `false` rejects every element in the validator). When present with `type: "array"`, codegen emits `Vec<T>` (or `Option<Vec<T>>`) where `T` is the Rust type for the item schema (string → `String`, integer → `i64`, number → `f64`, object with properties → struct name, string enum → enum name, array with items → `Vec<Inner>`). Unsupported item types (e.g. `null`, `boolean` only) emit `Vec<serde_json::Value>`. The validator, when `items` is present and the instance is an array, validates each array element against the item schema. The tuple form (an array of schemas, drafts 4 to 2019-09) is kept raw in `JsonSchema::extensions` (codegen ignores it) and validated with `additionalItems` for the rest; in 2020-12 an array `items` is not a schema and fails compilation. Reverse codegen: `Vec<T>::json_schema()` returns `type: "array"` and `items: Some(Schema::from(T::json_schema()))`. `serde_json::Value` implements `ToJsonSchema` as the empty schema `{}`, so generated code with a `Vec<serde_json::Value>` field (`"items": true` or an untyped item schema) compiles with the `ToJsonSchema` derive. We support minItems, maxItems, and uniqueItems (see their subsections). `prefixItems`, `contains` and `unevaluatedItems` are validator-only (see their subsections).
 
 **Spec version quirks:**
 
@@ -635,15 +645,15 @@ The `items` keyword defines the schema that all array elements must validate aga
 
 ### prefixItems
 
-TODO.
+**Our implementation:** Validator only. The first items are validated against the schemas in order, and `items` applies to the rest. Compiled with the draft 4–2019-09 tuple form of `items` + `additionalItems` into one `Items { prefix, rest }`.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** 2020-12 only; earlier drafts write the tuple as an array `items`, with `additionalItems` for the rest.
 
 ### contains / minContains / maxContains
 
-TODO.
+**Our implementation:** Validator only. Items are matched in the verdict mode; fewer matches than `minContains` (1 when absent) is `TooFewContains`, more than `maxContains` is `TooManyContains`. `minContains: 0` makes an empty array valid. In 2020-12 the matched items count as evaluated for `unevaluatedItems`; in 2019-09 they do not.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** `contains` from draft 6; `minContains` / `maxContains` from 2019-09.
 
 ### minItems / maxItems
 
@@ -663,9 +673,9 @@ When `uniqueItems` is `true`, all array elements must be unique (JSON structural
 
 ### unevaluatedItems
 
-TODO.
+**Our implementation:** Validator only. Like `unevaluatedProperties`, for the items no `prefixItems`, `items`, `additionalItems`, (2020-12) `contains`, or passing in-place subschema evaluated; `false` reports each as `FalseSchema` at its index.
 
-**Spec version quirks:** (placeholder or blank)
+**Spec version quirks:** from 2019-09.
 
 ---
 
@@ -858,9 +868,17 @@ TODO.
 
 ### format
 
-The `format` annotation is stored on `JsonSchema` as `Option<String>`. Currently only `"uuid"` is
-acted upon; other values are preserved through parse/serialize round-trips but have no effect on
-validation or codegen. **Assertion vs annotation** follows the dialect's `format_mode`: drafts 4, 6
+The `format` annotation is stored on `JsonSchema` as `Option<String>`. When the dialect asserts
+formats, the validator checks every format the specifications define (`validator/format.rs`,
+hand-written, no allocation): `date-time`, `date`, `time` (RFC 3339; a leap second is valid only
+at 23:59:60 UTC), `duration` (RFC 3339 appendix A), `email` / `idn-email` (RFC 5321 / 6531,
+quoted local parts and address literals), `hostname` / `idn-hostname` (RFC 1123; IDNA2008 with its
+contextual rules, from a code point table generated from the Unicode Character Database by
+`research/scripts/gen_idna_table.py`; the bidi rule is not applied), `ipv4`, `ipv6`, `uri`,
+`uri-reference`, `iri`, `iri-reference` (`fluent-uri`), `uri-template` (RFC 6570),
+`json-pointer`, `relative-json-pointer`, `regex` (compiles under `regress`) and `uuid`. A failure
+is `InvalidFormat { format, value }`; an unknown format name is ignored; non-strings are ignored.
+Codegen acts only on `uuid` (below). **Assertion vs annotation** follows the dialect's `format_mode`: drafts 4, 6
 and 7 check `format` by default (their specs say an implementation SHOULD, with an option to turn
 it off); 2019-09 and 2020-12 only record it (2020-12: assertion "MUST be disabled by default").
 `JsonSchemaSettings::builder().format_mode(..)` overrides either way. In annotation mode the
@@ -871,10 +889,7 @@ validator runs no format check; codegen's type mapping (`uuid` → `Uuid`) does 
 Enable with `json-schema-rs = { features = ["uuid"] }` (or `["dep:uuid"]` internally). Activating
 the feature:
 
-- **Validation:** when the dialect asserts formats, string instances whose schema has
-  `format: "uuid"` are validated with `uuid::Uuid::parse_str` (the check is applied in every
-  asserting draft, although `uuid` is defined from 2019-09). An `InvalidUuidFormat` error is emitted for strings that do not conform
-  to the UUID format.
+- **Validation:** not affected; the validator checks `uuid` with or without the feature.
 - **Codegen:** string properties with `format: "uuid"` emit `uuid::Uuid` (required) or
   `Option<uuid::Uuid>` (optional) instead of `String`/`Option<String>`. A `use uuid::Uuid;`
   statement is automatically prepended. Array item schemas with `format: "uuid"` likewise produce

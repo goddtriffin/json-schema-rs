@@ -2,18 +2,19 @@
 //!
 //! Speaks Bowtie's line-delimited JSON protocol (version 1) over stdin/stdout: one command per
 //! input line, one response per output line. Each `run` case is parsed with **strict** schema
-//! ingestion (unknown keywords are rejected) and every test instance is validated with
-//! [`json_schema_rs::validate`].
+//! ingestion (unknown keywords are rejected), its registry is built and the schema compiled once
+//! ([`json_schema_rs::CompiledSchema`]), and every test instance is validated with
+//! [`json_schema_rs::CompiledSchema::validate`].
 //!
 //! Classification of each case and test (the differential report builder depends on these exact
 //! skip messages):
 //!
 //! - Strict parsing rejects a key the draft does not define → whole-case skip
 //!   `unsupported keyword "<key>" at <path>`.
-//! - Any other parse failure → whole-case skip `unsupported schema: <error>`.
-//! - Validation reports an unresolvable `$ref` → test skip `unsupported $ref: <detail>`.
-//! - Validation reports another capability gap (e.g. a pattern our regex engine cannot compile)
-//!   → test skip `unsupported: <detail>`.
+//! - Any other parse failure, a registry error other than one `$ref`, or a compile error (e.g. a
+//!   pattern our regex engine cannot compile) → whole-case skip `unsupported schema: <error>`.
+//! - The registry reports an unresolvable `$ref` → whole-case skip `unsupported $ref: <detail>`.
+//! - Validation reports another capability gap → test skip `unsupported: <detail>`.
 //! - Anything else is a real verdict `{"valid": bool}`.
 //! - A panic anywhere in a case is caught and reported as `errored`, so one bad case never takes
 //!   the harness down.
@@ -26,8 +27,8 @@ use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
-    JsonSchemaParseError, JsonSchemaSettings, Registry, RegistryError, Schema, SpecVersion,
-    ValidationError, ValidationResult, validate_with_registry,
+    CompileError, CompiledSchema, JsonSchemaParseError, JsonSchemaSettings, Registry,
+    RegistryError, Schema, SpecVersion, ValidationError, ValidationResult,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -271,15 +272,23 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
         }
         Err(panic_message) => return CaseOutcome::Errored(panic_message),
     };
+    let compiled: CompiledSchema = match catch_panic(|| CompiledSchema::new(&registry)) {
+        Ok(Ok(compiled)) => compiled,
+        Ok(Err(errors)) => {
+            let error: &CompileError = errors.first();
+            return CaseOutcome::Skipped(format!("unsupported schema: {error}"));
+        }
+        Err(panic_message) => return CaseOutcome::Errored(panic_message),
+    };
     let outcomes: Vec<TestOutcome> = case
         .tests
         .iter()
-        .map(|test: &Test| {
-            match catch_panic(|| validate_with_registry(&registry, &test.instance)) {
+        .map(
+            |test: &Test| match catch_panic(|| compiled.validate(&test.instance)) {
                 Ok(result) => classify(&result),
                 Err(panic_message) => TestOutcome::Errored(panic_message),
-            }
-        })
+            },
+        )
         .collect();
     CaseOutcome::Results(outcomes)
 }
