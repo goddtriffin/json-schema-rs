@@ -1,12 +1,16 @@
 //! Integration test: `json_schema_to_rust!` with a schema that has an optional integer property.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(r#"{"type":"object","properties":{"count":{"type":"integer"}}}"#);
 
 #[test]
 fn expanded_code_compiles_and_optional_integer_deserializes() {
-    let root = schema_0::Root { count: Some(42) };
+    let root = schema_0::Root {
+        count: Some(42),
+        additional: BTreeMap::new(),
+    };
     assert_eq!(root.count, Some(42));
 }
 

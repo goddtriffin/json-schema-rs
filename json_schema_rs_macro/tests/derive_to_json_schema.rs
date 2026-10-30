@@ -103,7 +103,7 @@ fn derive_root_json_schema() {
             );
             m.insert(
                 "name".to_string(),
-                Option::<String>::json_schema().expect("schema").into(),
+                String::json_schema().expect("schema").into(),
             );
             m
         },
@@ -2623,5 +2623,329 @@ fn derive_list_form_doc_attribute_yields_no_description() {
         ..one_property_body("x", String::json_schema().expect("schema"))
     });
     let actual: ReverseCodeGenResult = DocHiddenOnly::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// --- Shapes forward codegen emits: nullable fields, flattened maps, unions, value enums ---
+
+/// Deserializes a present field (including `null`) as `Some(value)`, so an
+/// `Option<Option<T>>` tells an absent key from an explicit `null`.
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(deserializer).map(Some)
+}
+
+#[expect(clippy::unnecessary_wraps)]
+fn default_nullable_fields_renamed() -> Option<String> {
+    Some("x".to_string())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct NullableFields {
+    pub plain: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optional: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[json_schema(required)]
+    pub required_nullable: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_some",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[expect(clippy::option_option)]
+    pub optional_nullable: Option<Option<bool>>,
+    #[serde(
+        rename = "renamed-key",
+        default = "default_nullable_fields_renamed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub renamed: Option<String>,
+    pub nullable_items: Vec<Option<String>>,
+}
+
+#[test]
+fn derive_option_fields_emit_optional_required_nullable_and_renamed_properties() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "plain": { "type": "string" },
+            "optional": { "type": "string" },
+            "required_nullable": { "type": ["null", "string"] },
+            "optional_nullable": { "type": ["boolean", "null"] },
+            "renamed-key": { "type": "string" },
+            "nullable_items": { "type": "array", "items": { "type": ["null", "string"] } }
+        },
+        "additionalProperties": false,
+        "required": ["plain", "required_nullable", "nullable_items"]
+    })));
+    let actual: ReverseCodeGenResult = NullableFields::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct NullableLeaf {
+    pub x: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct RequiredNullableNamed {
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[json_schema(required)]
+    pub leaf: Option<NullableLeaf>,
+}
+
+#[test]
+fn derive_required_nullable_named_field_is_any_of_ref_and_null() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "leaf": { "anyOf": [{ "$ref": "#/$defs/NullableLeaf" }, { "type": "null" }] }
+        },
+        "additionalProperties": false,
+        "required": ["leaf"],
+        "$defs": {
+            "NullableLeaf": {
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "additionalProperties": false,
+                "required": ["x"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = RequiredNullableNamed::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct FlattenedStrings {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, String>,
+}
+
+#[test]
+fn derive_flattened_map_sets_additional_properties_instead_of_property() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "name": { "type": "string" } },
+        "additionalProperties": { "type": "string" },
+        "required": ["name"]
+    })));
+    let actual: ReverseCodeGenResult = FlattenedStrings::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct FlattenedNamed {
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, NullableLeaf>,
+}
+
+#[test]
+fn derive_flattened_map_of_named_type_refs_defs_entry() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": { "$ref": "#/$defs/NullableLeaf" },
+        "$defs": {
+            "NullableLeaf": {
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "additionalProperties": false,
+                "required": ["x"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = FlattenedNamed::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct Cat {
+    pub meows: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct Dog {
+    pub barks: bool,
+}
+
+/// A pet.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(title = "Pet")]
+enum PetAnyOf {
+    Cat(Cat),
+    String(String),
+    Dog(Box<Dog>),
+    Null(()),
+}
+
+#[test]
+fn derive_untagged_enum_emits_any_of_of_variant_payloads() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Pet",
+        "description": "A pet.",
+        "anyOf": [
+            { "$ref": "#/$defs/Cat" },
+            { "type": "string" },
+            { "$ref": "#/$defs/Dog" },
+            { "type": "null" }
+        ],
+        "$defs": {
+            "Cat": {
+                "type": "object",
+                "properties": { "meows": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["meows"]
+            },
+            "Dog": {
+                "type": "object",
+                "properties": { "barks": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["barks"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = PetAnyOf::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
+enum PetOneOf {
+    Cat(Cat),
+    Dog(Box<Dog>),
+}
+
+#[test]
+fn derive_untagged_enum_with_one_of_attribute_emits_one_of() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [{ "$ref": "#/$defs/Cat" }, { "$ref": "#/$defs/Dog" }],
+        "$defs": {
+            "Cat": {
+                "type": "object",
+                "properties": { "meows": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["meows"]
+            },
+            "Dog": {
+                "type": "object",
+                "properties": { "barks": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["barks"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = PetOneOf::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+enum RecursiveUnion {
+    Leaf(i8),
+    List(Vec<RecursiveUnion>),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct HoldsRecursiveUnion {
+    pub value: RecursiveUnion,
+}
+
+#[test]
+fn derive_recursive_untagged_enum_refers_to_its_defs_entry() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "value": { "$ref": "#/$defs/RecursiveUnion" } },
+        "additionalProperties": false,
+        "required": ["value"],
+        "$defs": {
+            "RecursiveUnion": {
+                "anyOf": [
+                    { "type": "integer", "minimum": -128, "maximum": 127 },
+                    { "type": "array", "items": { "$ref": "#/$defs/RecursiveUnion" } }
+                ]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsRecursiveUnion::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ToJsonSchema)]
+#[expect(dead_code)]
+enum Lvl {
+    #[json_schema(value = "x")]
+    X,
+    #[json_schema(value = 1)]
+    N1,
+    #[json_schema(value = null)]
+    Null,
+    #[json_schema(value = 1.5)]
+    N1Point5,
+    #[json_schema(value = -3)]
+    NMinus3,
+    #[json_schema(value = true)]
+    True,
+    #[json_schema(value = [1, "a"])]
+    List,
+    #[json_schema(value = {"k": [null]})]
+    Object,
+    #[serde(rename = "by-name")]
+    ByName,
+}
+
+#[test]
+fn derive_enum_with_values_emits_enum_of_json_literals_without_type() {
+    let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(
+        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","enum":["x",1,null,1.5,-3,true,[1,"a"],{"k":[null]},"by-name"]}"#
+            .to_string(),
+    );
+    let actual: Result<String, Vec<ReverseCodeGenError>> = Lvl::json_schema()
+        .map(|schema: JsonSchema| serde_json::to_string(&schema).expect("serialize"));
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, PartialEq, ToJsonSchema)]
+#[expect(dead_code)]
+enum OnlyNull {
+    #[json_schema(value = null)]
+    Null,
+}
+
+#[test]
+fn derive_single_variant_value_enum_emits_const() {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        const_value: Some(serde_json::Value::Null),
+        ..Default::default()
+    });
+    let actual: ReverseCodeGenResult = OnlyNull::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, PartialEq, ToJsonSchema)]
+enum NoVariants {}
+
+#[test]
+fn derive_enum_without_variants_emits_empty_enum() {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        enum_values: Some(Vec::new()),
+        ..Default::default()
+    });
+    let actual: ReverseCodeGenResult = NoVariants::json_schema();
     assert_eq!(expected, actual);
 }

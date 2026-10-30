@@ -1,6 +1,7 @@
 //! Integration test: `json_schema_to_rust!` with a schema that has minItems and maxItems.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(
     r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5}},"required":["tags"]}"#
@@ -10,6 +11,7 @@ json_schema_to_rust!(
 fn min_items_max_items_compiles_and_deserializes() {
     let root = schema_0::Root {
         tags: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        additional: BTreeMap::new(),
     };
     assert_eq!(
         root.tags,

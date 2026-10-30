@@ -146,61 +146,47 @@ pub(crate) fn collect_schema_entries(inputs: &[String]) -> Result<Vec<(PathBuf, 
     Ok(entries)
 }
 
-/// Returns the path prefix for shared-import statements in per-schema files.
-/// Depth = number of path components in `output_relative.parent()` (0 for root, 1 for sub/x.rs).
-/// Prefix = `super::` repeated (depth + 1) times so `super::shared::` or `super::super::shared::` etc.
-pub(crate) fn shared_import_prefix_for_output_relative(output_relative: &Path) -> String {
-    let depth = output_relative
-        .parent()
-        .map_or(0, |p| p.components().count());
-    (0..=depth).map(|_| "super::").collect()
-}
-
-/// Builds a map: directory path (relative to `output_dir`) -> set of module names (direct children).
-/// Root is ""; subdirs are e.g. `sub_dir`. Uses iterative logic (no recursion).
+/// Builds a map: directory path (relative to `output_dir`) -> set of module names (direct
+/// children: file stems and subdirectory names). Root is `""`. Any depth; iterative.
 pub(crate) fn mod_rs_content_by_dir(
     output_relatives: &[PathBuf],
 ) -> BTreeMap<PathBuf, BTreeSet<String>> {
     let mut by_dir: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     for rel in output_relatives {
-        let path = Path::new(rel);
-        let components: Vec<_> = path.components().collect();
-        if components.is_empty() {
+        let components: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+        let Some((file, dirs)) = components.split_last() else {
             continue;
-        }
-        let module_name = path
+        };
+        let module_name: String = Path::new(file)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("schema")
             .to_string();
-        if components.len() == 1 {
-            by_dir
-                .entry(PathBuf::new())
-                .or_default()
-                .insert(module_name);
-        } else {
-            let subdir_name = components[0].as_os_str().to_string_lossy().to_string();
-            by_dir
-                .entry(PathBuf::new())
-                .or_default()
-                .insert(subdir_name.clone());
-            by_dir
-                .entry(PathBuf::from(&subdir_name))
-                .or_default()
-                .insert(module_name);
+        let mut dir: PathBuf = PathBuf::new();
+        for sub in dirs {
+            by_dir.entry(dir.clone()).or_default().insert(sub.clone());
+            dir.push(sub);
         }
+        by_dir.entry(dir).or_default().insert(module_name);
     }
     by_dir
 }
 
-/// Writes a `mod.rs` in each output directory that has generated .rs files or subdirs.
+/// Writes a `mod.rs` in `output_dir` and in every subdirectory, declaring its modules. When
+/// `has_shared`, each subdirectory's `mod.rs` also re-exports its parent's `shared` module, so
+/// generated files at any depth reach the shared items as `super::shared::Name`.
 pub(crate) fn write_mod_rs_files(
     output_dir: &Path,
     output_relatives: &[PathBuf],
+    has_shared: bool,
 ) -> Result<(), String> {
     let by_dir = mod_rs_content_by_dir(output_relatives);
     for (dir_rel, modules) in by_dir {
-        let mod_rs_path = if dir_rel.as_os_str().is_empty() {
+        let is_root: bool = dir_rel.as_os_str().is_empty();
+        let mod_rs_path = if is_root {
             output_dir.join("mod.rs")
         } else {
             output_dir.join(&dir_rel).join("mod.rs")
@@ -209,12 +195,15 @@ pub(crate) fn write_mod_rs_files(
             fs::create_dir_all(parent)
                 .map_err(|e| format!("failed to create output dir {}: {e}", parent.display()))?;
         }
-        let content: String = modules
-            .iter()
-            .map(|name| format!("pub mod {name};"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let content = content + "\n";
+        let mut content: String = String::new();
+        for name in &modules {
+            content.push_str("pub mod ");
+            content.push_str(name);
+            content.push_str(";\n");
+        }
+        if has_shared && !is_root {
+            content.push_str("\npub use super::shared;\n");
+        }
         let mut f = File::create(&mod_rs_path)
             .map_err(|e| format!("failed to create {}: {e}", mod_rs_path.display()))?;
         f.write_all(content.as_bytes())
@@ -228,30 +217,6 @@ pub(crate) fn write_mod_rs_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shared_import_prefix_root_file_is_super() {
-        let output_relative = PathBuf::from("a.rs");
-        let actual = shared_import_prefix_for_output_relative(&output_relative);
-        let expected = "super::";
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn shared_import_prefix_one_subdir_is_super_super() {
-        let output_relative = PathBuf::from("sub/c.rs");
-        let actual = shared_import_prefix_for_output_relative(&output_relative);
-        let expected = "super::super::";
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn shared_import_prefix_two_subdirs_is_three_supers() {
-        let output_relative = PathBuf::from("a/b/c.rs");
-        let actual = shared_import_prefix_for_output_relative(&output_relative);
-        let expected = "super::super::super::";
-        assert_eq!(expected, actual);
-    }
 
     #[test]
     fn mod_rs_content_by_dir_single_root_file() {
@@ -271,13 +236,29 @@ mod tests {
             PathBuf::from("schema_1.rs"),
             PathBuf::from("sub_dir/schema_2.rs"),
         ];
-        let actual = mod_rs_content_by_dir(&paths);
-        let root_modules = actual.get(&PathBuf::new()).expect("root entry");
-        assert!(root_modules.contains("schema_1"));
-        assert!(root_modules.contains("sub_dir"));
-        let sub_modules = actual
-            .get(&PathBuf::from("sub_dir"))
-            .expect("sub_dir entry");
-        assert!(sub_modules.contains("schema_2"));
+        let actual: BTreeMap<PathBuf, BTreeSet<String>> = mod_rs_content_by_dir(&paths);
+        let expected: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::from([
+            (
+                PathBuf::new(),
+                BTreeSet::from(["schema_1".to_string(), "sub_dir".to_string()]),
+            ),
+            (
+                PathBuf::from("sub_dir"),
+                BTreeSet::from(["schema_2".to_string()]),
+            ),
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn mod_rs_content_by_dir_two_levels_deep() {
+        let paths: Vec<PathBuf> = vec![PathBuf::from("a/b/c.rs")];
+        let actual: BTreeMap<PathBuf, BTreeSet<String>> = mod_rs_content_by_dir(&paths);
+        let expected: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::from([
+            (PathBuf::new(), BTreeSet::from(["a".to_string()])),
+            (PathBuf::from("a"), BTreeSet::from(["b".to_string()])),
+            (PathBuf::from("a/b"), BTreeSet::from(["c".to_string()])),
+        ]);
+        assert_eq!(expected, actual);
     }
 }

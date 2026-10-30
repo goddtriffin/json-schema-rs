@@ -1,6 +1,7 @@
 //! Integration test: `json_schema_to_rust!` with `$defs` + `$ref`.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(
     r##"{
@@ -22,7 +23,9 @@ fn expanded_code_compiles_and_ref_type_exists() {
     let root = schema_0::Root {
         address: schema_0::Address {
             city: String::from("NYC"),
+            additional: BTreeMap::new(),
         },
+        additional: BTreeMap::new(),
     };
     let expected = "NYC";
     let actual = root.address.city.as_str();
@@ -32,14 +35,10 @@ fn expanded_code_compiles_and_ref_type_exists() {
 #[test]
 fn defs_ref_deserializes() {
     let json = r#"{"address":{"city":"Boston"}}"#;
-    let actual: schema_0::Root = serde_json::from_str(json).unwrap();
-    // Generated structs do not implement PartialEq; match full shape and value.
-    assert!(matches!(
-        actual,
-        schema_0::Root {
-            address: schema_0::Address { city: ref c }
-        } if c == "Boston"
-    ));
+    let root: schema_0::Root = serde_json::from_str(json).unwrap();
+    let expected: serde_json::Value = serde_json::json!({"address": {"city": "Boston"}});
+    let actual: serde_json::Value = serde_json::to_value(&root).unwrap();
+    assert_eq!(expected, actual);
 }
 
 #[test]

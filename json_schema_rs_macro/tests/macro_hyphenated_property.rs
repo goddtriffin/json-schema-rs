@@ -1,6 +1,7 @@
 //! Integration test: `json_schema_to_rust!` with a single inline schema with hyphenated property key.
 
 use json_schema_rs_macro::json_schema_to_rust;
+use std::collections::BTreeMap;
 
 json_schema_to_rust!(r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#);
 
@@ -8,6 +9,7 @@ json_schema_to_rust!(r#"{"type":"object","properties":{"foo-bar":{"type":"string
 fn expanded_code_compiles_and_root_exists() {
     let root = schema_0::Root {
         foo_bar: Some(String::from("baz")),
+        additional: BTreeMap::new(),
     };
     assert_eq!(root.foo_bar.as_deref(), Some("baz"));
 }
