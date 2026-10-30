@@ -14,8 +14,10 @@
 //! Official-suite failures are tracked separately in `suite_xfail.json`.
 
 use json_schema_rs::{
-    CodeGenSettings, GenerateRustOutput, JsonSchema, JsonSchemaSettings, generate_rust, validate,
+    CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchema, JsonSchemaSettings,
+    ValidationError, ValidationResult, generate_rust, validate,
 };
+use serde_json::json;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -245,18 +247,14 @@ fn codegen_struct_name_collision_keeps_both_types() {
     });
 }
 
-// --- #28: $ref siblings ignored in 2019-09 / 2020-12 (fixed in #8) ---
-
 #[test]
 fn ref_siblings_apply_in_2020_12() {
-    known_failure(28, || {
-        let expected: bool = false;
-        let actual: bool = is_valid(
-            r##"{"type":"array","$defs":{"a":{"type":"array"}},"$ref":"#/$defs/a","maxItems":1}"##,
-            "[1, 2]",
-        );
-        assert_eq!(expected, actual);
-    });
+    let expected: bool = false;
+    let actual: bool = is_valid(
+        r##"{"type":"array","$defs":{"a":{"type":"array"}},"$ref":"#/$defs/a","maxItems":1}"##,
+        "[1, 2]",
+    );
+    assert_eq!(expected, actual);
 }
 
 // --- #35: codegen hangs on self-referential schemas (fixed in #9) ---
@@ -302,20 +300,20 @@ fn codegen_terminates_on_mutual_recursion_via_defs() {
     );
 }
 
-// --- #36: validator stack overflow on an in-place $ref loop (fixed in #8) ---
-
 const IN_PLACE_LOOP_SCHEMA: &str = r##"{"anyOf":[{"type":"string"},{"$ref":"#"}]}"##;
 
+/// The loop fails its branch with a `RefCycle` cause, so `anyOf` fails as a whole.
 #[test]
 fn validator_terminates_on_in_place_ref_loop() {
-    known_failure_in_child_process(36, "validator_terminates_on_in_place_ref_loop", || {
-        let expected: bool = false;
-        let actual: bool = is_valid(IN_PLACE_LOOP_SCHEMA, r#"{"x":1}"#);
-        assert_eq!(expected, actual);
-    });
+    let expected: ValidationResult = Err(vec![ValidationError::NoSubschemaMatched {
+        instance_path: JsonPointer::root(),
+        subschema_count: 2,
+    }]);
+    let actual: ValidationResult = validate(&parse(IN_PLACE_LOOP_SCHEMA), &json!({"x": 1}));
+    assert_eq!(expected, actual);
 }
 
-/// Passes today and must keep passing: the first `anyOf` branch matches before the loop.
+/// The first `anyOf` branch matches before the loop is reached.
 #[test]
 fn in_place_ref_loop_schema_accepts_matching_branch() {
     let expected: bool = true;

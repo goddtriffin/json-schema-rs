@@ -213,8 +213,8 @@ pub struct Dialect {
     pub active_vocabularies: VocabularySet,
 }
 
-/// The drafts that have their own keyword table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The drafts that have their own keyword table, oldest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Draft {
     Draft4,
     Draft6,
@@ -464,6 +464,31 @@ impl Dialect {
             Draft::Draft4 => "id",
             Draft::Draft6 | Draft::Draft7 | Draft::Draft201909 | Draft::Draft202012 => "$id",
         }
+    }
+
+    /// Whether this dialect's specification defines the format `name`. A format a draft does
+    /// not define is an unknown format there (drafts 4 to 7: ignored), even when a later draft
+    /// defines it.
+    #[must_use]
+    pub fn defines_format(&self, name: &str) -> bool {
+        const DRAFT4: [&str; 6] = ["date-time", "email", "hostname", "ipv4", "ipv6", "uri"];
+        const DRAFT6: [&str; 3] = ["json-pointer", "uri-reference", "uri-template"];
+        const DRAFT7: [&str; 8] = [
+            "date",
+            "idn-email",
+            "idn-hostname",
+            "iri",
+            "iri-reference",
+            "regex",
+            "relative-json-pointer",
+            "time",
+        ];
+        const DRAFT2019: [&str; 2] = ["duration", "uuid"];
+        let draft: Draft = Draft::of(self.spec_version);
+        DRAFT4.contains(&name)
+            || (draft >= Draft::Draft6 && DRAFT6.contains(&name))
+            || (draft >= Draft::Draft7 && DRAFT7.contains(&name))
+            || (draft >= Draft::Draft201909 && DRAFT2019.contains(&name))
     }
 
     /// Every keyword this dialect's metaschema defines, sorted by name.

@@ -1,7 +1,8 @@
 //! JSON Schema ingestion settings.
 
 use super::dialect::{
-    Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, ResolvedDialect,
+    Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, RefSiblings,
+    ResolvedDialect,
 };
 use super::error::JsonSchemaParseError;
 use super::json_schema::JsonSchema;
@@ -56,6 +57,10 @@ pub struct JsonSchemaSettings {
     /// boolean modifier of `minimum` / `maximum`, or draft 6+'s numeric bound.
     pub exclusive_bounds: Option<ExclusiveBounds>,
 
+    /// How `$ref` treats the other keywords in its schema object. `None` follows the draft:
+    /// drafts 4, 6 and 7 ignore them, 2019-09 and 2020-12 evaluate them alongside `$ref`.
+    pub ref_siblings: Option<RefSiblings>,
+
     /// What to do when `$schema` is not a recognised metaschema URI.
     pub unknown_schema_uri: UnknownSchemaUri,
 }
@@ -69,6 +74,7 @@ pub struct JsonSchemaSettingsBuilder {
     format_mode: Option<FormatMode>,
     integer_semantics: Option<IntegerSemantics>,
     exclusive_bounds: Option<ExclusiveBounds>,
+    ref_siblings: Option<RefSiblings>,
     unknown_schema_uri: Option<UnknownSchemaUri>,
 }
 
@@ -123,6 +129,14 @@ impl JsonSchemaSettingsBuilder {
         self
     }
 
+    /// Ignore the keywords next to `$ref` ([`RefSiblings::Ignored`]) or evaluate them alongside
+    /// it ([`RefSiblings::Evaluated`]), whatever the draft's default.
+    #[must_use]
+    pub fn ref_siblings(mut self, value: RefSiblings) -> Self {
+        self.ref_siblings = Some(value);
+        self
+    }
+
     /// Set what happens when `$schema` is not a recognised metaschema URI (default:
     /// [`UnknownSchemaUri::Fallback`]).
     #[must_use]
@@ -141,6 +155,7 @@ impl JsonSchemaSettingsBuilder {
             format_mode: self.format_mode,
             integer_semantics: self.integer_semantics,
             exclusive_bounds: self.exclusive_bounds,
+            ref_siblings: self.ref_siblings,
             unknown_schema_uri: self.unknown_schema_uri.unwrap_or_default(),
         }
     }
@@ -162,6 +177,8 @@ pub struct DialectSettings {
     pub integer_semantics: Option<IntegerSemantics>,
     /// See [`JsonSchemaSettings::exclusive_bounds`].
     pub exclusive_bounds: Option<ExclusiveBounds>,
+    /// See [`JsonSchemaSettings::ref_siblings`].
+    pub ref_siblings: Option<RefSiblings>,
 }
 
 impl DialectSettings {
@@ -177,6 +194,9 @@ impl DialectSettings {
         if let Some(exclusive_bounds) = self.exclusive_bounds {
             dialect.exclusive_bounds = exclusive_bounds;
         }
+        if let Some(ref_siblings) = self.ref_siblings {
+            dialect.ref_siblings = ref_siblings;
+        }
         dialect
     }
 }
@@ -191,6 +211,7 @@ impl JsonSchemaSettings {
             format_mode: self.format_mode,
             integer_semantics: self.integer_semantics,
             exclusive_bounds: self.exclusive_bounds,
+            ref_siblings: self.ref_siblings,
         }
     }
 
@@ -268,7 +289,8 @@ mod tests {
     use super::{JsonSchemaSettings, UnknownSchemaUri, resolve_dialect};
     use crate::json_schema::SpecVersion;
     use crate::json_schema::dialect::{
-        Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, ResolvedDialect,
+        Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, RefSiblings,
+        ResolvedDialect,
     };
     use crate::json_schema::error::JsonSchemaParseError;
     use crate::json_schema::json_schema::JsonSchema;
@@ -326,6 +348,7 @@ mod tests {
             format_mode: Some(FormatMode::Annotation),
             integer_semantics: Some(IntegerSemantics::Lexical),
             exclusive_bounds: Some(ExclusiveBounds::BooleanModifier),
+            ref_siblings: Some(RefSiblings::Ignored),
             unknown_schema_uri: UnknownSchemaUri::Reject,
         };
         let actual: JsonSchemaSettings = JsonSchemaSettings::builder()
@@ -335,6 +358,7 @@ mod tests {
             .format_mode(FormatMode::Annotation)
             .integer_semantics(IntegerSemantics::Lexical)
             .exclusive_bounds(ExclusiveBounds::BooleanModifier)
+            .ref_siblings(RefSiblings::Ignored)
             .unknown_schema_uri(UnknownSchemaUri::Reject)
             .build();
         assert_eq!(expected, actual);
@@ -568,6 +592,45 @@ mod tests {
             .expect("resolve")
             .dialect
             .exclusive_bounds;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_ref_siblings_override_beats_draft_default() {
+        let schema: JsonSchema = schema_with_uri("https://json-schema.org/draft/2020-12/schema");
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .ref_siblings(RefSiblings::Ignored)
+            .build();
+        let expected: RefSiblings = RefSiblings::Ignored;
+        let actual: RefSiblings = resolve_dialect(&schema, &settings)
+            .expect("resolve")
+            .dialect
+            .ref_siblings;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_ref_siblings_override_evaluates_in_draft_7() {
+        let schema: JsonSchema = schema_with_uri("http://json-schema.org/draft-07/schema#");
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .ref_siblings(RefSiblings::Evaluated)
+            .build();
+        let expected: RefSiblings = RefSiblings::Evaluated;
+        let actual: RefSiblings = resolve_dialect(&schema, &settings)
+            .expect("resolve")
+            .dialect
+            .ref_siblings;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_without_override_uses_draft_ref_siblings() {
+        let schema: JsonSchema = schema_with_uri("http://json-schema.org/draft-07/schema#");
+        let expected: RefSiblings = RefSiblings::Ignored;
+        let actual: RefSiblings = resolve_dialect(&schema, &JsonSchemaSettings::default())
+            .expect("resolve")
+            .dialect
+            .ref_siblings;
         assert_eq!(expected, actual);
     }
 }
