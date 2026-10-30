@@ -1,0 +1,1 @@
+{"title":"Order","type":"object","properties":{"customer":{"$ref":"customer.json"},"item":{"$ref":"catalog.json#/$defs/Thing"}},"required":["customer","item"]}

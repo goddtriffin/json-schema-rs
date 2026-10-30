@@ -65,10 +65,75 @@
       "medium/package-json/instances/invalid/name-wrong-type.json",
       "medium/package-json/instances/invalid/scripts-wrong-type.json"
     ],
-    "apples_to_apples": false,
+    "apples_to_apples": true,
     "source": "https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/package.json",
     "license": "Apache-2.0 (SchemaStore)",
-    "notes": "Real-world npm package.json schema. Our lib PARSES and VALIDATES correctly. Codegen fails because the schema uses an EXTERNAL $ref (\"ava.json\") that cannot resolve from a standalone file (expected limitation, not necessarily a bug). Kept out of apples set."
+    "notes": "Real-world npm package.json schema (draft-07, root $id https://json.schemastore.org/package.json). Its external $refs (ava.json, eslintrc.json, ...; eslintrc.json in turn references partial-eslint-plugins.json) are vendored under resources/, so the fixture is hermetic: every tool registers each resource under its root $id where it can. Our lib parses, validates, and codegens it (generated code compiles). typify, jsonschema-cli, and the jsonschemars validate CLI cannot load extra documents.",
+    "resources": [
+      {
+        "path": "medium/package-json/resources/ava.json",
+        "id": "https://json.schemastore.org/ava.json",
+        "source": "https://json.schemastore.org/ava.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/eslintrc.json",
+        "id": "https://json.schemastore.org/eslintrc.json",
+        "source": "https://json.schemastore.org/eslintrc.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/jscpd.json",
+        "id": "https://json.schemastore.org/jscpd.json",
+        "source": "https://json.schemastore.org/jscpd.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/nodemon.json",
+        "id": "https://json.schemastore.org/nodemon.json",
+        "source": "https://json.schemastore.org/nodemon.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/partial-eslint-plugins.json",
+        "id": "https://json.schemastore.org/partial-eslint-plugins.json",
+        "source": "https://json.schemastore.org/partial-eslint-plugins.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/prettierrc.json",
+        "id": "https://www.schemastore.org/prettierrc.json",
+        "source": "https://json.schemastore.org/prettierrc.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/quikrun.json",
+        "id": "https://www.schemastore.org/quikrun.json",
+        "source": "https://json.schemastore.org/quikrun.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/semantic-release.json",
+        "id": "https://json.schemastore.org/semantic-release.json",
+        "source": "https://json.schemastore.org/semantic-release.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      },
+      {
+        "path": "medium/package-json/resources/stylelintrc.json",
+        "id": "https://json.schemastore.org/stylelintrc.json",
+        "source": "https://json.schemastore.org/stylelintrc.json",
+        "license": "Apache-2.0 (SchemaStore)",
+        "retrieved": "2026-10-30"
+      }
+    ]
   },
   {
     "id": "large/api-catalog",

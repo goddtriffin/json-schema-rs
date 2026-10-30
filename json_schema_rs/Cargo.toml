@@ -25,6 +25,9 @@ workspace = true
 
 [features]
 uuid = ["dep:uuid"]
+# Retrieve `http:` / `https:` documents a `$ref` names (`HttpRetriever`, the CLI's
+# `--cgs-allow-remote-refs`). Off by default: no network access unless asked for.
+http = ["dep:reqwest"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -35,6 +38,7 @@ log.workspace = true
 # SIMD substring search for the draft-4 parse prefilter (already in the tree via serde_json).
 memchr = "2.7"
 regress = "0.10"
+reqwest = { version = "0.13", optional = true, features = ["blocking"] }
 serde.workspace = true
 # `float_roundtrip`: parse every float to the nearest `f64` (the default parser can be one ULP off),
 # so numbers written by this crate read back exactly.

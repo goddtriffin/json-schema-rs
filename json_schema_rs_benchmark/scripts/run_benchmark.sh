@@ -18,7 +18,9 @@
 # A tool is only measured on a fixture/operation it handles CORRECTLY (codegen succeeds; valid
 # instance accepted; invalid instance rejected). Anything else is recorded as a compat failure and
 # left untimed, so a fast failure never masquerades as a fast result. The run is hermetic: a
-# fixture whose schema has an external $ref is not measured, and each CLI correctness probe runs
+# fixture may vendor the documents its schema references (resources/*.json, registered under their
+# root $id with every tool that can take them; a tool that cannot is a compat failure), a fixture
+# with a $ref to any document it does not vendor is not measured, and each CLI correctness probe runs
 # with network access denied (macOS sandbox-exec / Linux unshare -rn), so a tool that downloads a
 # remote document fails its probe instead of having the download timed. A tool missing from the
 # machine is different: the driver aborts up front rather than silently omit a competitor.
@@ -97,21 +99,39 @@ _first_instance() {
     find "$1" -mindepth 1 -maxdepth 1 -type f -name '*.json' | LC_ALL=C sort | head -n 1
 }
 
-# discover_fixtures: print "<fixture id>\t<fixture dir>\t<external refs>" for every fixture under
-# BENCH_FIXTURE_ROOTS, sorted by id, using the in-process tier's discovery (list_fixtures) so both
-# tiers measure the same set. <external refs> is empty for a self-contained schema.
+# discover_fixtures: print "<fixture id>\t<fixture dir>\t<resource count>\t<unresolved refs>" for
+# every fixture under BENCH_FIXTURE_ROOTS, sorted by id, using the in-process tier's discovery
+# (list_fixtures) so both tiers measure the same set. <unresolved refs> lists the $refs naming a
+# document the fixture does not vendor (empty when every one resolves).
 discover_fixtures() {
     "${RELEASE_DIR}/list_fixtures"
 }
 
-# _cli_offline_skip <raw_dir> <tool> <fixture id> <operation> <external refs>: record a cell left
-# unmeasured because the schema needs external documents. The benchmark runs offline, so timing it
-# would measure a failed lookup or a network fetch rather than the operation. The detail text
-# matches the in-process tier's (adapters::OFFLINE_SKIP).
+# _resources <fixture dir>: the fixture's resource documents (resources/*.json), one per line,
+# sorted by file name like the in-process tier's discovery.
+_resources() {
+    [[ -d "$1/resources" ]] || return 0
+    find "$1/resources" -mindepth 1 -maxdepth 1 -type f -name '*.json' | LC_ALL=C sort
+}
+
+# _cli_offline_skip <raw_dir> <tool> <fixture id> <operation> <unresolved refs>: record a cell left
+# unmeasured because the schema needs documents the fixture does not vendor. The benchmark runs
+# offline, so timing it would measure a failed lookup or a network fetch rather than the operation.
+# The detail text matches the in-process tier's (adapters::OFFLINE_SKIP).
 _cli_offline_skip() {
     printf '%s\t%s\t%s\tfail\t%s\n' "$2" "$3" "$4" \
-        "not measured: schema needs external documents (offline run)" >> "$1/cli/compat.tsv"
+        "not measured: schema needs external documents the fixture does not vendor (offline run)" \
+        >> "$1/cli/compat.tsv"
     echo "    $2 $4: skipped (schema needs external documents: ${5//,/, })"
+}
+
+# _cli_resources_unsupported <raw_dir> <tool> <fixture id> <operation>: record a cell whose tool's
+# CLI cannot take the fixture's resource documents. Running it without them would measure a failed
+# lookup. The detail text matches the in-process tier's (adapters::RESOURCES_UNSUPPORTED).
+_cli_resources_unsupported() {
+    printf '%s\t%s\t%s\tfail\t%s\n' "$2" "$3" "$4" \
+        "cannot load the fixture's resource documents" >> "$1/cli/compat.tsv"
+    echo "    $2 $4: FAIL (cannot load the fixture's resource documents)"
 }
 
 # _cli_measure <raw_dir> <tool> <fixture id> <operation> <expect: zero|nonzero> <command line>
@@ -180,7 +200,9 @@ _cli_failed() {
 # built, and BENCH_FIXTURE_ROOTS exported.
 run_cli_tier() {
     local raw_dir="$1"
-    local work fid fdir external schema valid invalid tool op out cmd fixtures
+    local work fid fdir unresolved resource_count schema valid invalid tool op out cmd fixtures
+    local resource
+    local -a resources
     mkdir -p "${raw_dir}/cli"
     : > "${raw_dir}/cli/compat.tsv"
     : > "${raw_dir}/cli/index.tsv"
@@ -198,16 +220,16 @@ run_cli_tier() {
     # shellcheck disable=SC2064  # expand ${work} now: it is local and gone when the trap fires.
     trap "rm -rf '${work}'" EXIT
 
-    while IFS="$(printf '\t')" read -r fid fdir external; do
+    while IFS="$(printf '\t')" read -r fid fdir resource_count unresolved; do
         [[ -n "${fid}" ]] || continue
         echo "==> CLI tier: ${fid}"
-        if [[ -n "${external}" ]]; then
+        if [[ -n "${unresolved}" ]]; then
             for tool in $(codegen_tools); do
-                _cli_offline_skip "${raw_dir}" "${tool}" "${fid}" codegen "${external}"
+                _cli_offline_skip "${raw_dir}" "${tool}" "${fid}" codegen "${unresolved}"
             done
             for tool in $(validation_tools); do
                 for op in validate_valid validate_invalid; do
-                    _cli_offline_skip "${raw_dir}" "${tool}" "${fid}" "${op}" "${external}"
+                    _cli_offline_skip "${raw_dir}" "${tool}" "${fid}" "${op}" "${unresolved}"
                 done
             done
             continue
@@ -215,17 +237,35 @@ run_cli_tier() {
         schema="${fdir}/schema.json"
         valid="$(_first_instance "${fdir}/instances/valid")"
         invalid="$(_first_instance "${fdir}/instances/invalid")"
+        resources=()
+        while IFS= read -r resource; do
+            [[ -n "${resource}" ]] && resources+=("${resource}")
+        done <<< "$(_resources "${fdir}")"
+        if [[ "${#resources[@]}" -ne "${resource_count:-0}" ]]; then
+            echo "!! ${fid}: found ${#resources[@]} resources, list_fixtures reported ${resource_count:-0}" >&2
+            exit 1
+        fi
 
         for tool in $(codegen_tools); do
+            if [[ "${#resources[@]}" -gt 0 ]] && ! loads_resources "${tool}" codegen; then
+                _cli_resources_unsupported "${raw_dir}" "${tool}" "${fid}" codegen
+                continue
+            fi
             out="${work}/${tool}__${fid//\//__}"
             mkdir -p "${out}"
-            cmd="$(codegen_cmd "${tool}" "${schema}" "${out}")"
+            cmd="$(codegen_cmd "${tool}" "${schema}" "${out}" ${resources[@]+"${resources[@]}"})"
             _cli_measure "${raw_dir}" "${tool}" "${fid}" codegen zero "${cmd}"
         done
 
         for tool in $(validation_tools); do
+            if [[ "${#resources[@]}" -gt 0 ]] && ! loads_resources "${tool}" validate_valid; then
+                for op in validate_valid validate_invalid; do
+                    _cli_resources_unsupported "${raw_dir}" "${tool}" "${fid}" "${op}"
+                done
+                continue
+            fi
             if [[ -n "${valid}" ]]; then
-                cmd="$(validate_cmd "${tool}" "${schema}" "${valid}")"
+                cmd="$(validate_cmd "${tool}" "${schema}" "${valid}" ${resources[@]+"${resources[@]}"})"
                 _cli_measure "${raw_dir}" "${tool}" "${fid}" validate_valid zero "${cmd}"
             fi
             if [[ -z "${invalid}" ]]; then
@@ -239,7 +279,7 @@ run_cli_tier() {
                 echo "    ${tool} validate_invalid: FAIL (not measured: valid instance was rejected)"
                 continue
             fi
-            cmd="$(validate_cmd "${tool}" "${schema}" "${invalid}")"
+            cmd="$(validate_cmd "${tool}" "${schema}" "${invalid}" ${resources[@]+"${resources[@]}"})"
             _cli_measure "${raw_dir}" "${tool}" "${fid}" validate_invalid nonzero "${cmd}"
         done
     done <<< "${fixtures}"

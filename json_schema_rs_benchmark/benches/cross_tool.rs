@@ -6,7 +6,8 @@
 //! one-line `skip` notice to stderr.
 //!
 //! Timed work per operation:
-//! * `codegen`, `schema_compile` — start from the schema TEXT held in memory.
+//! * `codegen`, `schema_compile` — start from the schema TEXT (and the texts of the fixture's
+//!   resource documents) held in memory.
 //! * `validate_valid`, `validate_invalid` — start from an already-compiled schema and an
 //!   already-parsed instance (both prepared outside the timed closure).
 //!
@@ -87,13 +88,25 @@ fn bench_cell(
     let id: BenchmarkId = BenchmarkId::new(tool.id(), &fixture.id);
     match operation {
         Operation::Codegen => {
-            group.bench_with_input(id, fixture.schema_text.as_str(), |b, text: &str| {
-                b.iter(|| adapters::codegen(tool, black_box(text)));
+            group.bench_with_input(id, fixture, |b, fixture: &Fixture| {
+                b.iter(|| {
+                    adapters::codegen(
+                        tool,
+                        black_box(&fixture.schema_text),
+                        black_box(&fixture.resources),
+                    )
+                });
             });
         }
         Operation::SchemaCompile => {
-            group.bench_with_input(id, fixture.schema_text.as_str(), |b, text: &str| {
-                b.iter(|| adapters::compile(tool, black_box(text)));
+            group.bench_with_input(id, fixture, |b, fixture: &Fixture| {
+                b.iter(|| {
+                    adapters::compile(
+                        tool,
+                        black_box(&fixture.schema_text),
+                        black_box(&fixture.resources),
+                    )
+                });
             });
         }
         Operation::ValidateValid | Operation::ValidateInvalid => {
@@ -124,6 +137,7 @@ fn prepare_validation(
     fixture: &Fixture,
 ) -> Option<(Compiled, Value)> {
     let instance: Value = adapters::parse_instance(operation.instance(fixture)?).ok()?;
-    let compiled: Compiled = adapters::compile(tool, &fixture.schema_text).ok()?;
+    let compiled: Compiled =
+        adapters::compile(tool, &fixture.schema_text, &fixture.resources).ok()?;
     Some((compiled, instance))
 }

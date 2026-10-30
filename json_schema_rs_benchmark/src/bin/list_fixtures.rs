@@ -3,8 +3,11 @@
 //! measure the same fixture set.
 //!
 //! Prints one tab-separated line per fixture, sorted by id:
-//! `<fixture id>\t<fixture dir>\t<external refs>`, where the last field is the comma-separated
-//! list of the schema's external `$ref`s (empty when the schema is self-contained).
+//! `<fixture id>\t<fixture dir>\t<resource count>\t<unresolved refs>`. `<resource count>` is the
+//! number of vendored documents under `resources/` (which the CLI tier lists itself, in the same
+//! order), and `<unresolved refs>` the comma-separated list of `$ref`s naming a document the
+//! fixture does not vendor (empty when every reference resolves; see `Fixture::unresolved_refs`).
+//! The possibly empty field is last: `read` with a tab `IFS` merges consecutive tabs.
 
 use json_schema_rs_benchmark::fixtures::{Fixture, discover_configured};
 use std::process::ExitCode;
@@ -18,12 +21,13 @@ fn main() -> ExitCode {
         }
     };
     for fixture in &fixtures {
-        let external: Vec<String> = fixture.external_refs();
+        let unresolved: Vec<String> = fixture.unresolved_refs();
         println!(
-            "{}\t{}\t{}",
+            "{}\t{}\t{}\t{}",
             fixture.id,
             fixture.dir.display(),
-            external.join(",")
+            fixture.resources.len(),
+            unresolved.join(",")
         );
     }
     ExitCode::SUCCESS

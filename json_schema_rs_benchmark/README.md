@@ -55,7 +55,17 @@ Operations: `codegen` (schema → Rust source), `schema_compile` (in-process onl
 
 - A cell is measured only when the tool is **correct** on it (codegen succeeds, schema compiles,
   valid accepted, invalid rejected); anything else is a compatibility failure with a reason.
-- The run is **hermetic**: a fixture whose schema has an external `$ref` is not measured.
+- The run is **hermetic**. A fixture may vendor the documents its schema references under
+  `resources/` (each with an absolute root `$id`); every tool gets them registered under that
+  `$id` the way it accepts extra documents (in-process: our `$ref` registry / an in-memory
+  retriever for codegen, a `jsonschema` registry, boon's `add_resource`; CLI: extra
+  `jsonschemars generate` inputs, `boon_validate -r`). A tool that cannot take extra documents
+  (typify, `jsonschema-cli`, `jsonschemars validate`) fails that cell with "cannot load the
+  fixture's resource documents". A fixture with a `$ref` to any document it does not vendor
+  (checked across the schema and its resources) is not measured at all. In-process, our codegen
+  reaches the resources through a retriever, so only the schema gets root types (as in every
+  validator's registry); our CLI has no such option, so it takes them as extra inputs and also
+  writes each resource's own types.
 - A tool **wins** a cell only when at least two tools were measured and its lead beats both 3%
   and the sum of the two standard deviations; ties and single-tool cells are never bolded. `†`
   flags a measurement whose stddev exceeds 10% of its median.
@@ -88,7 +98,8 @@ json_schema_rs_benchmark/
   benches/cross_tool.rs    # criterion timing of every tool
   scripts/run_benchmark.sh # driver invoked by `make benchmark`
   scripts/tools.sh         # CLI-tier tool definitions
-  fixtures/<size>/...      # committed schemas + instances, plus a provenance manifest
+  fixtures/<size>/<name>/  # schema.json, instances/{valid,invalid}/*.json, optional resources/*.json
+  fixtures/manifest.json   # provenance and license of every committed schema, instance and resource
   results.json, results.md # committed aggregated results
 ```
 
