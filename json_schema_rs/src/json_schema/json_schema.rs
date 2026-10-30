@@ -3,7 +3,7 @@
 use super::dialect::{
     Dialect, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
 };
-use super::error::{JsonSchemaParseError, JsonSchemaParseResult};
+use super::error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
 use super::settings::{DialectSettings, JsonSchemaSettings, resolve_dialect_for_uri};
 use super::type_set::{JsonType, TypeSet};
 use crate::json_pointer::JsonPointer;
@@ -792,7 +792,7 @@ fn parse_value(
 fn resolve_dialect_for_value(
     value: &Value,
     settings: &JsonSchemaSettings,
-) -> JsonSchemaParseResult<ResolvedDialect> {
+) -> Result<ResolvedDialect, JsonSchemaParseError> {
     let schema_uri: Option<&str> = value.get("$schema").and_then(Value::as_str);
     resolve_dialect_for_uri(schema_uri, settings)
 }
@@ -810,17 +810,29 @@ fn parse_value_in_dialect(
         reject_unknown: settings.disallow_unknown_fields,
         lexical_counts: resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
     };
-    if checks.reject_unknown || checks.lexical_counts {
-        check_keywords(&value, resolved.dialect, checks)?;
-    }
+    let errors: Vec<JsonSchemaParseError> = if checks.reject_unknown || checks.lexical_counts {
+        check_keywords(&value, resolved.dialect, checks)
+    } else {
+        Vec::new()
+    };
     if needs_draft4_normalization(resolved.dialect) {
         normalize_draft4_shapes(value.to_mut(), resolved.dialect);
     }
-    let schema: Schema = match value {
-        Cow::Owned(value) => serde_json::from_value(value)?,
-        Cow::Borrowed(value) => Schema::deserialize(value)?,
+    // Built even when the walk found problems: a model error (a keyword's value of the wrong
+    // type) is one more independent problem to report alongside them.
+    let built: Result<Schema, serde_json::Error> = match value {
+        Cow::Owned(value) => serde_json::from_value(value),
+        Cow::Borrowed(value) => Schema::deserialize(value),
     };
-    Ok(finish_parse(schema, resolved, settings))
+    match (built, JsonSchemaParseErrors::from_vec(errors)) {
+        (Ok(schema), None) => Ok(finish_parse(schema, resolved, settings)),
+        (Ok(_), Some(found)) => Err(found),
+        (Err(error), None) => Err(JsonSchemaParseError::Serde(error).into()),
+        (Err(error), Some(mut found)) => {
+            found.push(JsonSchemaParseError::Serde(error));
+            Err(found)
+        }
+    }
 }
 
 /// The count keywords: their value is a non-negative integer.
@@ -845,14 +857,16 @@ struct KeywordChecks {
     lexical_counts: bool,
 }
 
-/// Checks the keys of every schema object, walking depth-first with each object's keys in map
-/// order, so the same document always reports the same error:
+/// Checks the keys of every schema object and returns every problem found, one error each, in
+/// walk order: depth-first, each object's keys in map order, an object's own keys before its
+/// subschemas' keys. The same document always lists the same errors in the same order.
 ///
-/// - with `reject_unknown`, the first key that is not a keyword of `dialect` (its keyword table,
-///   see [`Dialect::keywords`]) is [`JsonSchemaParseError::UnknownField`];
-/// - with `lexical_counts`, a count keyword whose number was written with a fraction or exponent
-///   is [`JsonSchemaParseError::InvalidKeywordValue`]. `serde_json` reads such a number as a
-///   float and an integer literal as an integer, so the float form is the written form.
+/// - with `reject_unknown`, each key that is not a keyword of `dialect` (its keyword table,
+///   see [`Dialect::keywords`]) is a [`JsonSchemaParseError::UnknownField`];
+/// - with `lexical_counts`, each count keyword whose number was written with a fraction or
+///   exponent is a [`JsonSchemaParseError::InvalidKeywordValue`]. `serde_json` reads such a
+///   number as a float and an integer literal as an integer, so the float form is the written
+///   form.
 ///
 /// Every schema object is checked: the root and each subschema the table's
 /// [`SubschemaPosition`]s reach, including those under keywords the model does not hold (`not`,
@@ -862,7 +876,8 @@ fn check_keywords(
     root: &Value,
     dialect: Dialect,
     checks: KeywordChecks,
-) -> JsonSchemaParseResult<()> {
+) -> Vec<JsonSchemaParseError> {
+    let mut errors: Vec<JsonSchemaParseError> = Vec::new();
     // Each visited subschema records how it was reached (`steps`) instead of carrying its own
     // pointer, so the walk allocates no strings; the pointer is built only for an error.
     let mut steps: Vec<PathStep<'_>> = Vec::new();
@@ -875,7 +890,7 @@ fn check_keywords(
         for (key, child) in map {
             let Some(keyword) = dialect.keyword(key) else {
                 if checks.reject_unknown {
-                    return Err(JsonSchemaParseError::UnknownField {
+                    errors.push(JsonSchemaParseError::UnknownField {
                         key: key.clone(),
                         path: path_to(&steps, at),
                     });
@@ -887,12 +902,13 @@ fn check_keywords(
                 && let Value::Number(n) = child
                 && n.is_f64()
             {
-                return Err(JsonSchemaParseError::InvalidKeywordValue {
+                errors.push(JsonSchemaParseError::InvalidKeywordValue {
                     keyword: key.clone(),
                     path: path_to(&steps, at),
                     value: child.clone(),
                     expected: "a non-negative integer written without a fraction or exponent",
                 });
+                continue;
             }
             let Some(position) = keyword.subschemas else {
                 continue;
@@ -933,7 +949,7 @@ fn check_keywords(
         // Reversed so the stack visits subschemas in map order.
         stack.extend(children.drain(..).rev());
     }
-    Ok(())
+    errors
 }
 
 /// One step of the strict key walk's path: a segment and the step it extends (`None` = root).
@@ -1113,7 +1129,7 @@ fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect) {
 fn require_object(schema: Schema) -> JsonSchemaParseResult<JsonSchema> {
     match schema {
         Schema::Object(schema) => Ok(*schema),
-        Schema::Bool(value) => Err(JsonSchemaParseError::BooleanRoot { value }),
+        Schema::Bool(value) => Err(JsonSchemaParseError::BooleanRoot { value }.into()),
     }
 }
 
@@ -1222,12 +1238,21 @@ impl JsonSchema {
     ///
     /// # Errors
     ///
-    /// Returns [`JsonSchemaParseError::Serde`] on invalid JSON, a type mismatch, or an invalid
-    /// keyword value (e.g. `"minLength": 2.5`).
-    /// Returns [`JsonSchemaParseError::UnknownField`] when strict and an unknown key is present.
-    /// Returns [`JsonSchemaParseError::BooleanRoot`] when the document is a boolean schema
-    /// (`true` / `false`), which a [`JsonSchema`] cannot hold; parse it with
-    /// [`Schema::new_from_str`] instead.
+    /// Returns every problem found, one [`JsonSchemaParseError`] each, in walk order (see
+    /// [`JsonSchemaParseErrors`]):
+    ///
+    /// - [`JsonSchemaParseError::UnknownField`] for each key the draft does not define as a
+    ///   keyword, when strict;
+    /// - [`JsonSchemaParseError::InvalidKeywordValue`] for each count keyword written with a
+    ///   fraction or exponent under [`IntegerSemantics::Lexical`] (draft 4);
+    /// - [`JsonSchemaParseError::Serde`] on invalid JSON, a type mismatch, or an invalid keyword
+    ///   value (e.g. `"minLength": 2.5`). The model reports only its first such error, after
+    ///   any of the above; invalid JSON is the only error;
+    /// - [`JsonSchemaParseError::UnknownSchemaUri`] alone, when `$schema` is unrecognised under
+    ///   [`UnknownSchemaUri::Reject`](super::UnknownSchemaUri::Reject);
+    /// - [`JsonSchemaParseError::BooleanRoot`] alone, when the document is a boolean schema
+    ///   (`true` / `false`), which a [`JsonSchema`] cannot hold; parse it with
+    ///   [`Schema::new_from_str`] instead.
     pub fn new_from_str(json: &str, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Self> {
         parse_raw(RawSchema::Str(json), settings).and_then(require_object)
     }
@@ -1305,7 +1330,7 @@ impl JsonSchema {
 /// Parses a JSON Schema from a string using default [`JsonSchemaSettings`](super::settings::JsonSchemaSettings).
 /// For custom settings, use [`JsonSchema::new_from_str`](Self::new_from_str).
 impl TryFrom<&str> for JsonSchema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
@@ -1316,7 +1341,7 @@ impl TryFrom<&str> for JsonSchema {
 /// Parses a JSON Schema from an owned string using default settings.
 /// For custom settings, use [`JsonSchema::new_from_str`](Self::new_from_str).
 impl TryFrom<String> for JsonSchema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
@@ -1327,7 +1352,7 @@ impl TryFrom<String> for JsonSchema {
 /// Parses a JSON Schema from a byte slice using default settings.
 /// For custom settings, use [`JsonSchema::new_from_slice`](Self::new_from_slice).
 impl TryFrom<&[u8]> for JsonSchema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
@@ -1338,7 +1363,7 @@ impl TryFrom<&[u8]> for JsonSchema {
 /// Parses a JSON Schema from an already-parsed [`serde_json::Value`] using default settings.
 /// For custom settings, use [`JsonSchema::new_from_serde_value`](Self::new_from_serde_value).
 impl TryFrom<&serde_json::Value> for JsonSchema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
@@ -1349,7 +1374,7 @@ impl TryFrom<&serde_json::Value> for JsonSchema {
 /// Parses a JSON Schema from an open file using default settings. I/O errors are reported as [`JsonSchemaParseError::Io`].
 /// For custom settings, use [`JsonSchema::new_from_reader`](Self::new_from_reader).
 impl TryFrom<std::fs::File> for JsonSchema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: std::fs::File) -> Result<Self, Self::Error> {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
@@ -1360,7 +1385,7 @@ impl TryFrom<std::fs::File> for JsonSchema {
 /// Parses a JSON Schema from a file path using default settings. I/O errors (e.g. file not found) are reported as [`JsonSchemaParseError::Io`].
 /// For custom settings, use [`JsonSchema::new_from_path`](Self::new_from_path).
 impl TryFrom<&std::path::Path> for JsonSchema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &std::path::Path) -> Result<Self, Self::Error> {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
@@ -1371,7 +1396,7 @@ impl TryFrom<&std::path::Path> for JsonSchema {
 /// Parses a JSON Schema from an owned path using default settings. I/O errors are reported as [`JsonSchemaParseError::Io`].
 /// For custom settings, use [`JsonSchema::new_from_path`](Self::new_from_path).
 impl TryFrom<std::path::PathBuf> for JsonSchema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: std::path::PathBuf) -> Result<Self, Self::Error> {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
@@ -1381,7 +1406,7 @@ impl TryFrom<std::path::PathBuf> for JsonSchema {
 
 /// Parses a JSON Schema document (object or boolean) from a string using default settings.
 impl TryFrom<&str> for Schema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Schema::new_from_str(value, &JsonSchemaSettings::default())
@@ -1390,7 +1415,7 @@ impl TryFrom<&str> for Schema {
 
 /// Parses a JSON Schema document (object or boolean) from a byte slice using default settings.
 impl TryFrom<&[u8]> for Schema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Schema::new_from_slice(value, &JsonSchemaSettings::default())
@@ -1400,7 +1425,7 @@ impl TryFrom<&[u8]> for Schema {
 /// Parses a JSON Schema document (object or boolean) from a [`serde_json::Value`] using default
 /// settings.
 impl TryFrom<&serde_json::Value> for Schema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
         Schema::new_from_serde_value(value, &JsonSchemaSettings::default())
@@ -1409,7 +1434,7 @@ impl TryFrom<&serde_json::Value> for Schema {
 
 /// Parses a JSON Schema document (object or boolean) from a file path using default settings.
 impl TryFrom<&std::path::Path> for Schema {
-    type Error = JsonSchemaParseError;
+    type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &std::path::Path) -> Result<Self, Self::Error> {
         Schema::new_from_path(value, &JsonSchemaSettings::default())
@@ -1453,7 +1478,8 @@ mod tests {
     use super::{JsonSchema, Schema};
     use crate::json_schema::{
         Dialect, DialectSettings, ExclusiveBounds, FormatMode, IntegerSemantics,
-        JsonSchemaParseError, JsonSchemaSettings, JsonType, SpecVersion, TypeSet, UnknownSchemaUri,
+        JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaSettings, JsonType, SpecVersion,
+        TypeSet, UnknownSchemaUri,
     };
     use std::collections::BTreeMap;
     use std::io;
@@ -1669,8 +1695,11 @@ mod tests {
     #[test]
     fn try_from_str_invalid_json() {
         let json: &str = "not json";
-        let result: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(json);
-        assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(json);
+        assert!(matches!(
+            result.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Serde(_)])
+        ));
     }
 
     #[test]
@@ -1701,7 +1730,7 @@ mod tests {
     #[test]
     fn try_from_serde_value_invalid_type() {
         let value: serde_json::Value = serde_json::json!("not an object");
-        let result: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(&value);
+        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(&value);
         assert!(result.is_err());
     }
 
@@ -1723,8 +1752,11 @@ mod tests {
         let schema_path = temp_dir.path().join("bad.json");
         std::fs::write(&schema_path, "not json").expect("write temp file");
         let f: std::fs::File = std::fs::File::open(&schema_path).expect("open");
-        let result: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(f);
-        assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(f);
+        assert!(matches!(
+            result.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Serde(_)])
+        ));
     }
 
     #[test]
@@ -1742,9 +1774,12 @@ mod tests {
     fn try_from_path_file_not_found() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let missing_path: std::path::PathBuf = temp_dir.path().join("nonexistent.json");
-        let result: Result<JsonSchema, JsonSchemaParseError> =
+        let result: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::try_from(missing_path.as_path());
-        assert!(matches!(result, Err(JsonSchemaParseError::Io(_))));
+        assert!(matches!(
+            result.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Io(_)])
+        ));
     }
 
     #[test]
@@ -2370,7 +2405,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{},"unknown":42}"#;
-        let expected: StrictOutcome = Err(("unknown".to_string(), String::new()));
+        let expected: StrictOutcome = unknown("unknown", "");
         let actual: StrictOutcome = strict_outcome(JsonSchema::new_from_str(json, &settings));
         assert_eq!(expected, actual);
     }
@@ -2381,22 +2416,28 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"nested":{"type":"object","properties":{},"bad":1}}}"#;
-        let expected: StrictOutcome = Err(("bad".to_string(), "/properties/nested".to_string()));
+        let expected: StrictOutcome = unknown("bad", "/properties/nested");
         let actual: StrictOutcome = strict_outcome(JsonSchema::new_from_str(json, &settings));
         assert_eq!(expected, actual);
     }
 
-    /// A strict parse's outcome: `Ok` on success, `Err((key, path))` for
-    /// [`JsonSchemaParseError::UnknownField`]. Any other error panics, failing the test.
-    type StrictOutcome = Result<(), (String, String)>;
+    /// A strict parse's outcome: `Ok` on success, or every error as `(key, path)` for each
+    /// [`JsonSchemaParseError::UnknownField`], in the order reported. Any other error panics,
+    /// failing the test.
+    type StrictOutcome = Result<(), Vec<(String, String)>>;
 
-    fn strict_outcome(result: Result<JsonSchema, JsonSchemaParseError>) -> StrictOutcome {
+    fn strict_outcome(result: Result<JsonSchema, JsonSchemaParseErrors>) -> StrictOutcome {
         match result {
             Ok(_) => Ok(()),
-            Err(JsonSchemaParseError::UnknownField { key, path }) => {
-                Err((key, path.as_str().to_string()))
-            }
-            Err(other) => panic!("expected success or UnknownField, got {other:?}"),
+            Err(errors) => Err(errors
+                .into_iter()
+                .map(|error| match error {
+                    JsonSchemaParseError::UnknownField { key, path } => {
+                        (key, path.as_str().to_string())
+                    }
+                    other => panic!("expected UnknownField, got {other:?}"),
+                })
+                .collect()),
         }
     }
 
@@ -2408,7 +2449,14 @@ mod tests {
     }
 
     fn unknown(key: &str, path: &str) -> StrictOutcome {
-        Err((key.to_string(), path.to_string()))
+        unknowns(&[(key, path)])
+    }
+
+    fn unknowns(keys: &[(&str, &str)]) -> StrictOutcome {
+        Err(keys
+            .iter()
+            .map(|(key, path)| ((*key).to_string(), (*path).to_string()))
+            .collect())
     }
 
     #[test]
@@ -2442,8 +2490,13 @@ mod tests {
 
     #[test]
     fn strict_reports_unknown_key_in_draft7_items_array() {
-        let expected: StrictOutcome = unknown("bogus", "/items/1");
-        let actual: StrictOutcome = strict_parse(
+        // The model does not hold the array form of `items`, so its error follows the walk's.
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "unknown keyword \"bogus\" at /items/1".to_string(),
+            "invalid JSON Schema: invalid type: sequence, expected a schema (an object or a boolean)"
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = strict_error_messages(
             r#"{"$schema":"http://json-schema.org/draft-07/schema#","items":[{},{"bogus":1}]}"#,
         );
         assert_eq!(expected, actual);
@@ -2472,8 +2525,112 @@ mod tests {
 
     #[test]
     fn strict_reports_root_key_before_nested_key() {
-        let expected: StrictOutcome = unknown("zzz", "");
+        let expected: StrictOutcome = unknowns(&[("zzz", ""), ("bogus", "/properties/a")]);
         let actual: StrictOutcome = strict_parse(r#"{"properties":{"a":{"bogus":1}},"zzz":1}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_every_unknown_key_at_root_in_map_order() {
+        let expected: StrictOutcome = unknowns(&[("alpha", ""), ("mid", ""), ("zeta", "")]);
+        let actual: StrictOutcome = strict_parse(r#"{"zeta":1,"type":"string","alpha":2,"mid":3}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_keys_in_sibling_subschemas_in_walk_order() {
+        let expected: StrictOutcome = unknowns(&[
+            ("b", "/allOf/0"),
+            ("a", "/allOf/1"),
+            ("c", "/properties/x"),
+            ("d", "/properties/y"),
+        ]);
+        let actual: StrictOutcome =
+            strict_parse(r#"{"properties":{"x":{"c":1},"y":{"d":1}},"allOf":[{"b":1},{"a":1}]}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_unknown_keys_in_nested_subschemas_depth_first() {
+        let expected: StrictOutcome = unknowns(&[
+            ("a", "/allOf/0"),
+            ("b", "/allOf/0/not"),
+            ("c", "/allOf/0/not/items"),
+            ("d", "/allOf/1"),
+        ]);
+        let actual: StrictOutcome =
+            strict_parse(r#"{"allOf":[{"a":1,"not":{"b":1,"items":{"c":1}}},{"d":1}]}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_parses_document_with_no_problems() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(
+            r#"{"type":"object","properties":{"a":{"type":"string","minLength":1}},"allOf":[{"required":["a"]}]}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// Every error a strict parse of `json` reports, rendered with `Display`, in order.
+    fn strict_error_messages(json: &str) -> Result<(), Vec<String>> {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        JsonSchema::new_from_str(json, &settings)
+            .map(|_| ())
+            .map_err(|errors| errors.iter().map(ToString::to_string).collect())
+    }
+
+    #[test]
+    fn strict_reports_unknown_keys_mixed_with_invalid_counts_in_walk_order() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "invalid \"minLength\" value 2.0 at root: expected a non-negative integer written without a fraction or exponent".to_string(),
+            "unknown keyword \"zzz\" at root".to_string(),
+            "unknown keyword \"bogus\" at /properties/a".to_string(),
+            "invalid \"maxItems\" value 3.0 at /properties/a: expected a non-negative integer written without a fraction or exponent".to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = strict_error_messages(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","minLength":2.0,"zzz":1,"properties":{"a":{"maxItems":3.0,"bogus":true}}}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_model_error_after_unknown_keys() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "unknown keyword \"bogus\" at root".to_string(),
+            "unknown keyword \"extra\" at /items".to_string(),
+            "invalid JSON Schema: invalid type: string \"x\", expected a JSON number".to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> =
+            strict_error_messages(r#"{"bogus":1,"minLength":"x","items":{"extra":1}}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reports_only_model_error_when_keys_are_known() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "invalid JSON Schema: invalid type: string \"x\", expected a JSON number".to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = strict_error_messages(r#"{"minLength":"x"}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_errors_display_one_line_per_error() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: &str = "unknown keyword \"bogus\" at root\n\
+            invalid \"minLength\" value 2.0 at root: expected a non-negative integer written without a fraction or exponent\n\
+            unknown keyword \"extra\" at /properties/a";
+        let actual: String = JsonSchema::new_from_str(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","bogus":1,"minLength":2.0,"properties":{"a":{"extra":true}}}"#,
+            &settings,
+        )
+        .expect_err("three problems")
+        .to_string();
         assert_eq!(expected, actual);
     }
 
@@ -3107,27 +3264,37 @@ mod tests {
 
     const DRAFT4_SCHEMA: &str = "http://json-schema.org/draft-04/schema#";
 
-    /// A parse's outcome: `Ok` on success, `Err((keyword, path, value))` for
-    /// [`JsonSchemaParseError::InvalidKeywordValue`]. Any other error panics, failing the test.
-    type KeywordValueOutcome = Result<(), (String, String, String)>;
+    /// A parse's outcome: `Ok` on success, or every error as `(keyword, path, value)` for each
+    /// [`JsonSchemaParseError::InvalidKeywordValue`], in the order reported. Any other error
+    /// panics, failing the test.
+    type KeywordValueOutcome = Result<(), Vec<(String, String, String)>>;
 
     fn keyword_value_outcome(
-        result: Result<JsonSchema, JsonSchemaParseError>,
+        result: Result<JsonSchema, JsonSchemaParseErrors>,
     ) -> KeywordValueOutcome {
         match result {
             Ok(_) => Ok(()),
-            Err(JsonSchemaParseError::InvalidKeywordValue {
-                keyword,
-                path,
-                value,
-                ..
-            }) => Err((keyword, path.as_str().to_string(), value.to_string())),
-            Err(other) => panic!("expected success or InvalidKeywordValue, got {other:?}"),
+            Err(errors) => Err(errors
+                .into_iter()
+                .map(|error| match error {
+                    JsonSchemaParseError::InvalidKeywordValue {
+                        keyword,
+                        path,
+                        value,
+                        ..
+                    } => (keyword, path.as_str().to_string(), value.to_string()),
+                    other => panic!("expected InvalidKeywordValue, got {other:?}"),
+                })
+                .collect()),
         }
     }
 
     fn invalid_value(keyword: &str, path: &str, value: &str) -> KeywordValueOutcome {
-        Err((keyword.to_string(), path.to_string(), value.to_string()))
+        Err(vec![(
+            keyword.to_string(),
+            path.to_string(),
+            value.to_string(),
+        )])
     }
 
     /// `body` (the keys after `$schema`) as a draft-4 document, parsed with `settings`.
@@ -3476,11 +3643,11 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .unknown_schema_uri(UnknownSchemaUri::Reject)
             .build();
-        let actual: Result<JsonSchema, JsonSchemaParseError> =
+        let actual: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::new_from_str(json, &settings);
         assert!(matches!(
-            actual,
-            Err(JsonSchemaParseError::UnknownSchemaUri { ref uri }) if uri == "https://example.com/custom-meta"
+            actual.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::UnknownSchemaUri { uri }]) if uri == "https://example.com/custom-meta"
         ));
     }
 
@@ -3491,11 +3658,11 @@ mod tests {
             .disallow_unknown_fields(true)
             .unknown_schema_uri(UnknownSchemaUri::Reject)
             .build();
-        let actual: Result<JsonSchema, JsonSchemaParseError> =
+        let actual: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::new_from_str(json, &settings);
         assert!(matches!(
-            actual,
-            Err(JsonSchemaParseError::UnknownSchemaUri { ref uri }) if uri == "https://example.com/custom-meta"
+            actual.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::UnknownSchemaUri { uri }]) if uri == "https://example.com/custom-meta"
         ));
     }
 
@@ -3654,7 +3821,7 @@ mod tests {
     #[test]
     fn draft6_id_rejected_when_strict() {
         let json = r#"{"$schema":"http://json-schema.org/draft-06/schema#","id":"http://example.com/x.json"}"#;
-        let expected: StrictOutcome = Err(("id".to_string(), String::new()));
+        let expected: StrictOutcome = unknown("id", "");
         let actual: StrictOutcome = strict_parse(json);
         assert_eq!(expected, actual);
     }
@@ -4016,8 +4183,11 @@ mod tests {
     fn multiple_of_zero_is_rejected() {
         let expected: String =
             "multipleOf must be strictly greater than 0, got 0 at line 1 column 16".to_string();
-        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":0}"#) {
-            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":0}"#)
+            .as_ref()
+            .map_err(|errors| &errors[..])
+        {
+            Err([JsonSchemaParseError::Serde(e)]) => e.to_string(),
             other => format!("{other:?}"),
         };
         assert_eq!(expected, actual);
@@ -4027,8 +4197,11 @@ mod tests {
     fn multiple_of_negative_is_rejected() {
         let expected: String =
             "multipleOf must be strictly greater than 0, got -1.5 at line 1 column 19".to_string();
-        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":-1.5}"#) {
-            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":-1.5}"#)
+            .as_ref()
+            .map_err(|errors| &errors[..])
+        {
+            Err([JsonSchemaParseError::Serde(e)]) => e.to_string(),
             other => format!("{other:?}"),
         };
         assert_eq!(expected, actual);
@@ -4040,8 +4213,11 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let expected: String = "multipleOf must be strictly greater than 0, got 0".to_string();
-        let actual: String = match JsonSchema::new_from_str(r#"{"multipleOf":0}"#, &settings) {
-            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+        let actual: String = match JsonSchema::new_from_str(r#"{"multipleOf":0}"#, &settings)
+            .as_ref()
+            .map_err(|errors| &errors[..])
+        {
+            Err([JsonSchemaParseError::Serde(e)]) => e.to_string(),
             other => format!("{other:?}"),
         };
         assert_eq!(expected, actual);
@@ -4049,10 +4225,13 @@ mod tests {
 
     #[test]
     fn multiple_of_zero_is_rejected_in_draft4() {
-        let actual: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(
+        let actual: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(
             r#"{"$schema":"http://json-schema.org/draft-04/schema#","multipleOf":0}"#,
         );
-        assert!(matches!(actual, Err(JsonSchemaParseError::Serde(_))));
+        assert!(matches!(
+            actual.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Serde(_)])
+        ));
     }
 
     #[test]
@@ -4114,9 +4293,12 @@ mod tests {
 
     #[test]
     fn boolean_exclusive_minimum_is_rejected_in_2020_12() {
-        let actual: Result<JsonSchema, JsonSchemaParseError> =
+        let actual: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::try_from(r#"{"minimum":1,"exclusiveMinimum":true}"#);
-        assert!(matches!(actual, Err(JsonSchemaParseError::Serde(_))));
+        assert!(matches!(
+            actual.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Serde(_)])
+        ));
     }
 
     #[test]
@@ -4124,8 +4306,11 @@ mod tests {
         let json = "{\"exclusiveMinimum\":1,\n\"minLength\":\"x\"}";
         let expected: String =
             "invalid type: string \"x\", expected a JSON number at line 2 column 15".to_string();
-        let actual: String = match JsonSchema::try_from(json) {
-            Err(JsonSchemaParseError::Serde(e)) => e.to_string(),
+        let actual: String = match JsonSchema::try_from(json)
+            .as_ref()
+            .map_err(|errors| &errors[..])
+        {
+            Err([JsonSchemaParseError::Serde(e)]) => e.to_string(),
             other => format!("{other:?}"),
         };
         assert_eq!(expected, actual);
@@ -4176,7 +4361,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        let expected: StrictOutcome = Err(("unknown".to_string(), String::new()));
+        let expected: StrictOutcome = unknown("unknown", "");
         let actual: StrictOutcome =
             strict_outcome(JsonSchema::new_from_serde_value(&value, &settings));
         assert_eq!(expected, actual);
@@ -4185,7 +4370,7 @@ mod tests {
     #[test]
     fn parse_schema_from_serde_value_invalid_type() {
         let value: serde_json::Value = serde_json::json!("not an object");
-        let result: Result<JsonSchema, JsonSchemaParseError> = JsonSchema::try_from(&value);
+        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(&value);
         let actual_is_err: bool = result.is_err();
         assert!(actual_is_err, "string value should fail to parse as schema");
     }
@@ -4214,9 +4399,12 @@ mod tests {
     fn parse_schema_from_reader_invalid_json() {
         let reader: std::io::Cursor<&[u8]> = std::io::Cursor::new(b"not json");
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        let result: Result<JsonSchema, JsonSchemaParseError> =
+        let result: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::new_from_reader(reader, &settings);
-        assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+        assert!(matches!(
+            result.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Serde(_)])
+        ));
     }
 
     struct FailingReader;
@@ -4231,9 +4419,12 @@ mod tests {
     fn parse_schema_from_reader_io_error() {
         let reader: FailingReader = FailingReader;
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        let result: Result<JsonSchema, JsonSchemaParseError> =
+        let result: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::new_from_reader(reader, &settings);
-        assert!(matches!(result, Err(JsonSchemaParseError::Io(_))));
+        assert!(matches!(
+            result.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Io(_)])
+        ));
     }
 
     #[test]
@@ -4251,9 +4442,12 @@ mod tests {
     fn parse_schema_from_path_file_not_found() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let missing_path = temp_dir.path().join("nonexistent.json");
-        let result: Result<JsonSchema, JsonSchemaParseError> =
+        let result: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::try_from(missing_path.as_path());
-        assert!(matches!(result, Err(JsonSchemaParseError::Io(_))));
+        assert!(matches!(
+            result.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Io(_)])
+        ));
     }
 
     #[test]
@@ -4261,9 +4455,12 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let schema_path = temp_dir.path().join("bad.json");
         std::fs::write(&schema_path, "not json").expect("write temp file");
-        let result: Result<JsonSchema, JsonSchemaParseError> =
+        let result: Result<JsonSchema, JsonSchemaParseErrors> =
             JsonSchema::try_from(schema_path.as_path());
-        assert!(matches!(result, Err(JsonSchemaParseError::Serde(_))));
+        assert!(matches!(
+            result.as_ref().map_err(|errors| &errors[..]),
+            Err([JsonSchemaParseError::Serde(_)])
+        ));
     }
 
     #[test]
