@@ -30,4 +30,7 @@ pub use json_schema::{
 pub use reverse_code_gen::{
     ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema,
 };
-pub use validator::{ValidationError, ValidationResult, validate, validate_with_registry};
+pub use validator::{
+    CompileError, CompileErrors, CompiledSchema, ValidationError, ValidationResult, validate,
+    validate_with_registry,
+};

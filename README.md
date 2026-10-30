@@ -109,11 +109,27 @@ map with `$ref` for shared and recursive types. See [design.md](design.md) for
 reverse codegen details. **`$ref`** resolves through a shared `Registry` for both
 validation and Rust codegen: JSON Pointer fragments into any schema location (including
 unknown keywords), `$id` / draft-4 `id` resources with RFC 3986 base-URI resolution,
-`$anchor` / `$dynamicAnchor` (as plain anchors), URNs, the embedded standard
+`$anchor` / `$dynamicAnchor`, URNs, the embedded standard
 metaschemas, and other documents you supply (in memory or through a `Retrieve`
 implementation; nothing is fetched by default). A custom `$schema` metaschema's
-`$vocabulary` decides which keyword groups apply. `$dynamicRef` / `$recursiveRef`
-are not resolved dynamically.
+`$vocabulary` decides which keyword groups apply. The validator resolves
+`$dynamicRef` (2020-12) and `$recursiveRef` (2019-09) against the dynamic scope.
+
+**Validator coverage.** The validator implements every assertion and applicator
+keyword of drafts 4, 6, 7, 2019-09 and 2020-12: `not`, `if`/`then`/`else`,
+`dependentRequired`, `dependentSchemas`, `dependencies`, `prefixItems`, tuple
+`items` with `additionalItems`, `contains` with `minContains`/`maxContains`,
+`propertyNames`, `patternProperties`, `minProperties`/`maxProperties`,
+`unevaluatedProperties`, `unevaluatedItems`, and every `format` the specifications
+define (`date-time`, `date`, `time`, `duration`, `email`, `idn-email`, `hostname`,
+`idn-hostname`, `ipv4`, `ipv6`, `uri`, `uri-reference`, `iri`, `iri-reference`,
+`uri-template`, `json-pointer`, `relative-json-pointer`, `regex`, `uuid`), asserted
+by default in drafts 4/6/7 and annotation-only in 2019-09/2020-12 (override with
+`--jss-format-mode`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
+Schema Test Suite runs as a gate with strict parsing; the cases it still fails
+(schemas using a key their draft does not define, numbers beyond 64 bits, draft-7
+content assertion) are listed in `json_schema_rs/tests/suite_xfail.json`.
 
 ## Using the library
 
@@ -185,7 +201,9 @@ loads still follow their own),
 `.integer_semantics(IntegerSemantics::Numeric)` (whether `1.0` is an integer:
 draft 4 says no, draft 6 and later yes),
 `.exclusive_bounds(ExclusiveBounds::BooleanModifier)` (read `exclusiveMinimum` /
-`exclusiveMaximum` as draft 4's boolean modifier or as draft 6's number), and
+`exclusiveMaximum` as draft 4's boolean modifier or as draft 6's number),
+`.ref_siblings(RefSiblings::Evaluated)` (whether keywords next to `$ref` count:
+drafts 4, 6 and 7 ignore them, 2019-09 and 2020-12 evaluate them), and
 `.unknown_schema_uri(UnknownSchemaUri::Reject)` (refuse an unrecognized
 `$schema` instead of falling back to the default draft with a warning).
 `JsonSchema::dialect()` returns a parsed schema's effective rules and
@@ -195,6 +213,7 @@ stderr. CLI: `--jss-default-spec-version` and `--jss-forced-spec-version`
 (`draft-04|draft-06|draft-07|2019-09|2020-12`, and `draft-00` to `draft-05`), `--jss-format-mode annotation|assertion`,
 `--jss-integer-semantics lexical|numeric`,
 `--jss-exclusive-bounds boolean-modifier|numeric`,
+`--jss-ref-siblings ignored|evaluated`,
 `--jss-unknown-schema-uri fallback|reject`.
 
 ## Using the macro (compile-time codegen)
@@ -264,11 +283,13 @@ if let Err(errors) = result {
 }
 ```
 
-`validate` builds the schema's `$ref` registry on every call. To validate many
-instances, or to let `$ref` reach other documents, build the registry once:
+`validate` builds the schema's `$ref` registry and compiles the schema on every call.
+To validate many instances, or to let `$ref` reach other documents, build the
+registry and compile the schema once; `is_valid` is the fastest check when you only
+need the verdict:
 
 ```rust
-use json_schema_rs::{validate_with_registry, JsonSchema, Registry};
+use json_schema_rs::{CompiledSchema, JsonSchema, Registry};
 use std::collections::HashMap;
 
 let remotes: HashMap<String, Value> = HashMap::from([(
@@ -279,7 +300,9 @@ let registry: Registry<'_> = Registry::builder()
     .base_uri("https://example.com/person.json")
     .retriever(remotes)
     .build(&schema)?;
-let result = validate_with_registry(&registry, &instance);
+let compiled: CompiledSchema = CompiledSchema::new(&registry)?;
+let result = compiled.validate(&instance);
+let valid: bool = compiled.is_valid(&instance);
 ```
 
 ## Running the binary
