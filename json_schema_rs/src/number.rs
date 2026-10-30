@@ -222,6 +222,15 @@ fn decimal_is_multiple(value: Decimal, divisor: Decimal) -> bool {
 /// element. Iterative, so deep values cannot overflow the stack.
 #[must_use]
 pub(crate) fn json_equal(a: &Value, b: &Value) -> bool {
+    // Scalars (the common `const` / `enum` case) compare directly, without the work stack.
+    match (a, b) {
+        (Value::Null, Value::Null) => return true,
+        (Value::Bool(p), Value::Bool(q)) => return p == q,
+        (Value::Number(p), Value::Number(q)) => return cmp_num(p, q) == Ordering::Equal,
+        (Value::String(p), Value::String(q)) => return p == q,
+        (Value::Array(_), Value::Array(_)) | (Value::Object(_), Value::Object(_)) => {}
+        _ => return false,
+    }
     let mut stack: Vec<(&Value, &Value)> = vec![(a, b)];
     while let Some((x, y)) = stack.pop() {
         match (x, y) {
@@ -289,8 +298,10 @@ enum HashItem<'a> {
 /// agree), any other number by its `f64` bits; an object's entries are hashed in key order, so
 /// insertion order does not matter. Iterative.
 pub(crate) fn json_hash<H: Hasher>(value: &Value, state: &mut H) {
-    let mut stack: Vec<HashItem<'_>> = vec![HashItem::Value(value)];
-    while let Some(item) = stack.pop() {
+    // The root is hashed without the stack, so a scalar never allocates.
+    let mut stack: Vec<HashItem<'_>> = Vec::new();
+    let mut next: Option<HashItem<'_>> = Some(HashItem::Value(value));
+    while let Some(item) = next.take().or_else(|| stack.pop()) {
         let value: &Value = match item {
             HashItem::Key(key) => {
                 HashTag::Key.hash(state);
@@ -647,6 +658,29 @@ mod tests {
             json_equal(&json!([1]), &json!([1, 1])),
             json_equal(&json!({"a": 1}), &json!({"a": 1, "b": 1})),
         );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn json_equal_scalars_of_one_kind() {
+        let expected: [bool; 8] = [true, true, false, true, false, true, false, false];
+        let actual: [bool; 8] = [
+            json_equal(&json!(null), &json!(null)),
+            json_equal(&json!(true), &json!(true)),
+            json_equal(&json!(true), &json!(false)),
+            json_equal(&json!(-3), &json!(-3.0)),
+            json_equal(&json!(2), &json!(2.5)),
+            json_equal(&json!("é"), &json!("é")),
+            json_equal(&json!("a"), &json!("b")),
+            json_equal(&json!([]), &json!({})),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn json_hash_scalar_and_one_element_array_differ() {
+        let expected: bool = false;
+        let actual: bool = hash_of(&json!("a")) == hash_of(&json!(["a"]));
         assert_eq!(expected, actual);
     }
 
