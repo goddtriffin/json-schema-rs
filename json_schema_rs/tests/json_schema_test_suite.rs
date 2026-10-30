@@ -12,15 +12,17 @@
 //! Each group's schema gets a [`Registry`] whose retriever serves the suite's `remotes/` folder
 //! under `http://localhost:1234/`, as the suite specifies. Each directory's draft is the default
 //! draft: a schema without `$schema` uses it, one with `$schema` follows that (so a custom
-//! metaschema is found through the registry).
+//! metaschema is found through the registry). The group's schema is compiled once and every
+//! test runs in both modes, [`CompiledSchema::validate`] and [`CompiledSchema::is_valid`]; a
+//! case whose two verdicts differ fails, whatever the manifest says.
 //!
 //! The suite must be cloned at `research/json-schema-test-suite/` (`make vendor_test_suite`);
 //! the run hard-fails when it is missing. `make update_suite_xfail` rewrites the manifest from
 //! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`).
 
 use json_schema_rs::{
-    FormatMode, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidationError, validate,
-    validate_with_registry,
+    CompiledSchema, FormatMode, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidationError,
+    validate,
 };
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
@@ -81,6 +83,8 @@ enum Outcome {
     Passed,
     /// The test failed; the string says why.
     Failed(String),
+    /// `is_valid` and `validate` gave different verdicts: a failure the manifest cannot excuse.
+    Mismatch(String),
 }
 
 /// One evaluated suite test.
@@ -160,12 +164,23 @@ fn load_remotes(root: &Path) -> Result<HashMap<String, serde_json::Value>, Strin
 }
 
 /// Runs one suite test; a panic in our library is a failure, not a crash of the run. A schema
-/// whose registry could not be built is validated with [`validate`], which reports why.
-fn run_test(schema: &Schema, registry: Option<&Registry<'_>>, test: &SuiteTest) -> Outcome {
-    let result = catch_unwind(AssertUnwindSafe(|| match registry {
-        Some(registry) => validate_with_registry(registry, &test.data),
-        None => validate(schema, &test.data),
+/// that could not be compiled (or whose registry could not be built) is validated with
+/// [`validate`], which reports why.
+fn run_test(schema: &Schema, compiled: Option<&CompiledSchema>, test: &SuiteTest) -> Outcome {
+    let result = catch_unwind(AssertUnwindSafe(|| match compiled {
+        Some(compiled) => {
+            let result = compiled.validate(&test.data);
+            (result.is_ok() == compiled.is_valid(&test.data)).then_some(result)
+        }
+        None => Some(validate(schema, &test.data)),
     }));
+    let result = match result {
+        Ok(Some(result)) => Ok(result),
+        Ok(None) => {
+            return Outcome::Mismatch("is_valid and validate disagree".to_string());
+        }
+        Err(panic) => Err(panic),
+    };
     match (result, test.valid) {
         (Err(_), _) => Outcome::Failed("validator panicked".to_string()),
         (Ok(Ok(())), true) | (Ok(Err(_)), false) => Outcome::Passed,
@@ -225,20 +240,21 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
                     Ok(Err(e)) => Err(format!("schema not supported: {e}")),
                     Err(_) => Err("schema parser panicked".to_string()),
                 };
-                let registry: Option<Registry<'_>> = schema.as_ref().ok().and_then(|schema| {
+                let compiled: Option<CompiledSchema> = schema.as_ref().ok().and_then(|schema| {
                     catch_unwind(AssertUnwindSafe(|| {
-                        Registry::builder()
+                        let registry: Registry<'_> = Registry::builder()
                             .retriever(&remotes)
                             .settings(settings.clone())
                             .build(schema)
-                            .ok()
+                            .ok()?;
+                        CompiledSchema::new(&registry).ok()
                     }))
                     .ok()
                     .flatten()
                 });
                 for test in group.tests {
                     let outcome: Outcome = match &schema {
-                        Ok(schema) => run_test(schema, registry.as_ref(), &test),
+                        Ok(schema) => run_test(schema, compiled.as_ref(), &test),
                         Err(reason) => Outcome::Failed(reason.clone()),
                     };
                     cases.push(Case {
@@ -325,6 +341,9 @@ fn build_trials(cases: Vec<Case>, manifest: &XfailManifest) -> Vec<Trial> {
         let xfail: bool = expected_failures.remove(&case.key);
         let name: String = case.key.trial_name();
         let trial: Trial = match (xfail, case.outcome) {
+            (_, Outcome::Mismatch(reason)) => Trial::test(name, move || {
+                Err(Failed::from(format!("mode mismatch: {reason}")))
+            }),
             (false, Outcome::Passed) | (true, Outcome::Failed(_)) => Trial::test(name, || Ok(())),
             (false, Outcome::Failed(reason)) => Trial::test(name, move || {
                 Err(Failed::from(format!(
