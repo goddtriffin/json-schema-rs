@@ -112,12 +112,12 @@ impl Conditionals {
     /// Parses every `then` / `else` reachable from `schemas` and the `$ref` targets of
     /// `registries`, including those nested in other `then` / `else` values.
     pub(crate) fn collect(
-        schemas: &[JsonSchema],
+        schemas: &[&JsonSchema],
         registries: &[Registry<'_>],
     ) -> CodeGenResult<Conditionals> {
         let mut out: Conditionals = Conditionals::default();
         let mut found: Vec<(usize, Value)> = Vec::new();
-        let mut stack: Vec<&JsonSchema> = schemas.iter().collect();
+        let mut stack: Vec<&JsonSchema> = schemas.to_vec();
         for registry in registries {
             for target in registry.ref_targets() {
                 if let SchemaRef::Object(s) = target.schema {
@@ -172,7 +172,7 @@ impl Conditionals {
             }
         }
         // Pair up `then` and `else` of the same schema.
-        let mut stack: Vec<&JsonSchema> = schemas.iter().collect();
+        let mut stack: Vec<&JsonSchema> = schemas.to_vec();
         for registry in registries {
             for target in registry.ref_targets() {
                 if let SchemaRef::Object(s) = target.schema {
@@ -266,7 +266,7 @@ fn pointer_push(pointer: &str, token: &str) -> String {
 
 /// Builds the type graph for `schemas`; `registries[i]` is `schemas[i]`'s registry.
 pub(crate) fn build(
-    schemas: &[JsonSchema],
+    schemas: &[&JsonSchema],
     registries: &[Registry<'_>],
     conditionals: &Conditionals,
     settings: &CodeGenSettings,

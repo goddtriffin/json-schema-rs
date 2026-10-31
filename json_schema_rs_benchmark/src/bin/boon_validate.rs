@@ -1,6 +1,8 @@
 //! Thin CLI wrapper around the `boon` validator so the harness can time it end-to-end,
 //! uniformly with the other tools. Mirrors `jsonschemars validate`: takes a schema file and a payload file,
 //! compiles the schema, validates the payload, and exits 0 on valid / non-zero on invalid.
+//! Each `-r FILE` registers one more document the schema references, under its root `$id`, the
+//! way the in-process tier hands a fixture's resources to boon (`Compiler::add_resource`).
 //!
 //! OWNER: competitor-wiring leaf.
 //!
@@ -18,7 +20,7 @@
 //! If the schema has no `$schema`, boon assumes the latest draft.
 
 use boon::{Compiler, Schemas};
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use serde_json::Value;
 use std::fs::File;
 use std::io::BufReader;
@@ -42,6 +44,16 @@ fn main() -> ExitCode {
                 .help("Path to the JSON Schema file"),
         )
         .arg(
+            Arg::new("resource")
+                .short('r')
+                .long("resource")
+                .value_name("FILE")
+                .action(ArgAction::Append)
+                .help(
+                    "A document the schema references, registered under its root $id (repeatable)",
+                ),
+        )
+        .arg(
             Arg::new("payload")
                 .short('p')
                 .long("payload")
@@ -60,7 +72,12 @@ fn main() -> ExitCode {
         .map(PathBuf::from)
         .expect("required --payload");
 
-    match run(&schema, &payload) {
+    let resources: Vec<PathBuf> = matches
+        .get_many::<String>("resource")
+        .map(|values| values.map(PathBuf::from).collect())
+        .unwrap_or_default();
+
+    match run(&schema, &resources, &payload) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("boon_validate: {err}");
@@ -76,11 +93,13 @@ fn read_json(path: &Path) -> Result<Value, String> {
         .map_err(|e| format!("cannot parse {}: {e}", path.display()))
 }
 
-/// Compile `schema_path` with boon and validate `payload_path` against it.
+/// Compile `schema_path` with boon, with every `resource_paths` document registered under its
+/// root `$id`, and validate `payload_path` against it.
 ///
 /// Returns `Ok(())` when the payload is valid; an `Err` message otherwise (compile error,
-/// I/O error, or a validation failure). The caller maps `Err` to a non-zero exit code.
-fn run(schema_path: &Path, payload_path: &Path) -> Result<(), String> {
+/// I/O error, a resource without a root `$id`, or a validation failure). The caller maps `Err`
+/// to a non-zero exit code.
+fn run(schema_path: &Path, resource_paths: &[PathBuf], payload_path: &Path) -> Result<(), String> {
     let schema_doc: Value = read_json(schema_path)?;
     let instance: Value = read_json(payload_path)?;
 
@@ -89,6 +108,17 @@ fn run(schema_path: &Path, payload_path: &Path) -> Result<(), String> {
     compiler
         .add_resource(SCHEMA_LOC, schema_doc)
         .map_err(|e| format!("cannot register schema: {e}"))?;
+    for path in resource_paths {
+        let resource: Value = read_json(path)?;
+        let id: String = resource
+            .get("$id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{} has no root \"$id\" string", path.display()))?
+            .to_owned();
+        compiler
+            .add_resource(&id, resource)
+            .map_err(|e| format!("cannot register {}: {e}", path.display()))?;
+    }
     let sch_index = compiler
         .compile(SCHEMA_LOC, &mut schemas)
         .map_err(|e| format!("cannot compile schema: {e}"))?;

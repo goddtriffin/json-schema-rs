@@ -13,19 +13,22 @@ pub mod sanitizers;
 pub mod validator;
 
 pub use code_gen::{
-    CodeGenBackend, CodeGenError, CodeGenResult, CodeGenSettings, CodeGenSettingsBuilder,
-    DedupeMode, GenerateRustOutput, ModelNameSource, RustBackend, UnknownProperties, generate_rust,
+    CodeGenBackend, CodeGenError, CodeGenInput, CodeGenResult, CodeGenSettings,
+    CodeGenSettingsBuilder, DedupeMode, GenerateRustOutput, ModelNameSource, RustBackend,
+    UnknownProperties, generate_rust,
 };
 pub use error_list::ErrorList;
 pub use json_pointer::{JsonPointer, JsonPointerError};
+#[cfg(feature = "http")]
+pub use json_schema::HttpRetriever;
 pub use json_schema::{
-    Dialect, DialectSettings, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics,
-    JsonSchema, JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult,
-    JsonSchemaSettings, JsonSchemaSettingsBuilder, JsonType, Keyword, OfflineRetriever,
-    RefSiblings, Registry, RegistryBuilder, RegistryError, RegistryErrors, Resolved,
-    ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope, SpecVersion,
+    Dialect, DialectSettings, DialectWarning, ExclusiveBounds, FileRetriever, FormatMode,
+    IntegerSemantics, JsonSchema, JsonSchemaParseError, JsonSchemaParseErrors,
+    JsonSchemaParseResult, JsonSchemaSettings, JsonSchemaSettingsBuilder, JsonType, Keyword,
+    OfflineRetriever, RefSiblings, Registry, RegistryBuilder, RegistryError, RegistryErrors,
+    Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope, SpecVersion,
     SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri, Vocabulary,
-    VocabularyKind, VocabularySet, resolve_dialect,
+    VocabularyKind, VocabularySet, file_uri, resolve_dialect,
 };
 pub use number::json_equal;
 pub use reverse_code_gen::{

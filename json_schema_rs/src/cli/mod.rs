@@ -172,6 +172,18 @@ pub fn run() {
                         .value_name("MODE")
                         .value_parser(["capture", "drop"])
                         .help("Codegen Settings: keep (capture) or ignore (drop) object keys the schema does not name, overriding additionalProperties (default: follow the schema)"),
+                )
+                .arg(
+                    Arg::new("cgs-file-root")
+                        .long("cgs-file-root")
+                        .value_name("DIR")
+                        .help("Codegen Settings: a $ref to a file that is not an INPUT is read only from inside DIR (default: the current directory)"),
+                )
+                .arg(
+                    Arg::new("cgs-allow-remote-refs")
+                        .long("cgs-allow-remote-refs")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Codegen Settings: retrieve http: and https: documents a $ref names (needs the `http` feature; default: off)"),
                 ),
         )
         .subcommand(
@@ -220,6 +232,10 @@ pub fn run() {
             let cgs_unknown_properties: Option<&str> = gen_m
                 .get_one::<String>("cgs-unknown-properties")
                 .map(String::as_str);
+            let retrieval: generate::RefRetrieval = generate::RefRetrieval {
+                file_root: gen_m.get_one::<String>("cgs-file-root").map(PathBuf::from),
+                allow_remote: gen_m.get_flag("cgs-allow-remote-refs"),
+            };
             generate::run_generate(
                 lang,
                 &inputs,
@@ -228,6 +244,7 @@ pub fn run() {
                 cgs_model_name_source,
                 cgs_dedupe_mode,
                 cgs_unknown_properties,
+                &retrieval,
             )
         }
         Some(("validate", val_m)) => {

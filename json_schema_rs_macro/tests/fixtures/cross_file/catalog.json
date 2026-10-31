@@ -1,0 +1,1 @@
+{"$defs":{"Thing":{"type":"object","properties":{"sku":{"type":"string"}},"required":["sku"]}},"title":"Catalog","type":"object","properties":{"things":{"type":"array","items":{"$ref":"#/$defs/Thing"}}}}
