@@ -5,13 +5,77 @@ use std::fmt;
 
 pub type ValidationResult = Result<(), Vec<ValidationError>>;
 
-/// A single validation failure: kind and instance location.
+/// A single validation failure: what is wrong ([`ValidationErrorKind`]), where in the instance,
+/// and which schema keyword found it.
+///
+/// The locations follow the JSON Schema output format (2020-12 core §12.3): `keyword_location`
+/// is the path through the schema as evaluated, `$ref` and the dynamic references included
+/// (`/properties/width/$ref/minimum`); `absolute_keyword_location` is the same keyword as a full
+/// URI with a JSON Pointer fragment, after the last reference followed
+/// (`https://example.com/schemas/common#/$defs/count/minimum`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValidationError {
+pub struct ValidationError {
+    /// JSON Pointer to the instance value that failed.
+    pub instance_location: JsonPointer,
+    /// JSON Pointer to the failing keyword through the schema as evaluated, including every
+    /// `$ref`, `$dynamicRef` and `$recursiveRef` crossed (2020-12 core §12.3.1,
+    /// `keywordLocation`). For a boolean schema `false` it is the location of that subschema.
+    pub keyword_location: JsonPointer,
+    /// The failing keyword as an absolute URI with a JSON Pointer fragment: the canonical URI of
+    /// the last reference target crossed, followed by the path from it (2020-12 core §12.3.2,
+    /// `absoluteKeywordLocation`). `None` when evaluation crossed no reference, or when that
+    /// target's resource has no absolute URI of its own (no `$id` and no base URI set on the
+    /// registry), the two cases the specification allows to omit it.
+    pub absolute_keyword_location: Option<String>,
+    /// What was wrong.
+    pub kind: ValidationErrorKind,
+}
+
+impl ValidationError {
+    /// An error of `kind` at `instance_location`, found by the keyword at `keyword_location`, with no
+    /// absolute location.
+    #[must_use]
+    pub fn new(
+        kind: ValidationErrorKind,
+        instance_location: JsonPointer,
+        keyword_location: JsonPointer,
+    ) -> ValidationError {
+        ValidationError {
+            instance_location,
+            keyword_location,
+            absolute_keyword_location: None,
+            kind,
+        }
+    }
+
+    /// The same error with `absolute_keyword_location` set.
+    #[must_use]
+    pub fn with_absolute_keyword_location(mut self, uri: impl Into<String>) -> ValidationError {
+        self.absolute_keyword_location = Some(uri.into());
+        self
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+/// One line: the instance location and the message (`/age: value 15 is above maximum 10`).
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: {}",
+            self.instance_location.display_root_or_path(),
+            self.kind
+        )
+    }
+}
+
+/// What a [`ValidationError`] found: one variant per kind of problem, with the instance
+/// context (actual value, count, length, or "got" type) and the schema constraint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationErrorKind {
     /// Schema had an invalid or unsupported `$ref`, or the reference could not be resolved.
     InvalidRef {
-        /// JSON Pointer to the instance location where the referenced schema was applied.
-        instance_path: JsonPointer,
         /// The `$ref` string from the schema.
         ref_str: String,
         /// Human-readable reason (for user-facing context).
@@ -19,87 +83,62 @@ pub enum ValidationError {
     },
     /// Schema had `type: "object"` but the instance was not an object.
     ExpectedObject {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// Schema had `type: "string"` but the instance was not a string.
     ExpectedString {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// Schema had `type: "integer"` but the instance was not an integer (e.g. float, string, or non-number).
     ExpectedInteger {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// Schema had `type: "number"` but the instance was not a number (e.g. string, null, or non-number).
     ExpectedNumber {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// Schema had `type: "array"` but the instance was not an array.
     ExpectedArray {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// Schema had `type: "boolean"` but the instance was not a boolean.
     ExpectedBoolean {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// Schema had `type: "null"` but the instance was not null.
     ExpectedNull {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// Schema had a `type` array (or an empty one) and the instance matched none of its types.
     ExpectedType {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's allowed types.
         expected: TypeSet,
         /// JSON type of the instance (for user-facing context).
         got: String,
     },
     /// The schema at this location was the boolean schema `false`, which no value satisfies.
-    FalseSchema {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
-    },
+    FalseSchema,
     /// The schema cannot be used: its `$ref` registry could not be built for a reason other
     /// than one `$ref` (a duplicate `$id` or anchor, a metaschema requiring an unsupported
     /// vocabulary, ...). Reported once, at the instance root.
     InvalidSchema {
-        /// JSON Pointer to the instance (the root).
-        instance_path: JsonPointer,
         /// Why the schema cannot be used.
         reason: String,
     },
     /// Schema had `uniqueItems: true` but the array contained duplicate elements.
     DuplicateArrayItems {
-        /// JSON Pointer to the array instance that failed.
-        instance_path: JsonPointer,
         /// Serialized duplicate value (for user-facing context).
         duplicate_value: String,
     },
     /// Schema had `minItems` but the array had fewer elements.
     TooFewItems {
-        /// JSON Pointer to the array instance that failed.
-        instance_path: JsonPointer,
         /// The schema's minItems value.
         min_items: u64,
         /// Actual number of items in the array (for user-facing context).
@@ -107,8 +146,6 @@ pub enum ValidationError {
     },
     /// Schema had `maxItems` but the array had more elements.
     TooManyItems {
-        /// JSON Pointer to the array instance that failed.
-        instance_path: JsonPointer,
         /// The schema's maxItems value.
         max_items: u64,
         /// Actual number of items in the array (for user-facing context).
@@ -116,22 +153,16 @@ pub enum ValidationError {
     },
     /// A property listed in `required` was absent.
     MissingRequired {
-        /// JSON Pointer to the object (parent of the missing property).
-        instance_path: JsonPointer,
         /// The required property name that was missing.
         property: String,
     },
     /// Schema had `additionalProperties: false` but the instance contained a property not in `properties`.
     DisallowedAdditionalProperty {
-        /// JSON Pointer to the instance (the additional property).
-        instance_path: JsonPointer,
         /// The property name that is not allowed.
         property: String,
     },
     /// Schema had `enum` but the instance value was not one of the allowed values.
     NotInEnum {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// Serialized invalid value (for user-facing context).
         invalid_value: String,
         /// Serialized allowed enum values (for user-facing context).
@@ -139,8 +170,6 @@ pub enum ValidationError {
     },
     /// Schema had `const` but the instance value was not equal to the const value.
     NotConst {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// Serialized expected (const) value (for user-facing context).
         expected: String,
         /// Serialized actual instance value (for user-facing context).
@@ -148,8 +177,6 @@ pub enum ValidationError {
     },
     /// Instance was below the schema's `minimum` (inclusive lower bound).
     BelowMinimum {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's minimum value, exactly as written.
         minimum: Number,
         /// Actual instance value (for user-facing context).
@@ -157,8 +184,6 @@ pub enum ValidationError {
     },
     /// Instance was above the schema's `maximum` (inclusive upper bound).
     AboveMaximum {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's maximum value, exactly as written.
         maximum: Number,
         /// Actual instance value (for user-facing context).
@@ -166,8 +191,6 @@ pub enum ValidationError {
     },
     /// Instance was not above the schema's `exclusiveMinimum` (exclusive lower bound).
     NotAboveExclusiveMinimum {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's exclusive minimum, exactly as written.
         exclusive_minimum: Number,
         /// Actual instance value (for user-facing context).
@@ -175,8 +198,6 @@ pub enum ValidationError {
     },
     /// Instance was not below the schema's `exclusiveMaximum` (exclusive upper bound).
     NotBelowExclusiveMaximum {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's exclusive maximum, exactly as written.
         exclusive_maximum: Number,
         /// Actual instance value (for user-facing context).
@@ -184,8 +205,6 @@ pub enum ValidationError {
     },
     /// Instance was not an integer multiple of the schema's `multipleOf`.
     NotMultipleOf {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's `multipleOf`, exactly as written.
         multiple_of: Number,
         /// Actual instance value (for user-facing context).
@@ -193,8 +212,6 @@ pub enum ValidationError {
     },
     /// Schema had `minLength` but the string had fewer Unicode code points.
     TooShort {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's minLength value.
         min_length: u64,
         /// Actual Unicode code point count (for user-facing context).
@@ -202,8 +219,6 @@ pub enum ValidationError {
     },
     /// Schema had `maxLength` but the string had more Unicode code points.
     TooLong {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's maxLength value.
         max_length: u64,
         /// Actual Unicode code point count (for user-facing context).
@@ -211,8 +226,6 @@ pub enum ValidationError {
     },
     /// Schema had `pattern` but the string did not match the ECMA 262 regex.
     PatternMismatch {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's pattern value (ECMA 262 regex string).
         pattern: String,
         /// The instance string value (for user-facing context).
@@ -220,30 +233,21 @@ pub enum ValidationError {
     },
     /// Schema had an invalid `pattern` (not a valid ECMA 262 regex); compilation failed.
     InvalidPatternInSchema {
-        /// JSON Pointer to the instance (schema location where pattern was applied).
-        instance_path: JsonPointer,
         /// The invalid pattern string from the schema.
         pattern: String,
     },
     /// The string instance is not in the `format` the schema asserts (only when formats are
     /// asserted: see `FormatMode`).
     InvalidFormat {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The format name (`"date-time"`, `"uuid"`, ...).
         format: String,
         /// The invalid string value (for user-facing context).
         value: String,
     },
     /// The instance matched the schema of `not`.
-    NotSchemaMatched {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
-    },
+    NotSchemaMatched,
     /// The object had fewer members than `minProperties`.
     TooFewProperties {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's `minProperties`.
         min_properties: u64,
         /// Number of members in the instance.
@@ -251,8 +255,6 @@ pub enum ValidationError {
     },
     /// The object had more members than `maxProperties`.
     TooManyProperties {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's `maxProperties`.
         max_properties: u64,
         /// Number of members in the instance.
@@ -261,8 +263,6 @@ pub enum ValidationError {
     /// A property that `dependentRequired` (or the array form of `dependencies`) requires,
     /// because another property is present, was absent.
     MissingDependentProperty {
-        /// JSON Pointer to the missing property.
-        instance_path: JsonPointer,
         /// The missing property.
         property: String,
         /// The present property that requires it.
@@ -270,15 +270,11 @@ pub enum ValidationError {
     },
     /// A member name failed the `propertyNames` schema.
     InvalidPropertyName {
-        /// JSON Pointer to the member whose name failed.
-        instance_path: JsonPointer,
         /// The member name.
         property: String,
     },
     /// Fewer items matched `contains` than `minContains` (1 when absent) requires.
     TooFewContains {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The required minimum.
         min_contains: u64,
         /// Number of items that matched.
@@ -286,8 +282,6 @@ pub enum ValidationError {
     },
     /// More items matched `contains` than `maxContains` allows.
     TooManyContains {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// The schema's `maxContains`.
         max_contains: u64,
         /// Number of items that matched.
@@ -295,8 +289,6 @@ pub enum ValidationError {
     },
     /// Schema had `unevaluatedProperties: false` and no other keyword evaluated this member.
     DisallowedUnevaluatedProperty {
-        /// JSON Pointer to the member.
-        instance_path: JsonPointer,
         /// The member name.
         property: String,
     },
@@ -304,30 +296,26 @@ pub enum ValidationError {
     /// consuming any of the instance (an in-place loop such as
     /// `{"anyOf": [{"type": "string"}, {"$ref": "#"}]}`), so that branch fails.
     RefCycle {
-        /// JSON Pointer to the instance being evaluated.
-        instance_path: JsonPointer,
         /// The `$ref` (or `$dynamicRef` / `$recursiveRef`) that closed the loop.
         ref_str: String,
     },
     /// Evaluation nested deeper than the validator's depth guard (deeply nested instances under
     /// a recursive schema), which stops before the native stack can overflow.
     DepthLimitExceeded {
-        /// JSON Pointer to the instance where the limit was reached.
-        instance_path: JsonPointer,
         /// The depth limit.
         limit: usize,
     },
-    /// Schema had `anyOf` but the instance did not validate against any of the subschemas.
+    /// Schema had `anyOf` or `oneOf` (the keyword location says which) but the instance did not
+    /// validate against any of the subschemas.
     NoSubschemaMatched {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
-        /// Number of subschemas in the anyOf (for user-facing context).
+        /// Number of subschemas in the anyOf / oneOf (for user-facing context).
         subschema_count: usize,
+        /// Why each subschema failed: every error of every branch, in branch order (each with
+        /// its own keyword location, under `/anyOf/<i>` or `/oneOf/<i>`).
+        causes: Vec<ValidationError>,
     },
     /// Schema had `oneOf` but the instance validated against more than one subschema.
     MultipleSubschemasMatched {
-        /// JSON Pointer to the instance that failed.
-        instance_path: JsonPointer,
         /// Number of subschemas in the oneOf (for user-facing context).
         subschema_count: usize,
         /// Number of subschemas that passed validation (must be >= 2 for this error).
@@ -335,137 +323,78 @@ pub enum ValidationError {
     },
 }
 
-impl std::error::Error for ValidationError {}
-
-impl ValidationError {
-    #[must_use]
-    pub fn instance_path(&self) -> &JsonPointer {
-        match self {
-            ValidationError::InvalidRef { instance_path, .. }
-            | ValidationError::ExpectedObject { instance_path, .. }
-            | ValidationError::ExpectedString { instance_path, .. }
-            | ValidationError::ExpectedInteger { instance_path, .. }
-            | ValidationError::ExpectedNumber { instance_path, .. }
-            | ValidationError::ExpectedArray { instance_path, .. }
-            | ValidationError::ExpectedBoolean { instance_path, .. }
-            | ValidationError::ExpectedNull { instance_path, .. }
-            | ValidationError::ExpectedType { instance_path, .. }
-            | ValidationError::FalseSchema { instance_path }
-            | ValidationError::InvalidSchema { instance_path, .. }
-            | ValidationError::DuplicateArrayItems { instance_path, .. }
-            | ValidationError::TooFewItems { instance_path, .. }
-            | ValidationError::TooManyItems { instance_path, .. }
-            | ValidationError::MissingRequired { instance_path, .. }
-            | ValidationError::DisallowedAdditionalProperty { instance_path, .. }
-            | ValidationError::NotInEnum { instance_path, .. }
-            | ValidationError::NotConst { instance_path, .. }
-            | ValidationError::BelowMinimum { instance_path, .. }
-            | ValidationError::AboveMaximum { instance_path, .. }
-            | ValidationError::NotAboveExclusiveMinimum { instance_path, .. }
-            | ValidationError::NotBelowExclusiveMaximum { instance_path, .. }
-            | ValidationError::NotMultipleOf { instance_path, .. }
-            | ValidationError::TooShort { instance_path, .. }
-            | ValidationError::TooLong { instance_path, .. }
-            | ValidationError::PatternMismatch { instance_path, .. }
-            | ValidationError::InvalidPatternInSchema { instance_path, .. }
-            | ValidationError::NoSubschemaMatched { instance_path, .. }
-            | ValidationError::MultipleSubschemasMatched { instance_path, .. }
-            | ValidationError::InvalidFormat { instance_path, .. }
-            | ValidationError::NotSchemaMatched { instance_path }
-            | ValidationError::TooFewProperties { instance_path, .. }
-            | ValidationError::TooManyProperties { instance_path, .. }
-            | ValidationError::MissingDependentProperty { instance_path, .. }
-            | ValidationError::InvalidPropertyName { instance_path, .. }
-            | ValidationError::TooFewContains { instance_path, .. }
-            | ValidationError::TooManyContains { instance_path, .. }
-            | ValidationError::DisallowedUnevaluatedProperty { instance_path, .. }
-            | ValidationError::RefCycle { instance_path, .. }
-            | ValidationError::DepthLimitExceeded { instance_path, .. } => instance_path,
-        }
-    }
-}
-
-impl fmt::Display for ValidationError {
+/// The message alone, without a location.
+impl fmt::Display for ValidationErrorKind {
     #[expect(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let location = self.instance_path().display_root_or_path();
         match self {
-            ValidationError::InvalidRef {
+            ValidationErrorKind::InvalidRef {
                 ref_str, reason, ..
             } => {
-                write!(
-                    f,
-                    "{location}: could not resolve $ref \"{ref_str}\": {reason}"
-                )
+                write!(f, "could not resolve $ref \"{ref_str}\": {reason}")
             }
-            ValidationError::ExpectedObject { got, .. } => {
-                write!(f, "{location}: expected object, got {got}")
+            ValidationErrorKind::ExpectedObject { got, .. } => {
+                write!(f, "expected object, got {got}")
             }
-            ValidationError::ExpectedString { got, .. } => {
-                write!(f, "{location}: expected string, got {got}")
+            ValidationErrorKind::ExpectedString { got, .. } => {
+                write!(f, "expected string, got {got}")
             }
-            ValidationError::ExpectedInteger { got, .. } => {
-                write!(f, "{location}: expected integer, got {got}")
+            ValidationErrorKind::ExpectedInteger { got, .. } => {
+                write!(f, "expected integer, got {got}")
             }
-            ValidationError::ExpectedNumber { got, .. } => {
-                write!(f, "{location}: expected number, got {got}")
+            ValidationErrorKind::ExpectedNumber { got, .. } => {
+                write!(f, "expected number, got {got}")
             }
-            ValidationError::ExpectedArray { got, .. } => {
-                write!(f, "{location}: expected array, got {got}")
+            ValidationErrorKind::ExpectedArray { got, .. } => {
+                write!(f, "expected array, got {got}")
             }
-            ValidationError::ExpectedBoolean { got, .. } => {
-                write!(f, "{location}: expected boolean, got {got}")
+            ValidationErrorKind::ExpectedBoolean { got, .. } => {
+                write!(f, "expected boolean, got {got}")
             }
-            ValidationError::ExpectedNull { got, .. } => {
-                write!(f, "{location}: expected null, got {got}")
+            ValidationErrorKind::ExpectedNull { got, .. } => {
+                write!(f, "expected null, got {got}")
             }
-            ValidationError::ExpectedType { expected, got, .. } => {
-                write!(f, "{location}: expected one of {expected}, got {got}")
+            ValidationErrorKind::ExpectedType { expected, got, .. } => {
+                write!(f, "expected one of {expected}, got {got}")
             }
-            ValidationError::FalseSchema { .. } => {
-                write!(f, "{location}: no value is allowed here (schema is false)")
+            ValidationErrorKind::FalseSchema => {
+                write!(f, "no value is allowed here (schema is false)")
             }
-            ValidationError::InvalidSchema { reason, .. } => {
-                write!(f, "{location}: the schema cannot be used: {reason}")
+            ValidationErrorKind::InvalidSchema { reason, .. } => {
+                write!(f, "the schema cannot be used: {reason}")
             }
-            ValidationError::DuplicateArrayItems {
+            ValidationErrorKind::DuplicateArrayItems {
                 duplicate_value, ..
             } => {
-                write!(
-                    f,
-                    "{location}: array has duplicate items (value: {duplicate_value})"
-                )
+                write!(f, "array has duplicate items (value: {duplicate_value})")
             }
-            ValidationError::TooFewItems {
+            ValidationErrorKind::TooFewItems {
                 min_items,
                 actual_count,
                 ..
             } => {
                 write!(
                     f,
-                    "{location}: array has {actual_count} item(s), minimum is {min_items}"
+                    "array has {actual_count} item(s), minimum is {min_items}"
                 )
             }
-            ValidationError::TooManyItems {
+            ValidationErrorKind::TooManyItems {
                 max_items,
                 actual_count,
                 ..
             } => {
                 write!(
                     f,
-                    "{location}: array has {actual_count} item(s), maximum is {max_items}"
+                    "array has {actual_count} item(s), maximum is {max_items}"
                 )
             }
-            ValidationError::MissingRequired { property, .. } => {
-                write!(f, "{location}: missing required property \"{property}\"")
+            ValidationErrorKind::MissingRequired { property, .. } => {
+                write!(f, "missing required property \"{property}\"")
             }
-            ValidationError::DisallowedAdditionalProperty { property, .. } => {
-                write!(
-                    f,
-                    "{location}: additional property \"{property}\" not allowed"
-                )
+            ValidationErrorKind::DisallowedAdditionalProperty { property, .. } => {
+                write!(f, "additional property \"{property}\" not allowed")
             }
-            ValidationError::NotInEnum {
+            ValidationErrorKind::NotInEnum {
                 invalid_value,
                 allowed,
                 ..
@@ -473,166 +402,158 @@ impl fmt::Display for ValidationError {
                 let allowed_str: String = allowed.join(", ");
                 write!(
                     f,
-                    "{location}: value {invalid_value} not in enum (allowed: {allowed_str})"
+                    "value {invalid_value} not in enum (allowed: {allowed_str})"
                 )
             }
-            ValidationError::NotConst {
+            ValidationErrorKind::NotConst {
                 expected, actual, ..
             } => {
                 write!(
                     f,
-                    "{location}: value {actual} does not match const (expected: {expected})"
+                    "value {actual} does not match const (expected: {expected})"
                 )
             }
-            ValidationError::BelowMinimum {
+            ValidationErrorKind::BelowMinimum {
                 minimum, actual, ..
             } => {
-                write!(f, "{location}: value {actual} is below minimum {minimum}")
+                write!(f, "value {actual} is below minimum {minimum}")
             }
-            ValidationError::AboveMaximum {
+            ValidationErrorKind::AboveMaximum {
                 maximum, actual, ..
             } => {
-                write!(f, "{location}: value {actual} is above maximum {maximum}")
+                write!(f, "value {actual} is above maximum {maximum}")
             }
-            ValidationError::NotAboveExclusiveMinimum {
+            ValidationErrorKind::NotAboveExclusiveMinimum {
                 exclusive_minimum,
                 actual,
                 ..
             } => {
                 write!(
                     f,
-                    "{location}: value {actual} is not above exclusiveMinimum {exclusive_minimum}"
+                    "value {actual} is not above exclusiveMinimum {exclusive_minimum}"
                 )
             }
-            ValidationError::NotBelowExclusiveMaximum {
+            ValidationErrorKind::NotBelowExclusiveMaximum {
                 exclusive_maximum,
                 actual,
                 ..
             } => {
                 write!(
                     f,
-                    "{location}: value {actual} is not below exclusiveMaximum {exclusive_maximum}"
+                    "value {actual} is not below exclusiveMaximum {exclusive_maximum}"
                 )
             }
-            ValidationError::NotMultipleOf {
+            ValidationErrorKind::NotMultipleOf {
                 multiple_of,
                 actual,
                 ..
             } => {
-                write!(
-                    f,
-                    "{location}: value {actual} is not a multiple of {multiple_of}"
-                )
+                write!(f, "value {actual} is not a multiple of {multiple_of}")
             }
-            ValidationError::TooShort {
+            ValidationErrorKind::TooShort {
                 min_length,
                 actual_length,
                 ..
             } => {
                 write!(
                     f,
-                    "{location}: string has {actual_length} code points, minLength is {min_length}"
+                    "string has {actual_length} code points, minLength is {min_length}"
                 )
             }
-            ValidationError::TooLong {
+            ValidationErrorKind::TooLong {
                 max_length,
                 actual_length,
                 ..
             } => {
                 write!(
                     f,
-                    "{location}: string has {actual_length} code points, maxLength is {max_length}"
+                    "string has {actual_length} code points, maxLength is {max_length}"
                 )
             }
-            ValidationError::PatternMismatch { pattern, value, .. } => {
-                write!(
-                    f,
-                    "{location}: string \"{value}\" does not match pattern \"{pattern}\""
-                )
+            ValidationErrorKind::PatternMismatch { pattern, value, .. } => {
+                write!(f, "string \"{value}\" does not match pattern \"{pattern}\"")
             }
-            ValidationError::InvalidPatternInSchema { pattern, .. } => {
-                write!(f, "{location}: schema has invalid pattern \"{pattern}\"")
+            ValidationErrorKind::InvalidPatternInSchema { pattern, .. } => {
+                write!(f, "schema has invalid pattern \"{pattern}\"")
             }
-            ValidationError::InvalidFormat { format, value, .. } => {
-                write!(f, "{location}: string \"{value}\" is not a valid {format}")
+            ValidationErrorKind::InvalidFormat { format, value, .. } => {
+                write!(f, "string \"{value}\" is not a valid {format}")
             }
-            ValidationError::NotSchemaMatched { .. } => {
-                write!(f, "{location}: instance matches the schema of not")
+            ValidationErrorKind::NotSchemaMatched => {
+                write!(f, "instance matches the schema of not")
             }
-            ValidationError::TooFewProperties {
+            ValidationErrorKind::TooFewProperties {
                 min_properties,
                 actual_count,
                 ..
             } => write!(
                 f,
-                "{location}: object has {actual_count} propert(ies), minimum is {min_properties}"
+                "object has {actual_count} propert(ies), minimum is {min_properties}"
             ),
-            ValidationError::TooManyProperties {
+            ValidationErrorKind::TooManyProperties {
                 max_properties,
                 actual_count,
                 ..
             } => write!(
                 f,
-                "{location}: object has {actual_count} propert(ies), maximum is {max_properties}"
+                "object has {actual_count} propert(ies), maximum is {max_properties}"
             ),
-            ValidationError::MissingDependentProperty {
+            ValidationErrorKind::MissingDependentProperty {
                 property,
                 required_by,
                 ..
             } => write!(
                 f,
-                "{location}: missing property \"{property}\", required when \"{required_by}\" is present"
+                "missing property \"{property}\", required when \"{required_by}\" is present"
             ),
-            ValidationError::InvalidPropertyName { property, .. } => {
+            ValidationErrorKind::InvalidPropertyName { property, .. } => {
                 write!(
                     f,
-                    "{location}: property name \"{property}\" does not match propertyNames"
+                    "property name \"{property}\" does not match propertyNames"
                 )
             }
-            ValidationError::TooFewContains {
+            ValidationErrorKind::TooFewContains {
                 min_contains,
                 match_count,
                 ..
             } => write!(
                 f,
-                "{location}: {match_count} item(s) match contains, minimum is {min_contains}"
+                "{match_count} item(s) match contains, minimum is {min_contains}"
             ),
-            ValidationError::TooManyContains {
+            ValidationErrorKind::TooManyContains {
                 max_contains,
                 match_count,
                 ..
             } => write!(
                 f,
-                "{location}: {match_count} item(s) match contains, maximum is {max_contains}"
+                "{match_count} item(s) match contains, maximum is {max_contains}"
             ),
-            ValidationError::DisallowedUnevaluatedProperty { property, .. } => write!(
+            ValidationErrorKind::DisallowedUnevaluatedProperty { property, .. } => {
+                write!(f, "unevaluated property \"{property}\" not allowed")
+            }
+            ValidationErrorKind::RefCycle { ref_str, .. } => write!(
                 f,
-                "{location}: unevaluated property \"{property}\" not allowed"
+                "$ref \"{ref_str}\" loops back to itself without consuming the instance"
             ),
-            ValidationError::RefCycle { ref_str, .. } => write!(
-                f,
-                "{location}: $ref \"{ref_str}\" loops back to itself without consuming the instance"
-            ),
-            ValidationError::DepthLimitExceeded { limit, .. } => write!(
-                f,
-                "{location}: evaluation nested deeper than {limit} levels"
-            ),
-            ValidationError::NoSubschemaMatched {
+            ValidationErrorKind::DepthLimitExceeded { limit, .. } => {
+                write!(f, "evaluation nested deeper than {limit} levels")
+            }
+            ValidationErrorKind::NoSubschemaMatched {
                 subschema_count, ..
             } => {
                 write!(
                     f,
-                    "{location}: instance does not match any of the {subschema_count} subschema(s)"
+                    "instance does not match any of the {subschema_count} subschema(s)"
                 )
             }
-            ValidationError::MultipleSubschemasMatched {
+            ValidationErrorKind::MultipleSubschemasMatched {
                 subschema_count,
                 match_count,
                 ..
             } => {
                 write!(
                     f,
-                    "{location}: instance matches {match_count} of the {subschema_count} oneOf subschema(s), exactly one required"
+                    "instance matches {match_count} of the {subschema_count} oneOf subschema(s), exactly one required"
                 )
             }
         }

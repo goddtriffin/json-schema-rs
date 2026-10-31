@@ -28,7 +28,7 @@ use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
     CompileError, CompiledSchema, JsonSchemaParseError, JsonSchemaSettings, Registry,
-    RegistryError, Schema, SpecVersion, ValidationError, ValidationResult,
+    RegistryError, Schema, SpecVersion, ValidationError, ValidationErrorKind, ValidationResult,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -215,13 +215,12 @@ fn parse_skip_message(error: &JsonSchemaParseError) -> String {
 /// Skip message when a validation error reflects a library capability gap rather than an
 /// invalid instance.
 fn capability_gap_message(error: &ValidationError) -> Option<String> {
-    match error {
-        ValidationError::InvalidRef {
-            ref_str, reason, ..
-        } => Some(format!("unsupported $ref: \"{ref_str}\": {reason}")),
-        ValidationError::InvalidPatternInSchema { .. } | ValidationError::InvalidSchema { .. } => {
-            Some(format!("unsupported: {error}"))
+    match &error.kind {
+        ValidationErrorKind::InvalidRef { ref_str, reason } => {
+            Some(format!("unsupported $ref: \"{ref_str}\": {reason}"))
         }
+        ValidationErrorKind::InvalidPatternInSchema { .. }
+        | ValidationErrorKind::InvalidSchema { .. } => Some(format!("unsupported: {error}")),
         _ => None,
     }
 }
@@ -408,8 +407,8 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::{
         Case, CaseOutcome, Command, Harness, OutputFormat, SpecVersion, TestOutcome,
-        ValidationError, ValidationResult, catch_panic, classify, dialect_spec_version, run_case,
-        run_response,
+        ValidationError, ValidationErrorKind, ValidationResult, catch_panic, classify,
+        dialect_spec_version, run_case, run_response,
     };
     use json_schema_rs::JsonPointer;
     use serde::Deserialize;
@@ -653,10 +652,13 @@ mod tests {
 
     #[test]
     fn invalid_pattern_in_schema_is_a_capability_gap() {
-        let result: ValidationResult = Err(vec![ValidationError::InvalidPatternInSchema {
-            instance_path: JsonPointer::root(),
-            pattern: "(".to_string(),
-        }]);
+        let result: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::InvalidPatternInSchema {
+                pattern: "(".to_string(),
+            },
+            JsonPointer::root(),
+            JsonPointer::try_from("/pattern").expect("pointer"),
+        )]);
         let expected: TestOutcome =
             TestOutcome::Skipped("unsupported: root: schema has invalid pattern \"(\"".to_string());
         let actual: TestOutcome = classify(&result);
