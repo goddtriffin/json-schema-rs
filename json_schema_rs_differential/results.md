@@ -776,7 +776,7 @@ Instance:
 **json-schema-rs**: invalid (1 message line(s))
 
 ```text
-/bar: missing required property "bar"
+root: missing required property "bar"
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -1108,7 +1108,7 @@ Instance:
 **json-schema-rs**: invalid (1 message line(s))
 
 ```text
-/foo: missing property "foo", required when "bar" is present
+root: missing property "foo", required when "bar" is present
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2290,7 +2290,7 @@ Instance:
 **json-schema-rs**: invalid (1 message line(s))
 
 ```text
-/foo: missing required property "foo"
+root: missing required property "foo"
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2556,7 +2556,7 @@ Instance (`small/config/instances/invalid/missing-required.json`):
 **json-schema-rs**: invalid (1 message line(s))
 
 ```text
-/version: missing required property "version"
+root: missing required property "version"
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -2812,8 +2812,8 @@ Instance (`medium/user-profile/instances/invalid/missing-nested-required.json`):
 **json-schema-rs**: invalid (2 message line(s))
 
 ```text
-/addresses/0/city: missing required property "city"
-/addresses/0/country: missing required property "country"
+/addresses/0: missing required property "city"
+/addresses/0: missing required property "country"
 ```
 
 **jsonschema**: invalid (2 message line(s))
@@ -2986,7 +2986,7 @@ Instance (`large/api-catalog/instances/invalid/missing-required-and-additional.j
 **json-schema-rs**: invalid (2 message line(s))
 
 ```text
-/generatedAt: missing required property "generatedAt"
+root: missing required property "generatedAt"
 /services/0/unexpectedField: additional property "unexpectedField" not allowed
 ```
 

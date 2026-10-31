@@ -2897,11 +2897,14 @@ fn integration_validator_pattern_mismatch_fails() {
     let actual: Result<(), _> = json_schema_rs::validate(&schema, &instance);
     let errs = actual.unwrap_err();
     let expected: Vec<json_schema_rs::ValidationError> =
-        vec![json_schema_rs::ValidationError::PatternMismatch {
-            instance_path: json_schema_rs::JsonPointer::root(),
-            pattern: "^[0-9]+$".to_string(),
-            value: "12a3".to_string(),
-        }];
+        vec![json_schema_rs::ValidationError::new(
+            json_schema_rs::ValidationErrorKind::PatternMismatch {
+                pattern: "^[0-9]+$".to_string(),
+                value: "12a3".to_string(),
+            },
+            json_schema_rs::JsonPointer::root(),
+            json_schema_rs::JsonPointer::try_from("/pattern").expect("pointer"),
+        )];
     assert_eq!(expected, errs);
 }
 

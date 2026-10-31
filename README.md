@@ -146,7 +146,8 @@ define (`date-time`, `date`, `time`, `duration`, `email`, `idn-email`, `hostname
 `idn-hostname`, `ipv4`, `ipv6`, `uri`, `uri-reference`, `iri`, `iri-reference`,
 `uri-template`, `json-pointer`, `relative-json-pointer`, `regex`, `uuid`), asserted
 by default in drafts 4/6/7 and annotation-only in 2019-09/2020-12 (override with
-`--jss-format-mode`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+`--jss-format-mode`); user-defined formats are registered with
+`CompiledSchema::builder().format(name, check)`. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with strict parsing; the cases it still fails
 (schemas using a key their draft does not define, numbers beyond 64 bits, draft-7
@@ -351,6 +352,21 @@ let registry: Registry<'_> = Registry::builder()
 let compiled: CompiledSchema = CompiledSchema::new(&registry)?;
 let result = compiled.validate(&instance);
 let valid: bool = compiled.is_valid(&instance);
+```
+
+Each `ValidationError` carries the instance location, the failing keyword's location
+through the schema as evaluated (`keyword_location`, e.g. `/properties/width/$ref/minimum`),
+its absolute URI after the last `$ref` crossed (`absolute_keyword_location`, when the
+schema has one), and the `kind` of problem. A failing `anyOf` / `oneOf` lists every
+branch's errors as its `causes`. The standard output formats of JSON Schema 2020-12
+(§12) are rendered with `compiled.evaluate(&instance, OutputFormat::Basic)` (`Flag`,
+`Basic` or `Detailed`), which serializes to the specification's JSON:
+
+```rust
+use json_schema_rs::{Output, OutputFormat};
+
+let output: Output = compiled.evaluate(&instance, OutputFormat::Detailed);
+println!("{}", serde_json::to_string_pretty(&output)?);
 ```
 
 ## Running the binary

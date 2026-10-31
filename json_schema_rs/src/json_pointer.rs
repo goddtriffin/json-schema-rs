@@ -2,8 +2,8 @@
 //!
 //! A pointer is either the empty string (whole document) or a sequence of
 //! reference tokens separated by `/`. In each token, `~0` represents `~` and
-//! `~1` represents `/`. Segments are stored decoded; encoding is applied when
-//! producing the pointer string.
+//! `~1` represents `/`. A pointer keeps its encoded string, and its decoded segments
+//! next to it only when some segment needed escaping.
 
 use std::fmt;
 
@@ -32,8 +32,17 @@ impl fmt::Display for JsonPointerError {
 
 impl std::error::Error for JsonPointerError {}
 
+/// Whether `segment` holds a character RFC 6901 escapes (`~`, `/`).
+fn needs_escape(segment: &str) -> bool {
+    segment.bytes().any(|b| b == b'~' || b == b'/')
+}
+
 /// Appends one segment to `out`, encoded for RFC 6901: `~` → `~0`, `/` → `~1`.
 fn encode_segment(segment: &str, out: &mut String) {
+    if !needs_escape(segment) {
+        out.push_str(segment);
+        return;
+    }
     for c in segment.chars() {
         match c {
             '~' => out.push_str("~0"),
@@ -43,14 +52,59 @@ fn encode_segment(segment: &str, out: &mut String) {
     }
 }
 
-/// The RFC 6901 string of `segments` ("" for none, "/a/b" otherwise), built in one buffer.
-fn encode(segments: &[String]) -> String {
-    let mut out: String = String::with_capacity(segments.iter().map(|s| s.len() + 1).sum());
+/// Appends `segments` as a JSON Pointer in a URI fragment (RFC 6901 §6): each segment escaped
+/// for the pointer (`~0`, `~1`), then every byte a fragment may not hold as written
+/// percent-encoded (RFC 3986 §3.5: unreserved characters, sub-delimiters, `:`, `@`, `/` and `?`
+/// stay; non-ASCII characters are kept, as an IRI allows).
+pub(crate) fn push_uri_fragment<'s>(segments: impl Iterator<Item = &'s str>, out: &mut String) {
+    let keep = |c: char| -> bool {
+        !c.is_ascii()
+            || c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.'
+                    | '_'
+                    | '~'
+                    | '!'
+                    | '$'
+                    | '&'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '*'
+                    | '+'
+                    | ','
+                    | ';'
+                    | '='
+                    | ':'
+                    | '@'
+                    | '/'
+                    | '?'
+            )
+    };
+    let mut escaped: String = String::new();
     for segment in segments {
         out.push('/');
-        encode_segment(segment, &mut out);
+        // Most segments need no escape of either kind: copied whole.
+        if !needs_escape(segment) && segment.chars().all(keep) {
+            out.push_str(segment);
+            continue;
+        }
+        escaped.clear();
+        encode_segment(segment, &mut escaped);
+        for c in escaped.chars() {
+            if keep(c) {
+                out.push(c);
+            } else {
+                // ASCII: one byte, two hex digits.
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                let byte: usize = c as usize;
+                out.push('%');
+                out.push(char::from(HEX[byte >> 4]));
+                out.push(char::from(HEX[byte & 0xF]));
+            }
+        }
     }
-    out
 }
 
 /// Decode one reference token: first `~1` → `/`, then `~0` → `~`.
@@ -74,14 +128,20 @@ fn decode_token(token: &str) -> Result<String, JsonPointerError> {
 
 /// A JSON Pointer (RFC 6901): identifies a value within a JSON document.
 ///
-/// Stored as decoded segments; the pointer string is produced by encoding
-/// when needed. Root has zero segments.
+/// Stored as one buffer, the encoded pointer string followed (only when some segment needs
+/// escaping, `~` or `/`) by the decoded segments one after another, and where each segment
+/// ends. Two allocations whatever the depth. Root has zero segments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonPointer {
-    /// Decoded reference tokens; empty = root.
-    segments: Vec<String>,
-    /// Cached RFC 6901 string ("" or "/seg1/seg2/...") for `as_str()` and Display.
-    encoded: String,
+    /// The RFC 6901 string ("" or "/seg1/seg2/..."), then the decoded segments when they differ
+    /// from the encoded ones.
+    buffer: String,
+    /// The length of the RFC 6901 string at the start of `buffer`.
+    encoded_len: usize,
+    /// Where each segment ends in `buffer`: in the decoded part when there is one, else in the
+    /// encoded string (each segment there starts one byte after the previous end, past its
+    /// `/`). Empty = root.
+    ends: Box<[usize]>,
 }
 
 impl JsonPointer {
@@ -89,41 +149,90 @@ impl JsonPointer {
     #[must_use]
     pub fn root() -> Self {
         Self {
-            segments: Vec::new(),
-            encoded: String::new(),
+            buffer: String::new(),
+            encoded_len: 0,
+            ends: Box::new([]),
         }
     }
 
-    fn from_segments_and_encoded(segments: Vec<String>, encoded: String) -> Self {
-        Self { segments, encoded }
+    /// Whether the decoded segments are kept apart, after the encoded string.
+    fn has_decoded(&self) -> bool {
+        // An escaped segment holds `~` or `/`, so the decoded part is never empty.
+        self.buffer.len() > self.encoded_len
+    }
+
+    /// The pointer of `segments` (decoded).
+    pub(crate) fn from_segments<'s, I>(segments: I) -> Self
+    where
+        I: IntoIterator<Item = &'s str>,
+        I::IntoIter: Clone,
+    {
+        let segments = segments.into_iter();
+        let (count, bytes, escaped): (usize, usize, bool) =
+            segments
+                .clone()
+                .fold((0, 0, false), |(count, bytes, escaped), segment| {
+                    (
+                        count + 1,
+                        bytes + segment.len(),
+                        escaped || needs_escape(segment),
+                    )
+                });
+        let mut buffer: String = String::with_capacity(if escaped {
+            2 * bytes + 2 * count
+        } else {
+            bytes + count
+        });
+        let mut ends: Vec<usize> = Vec::with_capacity(count);
+        for segment in segments.clone() {
+            buffer.push('/');
+            encode_segment(segment, &mut buffer);
+            if !escaped {
+                ends.push(buffer.len());
+            }
+        }
+        let encoded_len: usize = buffer.len();
+        if escaped {
+            for segment in segments {
+                buffer.push_str(segment);
+                ends.push(buffer.len());
+            }
+        }
+        Self {
+            buffer,
+            encoded_len,
+            ends: ends.into_boxed_slice(),
+        }
+    }
+
+    /// Appends `segment` (decoded) in place.
+    fn push_segment(&mut self, segment: &str) {
+        if !self.has_decoded() && !needs_escape(segment) {
+            self.buffer.push('/');
+            encode_segment(segment, &mut self.buffer);
+            self.encoded_len = self.buffer.len();
+            let mut ends: Vec<usize> = std::mem::take(&mut self.ends).into_vec();
+            ends.push(self.encoded_len);
+            self.ends = ends.into_boxed_slice();
+            return;
+        }
+        let segments: Vec<&str> = self.segments().chain(std::iter::once(segment)).collect();
+        *self = Self::from_segments(segments);
     }
 
     /// Returns a new pointer with one more segment. The segment is stored
     /// decoded; encoding is applied when producing the pointer string.
     #[must_use]
     pub fn push(&self, segment: &str) -> Self {
-        let mut new_segments = self.segments.clone();
-        new_segments.push(segment.to_string());
-        let encoded: String = encode(&new_segments);
-        Self {
-            segments: new_segments,
-            encoded,
-        }
+        let mut pointer: JsonPointer = self.clone();
+        pointer.push_segment(segment);
+        pointer
     }
 
     /// Returns a new pointer with the last segment removed. Root unchanged.
     #[must_use]
     pub fn pop(&self) -> Self {
-        if self.segments.is_empty() {
-            return self.clone();
-        }
-        let mut segs = self.segments.clone();
-        segs.pop();
-        let enc: String = encode(&segs);
-        Self {
-            segments: segs,
-            encoded: enc,
-        }
+        self.truncate(self.len().saturating_sub(1))
     }
 
     /// Returns the parent pointer (same as popping the last segment).
@@ -135,81 +244,93 @@ impl JsonPointer {
     /// Returns a new pointer with only the first `len` segments.
     #[must_use]
     pub fn truncate(&self, len: usize) -> Self {
-        if len >= self.segments.len() {
+        if len >= self.len() {
             return self.clone();
         }
-        let segs: Vec<String> = self.segments[..len].to_vec();
-        let enc: String = encode(&segs);
-        Self {
-            segments: segs,
-            encoded: enc,
-        }
+        let segments: Vec<&str> = self.segments().take(len).collect();
+        Self::from_segments(segments)
     }
 
     /// Number of segments (0 for root).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.segments.len()
+        self.ends.len()
     }
 
     /// Returns true if this pointer has no segments (root).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
+        self.ends.is_empty()
     }
 
     /// Returns true if this is the root pointer.
     #[must_use]
     pub fn is_root(&self) -> bool {
-        self.segments.is_empty()
+        self.ends.is_empty()
     }
 
     /// Returns an iterator over the decoded segments.
-    pub fn segments(&self) -> impl Iterator<Item = &str> {
-        self.segments.iter().map(String::as_str)
+    pub fn segments(&self) -> impl Iterator<Item = &str> + Clone {
+        (0..self.ends.len()).map(|i| self.segment(i))
+    }
+
+    /// The segment at `index`, which is in bounds.
+    fn segment(&self, index: usize) -> &str {
+        if self.has_decoded() {
+            let start: usize = if index == 0 {
+                self.encoded_len
+            } else {
+                self.ends[index - 1]
+            };
+            &self.buffer[start..self.ends[index]]
+        } else {
+            let previous: usize = if index == 0 { 0 } else { self.ends[index - 1] };
+            // Past the segment's `/`.
+            &self.buffer[previous + 1..self.ends[index]]
+        }
     }
 
     /// Returns the segment at `index`, or `None` if out of bounds.
     #[must_use]
     pub fn segment_at(&self, index: usize) -> Option<&str> {
-        self.segments.get(index).map(String::as_str)
+        (index < self.len()).then(|| self.segment(index))
     }
 
     /// Returns a new pointer with the segment at `index` removed.
     #[must_use]
     pub fn remove(&self, index: usize) -> Self {
-        if index >= self.segments.len() {
+        if index >= self.len() {
             return self.clone();
         }
-        let mut segs = self.segments.clone();
-        segs.remove(index);
-        let enc: String = encode(&segs);
-        Self {
-            segments: segs,
-            encoded: enc,
-        }
+        let segments: Vec<&str> = self
+            .segments()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .map(|(_, segment)| segment)
+            .collect();
+        Self::from_segments(segments)
     }
 
     /// Returns the pointer as a string ("" for root, "/a/b" for children).
     #[must_use]
     pub fn as_str(&self) -> &str {
-        self.encoded.as_str()
+        &self.buffer[..self.encoded_len]
     }
 
     /// Returns a display-friendly location: "root" when empty, otherwise the pointer string.
     #[must_use]
     pub fn display_root_or_path(&self) -> &str {
-        if self.encoded.is_empty() {
+        if self.encoded_len == 0 {
             "root"
         } else {
-            self.encoded.as_str()
+            self.as_str()
         }
     }
 }
 
 impl fmt::Display for JsonPointer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.encoded)
+        f.write_str(self.as_str())
     }
 }
 
@@ -221,16 +342,14 @@ fn try_parse(s: &str) -> Result<JsonPointer, JsonPointerError> {
     if !s.starts_with('/') {
         return Err(JsonPointerError::InvalidEscape);
     }
-    let parts: Vec<&str> = s.split('/').collect();
-    let mut segments = Vec::with_capacity(parts.len().saturating_sub(1));
-    for (i, part) in parts.iter().enumerate() {
-        if i == 0 {
-            continue;
-        }
-        segments.push(decode_token(part)?);
-    }
-    let encoded = s.to_string();
-    Ok(JsonPointer::from_segments_and_encoded(segments, encoded))
+    let segments: Vec<String> = s
+        .split('/')
+        .skip(1)
+        .map(decode_token)
+        .collect::<Result<_, _>>()?;
+    Ok(JsonPointer::from_segments(
+        segments.iter().map(String::as_str),
+    ))
 }
 
 impl TryFrom<&str> for JsonPointer {
@@ -269,14 +388,14 @@ impl TryFrom<Vec<u8>> for JsonPointer {
 
 impl From<Vec<String>> for JsonPointer {
     fn from(segments: Vec<String>) -> Self {
-        let encoded: String = encode(&segments);
-        Self { segments, encoded }
+        Self::from_segments(segments.iter().map(String::as_str))
     }
 }
 
 impl From<JsonPointer> for String {
-    fn from(p: JsonPointer) -> Self {
-        p.encoded
+    fn from(mut p: JsonPointer) -> Self {
+        p.buffer.truncate(p.encoded_len);
+        p.buffer
     }
 }
 

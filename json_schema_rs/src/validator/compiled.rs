@@ -23,13 +23,15 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::{Arc, OnceLock};
 
 /// A problem that keeps a schema from compiling, with its location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
     /// A `pattern` or `patternProperties` key that is not a valid ECMA-262 regular expression.
     InvalidPattern {
-        /// JSON Pointer to the schema object holding the pattern, within its document.
+        /// JSON Pointer to the pattern within its document: the `pattern` keyword
+        /// (`/properties/a/pattern`), or the `patternProperties` key (`/patternProperties/(`).
         location: String,
         /// The pattern as written.
         pattern: String,
@@ -133,6 +135,128 @@ pub(crate) struct EnumId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PropertiesId(u32);
 
+/// The index of a user-defined format in a [`CompiledSchema`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UserFormatId(u32);
+
+/// A keyword's name, for the keyword locations of errors (one byte, so the evaluator's location
+/// frames stay small).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kw {
+    Type,
+    Const,
+    Enum,
+    Minimum,
+    Maximum,
+    ExclusiveMinimum,
+    ExclusiveMaximum,
+    MultipleOf,
+    MinLength,
+    MaxLength,
+    Pattern,
+    Format,
+    MinItems,
+    MaxItems,
+    UniqueItems,
+    Required,
+    MinProperties,
+    MaxProperties,
+    DependentRequired,
+    Dependencies,
+    DependentSchemas,
+    Properties,
+    PatternProperties,
+    AdditionalProperties,
+    PropertyNames,
+    UnevaluatedProperties,
+    Items,
+    PrefixItems,
+    AdditionalItems,
+    Contains,
+    MinContains,
+    MaxContains,
+    UnevaluatedItems,
+    AllOf,
+    AnyOf,
+    OneOf,
+    Not,
+    If,
+    Then,
+    Else,
+    Ref,
+    DynamicRef,
+    RecursiveRef,
+}
+
+impl Kw {
+    /// The keyword as written in a schema.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Kw::Type => "type",
+            Kw::Const => "const",
+            Kw::Enum => "enum",
+            Kw::Minimum => "minimum",
+            Kw::Maximum => "maximum",
+            Kw::ExclusiveMinimum => "exclusiveMinimum",
+            Kw::ExclusiveMaximum => "exclusiveMaximum",
+            Kw::MultipleOf => "multipleOf",
+            Kw::MinLength => "minLength",
+            Kw::MaxLength => "maxLength",
+            Kw::Pattern => "pattern",
+            Kw::Format => "format",
+            Kw::MinItems => "minItems",
+            Kw::MaxItems => "maxItems",
+            Kw::UniqueItems => "uniqueItems",
+            Kw::Required => "required",
+            Kw::MinProperties => "minProperties",
+            Kw::MaxProperties => "maxProperties",
+            Kw::DependentRequired => "dependentRequired",
+            Kw::Dependencies => "dependencies",
+            Kw::DependentSchemas => "dependentSchemas",
+            Kw::Properties => "properties",
+            Kw::PatternProperties => "patternProperties",
+            Kw::AdditionalProperties => "additionalProperties",
+            Kw::PropertyNames => "propertyNames",
+            Kw::UnevaluatedProperties => "unevaluatedProperties",
+            Kw::Items => "items",
+            Kw::PrefixItems => "prefixItems",
+            Kw::AdditionalItems => "additionalItems",
+            Kw::Contains => "contains",
+            Kw::MinContains => "minContains",
+            Kw::MaxContains => "maxContains",
+            Kw::UnevaluatedItems => "unevaluatedItems",
+            Kw::AllOf => "allOf",
+            Kw::AnyOf => "anyOf",
+            Kw::OneOf => "oneOf",
+            Kw::Not => "not",
+            Kw::If => "if",
+            Kw::Then => "then",
+            Kw::Else => "else",
+            Kw::Ref => "$ref",
+            Kw::DynamicRef => "$dynamicRef",
+            Kw::RecursiveRef => "$recursiveRef",
+        }
+    }
+}
+
+/// A user-defined format check: answers whether a string is a member of the format.
+pub type FormatCheck = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// A format the user registered with [`CompiledSchemaBuilder::format`].
+#[derive(Clone)]
+pub(crate) struct UserFormat {
+    pub(crate) name: Box<str>,
+    pub(crate) check: FormatCheck,
+}
+
+impl fmt::Debug for UserFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UserFormat")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A compiled regular expression and its source.
 #[derive(Debug)]
 pub(crate) struct Pattern {
@@ -204,6 +328,10 @@ pub(crate) struct DynamicRef {
 pub(crate) struct PrefixItems {
     pub(crate) prefix: Box<[NodeId]>,
     pub(crate) rest: Option<NodeId>,
+    /// How the prefix and the rest are spelled: `prefixItems` / `items` (2020-12), or `items` /
+    /// `additionalItems` (earlier drafts).
+    pub(crate) prefix_keyword: Kw,
+    pub(crate) rest_keyword: Kw,
 }
 
 /// `contains` with its bounds.
@@ -214,6 +342,8 @@ pub(crate) struct Contains {
     pub(crate) max: Option<u64>,
     /// Whether matched items count as evaluated for `unevaluatedItems` (2020-12).
     pub(crate) annotates: bool,
+    /// The keyword too few matches fail: `minContains` when the schema has it, else `contains`.
+    pub(crate) min_keyword: Kw,
 }
 
 /// One keyword, compiled. Rare or large payloads are boxed (or kept in a side table of the
@@ -237,19 +367,27 @@ pub(crate) enum Keyword {
     MaxLength(u64),
     Pattern(RegexId),
     Format(Format),
+    /// A format the user registered.
+    UserFormat(UserFormatId),
     MinItems(u64),
     MaxItems(u64),
     UniqueItems,
     Required(Box<Required>),
     MinProperties(u64),
     MaxProperties(u64),
-    /// `dependentRequired` and the array form of `dependencies`: (property, names it requires).
-    DependentRequired(Box<[Dependency]>),
+    /// `dependentRequired` and the array form of `dependencies` (`keyword` says which):
+    /// (property, names it requires).
+    DependentRequired {
+        dependencies: Box<[Dependency]>,
+        keyword: Kw,
+    },
     /// `additionalProperties: false`: every member outside `known` is an error of its own.
     NoAdditionalProperties(Box<KnownProperties>),
-    /// `$ref`: evaluated in place, with the in-place loop guard.
+    /// `$ref` (or a `$dynamicRef` / `$recursiveRef` that resolves statically, `keyword` says
+    /// which): evaluated in place, with the in-place loop guard.
     Ref {
         target: NodeId,
+        keyword: Kw,
         ref_str: Box<str>,
     },
     /// `$dynamicRef` whose initial target declares the matching `$dynamicAnchor`: the outermost
@@ -269,11 +407,17 @@ pub(crate) enum Keyword {
         known: Box<KnownProperties>,
     },
     PropertyNames(NodeId),
-    /// `dependentSchemas` and the schema form of `dependencies`.
-    DependentSchemas(Box<[(Box<str>, NodeId)]>),
-    /// One schema for every item: single-schema `items` (every draft), or 2020-12 `items`
-    /// without `prefixItems`.
-    Items(NodeId),
+    /// `dependentSchemas` and the schema form of `dependencies` (`keyword` says which).
+    DependentSchemas {
+        dependencies: Box<[(Box<str>, NodeId)]>,
+        keyword: Kw,
+    },
+    /// One schema for every item: single-schema `items` (every draft), 2020-12 `items`
+    /// without `prefixItems`, or `additionalItems` after an empty tuple (`keyword` says which).
+    Items {
+        node: NodeId,
+        keyword: Kw,
+    },
     /// `prefixItems` + `items` (2020-12), or array-form `items` + `additionalItems` (earlier
     /// drafts), normalised to one tuple.
     PrefixItems(Box<PrefixItems>),
@@ -301,6 +445,9 @@ pub struct CompiledSchema {
     pub(crate) patterns: Vec<Pattern>,
     /// Distinct `enum` lists.
     pub(crate) enums: Box<[Box<[Value]>]>,
+    /// Each `enum` list's values as error messages show them, serialized at the first error
+    /// that needs them (a failing combinator's causes can report one list many times).
+    pub(crate) enum_display: Box<[OnceLock<Box<[String]>>]>,
     /// `properties` lists, each sorted by name.
     pub(crate) properties: Box<[PropertyList]>,
     /// `$dynamicAnchor` targets: resource → (anchor name, node) for every anchor name a dynamic
@@ -313,6 +460,12 @@ pub struct CompiledSchema {
     /// Whether an object's members iterate in key order (see [`maps_are_sorted`]), so the
     /// property keywords can walk them together with their sorted name lists.
     pub(crate) sorted_maps: bool,
+    /// The canonical URI of every reference target that has one (see
+    /// [`Registry::canonical_uri`]): where the absolute keyword locations of errors start. Cold:
+    /// read only when an error is built.
+    pub(crate) target_uris: IntMap<NodeId, Box<str>>,
+    /// The user-defined formats, by [`UserFormatId`].
+    pub(crate) user_formats: Box<[UserFormat]>,
 }
 
 /// Whether [`serde_json::Map`] iterates its keys in sorted (byte) order: it does unless some
@@ -325,8 +478,73 @@ pub(crate) fn maps_are_sorted() -> bool {
     map.keys().next().map(String::as_str) == Some("a")
 }
 
+/// Options for compiling a schema: [`CompiledSchema::builder`], then
+/// [`CompiledSchemaBuilder::build`].
+///
+/// # Example
+///
+/// ```
+/// use json_schema_rs::{CompiledSchema, FormatMode, JsonSchema, JsonSchemaSettings, Registry};
+/// use serde_json::json;
+///
+/// // Formats are asserted only when the schema is parsed with assertion on (2020-12 records
+/// // them as annotations by default).
+/// let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+///     .format_mode(FormatMode::Assertion)
+///     .build();
+/// let schema: JsonSchema = JsonSchema::new_from_str(r#"{"format":"even-length"}"#, &settings)
+///     .unwrap();
+/// let registry: Registry<'_> = Registry::new(&schema).unwrap();
+/// let compiled: CompiledSchema = CompiledSchema::builder()
+///     .format("even-length", |s: &str| s.chars().count().is_multiple_of(2))
+///     .build(&registry)
+///     .unwrap();
+/// assert!(compiled.is_valid(&json!("ab")));
+/// assert!(!compiled.is_valid(&json!("abc")));
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct CompiledSchemaBuilder {
+    formats: Vec<UserFormat>,
+}
+
+impl CompiledSchemaBuilder {
+    /// Registers the format `name`, checked by `check` (which answers whether a string is a
+    /// member of the format). Like the built-in formats it applies to strings only, and only
+    /// where formats are asserted (`FormatMode::Assertion`, the default in drafts 4 to 7, or
+    /// the `format-assertion` vocabulary); it is known in every draft, so the
+    /// `format-assertion` vocabulary does not reject it. A user format replaces a built-in one
+    /// of the same name, and registering a name twice keeps the last check.
+    #[must_use]
+    pub fn format(
+        mut self,
+        name: impl Into<String>,
+        check: impl Fn(&str) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        let name: Box<str> = name.into().into_boxed_str();
+        self.formats.retain(|format| format.name != name);
+        self.formats.push(UserFormat {
+            name,
+            check: Arc::new(check),
+        });
+        self
+    }
+
+    /// Compiles the root schema of `registry` (and everything it references) with these
+    /// options.
+    ///
+    /// # Errors
+    ///
+    /// Returns every [`CompileError`] found (see [`CompiledSchema::new`]).
+    pub fn build(&self, registry: &Registry<'_>) -> Result<CompiledSchema, CompileErrors> {
+        let mut compiler: Compiler<'_, '_> = Compiler::new(registry);
+        compiler.user_formats.clone_from(&self.formats);
+        compiler.compile()
+    }
+}
+
 impl CompiledSchema {
-    /// Compiles the root schema of `registry` (and everything it references).
+    /// Compiles the root schema of `registry` (and everything it references) with the default
+    /// options.
     ///
     /// # Errors
     ///
@@ -334,6 +552,12 @@ impl CompiledSchema {
     /// keeps raw with a value of the wrong shape, or a `$ref` the registry does not know.
     pub fn new(registry: &Registry<'_>) -> Result<CompiledSchema, CompileErrors> {
         Compiler::new(registry).compile()
+    }
+
+    /// Options for compiling a schema (user-defined formats).
+    #[must_use]
+    pub fn builder() -> CompiledSchemaBuilder {
+        CompiledSchemaBuilder::default()
     }
 
     pub(crate) fn node(&self, id: NodeId) -> &Node {
@@ -348,8 +572,22 @@ impl CompiledSchema {
         &self.enums[id.0 as usize]
     }
 
+    /// The `enum` list `id`, each value serialized for error messages.
+    pub(crate) fn enum_display(&self, id: EnumId) -> &[String] {
+        self.enum_display[id.0 as usize].get_or_init(|| {
+            self.enum_values(id)
+                .iter()
+                .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "?".to_string()))
+                .collect()
+        })
+    }
+
     pub(crate) fn property_list(&self, id: PropertiesId) -> &[(Box<str>, NodeId)] {
         &self.properties[id.0 as usize]
+    }
+
+    pub(crate) fn user_format(&self, id: UserFormatId) -> &UserFormat {
+        &self.user_formats[id.0 as usize]
     }
 }
 
@@ -424,7 +662,7 @@ struct Pending<'r> {
 /// input an attacker chooses, so the flooding resistance of the default `SipHash` buys nothing and
 /// its cost shows on large schemas.
 #[derive(Debug, Clone, Copy, Default)]
-struct IntHasher(u64);
+pub(crate) struct IntHasher(u64);
 
 impl Hasher for IntHasher {
     fn finish(&self) -> u64 {
@@ -448,7 +686,7 @@ impl Hasher for IntHasher {
 }
 
 /// A hash map keyed by integers, hashed with [`IntHasher`].
-type IntMap<K, V> = HashMap<K, V, BuildHasherDefault<IntHasher>>;
+pub(crate) type IntMap<K, V> = HashMap<K, V, BuildHasherDefault<IntHasher>>;
 
 /// A hash set of integers, hashed with [`IntHasher`].
 type IntSet<K> = HashSet<K, BuildHasherDefault<IntHasher>>;
@@ -465,8 +703,6 @@ struct DialectFacts {
     unevaluated: bool,
     /// Whether `items` takes the tuple form (no `prefixItems`, drafts before 2020-12).
     tuple_items: bool,
-    /// Whether the schema form of `dependencies` is spelled `dependentSchemas`.
-    dependent_schemas: bool,
 }
 
 impl DialectFacts {
@@ -484,7 +720,6 @@ impl DialectFacts {
             assertions: dialect.vocabulary_active(VocabularyKind::Validation),
             unevaluated,
             tuple_items: dialect.keyword("prefixItems").is_none(),
-            dependent_schemas: dialect.keyword("dependentSchemas").is_some(),
         }
     }
 }
@@ -518,6 +753,10 @@ struct Compiler<'r, 'a> {
     dynamic_names: BTreeSet<&'r str>,
     uses_recursive_ref: bool,
     uses_dynamic_scope: bool,
+    /// See [`CompiledSchema::target_uris`].
+    target_uris: IntMap<NodeId, Box<str>>,
+    /// The user-defined formats (see [`CompiledSchemaBuilder::format`]).
+    user_formats: Vec<UserFormat>,
     errors: Vec<CompileError>,
 }
 
@@ -546,13 +785,20 @@ struct Parts<'r> {
     required: Vec<&'r str>,
     min_properties: Option<u64>,
     max_properties: Option<u64>,
-    dependent_required: Vec<(&'r str, Vec<&'r str>)>,
+    dependent_required: DependencyNames<'r>,
+    /// The array form of `dependencies` (kept apart: its errors name `dependencies`).
+    dependencies_required: DependencyNames<'r>,
     properties: Vec<(&'r str, Source<'r>)>,
     pattern_properties: Vec<(&'r str, Source<'r>)>,
     additional_properties: Option<Source<'r>>,
     property_names: Option<Source<'r>>,
     dependent_schemas: Vec<(&'r str, Source<'r>)>,
+    /// The schema form of `dependencies` (kept apart: its locations name `dependencies`).
+    dependencies_schemas: Vec<(&'r str, Source<'r>)>,
     prefix_items: Vec<Source<'r>>,
+    /// Whether `items` took the tuple form (an array, drafts before 2020-12), so the rest is
+    /// `additionalItems`.
+    tuple_form: bool,
     items: Option<Source<'r>>,
     contains: Option<Source<'r>>,
     min_contains: Option<u64>,
@@ -567,6 +813,9 @@ struct Parts<'r> {
     unevaluated_properties: Option<Source<'r>>,
     unevaluated_items: Option<Source<'r>>,
 }
+
+/// `dependentRequired` as read: each property and the names it requires.
+type DependencyNames<'r> = Vec<(&'r str, Vec<&'r str>)>;
 
 /// A numeric keyword's value and how to lower it.
 type NumericKeyword<'n> = (Option<&'n Number>, fn(Number) -> Keyword);
@@ -629,6 +878,8 @@ impl<'r, 'a> Compiler<'r, 'a> {
             dynamic_names: BTreeSet::new(),
             uses_recursive_ref: false,
             uses_dynamic_scope: false,
+            target_uris: IntMap::default(),
+            user_formats: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -659,12 +910,15 @@ impl<'r, 'a> Compiler<'r, 'a> {
             nodes,
             root,
             patterns: self.patterns,
+            enum_display: self.enums.iter().map(|_| OnceLock::new()).collect(),
             enums: self.enums.into_boxed_slice(),
             properties: self.properties.into_boxed_slice(),
             dynamic_anchors,
             recursive_anchors,
             uses_dynamic_scope: self.uses_dynamic_scope,
             sorted_maps: self.sorted_maps,
+            target_uris: self.target_uris,
+            user_formats: self.user_formats.into_boxed_slice(),
         })
     }
 
@@ -691,11 +945,9 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 }
                 if let Ok(resolved) = self.registry.resolve(scope, &format!("#{name}")) {
                     let location: usize = self.target_location(resolved.pointer);
-                    let id: NodeId = self.node_for(
-                        Source::from_schema_ref(resolved.schema),
-                        resolved.scope,
-                        location,
-                    );
+                    let source: Source<'r> = Source::from_schema_ref(resolved.schema);
+                    let id: NodeId = self.node_for(source, resolved.scope, location);
+                    self.record_target_uri(id, source, resolved.scope, resolved.pointer);
                     dynamic_anchors
                         .entry(scope)
                         .or_default()
@@ -711,6 +963,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             {
                 let location: usize = self.target_location(resolved.pointer);
                 let id: NodeId = self.node_for(Source::Typed(root), resolved.scope, location);
+                self.record_target_uri(id, Source::Typed(root), resolved.scope, resolved.pointer);
                 recursive_anchors.insert(scope, id);
                 added = true;
             }
@@ -1048,10 +1301,10 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 Some(Value::Object(map)) => {
                     for (name, value) in map {
                         if let Some(s) = Source::from_value(value) {
-                            parts.dependent_schemas.push((name.as_str(), s));
+                            parts.dependencies_schemas.push((name.as_str(), s));
                         } else if let Some(names) = strings(value) {
                             if assertions {
-                                parts.dependent_required.push((name.as_str(), names));
+                                parts.dependencies_required.push((name.as_str(), names));
                             }
                         } else {
                             errors.push(("dependencies", dependencies_shape));
@@ -1077,6 +1330,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             // an array (with `additionalItems` for the rest) or one schema.
             let items_value: Option<&'r Value> = get("items");
             if tuple_items && let Some(Value::Array(_)) = items_value {
+                parts.tuple_form = true;
                 parts.prefix_items = list_at("items", &mut errors).unwrap_or_default();
                 parts.items = schema_at("additionalItems", &mut errors);
             } else {
@@ -1101,7 +1355,14 @@ impl<'r, 'a> Compiler<'r, 'a> {
         parts
     }
 
-    fn intern_pattern(&mut self, pattern: &'r str, location: usize) -> Option<RegexId> {
+    /// Compiles `pattern`, written under `keyword` of the schema at `location` (`pattern`, or
+    /// `patternProperties` with the pattern as the key), interning it.
+    fn intern_pattern(
+        &mut self,
+        pattern: &'r str,
+        keyword: &'static str,
+        location: usize,
+    ) -> Option<RegexId> {
         if let Some(id) = self.pattern_ids.get(pattern) {
             return Some(*id);
         }
@@ -1121,7 +1382,11 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 Some(id)
             }
             Err(error) => {
-                let location: String = self.location_string(location);
+                let mut entry: usize = self.child_location(location, Step::Key(keyword));
+                if keyword == "patternProperties" {
+                    entry = self.child_location(entry, Step::Key(pattern));
+                }
+                let location: String = self.location_string(entry);
                 self.errors.push(CompileError::InvalidPattern {
                     location,
                     pattern: pattern.to_string(),
@@ -1190,11 +1455,33 @@ impl<'r, 'a> Compiler<'r, 'a> {
             return None;
         };
         let entry: usize = self.target_location(resolved.pointer);
-        Some(self.node_for(
-            Source::from_schema_ref(resolved.schema),
-            resolved.scope,
-            entry,
-        ))
+        let source: Source<'r> = Source::from_schema_ref(resolved.schema);
+        let id: NodeId = self.node_for(source, resolved.scope, entry);
+        self.record_target_uri(id, source, resolved.scope, resolved.pointer);
+        Some(id)
+    }
+
+    /// Records the canonical URI of the reference target `id` (see
+    /// [`CompiledSchema::target_uris`]), once per target.
+    fn record_target_uri(
+        &mut self,
+        id: NodeId,
+        source: Source<'r>,
+        scope: Scope,
+        pointer: &'r [String],
+    ) {
+        if self.target_uris.contains_key(&id) {
+            return;
+        }
+        // The target's own `$id`, if it has one, makes it the root of its resource.
+        let scope: Scope = match source {
+            Source::Bool(_) => scope,
+            Source::Typed(s) => self.registry.enter(scope, s),
+            Source::Raw(o) => self.registry.enter_raw(scope, o),
+        };
+        if let Some(uri) = self.registry.canonical_uri(scope, pointer) {
+            self.target_uris.insert(id, uri.into_boxed_str());
+        }
     }
 
     /// Lowers `parts` to keywords: assertions first (cheapest first), then the applicators,
@@ -1238,7 +1525,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         out.extend(parts.min_length.map(Keyword::MinLength));
         out.extend(parts.max_length.map(Keyword::MaxLength));
         if let Some(pattern) = parts.pattern
-            && let Some(id) = self.intern_pattern(pattern, location)
+            && let Some(id) = self.intern_pattern(pattern, "pattern", location)
         {
             out.push(Keyword::Pattern(id));
         }
@@ -1261,19 +1548,26 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
         out.extend(parts.min_properties.map(Keyword::MinProperties));
         out.extend(parts.max_properties.map(Keyword::MaxProperties));
-        if !parts.dependent_required.is_empty() {
-            out.push(Keyword::DependentRequired(
-                parts
-                    .dependent_required
-                    .iter()
-                    .map(|(name, required)| {
-                        (
-                            Box::from(*name),
-                            required.iter().map(|n| Box::from(*n)).collect(),
-                        )
-                    })
-                    .collect(),
-            ));
+        let facts: DialectFacts = self.facts(dialect);
+        let required_lists: [(&DependencyNames<'r>, Kw); 2] = [
+            (&parts.dependent_required, Kw::DependentRequired),
+            (&parts.dependencies_required, Kw::Dependencies),
+        ];
+        for (list, keyword) in required_lists {
+            if !list.is_empty() {
+                out.push(Keyword::DependentRequired {
+                    dependencies: list
+                        .iter()
+                        .map(|(name, required)| {
+                            (
+                                Box::from(*name),
+                                required.iter().map(|n| Box::from(*n)).collect(),
+                            )
+                        })
+                        .collect(),
+                    keyword,
+                });
+            }
         }
 
         // References.
@@ -1282,6 +1576,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         {
             out.push(Keyword::Ref {
                 target,
+                keyword: Kw::Ref,
                 ref_str: Box::from(ref_str),
             });
         }
@@ -1306,6 +1601,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             } else {
                 out.push(Keyword::Ref {
                     target: fallback,
+                    keyword: Kw::RecursiveRef,
                     ref_str: Box::from(ref_str),
                 });
             }
@@ -1315,7 +1611,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         let mut known_patterns: Vec<RegexId> = Vec::new();
         let mut pattern_properties: Vec<(RegexId, NodeId)> = Vec::new();
         for (pattern, source) in &parts.pattern_properties {
-            let id: Option<RegexId> = self.intern_pattern(pattern, location);
+            let id: Option<RegexId> = self.intern_pattern(pattern, "patternProperties", location);
             let node: NodeId = self.child(
                 (*source, "patternProperties", Some(Step::Key(pattern))),
                 scope,
@@ -1377,37 +1673,43 @@ impl<'r, 'a> Compiler<'r, 'a> {
             let node: NodeId = self.child((source, "propertyNames", None), scope, location);
             out.push(Keyword::PropertyNames(node));
         }
-        let facts: DialectFacts = self.facts(dialect);
-        if !parts.dependent_schemas.is_empty() {
-            let keyword: &'static str = if facts.dependent_schemas {
-                "dependentSchemas"
-            } else {
-                "dependencies"
-            };
+        let schema_lists: [(&Vec<(&'r str, Source<'r>)>, Kw); 2] = [
+            (&parts.dependent_schemas, Kw::DependentSchemas),
+            (&parts.dependencies_schemas, Kw::Dependencies),
+        ];
+        for (list, keyword) in schema_lists {
+            if list.is_empty() {
+                continue;
+            }
             let mut dependent: Vec<(Box<str>, NodeId)> = Vec::new();
-            for (name, source) in &parts.dependent_schemas {
-                let node: NodeId =
-                    self.child((*source, keyword, Some(Step::Key(name))), scope, location);
+            for (name, source) in list {
+                let node: NodeId = self.child(
+                    (*source, keyword.as_str(), Some(Step::Key(name))),
+                    scope,
+                    location,
+                );
                 dependent.push((Box::from(*name), node));
             }
-            out.push(Keyword::DependentSchemas(dependent.into_boxed_slice()));
+            out.push(Keyword::DependentSchemas {
+                dependencies: dependent.into_boxed_slice(),
+                keyword,
+            });
         }
 
         // Array applicators.
         let tuple_items: bool = facts.tuple_items;
-        let (prefix_keyword, rest_keyword): (&'static str, &'static str) =
-            if tuple_items && !parts.prefix_items.is_empty() {
-                ("items", "additionalItems")
-            } else {
-                ("prefixItems", "items")
-            };
+        let (prefix_keyword, rest_keyword): (Kw, Kw) = if parts.tuple_form {
+            (Kw::Items, Kw::AdditionalItems)
+        } else {
+            (Kw::PrefixItems, Kw::Items)
+        };
         let prefix: Vec<NodeId> = parts
             .prefix_items
             .iter()
             .enumerate()
             .map(|(i, source)| {
                 self.child(
-                    (*source, prefix_keyword, Some(Step::Index(i))),
+                    (*source, prefix_keyword.as_str(), Some(Step::Index(i))),
                     scope,
                     location,
                 )
@@ -1415,13 +1717,18 @@ impl<'r, 'a> Compiler<'r, 'a> {
             .collect();
         let rest: Option<NodeId> = parts
             .items
-            .map(|source| self.child((source, rest_keyword, None), scope, location));
+            .map(|source| self.child((source, rest_keyword.as_str(), None), scope, location));
         match (prefix.is_empty(), rest) {
             (true, None) => {}
-            (true, Some(rest)) => out.push(Keyword::Items(rest)),
+            (true, Some(rest)) => out.push(Keyword::Items {
+                node: rest,
+                keyword: rest_keyword,
+            }),
             (false, rest) => out.push(Keyword::PrefixItems(Box::new(PrefixItems {
                 prefix: prefix.into_boxed_slice(),
                 rest,
+                prefix_keyword,
+                rest_keyword,
             }))),
         }
         if let Some(source) = parts.contains {
@@ -1431,6 +1738,11 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 min: parts.min_contains.unwrap_or(1),
                 max: parts.max_contains,
                 annotates: !tuple_items,
+                min_keyword: if parts.min_contains.is_some() {
+                    Kw::MinContains
+                } else {
+                    Kw::Contains
+                },
             })));
         }
 
@@ -1493,6 +1805,16 @@ impl<'r, 'a> Compiler<'r, 'a> {
         location: usize,
         out: &mut Vec<Keyword>,
     ) {
+        if let Some(index) = self.user_formats.iter().position(|f| *f.name == *name) {
+            if dialect.format_mode == FormatMode::Assertion {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "fewer than u32::MAX formats fit in memory"
+                )]
+                out.push(Keyword::UserFormat(UserFormatId(index as u32)));
+            }
+            return;
+        }
         let format: Option<Format> = dialect
             .defines_format(name)
             .then(|| Format::from_name(name))
@@ -1540,6 +1862,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             }
             _ => Some(Keyword::Ref {
                 target: fallback,
+                keyword: Kw::DynamicRef,
                 ref_str: Box::from(ref_str),
             }),
         }

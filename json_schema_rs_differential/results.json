@@ -5027,7 +5027,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -5071,7 +5071,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -5115,7 +5115,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/ava.json\": invalid file url: https://json.schemastore.org/ava.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -5159,7 +5159,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/ava.json\": invalid file url: https://json.schemastore.org/ava.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -6836,7 +6836,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "/bar: missing required property \"bar\""
+            "root: missing required property \"bar\""
           ]
         },
         {
@@ -7160,7 +7160,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "/foo: missing property \"foo\", required when \"bar\" is present"
+            "root: missing property \"foo\", required when \"bar\" is present"
           ]
         },
         {
@@ -8313,7 +8313,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "/foo: missing required property \"foo\""
+            "root: missing required property \"foo\""
           ]
         },
         {
@@ -8580,7 +8580,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "/version: missing required property \"version\""
+            "root: missing required property \"version\""
           ]
         },
         {
@@ -8857,8 +8857,8 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "/addresses/0/city: missing required property \"city\"",
-            "/addresses/0/country: missing required property \"country\""
+            "/addresses/0: missing required property \"city\"",
+            "/addresses/0: missing required property \"country\""
           ]
         },
         {
@@ -9023,7 +9023,7 @@
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "/generatedAt: missing required property \"generatedAt\"",
+            "root: missing required property \"generatedAt\"",
             "/services/0/unexpectedField: additional property \"unexpectedField\" not allowed"
           ]
         },
