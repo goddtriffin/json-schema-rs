@@ -158,7 +158,7 @@ fn error_unit(error: &ValidationError) -> OutputUnit {
         valid: false,
         keyword_location: error.keyword_location.to_string(),
         absolute_keyword_location: error.absolute_keyword_location.clone(),
-        instance_location: error.instance_path.to_string(),
+        instance_location: error.instance_location.to_string(),
         error: Some(error.kind.to_string()),
         errors: Vec::new(),
     }
@@ -224,7 +224,7 @@ fn applies(keyword: &str, next: Option<&str>) -> Applies {
 /// of the keyword location and of the instance location lead to it.
 fn subschemas(error: &ValidationError) -> Vec<(usize, usize)> {
     let keyword: Vec<&str> = error.keyword_location.segments().collect();
-    let instance_len: usize = error.instance_path.len();
+    let instance_len: usize = error.instance_location.len();
     let mut out: Vec<(usize, usize)> = Vec::new();
     let mut i: usize = 0;
     let mut instance: usize = 0;
@@ -293,7 +293,8 @@ fn detailed(errors: &[ValidationError]) -> OutputUnit {
         let mut current: usize = parent;
         for (keyword_len, instance_len) in subschemas(error).into_iter().skip(skip) {
             let keyword_location: String = error.keyword_location.truncate(keyword_len).to_string();
-            let instance_location: String = error.instance_path.truncate(instance_len).to_string();
+            let instance_location: String =
+                error.instance_location.truncate(instance_len).to_string();
             let key: (String, String) = (keyword_location, instance_location);
             let found: Option<usize> = nodes[current]
                 .children
@@ -459,7 +460,7 @@ mod tests {
                     "valid": false,
                     "keywordLocation": "/items/$ref/required",
                     "absoluteKeywordLocation": "https://example.com/polygon#/$defs/point/required",
-                    "instanceLocation": "/1/y",
+                    "instanceLocation": "/1",
                     "error": "missing required property \"y\""
                 },
                 {
@@ -507,7 +508,7 @@ mod tests {
                             "keywordLocation": "/items/$ref/required",
                             "absoluteKeywordLocation":
                                 "https://example.com/polygon#/$defs/point/required",
-                            "instanceLocation": "/1/y",
+                            "instanceLocation": "/1",
                             "error": "missing required property \"y\""
                         },
                         {

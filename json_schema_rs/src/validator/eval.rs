@@ -71,7 +71,7 @@ enum Step<'a> {
 /// The schema path from a node to the subschema a [`Step`] enters.
 #[derive(Clone, Copy)]
 enum Via<'a> {
-    /// No subschema: a member named by an error (a missing `required` property), whose keyword
+    /// No subschema: a member named by an error (a property `additionalProperties: false` rejects), whose keyword
     /// location is the parent's.
     None,
     /// The keyword alone (`additionalProperties`, a single `items`, `not`).
@@ -411,7 +411,7 @@ impl CompiledSchema {
             Some(uri)
         });
         ValidationError {
-            instance_path: location.pointer(),
+            instance_location: location.pointer(),
             keyword_location: JsonPointer::from_segments(segments.iter().rev().map(|s| &**s)),
             absolute_keyword_location: absolute,
             kind,
@@ -1203,7 +1203,7 @@ impl CompiledSchema {
                         COLLECT,
                         self,
                         cx,
-                        &at.location.key(property, Via::None),
+                        at.location,
                         *keyword,
                         ValidationErrorKind::MissingDependentProperty {
                             property: property.to_string(),
@@ -1276,7 +1276,7 @@ impl CompiledSchema {
                 COLLECT,
                 self,
                 cx,
-                &at.location.key(name, Via::None),
+                at.location,
                 Kw::Required,
                 ValidationErrorKind::MissingRequired {
                     property: name.to_string(),

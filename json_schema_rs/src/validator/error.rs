@@ -16,7 +16,7 @@ pub type ValidationResult = Result<(), Vec<ValidationError>>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
     /// JSON Pointer to the instance value that failed.
-    pub instance_path: JsonPointer,
+    pub instance_location: JsonPointer,
     /// JSON Pointer to the failing keyword through the schema as evaluated, including every
     /// `$ref`, `$dynamicRef` and `$recursiveRef` crossed (2020-12 core §12.3.1,
     /// `keywordLocation`). For a boolean schema `false` it is the location of that subschema.
@@ -32,16 +32,16 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
-    /// An error of `kind` at `instance_path`, found by the keyword at `keyword_location`, with no
+    /// An error of `kind` at `instance_location`, found by the keyword at `keyword_location`, with no
     /// absolute location.
     #[must_use]
     pub fn new(
         kind: ValidationErrorKind,
-        instance_path: JsonPointer,
+        instance_location: JsonPointer,
         keyword_location: JsonPointer,
     ) -> ValidationError {
         ValidationError {
-            instance_path,
+            instance_location,
             keyword_location,
             absolute_keyword_location: None,
             kind,
@@ -54,12 +54,6 @@ impl ValidationError {
         self.absolute_keyword_location = Some(uri.into());
         self
     }
-
-    /// JSON Pointer to the instance value that failed.
-    #[must_use]
-    pub fn instance_path(&self) -> &JsonPointer {
-        &self.instance_path
-    }
 }
 
 impl std::error::Error for ValidationError {}
@@ -70,7 +64,7 @@ impl fmt::Display for ValidationError {
         write!(
             f,
             "{}: {}",
-            self.instance_path.display_root_or_path(),
+            self.instance_location.display_root_or_path(),
             self.kind
         )
     }

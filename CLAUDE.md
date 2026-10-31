@@ -32,6 +32,16 @@ see [design.md](design.md).
    - **A PR is not complete until both harnesses have been run and their results files are
      committed and current.** This is non-negotiable.
 
+4. **No backwards compatibility before 1.0.** The crate is pre-1.0 (`0.x`): there are no
+   users to keep working, so every change makes the API, behaviour and docs what they should
+   be, directly. Rename, reshape or remove anything; never keep an old name, alias,
+   re-export, redundant accessor, `#[deprecated]` shim, forwarding wrapper, old convention or
+   "kept for compatibility" path because it existed before, and never ask whether to keep
+   the old behaviour. When you notice such a leftover outside your change, file an issue for
+   it in its place in the roadmap (#15). This is about *our own* earlier API; what a JSON
+   Schema draft requires for schema authors (draft-04 `id`, `dependencies` in 2020-12,
+   `definitions`) is spec behaviour and stays.
+
 ## Testing and lint standards (summary; contribution-guide is authoritative)
 
 - One assertion per test; named `expected`/`actual` with explicit type annotations; compare

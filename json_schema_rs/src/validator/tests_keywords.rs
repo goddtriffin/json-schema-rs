@@ -1062,7 +1062,7 @@ fn dependent_required_reports_each_missing_property() {
                 property: "b".to_string(),
                 required_by: "a".to_string(),
             },
-            ptr("/b"),
+            root(),
             kl("/dependentRequired"),
         ),
         ValidationError::new(
@@ -1070,7 +1070,7 @@ fn dependent_required_reports_each_missing_property() {
                 property: "c".to_string(),
                 required_by: "a".to_string(),
             },
-            ptr("/c"),
+            root(),
             kl("/dependentRequired"),
         ),
     ]);
@@ -1118,7 +1118,7 @@ fn dependent_schemas_applies_when_trigger_present() {
         ValidationErrorKind::MissingRequired {
             property: "b".to_string(),
         },
-        ptr("/b"),
+        root(),
         kl("/dependentSchemas/a/required"),
     )]);
     assert_eq!(expected, actual);
@@ -1149,7 +1149,7 @@ fn dependencies_array_form_in_draft_7() {
             property: "b".to_string(),
             required_by: "a".to_string(),
         },
-        ptr("/b"),
+        root(),
         kl("/dependencies"),
     )]);
     assert_eq!(expected, actual);
@@ -1199,7 +1199,7 @@ fn dependencies_applies_in_2020_12_for_compatibility() {
             property: "b".to_string(),
             required_by: "a".to_string(),
         },
-        ptr("/b"),
+        root(),
         kl("/dependencies"),
     )]);
     assert_eq!(expected, actual);
@@ -2507,11 +2507,12 @@ fn display_missing_dependent_property() {
             property: "b".to_string(),
             required_by: "a".to_string(),
         },
-        ptr("/b"),
+        root(),
         kl("/dependentRequired"),
     );
     let actual: String = error.to_string();
-    let expected: String = "/b: missing property \"b\", required when \"a\" is present".to_string();
+    let expected: String =
+        "root: missing property \"b\", required when \"a\" is present".to_string();
     assert_eq!(expected, actual);
 }
 
@@ -2589,7 +2590,7 @@ fn display_depth_limit_exceeded() {
 }
 
 #[test]
-fn display_escapes_instance_path() {
+fn display_escapes_instance_location() {
     let error: ValidationError = expected_integer(
         "/a~1b/m~0n",
         "/properties/a~1b/properties/m~0n/type",
@@ -2836,7 +2837,7 @@ fn boolean_root_schema_false_rejects() {
 // --- Instance paths with escaped keys ---
 
 #[test]
-fn instance_path_escapes_slash_in_key() {
+fn instance_location_escapes_slash_in_key() {
     let schema: JsonSchema = schema(r#"{"properties":{"a/b":{"type":"integer"}}}"#);
     let actual: ValidationResult = validate(&schema, &json!({"a/b": "x"}));
     let expected: ValidationResult = Err(vec![expected_integer(
@@ -2848,7 +2849,7 @@ fn instance_path_escapes_slash_in_key() {
 }
 
 #[test]
-fn instance_path_escapes_tilde_in_key() {
+fn instance_location_escapes_tilde_in_key() {
     let schema: JsonSchema = schema(r#"{"properties":{"m~n":{"type":"integer"}}}"#);
     let actual: ValidationResult = validate(&schema, &json!({"m~n": "x"}));
     let expected: ValidationResult = Err(vec![expected_integer(
@@ -2860,7 +2861,7 @@ fn instance_path_escapes_tilde_in_key() {
 }
 
 #[test]
-fn instance_path_escapes_nested_keys() {
+fn instance_location_escapes_nested_keys() {
     let schema: JsonSchema =
         schema(r#"{"properties":{"a/b":{"properties":{"m~n":{"items":{"type":"integer"}}}}}}"#);
     let actual: ValidationResult = validate(&schema, &json!({"a/b": {"m~n": [1, "x"]}}));
@@ -2880,7 +2881,7 @@ fn missing_required_path_escapes_key() {
         ValidationErrorKind::MissingRequired {
             property: "a/b".to_string(),
         },
-        ptr("/a~1b"),
+        root(),
         kl("/required"),
     )]);
     assert_eq!(expected, actual);
@@ -3099,7 +3100,7 @@ fn missing_required(property: &str) -> ValidationError {
         ValidationErrorKind::MissingRequired {
             property: property.to_string(),
         },
-        root().push(property),
+        root(),
         ptr("/required"),
     )
 }
@@ -3826,7 +3827,7 @@ fn dependencies_schema_form_location_names_dependencies_in_2020_12() {
         ValidationErrorKind::MissingRequired {
             property: "b".to_string(),
         },
-        ptr("/b"),
+        root(),
         kl("/dependencies/a/required"),
     )]);
     let actual: ValidationResult = validate(&schema, &json!({"a": 1}));

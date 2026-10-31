@@ -394,7 +394,7 @@ mod tests {
             ValidationErrorKind::MissingRequired {
                 property: "name".to_string(),
             },
-            JsonPointer::root().push("name"),
+            JsonPointer::root(),
             kl("/required"),
         )]);
         assert_eq!(expected, actual);
@@ -479,15 +479,15 @@ mod tests {
         ];
         let mut expected_sorted = expected_errors;
         expected_sorted.sort_by(|a, b| {
-            a.instance_path()
+            a.instance_location
                 .to_string()
-                .cmp(&b.instance_path().to_string())
+                .cmp(&b.instance_location.to_string())
         });
         let mut actual_errors = actual_result.expect_err("expected validation errors");
         actual_errors.sort_by(|a, b| {
-            a.instance_path()
+            a.instance_location
                 .to_string()
-                .cmp(&b.instance_path().to_string())
+                .cmp(&b.instance_location.to_string())
         });
         let expected: ValidationResult = Err(expected_sorted);
         let actual: ValidationResult = Err(actual_errors);
@@ -1178,7 +1178,7 @@ mod tests {
             ValidationErrorKind::MissingRequired {
                 property: "x".to_string(),
             },
-            JsonPointer::root().push("x"),
+            JsonPointer::root(),
             kl("/required"),
         )]);
         assert_eq!(expected, actual);
@@ -2298,7 +2298,7 @@ mod tests {
             ValidationErrorKind::MissingRequired {
                 property: "count".to_string(),
             },
-            JsonPointer::root().push("count"),
+            JsonPointer::root(),
             kl("/required"),
         )]);
         assert_eq!(expected, actual);
@@ -3938,7 +3938,7 @@ mod tests {
             ValidationErrorKind::MissingRequired {
                 property: "value".to_string(),
             },
-            JsonPointer::root().push("value"),
+            JsonPointer::root(),
             kl("/required"),
         )]);
         assert_eq!(expected, actual);
@@ -4161,7 +4161,7 @@ mod tests {
             ValidationErrorKind::MissingRequired {
                 property: "city".to_string(),
             },
-            JsonPointer::root().push("address").push("city"),
+            JsonPointer::root().push("address"),
             kl("/properties/address/required"),
         )]);
         assert_eq!(expected, actual);
@@ -4220,21 +4220,21 @@ mod tests {
                 ValidationErrorKind::MissingRequired {
                     property: "a".to_string(),
                 },
-                JsonPointer::root().push("a"),
+                JsonPointer::root(),
                 kl("/required"),
             ),
             ValidationError::new(
                 ValidationErrorKind::MissingRequired {
                     property: "b".to_string(),
                 },
-                JsonPointer::root().push("b"),
+                JsonPointer::root(),
                 kl("/required"),
             ),
             ValidationError::new(
                 ValidationErrorKind::MissingRequired {
                     property: "c".to_string(),
                 },
-                JsonPointer::root().push("c"),
+                JsonPointer::root(),
                 kl("/required"),
             ),
         ]);
@@ -4301,14 +4301,14 @@ mod tests {
                 ValidationErrorKind::MissingRequired {
                     property: "x".to_string(),
                 },
-                JsonPointer::root().push("x"),
+                JsonPointer::root(),
                 kl("/required"),
             ),
             ValidationError::new(
                 ValidationErrorKind::MissingRequired {
                     property: "y".to_string(),
                 },
-                JsonPointer::root().push("nested").push("y"),
+                JsonPointer::root().push("nested"),
                 kl("/properties/nested/required"),
             ),
         ]);
@@ -5688,7 +5688,7 @@ mod tests {
             ValidationErrorKind::MissingRequired {
                 property: "a".to_string(),
             },
-            JsonPointer::root().push("a"),
+            JsonPointer::root(),
             kl("/required"),
         )]);
         let actual: ValidationResult =
