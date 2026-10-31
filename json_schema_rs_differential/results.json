@@ -343,16 +343,16 @@
       },
       "rust-jsonschema": {
         "tally": {
-          "total": 4056,
-          "passed": 4056,
+          "total": 4890,
+          "passed": 4890,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4056,
-          "denominator": 4056,
+          "numerator": 4890,
+          "denominator": 4890,
           "percent": "100.00%"
         }
       }
@@ -480,17 +480,17 @@
       },
       "rust-jsonschema": {
         "tally": {
-          "total": 2325,
-          "passed": 1808,
+          "total": 2666,
+          "passed": 2149,
           "failed": 511,
           "skipped": 0,
           "errored": 6,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1808,
-          "denominator": 2325,
-          "percent": "77.76%"
+          "numerator": 2149,
+          "denominator": 2666,
+          "percent": "80.61%"
         }
       }
     },
@@ -1166,6 +1166,21 @@
               "denominator": 834,
               "percent": "100.00%"
             }
+          },
+          "rust-jsonschema": {
+            "tally": {
+              "total": 834,
+              "passed": 834,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 834,
+              "denominator": 834,
+              "percent": "100.00%"
+            }
           }
         },
         "ours": {
@@ -1318,6 +1333,21 @@
               "denominator": 341,
               "percent": "99.41%"
             }
+          },
+          "rust-jsonschema": {
+            "tally": {
+              "total": 341,
+              "passed": 341,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 341,
+              "denominator": 341,
+              "percent": "100.00%"
+            }
           }
         },
         "ours": {
@@ -1344,46 +1374,12 @@
             "denominator": 338,
             "percent": "100.00%"
           },
-          "disagreements_with_majority": 13,
+          "disagreements_with_majority": 11,
           "wrong_vs_expected": 0
         }
       },
       "findings": {
         "disagreements_with_majority": [
-          {
-            "group": "draft6",
-            "file": "optional/ecmascript-regex.json",
-            "optional": true,
-            "case_description": "ECMA 262 \\s matches whitespace",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "zero-width whitespace matches",
-                "expected": true,
-                "ours": true,
-                "majority": false,
-                "agreeing": 4,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "optional/ecmascript-regex.json",
-            "optional": true,
-            "case_description": "ECMA 262 \\S matches everything but whitespace",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "zero-width whitespace does not match",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              }
-            ]
-          },
           {
             "group": "draft6",
             "file": "optional/format/hostname.json",
@@ -1397,7 +1393,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 5,
-                "voters": 6
+                "voters": 7
               }
             ]
           },
@@ -1414,7 +1410,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               }
             ]
           },
@@ -1431,7 +1427,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid backslash character",
@@ -1439,7 +1435,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid \" character",
@@ -1447,7 +1443,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid <> characters",
@@ -1455,7 +1451,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid {} characters",
@@ -1463,7 +1459,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid ^ character",
@@ -1471,7 +1467,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid ` character",
@@ -1479,7 +1475,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid SPACE character",
@@ -1487,7 +1483,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               },
               {
                 "test_description": "invalid | character",
@@ -1495,7 +1491,7 @@
                 "ours": false,
                 "majority": true,
                 "agreeing": 4,
-                "voters": 6
+                "voters": 7
               }
             ]
           }
@@ -5119,7 +5115,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -5163,7 +5159,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"

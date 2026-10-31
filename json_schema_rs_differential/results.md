@@ -44,7 +44,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 | `js-hyperjump` | 99.18% | 4850 | 0 | 40 | 0 | 4890 |
 | `python-jsonschema` | 99.94% | 4887 | 3 | 0 | 0 | 4890 |
 | `rust-boon` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
-| `rust-jsonschema` | 100.00% | 4056 | 0 | 0 | 0 | 4056 |
+| `rust-jsonschema` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
 
 ### Compliance per implementation (optional suite, all drafts)
 
@@ -58,7 +58,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 | `js-hyperjump` | 62.79% | 1674 | 982 | 0 | 10 | 2666 |
 | `python-jsonschema` | 57.80% | 1541 | 1029 | 0 | 96 | 2666 |
 | `rust-boon` | 79.26% | 2113 | 543 | 0 | 10 | 2666 |
-| `rust-jsonschema` | 77.76% | 1808 | 511 | 0 | 6 | 2325 |
+| `rust-jsonschema` | 80.61% | 2149 | 511 | 0 | 6 | 2666 |
 
 ### Agreement with the fixture manifest per implementation (all fixtures)
 
@@ -160,6 +160,7 @@ Non-optional suite:
 | `js-hyperjump` | 98.68% | 823 | 0 | 11 | 0 | 834 |
 | `python-jsonschema` | 100.00% | 834 | 0 | 0 | 0 | 834 |
 | `rust-boon` | 100.00% | 834 | 0 | 0 | 0 | 834 |
+| `rust-jsonschema` | 100.00% | 834 | 0 | 0 | 0 | 834 |
 
 Optional suite:
 
@@ -173,20 +174,19 @@ Optional suite:
 | `js-hyperjump` | 69.21% | 236 | 105 | 0 | 0 | 341 |
 | `python-jsonschema` | 61.00% | 208 | 115 | 0 | 18 | 341 |
 | `rust-boon` | 99.41% | 339 | 2 | 0 | 0 | 341 |
+| `rust-jsonschema` | 100.00% | 341 | 0 | 0 | 0 | 341 |
 
-**Disagreements with the competitor majority: 13**
+**Disagreements with the competitor majority: 11**
 
-<details><summary>Disagreements with the competitor majority (13)</summary>
+<details><summary>Disagreements with the competitor majority (11)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
 | File | Case | Tests (expected) | Majority | Triage |
 |---|---|---|---|---|
-| `optional/ecmascript-regex.json` | ECMA 262 \\s matches whitespace | zero-width whitespace matches (valid) | 4/7 | competitors differ from expected |
-| `optional/ecmascript-regex.json` | ECMA 262 \\S matches everything but whitespace | zero-width whitespace does not match (invalid) | 4/7 | competitors differ from expected |
-| `optional/format/hostname.json` | validation of host names | trailing dot (invalid) | 5/6 | competitors differ from expected |
-| `optional/format/uri-reference.json` | validation of URI References | unescaped non US-ASCII characters (invalid) | 4/6 | competitors differ from expected |
-| `optional/format/uri.json` | validation of URIs | unescaped non US-ASCII characters (invalid); invalid backslash character (invalid); invalid " character (invalid); invalid &lt;&gt; characters (invalid); invalid {} characters (invalid); invalid ^ character (invalid); invalid ` character (invalid); invalid SPACE character (invalid); invalid \| character (invalid) | 4/6 | competitors differ from expected |
+| `optional/format/hostname.json` | validation of host names | trailing dot (invalid) | 5/7 | competitors differ from expected |
+| `optional/format/uri-reference.json` | validation of URI References | unescaped non US-ASCII characters (invalid) | 4/7 | competitors differ from expected |
+| `optional/format/uri.json` | validation of URIs | unescaped non US-ASCII characters (invalid); invalid backslash character (invalid); invalid " character (invalid); invalid &lt;&gt; characters (invalid); invalid {} characters (invalid); invalid ^ character (invalid); invalid ` character (invalid); invalid SPACE character (invalid); invalid \| character (invalid) | 4/7 | competitors differ from expected |
 
 </details>
 
