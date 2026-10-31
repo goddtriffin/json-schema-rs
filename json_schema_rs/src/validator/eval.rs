@@ -7,19 +7,26 @@
 //! the verdict mode, since only their outcome matters.
 //!
 //! The evaluator recurses (one native frame group per nested schema), guarded by a depth limit
-//! that returns [`ValidationError::DepthLimitExceeded`] before the stack can overflow. An
+//! that returns [`ValidationErrorKind::DepthLimitExceeded`] before the stack can overflow. An
 //! in-place loop (a `$ref` re-entered at the same instance location without consuming any of
-//! the instance) fails that branch with [`ValidationError::RefCycle`].
+//! the instance) fails that branch with [`ValidationErrorKind::RefCycle`].
+//!
+//! Every subschema entered pushes a [`Location`] frame on the native stack recording the
+//! instance step (a member or an item, or none for an in-place applicator) and the schema step
+//! ([`Via`]); an error's instance path and keyword locations are read from those frames only
+//! when the error is built. When `anyOf` / `oneOf` fails in the collect mode, its branches are
+//! evaluated again in the collect mode, only to attach their errors as the failure's causes.
 
 use super::compiled::{
-    CompiledSchema, Contains, DynamicRef, Keyword, KnownProperties, Node, NodeId, PrefixItems,
-    Required,
+    CompiledSchema, Contains, DynamicRef, EnumId, Keyword, KnownProperties, Kw, Node, NodeId,
+    PrefixItems, RegexId, Required,
 };
-use super::error::{ValidationError, ValidationResult};
-use crate::json_pointer::JsonPointer;
+use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
+use crate::json_pointer::{self, JsonPointer};
 use crate::json_schema::{JsonType, Scope, TypeSet};
 use crate::number::{self, JsonEqKey};
 use serde_json::{Map, Number, Value};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -32,8 +39,8 @@ use std::collections::HashSet;
 /// `depth_guard_fits_two_mib_thread` checks the guard fires first on such a thread.
 pub(crate) const DEPTH_LIMIT: usize = if cfg!(debug_assertions) { 512 } else { 2048 };
 
-/// An instance location: a linked list on the native stack, encoded as a [`JsonPointer`] only
-/// when an error is created.
+/// Where evaluation is: a linked list on the native stack, one frame per subschema entered, read
+/// (into an instance path and keyword locations) only when an error is created.
 #[derive(Clone, Copy)]
 pub(crate) struct Location<'a> {
     parent: Option<&'a Location<'a>>,
@@ -42,17 +49,47 @@ pub(crate) struct Location<'a> {
 
 #[derive(Clone, Copy)]
 enum Step<'a> {
+    /// The root schema at the instance root.
     Root,
-    Key(&'a str),
-    Index(usize),
-    /// A `$ref` (or dynamic reference) followed in place to `target`: the same instance, no
-    /// pointer segment. These steps are the in-place loop guard (see
+    /// Into the member `key`, through `Via`.
+    Key(&'a str, Via<'a>),
+    /// Into the item at the index, through `Via`.
+    Index(usize, Via<'a>),
+    /// Into a subschema at the same instance (`allOf`, `not`, `if`, ...).
+    InPlace(Via<'a>),
+    /// A `$ref` (or dynamic reference, `keyword` says which) followed in place to `target`:
+    /// the same instance, no pointer segment. These steps are the in-place loop guard (see
     /// [`CompiledSchema::follow`]), with how many resources declaring a dynamic anchor were in
     /// the dynamic scope (see [`CompiledSchema::anchor_resources`]).
     Ref {
         target: NodeId,
+        keyword: Kw,
         anchors: usize,
     },
+}
+
+/// The schema path from a node to the subschema a [`Step`] enters.
+#[derive(Clone, Copy)]
+enum Via<'a> {
+    /// No subschema: a member named by an error (a missing `required` property), whose keyword
+    /// location is the parent's.
+    None,
+    /// The keyword alone (`additionalProperties`, a single `items`, `not`).
+    Keyword(Kw),
+    /// The keyword and the member name or item index the step enters (`properties/<name>`,
+    /// `prefixItems/<index>`).
+    Member(Kw),
+    /// The keyword and a position in its array (`allOf/<index>`).
+    Index(Kw, u32),
+    /// The keyword and a name (`dependentSchemas/<name>`). A reference to the `Box` is one
+    /// pointer, where `&str` would be two, so the frames stay small.
+    #[expect(
+        clippy::borrowed_box,
+        reason = "a thin pointer keeps the location frames small"
+    )]
+    Name(Kw, &'a Box<str>),
+    /// `patternProperties/<pattern>`.
+    Pattern(RegexId),
 }
 
 impl<'a> Location<'a> {
@@ -61,39 +98,39 @@ impl<'a> Location<'a> {
         step: Step::Root,
     };
 
-    fn key(&'a self, key: &'a str) -> Location<'a> {
+    fn key(&'a self, key: &'a str, via: Via<'a>) -> Location<'a> {
         Location {
             parent: Some(self),
-            step: Step::Key(key),
+            step: Step::Key(key, via),
         }
     }
 
-    fn index(&'a self, index: usize) -> Location<'a> {
+    fn index(&'a self, index: usize, via: Via<'a>) -> Location<'a> {
         Location {
             parent: Some(self),
-            step: Step::Index(index),
+            step: Step::Index(index, via),
+        }
+    }
+
+    fn in_place(&'a self, via: Via<'a>) -> Location<'a> {
+        Location {
+            parent: Some(self),
+            step: Step::InPlace(via),
         }
     }
 
     fn pointer(&self) -> JsonPointer {
-        let mut count: usize = 0;
+        let mut segments: Vec<Cow<'_, str>> = Vec::with_capacity(8);
         let mut cursor: Option<&Location<'_>> = Some(self);
         while let Some(location) = cursor {
-            count += usize::from(matches!(location.step, Step::Key(_) | Step::Index(_)));
-            cursor = location.parent;
-        }
-        let mut segments: Vec<String> = Vec::with_capacity(count);
-        cursor = Some(self);
-        while let Some(location) = cursor {
             match location.step {
-                Step::Root | Step::Ref { .. } => {}
-                Step::Key(key) => segments.push(key.to_string()),
-                Step::Index(index) => segments.push(index.to_string()),
+                Step::Root | Step::Ref { .. } | Step::InPlace(_) => {}
+                Step::Key(key, _) => segments.push(Cow::Borrowed(key)),
+                Step::Index(index, _) => segments.push(Cow::Owned(index.to_string())),
             }
             cursor = location.parent;
         }
-        segments.reverse();
-        JsonPointer::from(segments)
+        JsonPointer::from_segments(segments.iter().rev().map(|s| &**s))
     }
 }
 
@@ -153,10 +190,10 @@ struct Context {
     depth: usize,
     /// Schema resources entered, outermost first (only when a dynamic reference needs them).
     dynamic_scope: Vec<Scope>,
-    /// Where the depth guard fired. Once set, every evaluation fails at once and the result is
-    /// that one error: a branch cut short by the guard must not read as a branch that failed
-    /// (which would make `not` pass, or `anyOf` report a mismatch).
-    depth_exceeded: Option<JsonPointer>,
+    /// The error of the depth guard, when it fired. Once set, every evaluation fails at once
+    /// and the result is that one error: a branch cut short by the guard must not read as a
+    /// branch that failed (which would make `not` pass, or `anyOf` report a mismatch).
+    depth_exceeded: Option<ValidationError>,
 }
 
 /// Returns the JSON type name of the value for use in "got" error messages.
@@ -177,26 +214,18 @@ fn value_to_display_string(v: &Value) -> String {
 }
 
 /// The error for an instance that `type` rejects: the single-type variant for a set of one,
-/// [`ValidationError::ExpectedType`] otherwise.
-fn type_mismatch(
-    expected: TypeSet,
-    instance: &Value,
-    instance_path: JsonPointer,
-) -> ValidationError {
+/// [`ValidationErrorKind::ExpectedType`] otherwise.
+fn type_mismatch(expected: TypeSet, instance: &Value) -> ValidationErrorKind {
     let got: String = json_type_name(instance).to_string();
     match expected.single() {
-        Some(JsonType::Object) => ValidationError::ExpectedObject { instance_path, got },
-        Some(JsonType::String) => ValidationError::ExpectedString { instance_path, got },
-        Some(JsonType::Integer) => ValidationError::ExpectedInteger { instance_path, got },
-        Some(JsonType::Number) => ValidationError::ExpectedNumber { instance_path, got },
-        Some(JsonType::Array) => ValidationError::ExpectedArray { instance_path, got },
-        Some(JsonType::Boolean) => ValidationError::ExpectedBoolean { instance_path, got },
-        Some(JsonType::Null) => ValidationError::ExpectedNull { instance_path, got },
-        None => ValidationError::ExpectedType {
-            instance_path,
-            expected,
-            got,
-        },
+        Some(JsonType::Object) => ValidationErrorKind::ExpectedObject { got },
+        Some(JsonType::String) => ValidationErrorKind::ExpectedString { got },
+        Some(JsonType::Integer) => ValidationErrorKind::ExpectedInteger { got },
+        Some(JsonType::Number) => ValidationErrorKind::ExpectedNumber { got },
+        Some(JsonType::Array) => ValidationErrorKind::ExpectedArray { got },
+        Some(JsonType::Boolean) => ValidationErrorKind::ExpectedBoolean { got },
+        Some(JsonType::Null) => ValidationErrorKind::ExpectedNull { got },
+        None => ValidationErrorKind::ExpectedType { expected, got },
     }
 }
 
@@ -258,19 +287,12 @@ fn all_keys_known(object: &Map<String, Value>, names: &[(Box<str>, NodeId)]) -> 
     true
 }
 
-/// Records an error in collect mode. Out of line and cold, so building the error (and its
-/// temporaries) takes no space in the evaluator's recursive frames.
-#[cold]
-#[inline(never)]
-fn push_error(errors: &mut Vec<ValidationError>, make: impl FnOnce() -> ValidationError) {
-    errors.push(make());
-}
-
-/// Records `$error` in collect mode and evaluates to `false` (the keyword failed).
+/// Records, in collect mode, the error `$kind` of the keyword `$keyword` evaluated at
+/// `$location`, and evaluates to `false` (the keyword failed).
 macro_rules! fail {
-    ($collect:expr, $cx:expr, $error:expr) => {{
+    ($collect:expr, $this:expr, $cx:expr, $location:expr, $keyword:expr, $kind:expr) => {{
         if $collect {
-            push_error(&mut $cx.errors, || $error);
+            $this.report(&mut $cx.errors, $location, Some($keyword), || $kind);
         }
         false
     }};
@@ -313,7 +335,7 @@ impl CompiledSchema {
 
     /// Validates `instance`, collecting every error (one per problem, see [`ValidationError`]).
     /// When the instance nests deeper than the depth guard allows, the result is that one
-    /// [`ValidationError::DepthLimitExceeded`].
+    /// [`ValidationErrorKind::DepthLimitExceeded`].
     ///
     /// # Errors
     ///
@@ -321,16 +343,108 @@ impl CompiledSchema {
     pub fn validate(&self, instance: &Value) -> ValidationResult {
         let mut cx: Context = Context::default();
         let valid: bool = self.eval::<true>(self.root, instance, &Location::ROOT, &mut cx, None);
-        if let Some(instance_path) = cx.depth_exceeded {
-            return Err(vec![ValidationError::DepthLimitExceeded {
-                instance_path,
-                limit: DEPTH_LIMIT,
-            }]);
+        if let Some(error) = cx.depth_exceeded {
+            return Err(vec![error]);
         }
         if valid && cx.errors.is_empty() {
             Ok(())
         } else {
             Err(cx.errors)
+        }
+    }
+
+    /// Records the error `make` builds, of `keyword` (`None`: of the subschema itself) evaluated
+    /// at `location`. Out of line and cold, so building the error (its locations and
+    /// temporaries) takes no space in the evaluator's recursive frames.
+    #[cold]
+    #[inline(never)]
+    fn report(
+        &self,
+        errors: &mut Vec<ValidationError>,
+        location: &Location<'_>,
+        keyword: Option<Kw>,
+        make: impl FnOnce() -> ValidationErrorKind,
+    ) {
+        errors.push(self.error_at(location, keyword, make()));
+    }
+
+    /// The error `kind` of `keyword` (`None`: of the subschema itself) evaluated at `location`,
+    /// with its instance path and keyword locations.
+    fn error_at(
+        &self,
+        location: &Location<'_>,
+        keyword: Option<Kw>,
+        kind: ValidationErrorKind,
+    ) -> ValidationError {
+        // Segments leaf first; `after_ref` is how many were collected when the nearest
+        // reference was reached, and its target.
+        let mut segments: Vec<Cow<'_, str>> = Vec::with_capacity(16);
+        let mut after_ref: Option<(usize, NodeId)> = None;
+        if let Some(keyword) = keyword {
+            segments.push(Cow::Borrowed(keyword.as_str()));
+        }
+        let mut cursor: Option<&Location<'_>> = Some(location);
+        while let Some(frame) = cursor {
+            match frame.step {
+                Step::Root => {}
+                Step::Key(key, via) => self.push_via(via, Some(Cow::Borrowed(key)), &mut segments),
+                Step::Index(index, via) => {
+                    self.push_via(via, Some(Cow::Owned(index.to_string())), &mut segments);
+                }
+                Step::InPlace(via) => self.push_via(via, None, &mut segments),
+                Step::Ref {
+                    target, keyword, ..
+                } => {
+                    if after_ref.is_none() {
+                        after_ref = Some((segments.len(), target));
+                    }
+                    segments.push(Cow::Borrowed(keyword.as_str()));
+                }
+            }
+            cursor = frame.parent;
+        }
+        let absolute: Option<String> = after_ref.and_then(|(count, target)| {
+            let base: &str = self.target_uris.get(&target)?;
+            let mut uri: String = String::with_capacity(base.len() + 64);
+            uri.push_str(base);
+            json_pointer::push_uri_fragment(segments[..count].iter().rev().map(|s| &**s), &mut uri);
+            Some(uri)
+        });
+        ValidationError {
+            instance_path: location.pointer(),
+            keyword_location: JsonPointer::from_segments(segments.iter().rev().map(|s| &**s)),
+            absolute_keyword_location: absolute,
+            kind,
+        }
+    }
+
+    /// Pushes the schema segments of `via`, last first; `member` is the member name or item
+    /// index of the step.
+    fn push_via<'s>(
+        &'s self,
+        via: Via<'s>,
+        member: Option<Cow<'s, str>>,
+        segments: &mut Vec<Cow<'s, str>>,
+    ) {
+        match via {
+            Via::None => {}
+            Via::Keyword(keyword) => segments.push(Cow::Borrowed(keyword.as_str())),
+            Via::Member(keyword) => {
+                segments.push(member.unwrap_or_default());
+                segments.push(Cow::Borrowed(keyword.as_str()));
+            }
+            Via::Index(keyword, index) => {
+                segments.push(Cow::Owned(index.to_string()));
+                segments.push(Cow::Borrowed(keyword.as_str()));
+            }
+            Via::Name(keyword, name) => {
+                segments.push(Cow::Borrowed(name));
+                segments.push(Cow::Borrowed(keyword.as_str()));
+            }
+            Via::Pattern(id) => {
+                segments.push(Cow::Borrowed(&self.pattern(id).source));
+                segments.push(Cow::Borrowed(Kw::PatternProperties.as_str()));
+            }
         }
     }
 
@@ -356,7 +470,7 @@ impl CompiledSchema {
             return false;
         }
         if cx.depth >= DEPTH_LIMIT {
-            cx.depth_exceeded = Some(location.pointer());
+            self.depth_exceeded(location, cx);
             return false;
         }
         cx.depth += 1;
@@ -375,6 +489,16 @@ impl CompiledSchema {
         }
         cx.depth -= 1;
         valid
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn depth_exceeded(&self, location: &Location<'_>, cx: &mut Context) {
+        cx.depth_exceeded = Some(self.error_at(
+            location,
+            None,
+            ValidationErrorKind::DepthLimitExceeded { limit: DEPTH_LIMIT },
+        ));
     }
 
     /// The keywords of a node with `unevaluated*`, which reads every sibling's annotations, so
@@ -420,7 +544,7 @@ impl CompiledSchema {
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         match (keyword, at.instance) {
-            (Keyword::False, _) => Self::false_schema::<COLLECT>(at, cx),
+            (Keyword::False, _) => self.false_schema::<COLLECT>(at, cx),
             (
                 Keyword::Type {
                     types,
@@ -429,10 +553,10 @@ impl CompiledSchema {
                 instance,
             ) => {
                 types.matches(instance, *integer_semantics)
-                    || Self::type_error::<COLLECT>(*types, at, cx)
+                    || self.type_error::<COLLECT>(*types, at, cx)
             }
-            (Keyword::Const(expected), _) => Self::const_check::<COLLECT>(expected, at, cx),
-            (Keyword::Enum(id), _) => Self::enum_check::<COLLECT>(self.enum_values(*id), at, cx),
+            (Keyword::Const(expected), _) => self.const_check::<COLLECT>(expected, at, cx),
+            (Keyword::Enum(id), _) => self.enum_check::<COLLECT>(*id, at, cx),
             (
                 Keyword::Minimum(_)
                 | Keyword::Maximum(_)
@@ -440,29 +564,35 @@ impl CompiledSchema {
                 | Keyword::ExclusiveMaximum(_)
                 | Keyword::MultipleOf(_),
                 Value::Number(n),
-            ) => Self::numeric::<COLLECT>(keyword, n, at, cx),
+            ) => self.numeric::<COLLECT>(keyword, n, at, cx),
             (
                 Keyword::MinLength(_)
                 | Keyword::MaxLength(_)
                 | Keyword::Pattern(_)
-                | Keyword::Format(_),
+                | Keyword::Format(_)
+                | Keyword::UserFormat(_),
                 Value::String(s),
             ) => self.string::<COLLECT>(keyword, s, at, cx),
             (
                 Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems,
                 Value::Array(items),
-            ) => Self::array_assertion::<COLLECT>(keyword, items, at, cx),
+            ) => self.array_assertion::<COLLECT>(keyword, items, at, cx),
             (
                 Keyword::Required(_)
                 | Keyword::MinProperties(_)
                 | Keyword::MaxProperties(_)
-                | Keyword::DependentRequired(_)
+                | Keyword::DependentRequired { .. }
                 | Keyword::NoAdditionalProperties(_),
                 Value::Object(object),
             ) => self.object_assertion::<COLLECT>(keyword, object, at, cx),
-            (Keyword::Ref { target, ref_str }, _) => {
-                self.follow::<COLLECT>(*target, ref_str, at, cx, evaluated)
-            }
+            (
+                Keyword::Ref {
+                    target,
+                    keyword,
+                    ref_str,
+                },
+                _,
+            ) => self.follow::<COLLECT>(*target, *keyword, ref_str, at, cx, evaluated),
             (Keyword::DynamicRef(dynamic), _) => {
                 let DynamicRef {
                     fallback,
@@ -470,7 +600,7 @@ impl CompiledSchema {
                     ref_str,
                 } = &**dynamic;
                 let target: NodeId = self.dynamic_target(*fallback, anchor, cx);
-                self.follow::<COLLECT>(target, ref_str, at, cx, evaluated)
+                self.follow::<COLLECT>(target, Kw::DynamicRef, ref_str, at, cx, evaluated)
             }
             (Keyword::RecursiveRef { fallback, ref_str }, _) => {
                 let target: NodeId = cx
@@ -478,7 +608,7 @@ impl CompiledSchema {
                     .iter()
                     .find_map(|scope| self.recursive_anchors.get(scope).copied())
                     .unwrap_or(*fallback);
-                self.follow::<COLLECT>(target, ref_str, at, cx, evaluated)
+                self.follow::<COLLECT>(target, Kw::RecursiveRef, ref_str, at, cx, evaluated)
             }
             (Keyword::Properties(id), Value::Object(object)) => {
                 self.properties::<COLLECT>(self.property_list(*id), object, at, cx, evaluated)
@@ -492,18 +622,43 @@ impl CompiledSchema {
             (Keyword::PropertyNames(node), Value::Object(object)) => {
                 self.property_names::<COLLECT>(*node, object, at, cx)
             }
-            (Keyword::DependentSchemas(dependencies), Value::Object(object)) => {
-                self.dependent_schemas::<COLLECT>(dependencies, object, at, cx, evaluated)
+            (
+                Keyword::DependentSchemas {
+                    dependencies,
+                    keyword,
+                },
+                Value::Object(object),
+            ) => {
+                self.dependent_schemas::<COLLECT>(dependencies, *keyword, object, at, cx, evaluated)
             }
             (Keyword::UnevaluatedProperties(node), Value::Object(object)) => {
                 self.unevaluated_properties::<COLLECT>(*node, object, at, cx, evaluated)
             }
-            (Keyword::Items(rest), Value::Array(items)) => {
-                self.items::<COLLECT>(&[], Some(*rest), items, at, cx, evaluated)
-            }
+            (Keyword::Items { node, keyword }, Value::Array(items)) => self.items::<COLLECT>(
+                &[],
+                Some(*node),
+                (*keyword, *keyword),
+                items,
+                at,
+                cx,
+                evaluated,
+            ),
             (Keyword::PrefixItems(tuple), Value::Array(items)) => {
-                let PrefixItems { prefix, rest } = &**tuple;
-                self.items::<COLLECT>(prefix, *rest, items, at, cx, evaluated)
+                let PrefixItems {
+                    prefix,
+                    rest,
+                    prefix_keyword,
+                    rest_keyword,
+                } = &**tuple;
+                self.items::<COLLECT>(
+                    prefix,
+                    *rest,
+                    (*prefix_keyword, *rest_keyword),
+                    items,
+                    at,
+                    cx,
+                    evaluated,
+                )
             }
             (Keyword::Contains(contains), Value::Array(items)) => {
                 self.contains::<COLLECT>(contains, items, at, cx, evaluated)
@@ -534,21 +689,22 @@ impl CompiledSchema {
                 | Keyword::MaxLength(_)
                 | Keyword::Pattern(_)
                 | Keyword::Format(_)
+                | Keyword::UserFormat(_)
                 | Keyword::MinItems(_)
                 | Keyword::MaxItems(_)
                 | Keyword::UniqueItems
                 | Keyword::Required(_)
                 | Keyword::MinProperties(_)
                 | Keyword::MaxProperties(_)
-                | Keyword::DependentRequired(_)
+                | Keyword::DependentRequired { .. }
                 | Keyword::NoAdditionalProperties(_)
                 | Keyword::Properties(_)
                 | Keyword::PatternProperties(_)
                 | Keyword::AdditionalProperties { .. }
                 | Keyword::PropertyNames(_)
-                | Keyword::DependentSchemas(_)
+                | Keyword::DependentSchemas { .. }
                 | Keyword::UnevaluatedProperties(_)
-                | Keyword::Items(_)
+                | Keyword::Items { .. }
                 | Keyword::PrefixItems(_)
                 | Keyword::Contains(_)
                 | Keyword::UnevaluatedItems(_),
@@ -557,18 +713,19 @@ impl CompiledSchema {
         }
     }
 
-    /// Evaluates a subschema at the same instance location; its annotations count only when it
-    /// passes.
+    /// Evaluates a subschema at the same instance, entered through `location`; its
+    /// annotations count only when it passes.
     fn in_place<const COLLECT: bool>(
         &self,
         id: NodeId,
-        at: At<'_, '_>,
+        instance: &Value,
+        location: &Location<'_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         match evaluated {
-            None => self.eval::<COLLECT>(id, at.instance, at.location, cx, None),
-            Some(parent) => self.in_place_annotated::<COLLECT>(id, at, cx, parent),
+            None => self.eval::<COLLECT>(id, instance, location, cx, None),
+            Some(parent) => self.in_place_annotated::<COLLECT>(id, instance, location, cx, parent),
         }
     }
 
@@ -576,30 +733,34 @@ impl CompiledSchema {
     fn in_place_annotated<const COLLECT: bool>(
         &self,
         id: NodeId,
-        at: At<'_, '_>,
+        instance: &Value,
+        location: &Location<'_>,
         cx: &mut Context,
         parent: &mut Evaluated,
     ) -> bool {
         let mut sub: Evaluated = Evaluated::default();
-        let ok: bool = self.eval::<COLLECT>(id, at.instance, at.location, cx, Some(&mut sub));
+        let ok: bool = self.eval::<COLLECT>(id, instance, location, cx, Some(&mut sub));
         if ok {
             parent.merge(&sub);
         }
         ok
     }
 
-    /// Follows a reference to `target` in place, failing with [`ValidationError::RefCycle`] when
-    /// `target` is already being evaluated at this instance location.
+    /// Follows a reference (`keyword`) to `target` in place, failing with
+    /// [`ValidationErrorKind::RefCycle`] when `target` is already being evaluated at this
+    /// instance location.
     fn follow<const COLLECT: bool>(
         &self,
         target: NodeId,
+        keyword: Kw,
         ref_str: &str,
         at: At<'_, '_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        // The references followed at this instance location are the `Ref` steps directly above
-        // it: the step that entered the location (a key, an index, the root) ends them.
+        // The references followed at this instance location are the `Ref` steps above it,
+        // through in-place steps: the step that entered the location (a key, an index, the
+        // root) ends them.
         // Re-entering under a dynamic scope with more anchor-declaring resources is not a
         // loop: a dynamic reference inside may now resolve elsewhere. That count only grows
         // along a path and is bounded by the number of resources, so the guard still ends
@@ -607,40 +768,45 @@ impl CompiledSchema {
         let anchors: usize = self.anchor_resources(cx);
         let mut looping: bool = false;
         let mut cursor: Option<&Location<'_>> = Some(at.location);
-        while let Some(Location {
-            parent,
-            step:
+        while let Some(frame) = cursor {
+            let seen: (NodeId, usize) = match frame.step {
                 Step::Ref {
-                    target: seen_target,
-                    anchors: seen_anchors,
-                },
-        }) = cursor
-        {
-            if *seen_target == target && *seen_anchors == anchors {
+                    target, anchors, ..
+                } => (target, anchors),
+                Step::InPlace(_) => {
+                    cursor = frame.parent;
+                    continue;
+                }
+                Step::Root | Step::Key(..) | Step::Index(..) => break,
+            };
+            if seen == (target, anchors) {
                 looping = true;
                 break;
             }
-            cursor = *parent;
+            cursor = frame.parent;
         }
+        let entered: Location<'_> = Location {
+            parent: Some(at.location),
+            step: Step::Ref {
+                target,
+                keyword,
+                anchors,
+            },
+        };
         if looping {
+            // The keyword location ends at the reference that closed the loop.
             return fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::RefCycle {
-                    instance_path: at.location.pointer(),
+                at.location,
+                keyword,
+                ValidationErrorKind::RefCycle {
                     ref_str: ref_str.to_string(),
                 }
             );
         }
-        let entered: Location<'_> = Location {
-            parent: Some(at.location),
-            step: Step::Ref { target, anchors },
-        };
-        let at: At<'_, '_> = At {
-            instance: at.instance,
-            location: &entered,
-        };
-        self.in_place::<COLLECT>(target, at, cx, evaluated)
+        self.in_place::<COLLECT>(target, at.instance, &entered, cx, evaluated)
     }
 
     /// How many distinct resources in the dynamic scope declare a dynamic anchor a dynamic
@@ -676,25 +842,33 @@ impl CompiledSchema {
             .unwrap_or(fallback)
     }
 
-    fn false_schema<const COLLECT: bool>(at: At<'_, '_>, cx: &mut Context) -> bool {
-        fail!(
-            COLLECT,
-            cx,
-            ValidationError::FalseSchema {
-                instance_path: at.location.pointer(),
-            }
-        )
+    fn false_schema<const COLLECT: bool>(&self, at: At<'_, '_>, cx: &mut Context) -> bool {
+        if COLLECT {
+            self.report(&mut cx.errors, at.location, None, || {
+                ValidationErrorKind::FalseSchema
+            });
+        }
+        false
     }
 
-    fn type_error<const COLLECT: bool>(types: TypeSet, at: At<'_, '_>, cx: &mut Context) -> bool {
+    fn type_error<const COLLECT: bool>(
+        &self,
+        types: TypeSet,
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
         fail!(
             COLLECT,
+            self,
             cx,
-            type_mismatch(types, at.instance, at.location.pointer())
+            at.location,
+            Kw::Type,
+            type_mismatch(types, at.instance)
         )
     }
 
     fn const_check<const COLLECT: bool>(
+        &self,
         expected: &Value,
         at: At<'_, '_>,
         cx: &mut Context,
@@ -702,9 +876,11 @@ impl CompiledSchema {
         number::json_equal(at.instance, expected)
             || fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::NotConst {
-                    instance_path: at.location.pointer(),
+                at.location,
+                Kw::Const,
+                ValidationErrorKind::NotConst {
                     expected: value_to_display_string(expected),
                     actual: value_to_display_string(at.instance),
                 }
@@ -712,37 +888,44 @@ impl CompiledSchema {
     }
 
     fn enum_check<const COLLECT: bool>(
-        allowed: &[Value],
+        &self,
+        id: EnumId,
         at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
-        allowed.iter().any(|a| number::json_equal(a, at.instance))
+        self.enum_values(id)
+            .iter()
+            .any(|a| number::json_equal(a, at.instance))
             || fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::NotInEnum {
-                    instance_path: at.location.pointer(),
+                at.location,
+                Kw::Enum,
+                ValidationErrorKind::NotInEnum {
                     invalid_value: value_to_display_string(at.instance),
-                    allowed: allowed.iter().map(value_to_display_string).collect(),
+                    allowed: self.enum_display(id).to_vec(),
                 }
             )
     }
 
     fn numeric<const COLLECT: bool>(
+        &self,
         keyword: &Keyword,
         n: &Number,
         at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
-        let path = || at.location.pointer();
         match keyword {
             Keyword::Minimum(minimum) => {
                 number::cmp_num(n, minimum) != Ordering::Less
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::BelowMinimum {
-                            instance_path: path(),
+                        at.location,
+                        Kw::Minimum,
+                        ValidationErrorKind::BelowMinimum {
                             minimum: minimum.clone(),
                             actual: n.clone(),
                         }
@@ -752,9 +935,11 @@ impl CompiledSchema {
                 number::cmp_num(n, maximum) != Ordering::Greater
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::AboveMaximum {
-                            instance_path: path(),
+                        at.location,
+                        Kw::Maximum,
+                        ValidationErrorKind::AboveMaximum {
                             maximum: maximum.clone(),
                             actual: n.clone(),
                         }
@@ -764,9 +949,11 @@ impl CompiledSchema {
                 number::cmp_num(n, exclusive_minimum) == Ordering::Greater
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::NotAboveExclusiveMinimum {
-                            instance_path: path(),
+                        at.location,
+                        Kw::ExclusiveMinimum,
+                        ValidationErrorKind::NotAboveExclusiveMinimum {
                             exclusive_minimum: exclusive_minimum.clone(),
                             actual: n.clone(),
                         }
@@ -776,9 +963,11 @@ impl CompiledSchema {
                 number::cmp_num(n, exclusive_maximum) == Ordering::Less
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::NotBelowExclusiveMaximum {
-                            instance_path: path(),
+                        at.location,
+                        Kw::ExclusiveMaximum,
+                        ValidationErrorKind::NotBelowExclusiveMaximum {
                             exclusive_maximum: exclusive_maximum.clone(),
                             actual: n.clone(),
                         }
@@ -788,9 +977,11 @@ impl CompiledSchema {
                 number::is_multiple_of(n, multiple_of)
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::NotMultipleOf {
-                            instance_path: path(),
+                        at.location,
+                        Kw::MultipleOf,
+                        ValidationErrorKind::NotMultipleOf {
                             multiple_of: multiple_of.clone(),
                             actual: n.clone(),
                         }
@@ -807,7 +998,6 @@ impl CompiledSchema {
         at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
-        let path = || at.location.pointer();
         // Lengths count Unicode code points; a string has at most as many as it has bytes.
         match keyword {
             Keyword::MinLength(min_length) => {
@@ -819,9 +1009,11 @@ impl CompiledSchema {
                 count >= *min_length
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::TooShort {
-                            instance_path: path(),
+                        at.location,
+                        Kw::MinLength,
+                        ValidationErrorKind::TooShort {
                             min_length: *min_length,
                             actual_length: count,
                         }
@@ -835,9 +1027,11 @@ impl CompiledSchema {
                 count <= *max_length
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::TooLong {
-                            instance_path: path(),
+                        at.location,
+                        Kw::MaxLength,
+                        ValidationErrorKind::TooLong {
                             max_length: *max_length,
                             actual_length: count,
                         }
@@ -848,9 +1042,11 @@ impl CompiledSchema {
                 pattern.is_match(s)
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::PatternMismatch {
-                            instance_path: path(),
+                        at.location,
+                        Kw::Pattern,
+                        ValidationErrorKind::PatternMismatch {
                             pattern: pattern.source.clone(),
                             value: s.to_string(),
                         }
@@ -860,10 +1056,27 @@ impl CompiledSchema {
                 format.is_valid(s)
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::InvalidFormat {
-                            instance_path: path(),
+                        at.location,
+                        Kw::Format,
+                        ValidationErrorKind::InvalidFormat {
                             format: format.name().to_string(),
+                            value: s.to_string(),
+                        }
+                    )
+            }
+            Keyword::UserFormat(id) => {
+                let format = self.user_format(*id);
+                (format.check)(s)
+                    || fail!(
+                        COLLECT,
+                        self,
+                        cx,
+                        at.location,
+                        Kw::Format,
+                        ValidationErrorKind::InvalidFormat {
+                            format: format.name.to_string(),
                             value: s.to_string(),
                         }
                     )
@@ -873,21 +1086,23 @@ impl CompiledSchema {
     }
 
     fn array_assertion<const COLLECT: bool>(
+        &self,
         keyword: &Keyword,
         items: &[Value],
         at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
-        let path = || at.location.pointer();
         let count: u64 = items.len() as u64;
         match keyword {
             Keyword::MinItems(min_items) => {
                 count >= *min_items
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::TooFewItems {
-                            instance_path: path(),
+                        at.location,
+                        Kw::MinItems,
+                        ValidationErrorKind::TooFewItems {
                             min_items: *min_items,
                             actual_count: count,
                         }
@@ -897,9 +1112,11 @@ impl CompiledSchema {
                 count <= *max_items
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::TooManyItems {
-                            instance_path: path(),
+                        at.location,
+                        Kw::MaxItems,
+                        ValidationErrorKind::TooManyItems {
                             max_items: *max_items,
                             actual_count: count,
                         }
@@ -909,9 +1126,11 @@ impl CompiledSchema {
                 None => true,
                 Some(duplicate) => fail!(
                     COLLECT,
+                    self,
                     cx,
-                    ValidationError::DuplicateArrayItems {
-                        instance_path: path(),
+                    at.location,
+                    Kw::UniqueItems,
+                    ValidationErrorKind::DuplicateArrayItems {
                         duplicate_value: value_to_display_string(duplicate),
                     }
                 ),
@@ -946,9 +1165,11 @@ impl CompiledSchema {
                 count >= *min_properties
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::TooFewProperties {
-                            instance_path: at.location.pointer(),
+                        at.location,
+                        Kw::MinProperties,
+                        ValidationErrorKind::TooFewProperties {
                             min_properties: *min_properties,
                             actual_count: count,
                         }
@@ -958,15 +1179,20 @@ impl CompiledSchema {
                 count <= *max_properties
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::TooManyProperties {
-                            instance_path: at.location.pointer(),
+                        at.location,
+                        Kw::MaxProperties,
+                        ValidationErrorKind::TooManyProperties {
                             max_properties: *max_properties,
                             actual_count: count,
                         }
                     )
             }
-            Keyword::DependentRequired(dependencies) => each!(
+            Keyword::DependentRequired {
+                dependencies,
+                keyword,
+            } => each!(
                 COLLECT,
                 dependencies
                     .iter()
@@ -975,9 +1201,11 @@ impl CompiledSchema {
                 |(name, property)| object.contains_key(&**property)
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::MissingDependentProperty {
-                            instance_path: at.location.key(property).pointer(),
+                        &at.location.key(property, Via::None),
+                        *keyword,
+                        ValidationErrorKind::MissingDependentProperty {
                             property: property.to_string(),
                             required_by: name.to_string(),
                         }
@@ -1004,9 +1232,11 @@ impl CompiledSchema {
                 each!(COLLECT, object.keys(), |key| self.is_known(known, key)
                     || fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::DisallowedAdditionalProperty {
-                            instance_path: at.location.key(key).pointer(),
+                        &at.location.key(key, Via::None),
+                        Kw::AdditionalProperties,
+                        ValidationErrorKind::DisallowedAdditionalProperty {
                             property: key.clone(),
                         }
                     ))
@@ -1044,9 +1274,11 @@ impl CompiledSchema {
         each!(COLLECT, names.iter(), |name| object.contains_key(&**name)
             || fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::MissingRequired {
-                    instance_path: at.location.key(name).pointer(),
+                &at.location.key(name, Via::None),
+                Kw::Required,
+                ValidationErrorKind::MissingRequired {
                     property: name.to_string(),
                 }
             ))
@@ -1060,6 +1292,7 @@ impl CompiledSchema {
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
+        let via: Via<'_> = Via::Member(Kw::Properties);
         // Sorted maps and a list about the object's size: walk the members and the names
         // together.
         let comparable: bool = object.len() <= MERGE_RATIO * properties.len()
@@ -1085,7 +1318,7 @@ impl CompiledSchema {
                     if let Some(evaluated) = evaluated.as_deref_mut() {
                         evaluated.mark(i);
                     }
-                    self.eval::<COLLECT>(node, value, &at.location.key(key), cx, None)
+                    self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
                 }
             );
         }
@@ -1100,7 +1333,7 @@ impl CompiledSchema {
                 |((key, value), node)| self.eval::<COLLECT>(
                     *node,
                     value,
-                    &at.location.key(key),
+                    &at.location.key(key, via),
                     cx,
                     None
                 )
@@ -1127,7 +1360,7 @@ impl CompiledSchema {
                     if let Some(evaluated) = evaluated.as_deref_mut() {
                         evaluated.mark(i);
                     }
-                    self.eval::<COLLECT>(node, value, &at.location.key(key), cx, None)
+                    self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
                 }
             }
         )
@@ -1135,7 +1368,7 @@ impl CompiledSchema {
 
     fn pattern_properties<const COLLECT: bool>(
         &self,
-        patterns: &[(super::compiled::RegexId, NodeId)],
+        patterns: &[(RegexId, NodeId)],
         object: &Map<String, Value>,
         at: At<'_, '_>,
         cx: &mut Context,
@@ -1146,12 +1379,13 @@ impl CompiledSchema {
             object.iter().enumerate().flat_map(|(i, kv)| patterns
                 .iter()
                 .filter(|(pattern, _)| self.pattern(*pattern).is_match(kv.0))
-                .map(move |(_, node)| (i, kv, node))),
-            |(i, (key, value), node)| {
+                .map(move |(pattern, node)| (i, kv, *pattern, node))),
+            |(i, (key, value), pattern, node)| {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                self.eval::<COLLECT>(*node, value, &at.location.key(key), cx, None)
+                let child: Location<'_> = at.location.key(key, Via::Pattern(pattern));
+                self.eval::<COLLECT>(*node, value, &child, cx, None)
             }
         )
     }
@@ -1165,6 +1399,7 @@ impl CompiledSchema {
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
+        let via: Via<'_> = Via::Keyword(Kw::AdditionalProperties);
         each!(
             COLLECT,
             object
@@ -1175,7 +1410,7 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                self.eval::<COLLECT>(node, value, &at.location.key(key), cx, None)
+                self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
             }
         )
     }
@@ -1194,13 +1429,15 @@ impl CompiledSchema {
                 buffer.clear();
                 buffer.push_str(key);
             }
-            let child: Location<'_> = at.location.key(key);
+            let child: Location<'_> = at.location.key(key, Via::Keyword(Kw::PropertyNames));
             self.eval::<false>(node, &name, &child, cx, None)
                 || fail!(
                     COLLECT,
+                    self,
                     cx,
-                    ValidationError::InvalidPropertyName {
-                        instance_path: child.pointer(),
+                    &at.location.key(key, Via::None),
+                    Kw::PropertyNames,
+                    ValidationErrorKind::InvalidPropertyName {
                         property: key.clone(),
                     }
                 )
@@ -1210,6 +1447,7 @@ impl CompiledSchema {
     fn dependent_schemas<const COLLECT: bool>(
         &self,
         dependencies: &[(Box<str>, NodeId)],
+        keyword: Kw,
         object: &Map<String, Value>,
         at: At<'_, '_>,
         cx: &mut Context,
@@ -1220,7 +1458,10 @@ impl CompiledSchema {
             dependencies
                 .iter()
                 .filter(|(name, _)| object.contains_key(&**name)),
-            |(_, node)| self.in_place::<COLLECT>(*node, at, cx, evaluated.as_deref_mut())
+            |(name, node)| {
+                let branch: Location<'_> = at.location.in_place(Via::Name(keyword, name));
+                self.in_place::<COLLECT>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
+            }
         )
     }
 
@@ -1241,17 +1482,21 @@ impl CompiledSchema {
                 .enumerate()
                 .filter(|(i, _)| !seen.is_some_and(|e| e.contains(*i))),
             |(_, (key, value))| {
-                let child: Location<'_> = at.location.key(key);
                 if reject {
                     fail!(
                         COLLECT,
+                        self,
                         cx,
-                        ValidationError::DisallowedUnevaluatedProperty {
-                            instance_path: child.pointer(),
+                        &at.location.key(key, Via::None),
+                        Kw::UnevaluatedProperties,
+                        ValidationErrorKind::DisallowedUnevaluatedProperty {
                             property: key.clone(),
                         }
                     )
                 } else {
+                    let child: Location<'_> = at
+                        .location
+                        .key(key, Via::Keyword(Kw::UnevaluatedProperties));
                     self.eval::<COLLECT>(node, value, &child, cx, None)
                 }
             }
@@ -1262,23 +1507,39 @@ impl CompiledSchema {
         valid
     }
 
+    /// `prefixItems` / `items` (and their spellings in earlier drafts, `keywords` gives the
+    /// prefix's and the rest's).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tuple, its spellings, and the shared evaluation state"
+    )]
     fn items<const COLLECT: bool>(
         &self,
         prefix: &[NodeId],
         rest: Option<NodeId>,
+        keywords: (Kw, Kw),
         items: &[Value],
         at: At<'_, '_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
+        let (prefix_keyword, rest_keyword) = keywords;
         let valid: bool = each!(
             COLLECT,
-            items.iter().enumerate().map_while(|(i, item)| prefix
-                .get(i)
-                .copied()
-                .or(rest)
-                .map(|node| (i, item, node))),
-            |(i, item, node)| self.eval::<COLLECT>(node, item, &at.location.index(i), cx, None)
+            items
+                .iter()
+                .enumerate()
+                .map_while(|(i, item)| match prefix.get(i) {
+                    Some(node) => Some((i, item, *node, Via::Member(prefix_keyword))),
+                    None => rest.map(|node| (i, item, node, Via::Keyword(rest_keyword))),
+                }),
+            |(i, item, node, via)| self.eval::<COLLECT>(
+                node,
+                item,
+                &at.location.index(i, via),
+                cx,
+                None
+            )
         );
         if let Some(evaluated) = evaluated {
             if rest.is_some() {
@@ -1305,11 +1566,13 @@ impl CompiledSchema {
             min,
             max,
             annotates,
+            min_keyword,
         } = contains;
         let annotating: bool = *annotates && evaluated.is_some();
         let mut match_count: u64 = 0;
         for (i, item) in items.iter().enumerate() {
-            if self.eval::<false>(*node, item, &at.location.index(i), cx, None) {
+            let child: Location<'_> = at.location.index(i, Via::Keyword(Kw::Contains));
+            if self.eval::<false>(*node, item, &child, cx, None) {
                 match_count += 1;
                 if annotating && let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
@@ -1322,9 +1585,11 @@ impl CompiledSchema {
         if match_count < *min {
             return fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::TooFewContains {
-                    instance_path: at.location.pointer(),
+                at.location,
+                *min_keyword,
+                ValidationErrorKind::TooFewContains {
                     min_contains: *min,
                     match_count,
                 }
@@ -1333,9 +1598,11 @@ impl CompiledSchema {
         match max {
             Some(max) if match_count > *max => fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::TooManyContains {
-                    instance_path: at.location.pointer(),
+                at.location,
+                Kw::MaxContains,
+                ValidationErrorKind::TooManyContains {
                     max_contains: *max,
                     match_count,
                 }
@@ -1353,13 +1620,14 @@ impl CompiledSchema {
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let seen: Option<&Evaluated> = evaluated.as_deref();
+        let via: Via<'_> = Via::Keyword(Kw::UnevaluatedItems);
         let valid: bool = each!(
             COLLECT,
             items
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| !seen.is_some_and(|e| e.contains(*i))),
-            |(i, item)| self.eval::<COLLECT>(node, item, &at.location.index(i), cx, None)
+            |(i, item)| self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None)
         );
         if let Some(evaluated) = evaluated {
             evaluated.mark_all();
@@ -1374,12 +1642,10 @@ impl CompiledSchema {
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        each!(COLLECT, nodes.iter(), |node| self.in_place::<COLLECT>(
-            *node,
-            at,
-            cx,
-            evaluated.as_deref_mut()
-        ))
+        each!(COLLECT, nodes.iter().enumerate(), |(i, node)| {
+            let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AllOf, index_u32(i)));
+            self.in_place::<COLLECT>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
+        })
     }
 
     fn any_of<const COLLECT: bool>(
@@ -1390,8 +1656,9 @@ impl CompiledSchema {
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let mut matched: bool = false;
-        for node in nodes {
-            if self.in_place::<false>(*node, at, cx, evaluated.as_deref_mut()) {
+        for (i, node) in nodes.iter().enumerate() {
+            let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
+            if self.in_place::<false>(*node, at.instance, &branch, cx, evaluated.as_deref_mut()) {
                 matched = true;
                 // Every passing branch annotates, so keep going only when annotations are
                 // collected.
@@ -1400,15 +1667,10 @@ impl CompiledSchema {
                 }
             }
         }
+        if !matched && COLLECT {
+            self.no_match(Kw::AnyOf, nodes, at, cx);
+        }
         matched
-            || fail!(
-                COLLECT,
-                cx,
-                ValidationError::NoSubschemaMatched {
-                    instance_path: at.location.pointer(),
-                    subschema_count: nodes.len(),
-                }
-            )
     }
 
     fn one_of<const COLLECT: bool>(
@@ -1420,10 +1682,11 @@ impl CompiledSchema {
     ) -> bool {
         let mut match_count: usize = 0;
         let mut first: Option<Evaluated> = None;
-        for node in nodes {
+        for (i, node) in nodes.iter().enumerate() {
             let mut sub: Evaluated = Evaluated::default();
             let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
-            if self.eval::<false>(*node, at.instance, at.location, cx, wants) {
+            let branch: Location<'_> = at.location.in_place(Via::Index(Kw::OneOf, index_u32(i)));
+            if self.eval::<false>(*node, at.instance, &branch, cx, wants) {
                 match_count += 1;
                 if first.is_none() {
                     first = Some(sub);
@@ -1441,19 +1704,19 @@ impl CompiledSchema {
                 }
                 true
             }
-            0 => fail!(
-                COLLECT,
-                cx,
-                ValidationError::NoSubschemaMatched {
-                    instance_path: at.location.pointer(),
-                    subschema_count: nodes.len(),
+            0 => {
+                if COLLECT {
+                    self.no_match(Kw::OneOf, nodes, at, cx);
                 }
-            ),
+                false
+            }
             _ => fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::MultipleSubschemasMatched {
-                    instance_path: at.location.pointer(),
+                at.location,
+                Kw::OneOf,
+                ValidationErrorKind::MultipleSubschemasMatched {
                     subschema_count: nodes.len(),
                     match_count,
                 }
@@ -1461,8 +1724,29 @@ impl CompiledSchema {
         }
     }
 
+    /// Records [`ValidationErrorKind::NoSubschemaMatched`] for an `anyOf` / `oneOf` none of
+    /// whose branches passed, with its causes: the branches evaluated again in the collect mode,
+    /// only to explain the failure (every error of every branch, in branch order).
+    #[cold]
+    #[inline(never)]
+    fn no_match(&self, keyword: Kw, nodes: &[NodeId], at: At<'_, '_>, cx: &mut Context) {
+        let outer: Vec<ValidationError> = std::mem::take(&mut cx.errors);
+        for (i, node) in nodes.iter().enumerate() {
+            let branch: Location<'_> = at.location.in_place(Via::Index(keyword, index_u32(i)));
+            self.eval::<true>(*node, at.instance, &branch, cx, None);
+        }
+        let causes: Vec<ValidationError> = std::mem::replace(&mut cx.errors, outer);
+        self.report(&mut cx.errors, at.location, Some(keyword), || {
+            ValidationErrorKind::NoSubschemaMatched {
+                subschema_count: nodes.len(),
+                causes,
+            }
+        });
+    }
+
     fn not<const COLLECT: bool>(&self, node: NodeId, at: At<'_, '_>, cx: &mut Context) -> bool {
-        let matched: bool = self.eval::<false>(node, at.instance, at.location, cx, None);
+        let branch: Location<'_> = at.location.in_place(Via::Keyword(Kw::Not));
+        let matched: bool = self.eval::<false>(node, at.instance, &branch, cx, None);
         // A branch cut short by the depth guard did not fail: it must not make `not` pass.
         if cx.depth_exceeded.is_some() {
             return false;
@@ -1470,10 +1754,11 @@ impl CompiledSchema {
         !matched
             || fail!(
                 COLLECT,
+                self,
                 cx,
-                ValidationError::NotSchemaMatched {
-                    instance_path: at.location.pointer(),
-                }
+                at.location,
+                Kw::Not,
+                ValidationErrorKind::NotSchemaMatched
             )
     }
 
@@ -1486,10 +1771,30 @@ impl CompiledSchema {
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        let passed: bool = self.in_place::<false>(condition, at, cx, evaluated.as_deref_mut());
-        match if passed { then } else { otherwise } {
-            Some(node) => self.in_place::<COLLECT>(node, at, cx, evaluated),
+        let branch: Location<'_> = at.location.in_place(Via::Keyword(Kw::If));
+        let passed: bool = self.in_place::<false>(
+            condition,
+            at.instance,
+            &branch,
+            cx,
+            evaluated.as_deref_mut(),
+        );
+        let (node, keyword): (Option<NodeId>, Kw) = if passed {
+            (then, Kw::Then)
+        } else {
+            (otherwise, Kw::Else)
+        };
+        match node {
+            Some(node) => {
+                let branch: Location<'_> = at.location.in_place(Via::Keyword(keyword));
+                self.in_place::<COLLECT>(node, at.instance, &branch, cx, evaluated)
+            }
             None => true,
         }
     }
+}
+
+/// A position in a keyword's array of subschemas, for its keyword location.
+fn index_u32(index: usize) -> u32 {
+    u32::try_from(index).unwrap_or(u32::MAX)
 }

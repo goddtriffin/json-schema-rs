@@ -15,7 +15,7 @@
 
 use json_schema_rs::{
     CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchema, JsonSchemaSettings,
-    ValidationError, ValidationResult, generate_rust, validate,
+    ValidationError, ValidationErrorKind, ValidationResult, generate_rust, validate,
 };
 use serde_json::json;
 use std::io::Read;
@@ -407,13 +407,48 @@ pub struct B {
 
 const IN_PLACE_LOOP_SCHEMA: &str = r##"{"anyOf":[{"type":"string"},{"$ref":"#"}]}"##;
 
-/// The loop fails its branch with a `RefCycle` cause, so `anyOf` fails as a whole.
+/// The loop fails its branch with a `RefCycle`, so `anyOf` fails as a whole. Each branch's errors
+/// are its causes: the second branch re-enters the root once (the guard cuts the loop at the
+/// second re-entry), whose own `anyOf` fails with the `RefCycle` among its causes.
 #[test]
 fn validator_terminates_on_in_place_ref_loop() {
-    let expected: ValidationResult = Err(vec![ValidationError::NoSubschemaMatched {
-        instance_path: JsonPointer::root(),
-        subschema_count: 2,
-    }]);
+    let pointer = |p: &str| JsonPointer::try_from(p).expect("pointer");
+    let expected_string = |keyword_location: &str| {
+        ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "object".to_string(),
+            },
+            JsonPointer::root(),
+            pointer(keyword_location),
+        )
+    };
+    let expected: ValidationResult = Err(vec![ValidationError::new(
+        ValidationErrorKind::NoSubschemaMatched {
+            subschema_count: 2,
+            causes: vec![
+                expected_string("/anyOf/0/type"),
+                ValidationError::new(
+                    ValidationErrorKind::NoSubschemaMatched {
+                        subschema_count: 2,
+                        causes: vec![
+                            expected_string("/anyOf/1/$ref/anyOf/0/type"),
+                            ValidationError::new(
+                                ValidationErrorKind::RefCycle {
+                                    ref_str: "#".to_string(),
+                                },
+                                JsonPointer::root(),
+                                pointer("/anyOf/1/$ref/anyOf/1/$ref"),
+                            ),
+                        ],
+                    },
+                    JsonPointer::root(),
+                    pointer("/anyOf/1/$ref/anyOf"),
+                ),
+            ],
+        },
+        JsonPointer::root(),
+        pointer("/anyOf"),
+    )]);
     let actual: ValidationResult = validate(&parse(IN_PLACE_LOOP_SCHEMA), &json!({"x": 1}));
     assert_eq!(expected, actual);
 }

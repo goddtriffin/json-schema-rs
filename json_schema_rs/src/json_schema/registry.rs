@@ -1841,6 +1841,27 @@ impl<'a> Registry<'a> {
         self.resources[scope.0].uri.as_str()
     }
 
+    /// The canonical URI of the schema at `pointer` (JSON Pointer segments from its document's
+    /// root) in the resource `scope` (after [`Registry::enter`] on that schema): the resource's
+    /// URI with the pointer from the resource's root as its fragment
+    /// (`https://example.com/polygon#/$defs/point`). `None` when the resource's URI is the
+    /// placeholder [`DEFAULT_BASE_URI`] (the schema declares no absolute URI) or the schema does
+    /// not sit under the resource's root.
+    pub(crate) fn canonical_uri(&self, scope: Scope, pointer: &[String]) -> Option<String> {
+        let resource: &Resource = &self.resources[scope.0];
+        let base: &str = resource.uri.as_str();
+        let base: &str = base.split_once('#').map_or(base, |(base, _)| base);
+        if base.starts_with("json-schema:") {
+            return None;
+        }
+        let rest: &[String] = pointer.strip_prefix(resource.pointer.as_slice())?;
+        let mut uri: String = String::with_capacity(base.len() + 1 + rest.len() * 8);
+        uri.push_str(base);
+        uri.push('#');
+        crate::json_pointer::push_uri_fragment(rest.iter().map(String::as_str), &mut uri);
+        Some(uri)
+    }
+
     /// The target of `ref_str`, a `$ref` written in a schema whose scope (after
     /// [`Registry::enter`]) is `scope`.
     ///
@@ -1909,6 +1930,12 @@ impl<'a> Registry<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::validator::ValidationErrorKind;
+
+    /// A keyword location.
+    fn kl(pointer: &str) -> crate::json_pointer::JsonPointer {
+        crate::json_pointer::JsonPointer::try_from(pointer).expect("valid JSON Pointer")
+    }
     use super::{Registry, RegistryError, RegistryErrors, Resolved, Scope, UnknownRef};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::dialect::{Dialect, FormatMode, VocabularyKind, VocabularySet};
@@ -2117,10 +2144,13 @@ mod tests {
             "$ref": "#/$defs/a%20b"
         }));
         let actual: ValidationResult = validate_default(&schema, &json!(1));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2133,10 +2163,13 @@ mod tests {
             "properties": {"p": {"$ref": "#/x-defs/a"}}
         }));
         let actual: ValidationResult = validate_default(&schema, &json!({"p": 1}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root().push("p"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("p"),
+            kl("/properties/p/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2148,10 +2181,13 @@ mod tests {
             "properties": {"p": {"$ref": "#/x-defs/a"}}
         }));
         let actual: ValidationResult = validate_default(&schema, &json!({"p": 1}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root().push("p"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("p"),
+            kl("/properties/p/$ref/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2162,10 +2198,13 @@ mod tests {
             "properties": {"p": {"$ref": "#/examples/0"}}
         }));
         let actual: ValidationResult = validate_default(&schema, &json!({"p": 1}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root().push("p"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("p"),
+            kl("/properties/p/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2242,10 +2281,16 @@ mod tests {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
         let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": {"a": "s"}}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("b").push("a"),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedInteger {
+                    got: "string".to_string(),
+                },
+                JsonPointer::root().push("b").push("a"),
+                kl("/properties/b/$ref/properties/a/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/a.json#/$defs/y/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -2263,10 +2308,16 @@ mod tests {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
         let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": 1}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
-            instance_path: JsonPointer::root().push("b"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedObject {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root().push("b"),
+                kl("/properties/b/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/b.json#/$defs/x/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -2282,10 +2333,16 @@ mod tests {
             .build(&root)
             .expect("build registry");
         let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root(),
+                kl("/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/remote.json#/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -2297,10 +2354,16 @@ mod tests {
         }));
         let registry: Registry<'_> = Registry::new(&root).expect("build registry");
         let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root(),
+                kl("/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/a.json#/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -2312,10 +2375,16 @@ mod tests {
             .build(&root)
             .expect("build registry");
         let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root(),
+                kl("/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/remote.json#/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -2416,10 +2485,16 @@ mod tests {
             "properties": {"p": {"$ref": "folder/"}}
         }));
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("p"),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedInteger {
+                    got: "string".to_string(),
+                },
+                JsonPointer::root().push("p"),
+                kl("/properties/p/$ref/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/folder/item.json#/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -2458,10 +2533,16 @@ mod tests {
         )
         .expect("parse schema");
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("p"),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedInteger {
+                    got: "string".to_string(),
+                },
+                JsonPointer::root().push("p"),
+                kl("/properties/p/$ref/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/b.json#/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -2498,10 +2579,13 @@ mod tests {
         )
         .expect("parse schema");
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("p"),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "string".to_string(),
+            },
+            JsonPointer::root().push("p"),
+            kl("/properties/p/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2512,10 +2596,13 @@ mod tests {
             "properties": {"p": {"$ref": "#foo"}}
         }));
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("p"),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "string".to_string(),
+            },
+            JsonPointer::root().push("p"),
+            kl("/properties/p/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2529,11 +2616,7 @@ mod tests {
     fn embedded_metaschema_rejects_negative_min_length() {
         let schema: JsonSchema = embedded_metaschema_ref();
         let actual: ValidationResult = validate_default(&schema, &json!({"minLength": -1}));
-        let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
-            instance_path: JsonPointer::root().push("minLength"),
-            minimum: 0.into(),
-            actual: (-1).into(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(ValidationErrorKind::BelowMinimum { minimum: 0.into(), actual: (-1).into() }, JsonPointer::root().push("minLength"), kl("/$ref/allOf/3/$ref/properties/minLength/$ref/$ref/minimum")).with_absolute_keyword_location("https://json-schema.org/draft/2020-12/meta/validation#/$defs/nonNegativeInteger/minimum")]);
         assert_eq!(expected, actual);
     }
 
@@ -2753,10 +2836,13 @@ mod tests {
     fn draft4_resource_in_2020_12_root_rejects_zero_fraction_float() {
         let schema: JsonSchema = mixed_dialect_root();
         let actual: ValidationResult = validate_default(&schema, &json!({"old": 1.0}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("old"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("old"),
+            kl("/properties/old/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2792,10 +2878,13 @@ mod tests {
             .build();
         let schema: JsonSchema = mixed_dialect_root_with(&settings);
         let actual: ValidationResult = validate_default(&schema, &json!({"old": 1.0}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("old"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("old"),
+            kl("/properties/old/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2806,10 +2895,13 @@ mod tests {
             .build();
         let schema: JsonSchema = mixed_dialect_root_with(&settings);
         let actual: ValidationResult = validate_default(&schema, &json!({"new": 1.0}));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("new"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("new"),
+            kl("/properties/new/$ref/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2861,10 +2953,16 @@ mod tests {
             .build(&schema)
             .expect("build registry");
         let actual: ValidationResult = validate_with_registry(&registry, &json!(1.0));
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedInteger {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root(),
+                kl("/$ref/type"),
+            )
+            .with_absolute_keyword_location("https://example.com/old.json#/type"),
+        ]);
         assert_eq!(expected, actual);
     }
 
@@ -3330,11 +3428,19 @@ mod tests {
         validate_with_registry(&registry, instance)
     }
 
-    fn expected_string_error() -> ValidationResult {
-        Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }])
+    /// The `type: string` failure of the number `1` at the root, reached through `$ref`s:
+    /// `keyword_location` is the evaluation path and `absolute` the target's canonical URI.
+    fn expected_string_error(keyword_location: &str, absolute: &str) -> ValidationResult {
+        Err(vec![
+            ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root(),
+                kl(keyword_location),
+            )
+            .with_absolute_keyword_location(absolute.to_string()),
+        ])
     }
 
     #[test]
@@ -3346,7 +3452,8 @@ mod tests {
             &[("https://example.com/b.json", &document)],
             &json!(1),
         );
-        let expected: ValidationResult = expected_string_error();
+        let expected: ValidationResult =
+            expected_string_error("/$ref/type", "https://example.com/b.json#/type");
         assert_eq!(expected, actual);
     }
 
@@ -3357,7 +3464,8 @@ mod tests {
             parse(&json!({"$id": "https://example.com/id.json", "type": "string"}));
         let actual: ValidationResult =
             validate_with_parsed(&root, &[("file:///schemas/b.json", &document)], &json!(1));
-        let expected: ValidationResult = expected_string_error();
+        let expected: ValidationResult =
+            expected_string_error("/$ref/type", "https://example.com/id.json#/type");
         assert_eq!(expected, actual);
     }
 
@@ -3370,7 +3478,8 @@ mod tests {
             &[("https://example.com/dir/b.json", &document)],
             &json!(1),
         );
-        let expected: ValidationResult = expected_string_error();
+        let expected: ValidationResult =
+            expected_string_error("/$ref/type", "https://example.com/dir/c.json#/type");
         assert_eq!(expected, actual);
     }
 
@@ -3387,7 +3496,8 @@ mod tests {
             ],
             &json!(1),
         );
-        let expected: ValidationResult = expected_string_error();
+        let expected: ValidationResult =
+            expected_string_error("/$ref/$ref/type", "https://example.com/dir/c.json#/type");
         assert_eq!(expected, actual);
     }
 
@@ -3406,7 +3516,8 @@ mod tests {
             ],
             &json!(1),
         );
-        let expected: ValidationResult = expected_string_error();
+        let expected: ValidationResult =
+            expected_string_error("/$ref/type", "https://example.com/id.json#/type");
         assert_eq!(expected, actual);
     }
 

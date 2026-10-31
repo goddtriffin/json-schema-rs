@@ -35,6 +35,7 @@ pub use reverse_code_gen::{
     ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema,
 };
 pub use validator::{
-    CompileError, CompileErrors, CompiledSchema, ValidationError, ValidationResult, validate,
-    validate_with_registry,
+    BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, FlagOutput,
+    FormatCheck, Output, OutputFormat, OutputUnit, ValidationError, ValidationErrorKind,
+    ValidationResult, validate, validate_with_registry,
 };
