@@ -9,12 +9,16 @@ mod ecma_regex;
 mod error;
 mod eval;
 mod format;
+mod output;
 mod simple_pattern;
 #[cfg(test)]
 mod tests_keywords;
 
-pub use compiled::{CompileError, CompileErrors, CompiledSchema};
-pub use error::{ValidationError, ValidationResult};
+pub use compiled::{
+    CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, FormatCheck,
+};
+pub use error::{ValidationError, ValidationErrorKind, ValidationResult};
+pub use output::{BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
 
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{Registry, RegistryError, SchemaRef};
@@ -97,48 +101,88 @@ pub fn validate_with_registry(
     }
 }
 
-/// The error every instance gets for one problem that kept the schema's registry from being
-/// built (one per problem).
-fn registry_error(error: &RegistryError) -> ValidationError {
-    let instance_path: JsonPointer = JsonPointer::root();
-    match error.ref_str() {
-        Some(ref_str) => ValidationError::InvalidRef {
-            instance_path,
-            ref_str: ref_str.to_string(),
-            reason: error.to_string(),
-        },
-        None => ValidationError::InvalidSchema {
-            instance_path,
-            reason: error.to_string(),
-        },
+/// A keyword location within the schema's documents: `location` (a JSON Pointer as written in
+/// an error) with `keyword` appended. A location that does not parse (it never should) gives
+/// the root.
+fn schema_location(location: &str, keyword: Option<&str>) -> JsonPointer {
+    let pointer: JsonPointer = JsonPointer::try_from(location).unwrap_or_else(|_| {
+        log::debug!("schema location {location:?} is not a JSON Pointer");
+        JsonPointer::root()
+    });
+    match keyword {
+        Some(keyword) => pointer.push(keyword),
+        None => pointer,
     }
 }
 
-/// The error every instance gets for one problem that kept the schema from compiling (one per
-/// problem).
-fn compile_error(error: &CompileError) -> ValidationError {
-    let instance_path: JsonPointer = JsonPointer::root();
-    match error {
-        CompileError::InvalidPattern { pattern, .. } => ValidationError::InvalidPatternInSchema {
-            instance_path,
-            pattern: pattern.clone(),
-        },
-        CompileError::UnknownRef { ref_str, .. } => ValidationError::InvalidRef {
-            instance_path,
-            ref_str: ref_str.clone(),
+/// The error every instance gets for one problem that kept the schema's registry from being
+/// built (one per problem): at the instance root, with the keyword location of the `$ref` when
+/// the problem is one (else the schema root).
+fn registry_error(error: &RegistryError) -> ValidationError {
+    let kind: ValidationErrorKind = match error.ref_str() {
+        Some(ref_str) => ValidationErrorKind::InvalidRef {
+            ref_str: ref_str.to_string(),
             reason: error.to_string(),
         },
-        CompileError::InvalidKeywordValue { .. } | CompileError::UnknownFormat { .. } => {
-            ValidationError::InvalidSchema {
-                instance_path,
-                reason: error.to_string(),
-            }
+        None => ValidationErrorKind::InvalidSchema {
+            reason: error.to_string(),
+        },
+    };
+    let keyword_location: JsonPointer = match error {
+        RegistryError::UnresolvableRef { location, .. }
+        | RegistryError::RefTargetNotSchema { location, .. } => {
+            schema_location(location, Some("$ref"))
         }
-    }
+        _ => JsonPointer::root(),
+    };
+    ValidationError::new(kind, JsonPointer::root(), keyword_location)
+}
+
+/// The error every instance gets for one problem that kept the schema from compiling (one per
+/// problem): at the instance root, with the keyword location of the problem.
+fn compile_error(error: &CompileError) -> ValidationError {
+    let (kind, keyword_location): (ValidationErrorKind, JsonPointer) = match error {
+        CompileError::InvalidPattern {
+            location, pattern, ..
+        } => (
+            ValidationErrorKind::InvalidPatternInSchema {
+                pattern: pattern.clone(),
+            },
+            schema_location(location, None),
+        ),
+        CompileError::UnknownRef { location, ref_str } => (
+            ValidationErrorKind::InvalidRef {
+                ref_str: ref_str.clone(),
+                reason: error.to_string(),
+            },
+            schema_location(location, Some("$ref")),
+        ),
+        CompileError::InvalidKeywordValue {
+            location, keyword, ..
+        } => (
+            ValidationErrorKind::InvalidSchema {
+                reason: error.to_string(),
+            },
+            schema_location(location, Some(keyword)),
+        ),
+        CompileError::UnknownFormat { location, .. } => (
+            ValidationErrorKind::InvalidSchema {
+                reason: error.to_string(),
+            },
+            schema_location(location, Some("format")),
+        ),
+    };
+    ValidationError::new(kind, JsonPointer::root(), keyword_location)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::validator::ValidationErrorKind;
+
+    /// A keyword location.
+    fn kl(pointer: &str) -> crate::json_pointer::JsonPointer {
+        crate::json_pointer::JsonPointer::try_from(pointer).expect("valid JSON Pointer")
+    }
     use super::{ValidationError, ValidationResult, validate};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
@@ -208,11 +252,14 @@ mod tests {
             reason: "no such location".to_string(),
         }
         .to_string();
-        let expected: ValidationResult = Err(vec![ValidationError::InvalidRef {
-            instance_path: JsonPointer::root(),
-            ref_str: "#/$defs/Missing".to_string(),
-            reason: expected_reason,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::InvalidRef {
+                ref_str: "#/$defs/Missing".to_string(),
+                reason: expected_reason,
+            },
+            JsonPointer::root(),
+            kl("/properties/x/$ref"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -233,37 +280,46 @@ mod tests {
         .expect("parse schema");
         let actual: ValidationResult = validate(&schema, &json!({}));
         let expected: ValidationResult = Err(vec![
-            ValidationError::InvalidSchema {
-                instance_path: JsonPointer::root(),
-                reason: RegistryError::DuplicateId {
-                    uri: "https://example.com/s.json".to_string(),
-                    first: "/$defs/a".to_string(),
-                    second: "/$defs/b".to_string(),
-                }
-                .to_string(),
-            },
-            ValidationError::InvalidRef {
-                instance_path: JsonPointer::root(),
-                ref_str: "#/$defs/missing".to_string(),
-                reason: RegistryError::UnresolvableRef {
+            ValidationError::new(
+                ValidationErrorKind::InvalidSchema {
+                    reason: RegistryError::DuplicateId {
+                        uri: "https://example.com/s.json".to_string(),
+                        first: "/$defs/a".to_string(),
+                        second: "/$defs/b".to_string(),
+                    }
+                    .to_string(),
+                },
+                JsonPointer::root(),
+                kl(""),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::InvalidRef {
                     ref_str: "#/$defs/missing".to_string(),
-                    location: "/properties/x".to_string(),
-                    target: "json-schema:///#/$defs/missing".to_string(),
-                    reason: "no such location".to_string(),
-                }
-                .to_string(),
-            },
-            ValidationError::InvalidRef {
-                instance_path: JsonPointer::root(),
-                ref_str: "#/$defs/gone".to_string(),
-                reason: RegistryError::UnresolvableRef {
+                    reason: RegistryError::UnresolvableRef {
+                        ref_str: "#/$defs/missing".to_string(),
+                        location: "/properties/x".to_string(),
+                        target: "json-schema:///#/$defs/missing".to_string(),
+                        reason: "no such location".to_string(),
+                    }
+                    .to_string(),
+                },
+                JsonPointer::root(),
+                kl("/properties/x/$ref"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::InvalidRef {
                     ref_str: "#/$defs/gone".to_string(),
-                    location: "/properties/y".to_string(),
-                    target: "json-schema:///#/$defs/gone".to_string(),
-                    reason: "no such location".to_string(),
-                }
-                .to_string(),
-            },
+                    reason: RegistryError::UnresolvableRef {
+                        ref_str: "#/$defs/gone".to_string(),
+                        location: "/properties/y".to_string(),
+                        target: "json-schema:///#/$defs/gone".to_string(),
+                        reason: "no such location".to_string(),
+                    }
+                    .to_string(),
+                },
+                JsonPointer::root(),
+                kl("/properties/y/$ref"),
+            ),
         ]);
         assert_eq!(expected, actual);
     }
@@ -283,10 +339,13 @@ mod tests {
         .expect("parse schema");
         let instance = json!({"x": 42});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::RefCycle {
-            instance_path: JsonPointer::root().push("x"),
-            ref_str: "#/$defs/A".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::RefCycle {
+                ref_str: "#/$defs/A".to_string(),
+            },
+            JsonPointer::root().push("x"),
+            kl("/properties/x/$ref/$ref/$ref"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -331,10 +390,13 @@ mod tests {
         });
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
-            instance_path: JsonPointer::root().push("name"),
-            property: "name".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::MissingRequired {
+                property: "name".to_string(),
+            },
+            JsonPointer::root().push("name"),
+            kl("/required"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -373,10 +435,13 @@ mod tests {
         schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({"a": "x", "extra": 1});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::DisallowedAdditionalProperty {
-            instance_path: JsonPointer::root().push("extra"),
-            property: "extra".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::DisallowedAdditionalProperty {
+                property: "extra".to_string(),
+            },
+            JsonPointer::root().push("extra"),
+            kl("/additionalProperties"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -397,14 +462,20 @@ mod tests {
         let instance = json!({"a": "x", "extra1": 1, "extra2": 2});
         let actual_result: ValidationResult = validate(&schema, &instance);
         let expected_errors: Vec<ValidationError> = vec![
-            ValidationError::DisallowedAdditionalProperty {
-                instance_path: JsonPointer::root().push("extra1"),
-                property: "extra1".to_string(),
-            },
-            ValidationError::DisallowedAdditionalProperty {
-                instance_path: JsonPointer::root().push("extra2"),
-                property: "extra2".to_string(),
-            },
+            ValidationError::new(
+                ValidationErrorKind::DisallowedAdditionalProperty {
+                    property: "extra1".to_string(),
+                },
+                JsonPointer::root().push("extra1"),
+                kl("/additionalProperties"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::DisallowedAdditionalProperty {
+                    property: "extra2".to_string(),
+                },
+                JsonPointer::root().push("extra2"),
+                kl("/additionalProperties"),
+            ),
         ];
         let mut expected_sorted = expected_errors;
         expected_sorted.sort_by(|a, b| {
@@ -517,10 +588,13 @@ mod tests {
         };
         let instance = json!({"a": "x", "extra": "not_an_integer"});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("extra"),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "string".to_string(),
+            },
+            JsonPointer::root().push("extra"),
+            kl("/additionalProperties/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -606,7 +680,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         assert!(matches!(
             actual,
-            Err(ref e) if e.iter().any(|err| matches!(err, ValidationError::MissingRequired { property, .. } if property == "b"))
+            Err(ref e) if e.iter().any(|err| matches!(&err.kind, ValidationErrorKind::MissingRequired { property, .. } if property == "b"))
         ));
     }
 
@@ -712,7 +786,7 @@ mod tests {
         let errs = actual.unwrap_err();
         assert!(
             errs.iter()
-                .any(|e| matches!(e, ValidationError::NotInEnum { .. }))
+                .any(|e| matches!(&e.kind, ValidationErrorKind::NotInEnum { .. }))
         );
     }
 
@@ -767,8 +841,8 @@ mod tests {
         let actual_count: usize = errs.len();
         assert_eq!(expected, actual_count);
         assert!(errs.iter().any(|e| matches!(
-            e,
-            ValidationError::NoSubschemaMatched {
+            &e.kind,
+            ValidationErrorKind::NoSubschemaMatched {
                 subschema_count: 2,
                 ..
             }
@@ -788,8 +862,8 @@ mod tests {
         let actual_count: usize = errs.len();
         assert_eq!(expected, actual_count);
         assert!(errs.iter().any(|e| matches!(
-            e,
-            ValidationError::NoSubschemaMatched {
+            &e.kind,
+            ValidationErrorKind::NoSubschemaMatched {
                 subschema_count: 0,
                 ..
             }
@@ -831,8 +905,8 @@ mod tests {
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
-            e,
-            ValidationError::NoSubschemaMatched {
+            &e.kind,
+            ValidationErrorKind::NoSubschemaMatched {
                 subschema_count: 1,
                 ..
             }
@@ -884,8 +958,8 @@ mod tests {
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
-            e,
-            ValidationError::NoSubschemaMatched {
+            &e.kind,
+            ValidationErrorKind::NoSubschemaMatched {
                 subschema_count: 2,
                 ..
             }
@@ -910,8 +984,8 @@ mod tests {
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
-            e,
-            ValidationError::MultipleSubschemasMatched {
+            &e.kind,
+            ValidationErrorKind::MultipleSubschemasMatched {
                 subschema_count: 2,
                 match_count: 2,
                 ..
@@ -930,8 +1004,8 @@ mod tests {
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
-            e,
-            ValidationError::NoSubschemaMatched {
+            &e.kind,
+            ValidationErrorKind::NoSubschemaMatched {
                 subschema_count: 0,
                 ..
             }
@@ -973,8 +1047,8 @@ mod tests {
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
-            e,
-            ValidationError::NoSubschemaMatched {
+            &e.kind,
+            ValidationErrorKind::NoSubschemaMatched {
                 subschema_count: 1,
                 ..
             }
@@ -989,10 +1063,13 @@ mod tests {
         };
         let instance = json!("not an object");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedObject {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1097,10 +1174,13 @@ mod tests {
         .expect("parse schema");
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
-            instance_path: JsonPointer::root().push("x"),
-            property: "x".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::MissingRequired {
+                property: "x".to_string(),
+            },
+            JsonPointer::root().push("x"),
+            kl("/required"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1389,10 +1469,13 @@ mod tests {
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "object".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "object".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1426,10 +1509,13 @@ mod tests {
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1463,10 +1549,13 @@ mod tests {
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "null".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "null".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1500,10 +1589,13 @@ mod tests {
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "boolean".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "boolean".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1539,10 +1631,13 @@ mod tests {
         };
         let instance = json!("hello");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedBoolean {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedBoolean {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1576,10 +1671,13 @@ mod tests {
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "array".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "array".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1609,11 +1707,14 @@ mod tests {
         };
         let instance = json!("pending");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::NotInEnum {
-            instance_path: JsonPointer::root(),
-            invalid_value: "\"pending\"".to_string(),
-            allowed: vec!["\"open\"".to_string(), "\"closed\"".to_string()],
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotInEnum {
+                invalid_value: "\"pending\"".to_string(),
+                allowed: vec!["\"open\"".to_string(), "\"closed\"".to_string()],
+            },
+            JsonPointer::root(),
+            kl("/enum"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1645,11 +1746,14 @@ mod tests {
         };
         let instance = json!("c");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::NotInEnum {
-            instance_path: JsonPointer::root(),
-            invalid_value: "\"c\"".to_string(),
-            allowed: vec!["\"a\"".to_string(), "\"b\"".to_string()],
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotInEnum {
+                invalid_value: "\"c\"".to_string(),
+                allowed: vec!["\"a\"".to_string(), "\"b\"".to_string()],
+            },
+            JsonPointer::root(),
+            kl("/enum"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1675,9 +1779,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let errs = actual.as_ref().expect_err("expected NotConst error");
         assert_eq!(errs.len(), 1);
-        assert!(matches!(
-            &errs[0],
-            ValidationError::NotConst {
+        assert!(matches!(&errs[0].kind, ValidationErrorKind::NotConst {
                 expected: e,
                 actual: a,
                 ..
@@ -1769,16 +1871,22 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let errs = actual.as_ref().expect_err("expected NotConst");
         assert_eq!(errs.len(), 1);
-        assert!(matches!(&errs[0], ValidationError::NotConst { .. }));
+        assert!(matches!(
+            &errs[0].kind,
+            ValidationErrorKind::NotConst { .. }
+        ));
     }
 
     #[test]
     fn validation_error_not_const_display() {
-        let err: ValidationError = ValidationError::NotConst {
-            instance_path: JsonPointer::root(),
-            expected: "\"foo\"".to_string(),
-            actual: "\"bar\"".to_string(),
-        };
+        let err: ValidationError = ValidationError::new(
+            ValidationErrorKind::NotConst {
+                expected: "\"foo\"".to_string(),
+                actual: "\"bar\"".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/const"),
+        );
         let expected: String =
             "root: value \"bar\" does not match const (expected: \"foo\")".to_string();
         let actual: String = err.to_string();
@@ -1917,10 +2025,13 @@ mod tests {
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1954,10 +2065,13 @@ mod tests {
         };
         let instance = json!("42");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -1991,10 +2105,13 @@ mod tests {
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "null".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "null".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2028,10 +2145,13 @@ mod tests {
         };
         let instance = json!({"x": 1});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "object".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "object".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2065,10 +2185,13 @@ mod tests {
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "array".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "array".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2102,10 +2225,13 @@ mod tests {
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "boolean".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "boolean".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2143,10 +2269,13 @@ mod tests {
         });
         let instance = json!({"count": 2.5});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root().push("count"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("count"),
+            kl("/properties/count/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2165,10 +2294,13 @@ mod tests {
         });
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
-            instance_path: JsonPointer::root().push("count"),
-            property: "count".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::MissingRequired {
+                property: "count".to_string(),
+            },
+            JsonPointer::root().push("count"),
+            kl("/required"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2270,10 +2402,13 @@ mod tests {
         };
         let instance = json!("3.14");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNumber {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2307,10 +2442,13 @@ mod tests {
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
-            instance_path: JsonPointer::root(),
-            got: "null".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNumber {
+                got: "null".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2344,10 +2482,13 @@ mod tests {
         };
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
-            instance_path: JsonPointer::root(),
-            got: "object".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNumber {
+                got: "object".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2381,10 +2522,13 @@ mod tests {
         };
         let instance = json!([1.0]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
-            instance_path: JsonPointer::root(),
-            got: "array".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNumber {
+                got: "array".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2418,10 +2562,13 @@ mod tests {
         };
         let instance = json!(true);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
-            instance_path: JsonPointer::root(),
-            got: "boolean".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNumber {
+                got: "boolean".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2489,11 +2636,14 @@ mod tests {
         };
         let instance = json!(5);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
-            instance_path: JsonPointer::root(),
-            minimum: 10_u64.into(),
-            actual: 5_u64.into(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::BelowMinimum {
+                minimum: 10_u64.into(),
+                actual: 5_u64.into(),
+            },
+            JsonPointer::root(),
+            kl("/minimum"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2527,11 +2677,14 @@ mod tests {
         };
         let instance = json!(20);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
-            instance_path: JsonPointer::root(),
-            maximum: 10_u64.into(),
-            actual: 20_u64.into(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::AboveMaximum {
+                maximum: 10_u64.into(),
+                actual: 20_u64.into(),
+            },
+            JsonPointer::root(),
+            kl("/maximum"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2633,11 +2786,14 @@ mod tests {
         };
         let instance = json!(0.5);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
-            instance_path: JsonPointer::root(),
-            minimum: 1_u64.into(),
-            actual: float(0.5),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::BelowMinimum {
+                minimum: 1_u64.into(),
+                actual: float(0.5),
+            },
+            JsonPointer::root(),
+            kl("/minimum"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2671,11 +2827,14 @@ mod tests {
         };
         let instance = json!(2.5);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
-            instance_path: JsonPointer::root(),
-            maximum: 1_u64.into(),
-            actual: float(2.5),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::AboveMaximum {
+                maximum: 1_u64.into(),
+                actual: float(2.5),
+            },
+            JsonPointer::root(),
+            kl("/maximum"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -2774,16 +2933,22 @@ mod tests {
         let instance = json!({"low": 5, "high": 200});
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![
-            ValidationError::AboveMaximum {
-                instance_path: JsonPointer::root().push("high"),
-                maximum: 100_u64.into(),
-                actual: 200_u64.into(),
-            },
-            ValidationError::BelowMinimum {
-                instance_path: JsonPointer::root().push("low"),
-                minimum: 10_u64.into(),
-                actual: 5_u64.into(),
-            },
+            ValidationError::new(
+                ValidationErrorKind::AboveMaximum {
+                    maximum: 100_u64.into(),
+                    actual: 200_u64.into(),
+                },
+                JsonPointer::root().push("high"),
+                kl("/properties/high/maximum"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::BelowMinimum {
+                    minimum: 10_u64.into(),
+                    actual: 5_u64.into(),
+                },
+                JsonPointer::root().push("low"),
+                kl("/properties/low/minimum"),
+            ),
         ]);
         assert_eq!(expected, actual);
     }
@@ -2886,10 +3051,13 @@ mod tests {
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedArray {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedArray {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3009,10 +3177,13 @@ mod tests {
         };
         let instance = json!(["a", 42, "c"]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root().push("1"),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::root().push("1"),
+            kl("/items/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3134,7 +3305,7 @@ mod tests {
         let actual: ValidationResult = validate(&schema, &instance);
         let expected_has_duplicate_error: bool = actual.as_ref().err().is_some_and(|e| {
             e.iter()
-                .any(|err| matches!(err, ValidationError::DuplicateArrayItems { .. }))
+                .any(|err| matches!(&err.kind, ValidationErrorKind::DuplicateArrayItems { .. }))
         });
         assert!(
             expected_has_duplicate_error,
@@ -3360,11 +3531,14 @@ mod tests {
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
-            instance_path: JsonPointer::root(),
-            min_items: 3,
-            actual_count: 2,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooFewItems {
+                min_items: 3,
+                actual_count: 2,
+            },
+            JsonPointer::root(),
+            kl("/minItems"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3466,11 +3640,14 @@ mod tests {
         };
         let instance = json!([1, 2, 3]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooManyItems {
-            instance_path: JsonPointer::root(),
-            max_items: 2,
-            actual_count: 3,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooManyItems {
+                max_items: 2,
+                actual_count: 3,
+            },
+            JsonPointer::root(),
+            kl("/maxItems"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3572,11 +3749,14 @@ mod tests {
         };
         let instance = json!([1]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
-            instance_path: JsonPointer::root(),
-            min_items: 2,
-            actual_count: 1,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooFewItems {
+                min_items: 2,
+                actual_count: 1,
+            },
+            JsonPointer::root(),
+            kl("/minItems"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3610,11 +3790,14 @@ mod tests {
         };
         let instance = json!([1, 2, 3, 4, 5, 6]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooManyItems {
-            instance_path: JsonPointer::root(),
-            max_items: 5,
-            actual_count: 6,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooManyItems {
+                max_items: 5,
+                actual_count: 6,
+            },
+            JsonPointer::root(),
+            kl("/maxItems"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3682,10 +3865,13 @@ mod tests {
         };
         let instance = json!("not an array");
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedArray {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedArray {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3723,10 +3909,13 @@ mod tests {
         });
         let instance = json!({"value": "3.14"});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNumber {
-            instance_path: JsonPointer::root().push("value"),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNumber {
+                got: "string".to_string(),
+            },
+            JsonPointer::root().push("value"),
+            kl("/properties/value/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3745,10 +3934,13 @@ mod tests {
         });
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
-            instance_path: JsonPointer::root().push("value"),
-            property: "value".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::MissingRequired {
+                property: "value".to_string(),
+            },
+            JsonPointer::root().push("value"),
+            kl("/required"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3782,10 +3974,13 @@ mod tests {
         };
         let instance = json!(42);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedObject {
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3819,10 +4014,13 @@ mod tests {
         };
         let instance = json!(null);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
-            instance_path: JsonPointer::root(),
-            got: "null".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedObject {
+                got: "null".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3856,10 +4054,13 @@ mod tests {
         };
         let instance = json!([1, 2]);
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedObject {
-            instance_path: JsonPointer::root(),
-            got: "array".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedObject {
+                got: "array".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -3956,10 +4157,13 @@ mod tests {
         });
         let instance = json!({"address": {}});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
-            instance_path: JsonPointer::root().push("address").push("city"),
-            property: "city".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::MissingRequired {
+                property: "city".to_string(),
+            },
+            JsonPointer::root().push("address").push("city"),
+            kl("/properties/address/required"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -4012,18 +4216,27 @@ mod tests {
         let instance = json!({});
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![
-            ValidationError::MissingRequired {
-                instance_path: JsonPointer::root().push("a"),
-                property: "a".to_string(),
-            },
-            ValidationError::MissingRequired {
-                instance_path: JsonPointer::root().push("b"),
-                property: "b".to_string(),
-            },
-            ValidationError::MissingRequired {
-                instance_path: JsonPointer::root().push("c"),
-                property: "c".to_string(),
-            },
+            ValidationError::new(
+                ValidationErrorKind::MissingRequired {
+                    property: "a".to_string(),
+                },
+                JsonPointer::root().push("a"),
+                kl("/required"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::MissingRequired {
+                    property: "b".to_string(),
+                },
+                JsonPointer::root().push("b"),
+                kl("/required"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::MissingRequired {
+                    property: "c".to_string(),
+                },
+                JsonPointer::root().push("c"),
+                kl("/required"),
+            ),
         ]);
         assert_eq!(expected, actual);
     }
@@ -4084,14 +4297,20 @@ mod tests {
         let instance = json!({"nested": {}});
         let actual: ValidationResult = validate(&schema, &instance);
         let expected: ValidationResult = Err(vec![
-            ValidationError::MissingRequired {
-                instance_path: JsonPointer::root().push("x"),
-                property: "x".to_string(),
-            },
-            ValidationError::MissingRequired {
-                instance_path: JsonPointer::root().push("nested").push("y"),
-                property: "y".to_string(),
-            },
+            ValidationError::new(
+                ValidationErrorKind::MissingRequired {
+                    property: "x".to_string(),
+                },
+                JsonPointer::root().push("x"),
+                kl("/required"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::MissingRequired {
+                    property: "y".to_string(),
+                },
+                JsonPointer::root().push("nested").push("y"),
+                kl("/properties/nested/required"),
+            ),
         ]);
         assert_eq!(expected, actual);
     }
@@ -4159,10 +4378,13 @@ mod tests {
         });
         let instance = json!({"a/b": 123});
         let actual: ValidationResult = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::try_from("/a~1b").unwrap(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::try_from("/a~1b").unwrap(),
+            kl("/properties/a~1b/type"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -4186,11 +4408,14 @@ mod tests {
         };
         let instance = json!("hi");
         let actual = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooShort {
-            instance_path: JsonPointer::root(),
-            min_length: 5,
-            actual_length: 2,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooShort {
+                min_length: 5,
+                actual_length: 2,
+            },
+            JsonPointer::root(),
+            kl("/minLength"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -4235,11 +4460,14 @@ mod tests {
         };
         let instance = json!("hello");
         let actual = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooLong {
-            instance_path: JsonPointer::root(),
-            max_length: 3,
-            actual_length: 5,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooLong {
+                max_length: 3,
+                actual_length: 5,
+            },
+            JsonPointer::root(),
+            kl("/maxLength"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -4284,11 +4512,14 @@ mod tests {
         };
         let instance = json!("x");
         let actual = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooLong {
-            instance_path: JsonPointer::root(),
-            max_length: 0,
-            actual_length: 1,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooLong {
+                max_length: 0,
+                actual_length: 1,
+            },
+            JsonPointer::root(),
+            kl("/maxLength"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -4325,11 +4556,14 @@ mod tests {
         };
         let instance = json!("hi");
         let actual = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooShort {
-            instance_path: JsonPointer::root(),
-            min_length: 5,
-            actual_length: 2,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooShort {
+                min_length: 5,
+                actual_length: 2,
+            },
+            JsonPointer::root(),
+            kl("/minLength"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -4343,11 +4577,14 @@ mod tests {
         };
         let instance = json!("hello world");
         let actual = validate(&schema, &instance);
-        let expected: ValidationResult = Err(vec![ValidationError::TooLong {
-            instance_path: JsonPointer::root(),
-            max_length: 4,
-            actual_length: 11,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooLong {
+                max_length: 4,
+                actual_length: 11,
+            },
+            JsonPointer::root(),
+            kl("/maxLength"),
+        )]);
         assert_eq!(expected, actual);
     }
 
@@ -4396,11 +4633,14 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("1");
-        let expected: ValidationResult = Err(vec![ValidationError::PatternMismatch {
-            instance_path: JsonPointer::root(),
-            pattern: r"^\p{Letter}$".to_string(),
-            value: "1".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::PatternMismatch {
+                pattern: r"^\p{Letter}$".to_string(),
+                value: "1".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/pattern"),
+        )]);
         let actual: ValidationResult = validate(&schema, &instance);
         assert_eq!(expected, actual);
     }
@@ -4426,11 +4666,14 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("12a3");
-        let expected: ValidationResult = Err(vec![ValidationError::PatternMismatch {
-            instance_path: JsonPointer::root(),
-            pattern: "^[0-9]+$".to_string(),
-            value: "12a3".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::PatternMismatch {
+                pattern: "^[0-9]+$".to_string(),
+                value: "12a3".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/pattern"),
+        )]);
         let actual: ValidationResult = validate(&schema, &instance);
         assert_eq!(expected, actual);
     }
@@ -4443,10 +4686,13 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedString {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult = validate(&schema, &instance);
         assert_eq!(expected, actual);
     }
@@ -4459,10 +4705,13 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("x");
-        let expected: ValidationResult = Err(vec![ValidationError::InvalidPatternInSchema {
-            instance_path: JsonPointer::root(),
-            pattern: "[".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::InvalidPatternInSchema {
+                pattern: "[".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/pattern"),
+        )]);
         let actual: ValidationResult = validate(&schema, &instance);
         assert_eq!(expected, actual);
     }
@@ -4477,16 +4726,22 @@ mod tests {
         };
         let instance = json!("12a");
         let expected: ValidationResult = Err(vec![
-            ValidationError::TooLong {
-                instance_path: JsonPointer::root(),
-                max_length: 2,
-                actual_length: 3,
-            },
-            ValidationError::PatternMismatch {
-                instance_path: JsonPointer::root(),
-                pattern: "^[0-9]+$".to_string(),
-                value: "12a".to_string(),
-            },
+            ValidationError::new(
+                ValidationErrorKind::TooLong {
+                    max_length: 2,
+                    actual_length: 3,
+                },
+                JsonPointer::root(),
+                kl("/maxLength"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::PatternMismatch {
+                    pattern: "^[0-9]+$".to_string(),
+                    value: "12a".to_string(),
+                },
+                JsonPointer::root(),
+                kl("/pattern"),
+            ),
         ]);
         let actual: ValidationResult = validate(&schema, &instance);
         assert_eq!(expected, actual);
@@ -4514,11 +4769,14 @@ mod tests {
     }
 
     fn invalid_format_errors(format: &str) -> ValidationResult {
-        Err(vec![ValidationError::InvalidFormat {
-            instance_path: JsonPointer::root(),
-            format: format.to_string(),
-            value: "not-valid".to_string(),
-        }])
+        Err(vec![ValidationError::new(
+            ValidationErrorKind::InvalidFormat {
+                format: format.to_string(),
+                value: "not-valid".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/format"),
+        )])
     }
 
     #[test]
@@ -4597,10 +4855,21 @@ mod tests {
 
     #[test]
     fn validate_format_asserted_inside_any_of_in_draft7() {
-        let expected: ValidationResult = Err(vec![ValidationError::NoSubschemaMatched {
-            instance_path: JsonPointer::root(),
-            subschema_count: 1,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NoSubschemaMatched {
+                subschema_count: 1,
+                causes: vec![ValidationError::new(
+                    ValidationErrorKind::InvalidFormat {
+                        format: "ipv4".to_string(),
+                        value: "not-valid".to_string(),
+                    },
+                    JsonPointer::root(),
+                    kl("/anyOf/0/format"),
+                )],
+            },
+            JsonPointer::root(),
+            kl("/anyOf"),
+        )]);
         let actual: ValidationResult = validate_not_valid(
             r#"{"$schema":"http://json-schema.org/draft-07/schema#","anyOf":[{"type":"string","format":"ipv4"}]}"#,
             &crate::JsonSchemaSettings::default(),
@@ -4695,10 +4964,13 @@ mod tests {
 
     #[test]
     fn integer_rejects_fraction() {
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedInteger {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedInteger {
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"type":"integer"}"#,
             "1.5",
@@ -4745,15 +5017,21 @@ mod tests {
     #[test]
     fn integer_type_error_and_bound_error_are_both_reported() {
         let expected: ValidationResult = Err(vec![
-            ValidationError::ExpectedInteger {
-                instance_path: JsonPointer::root(),
-                got: "number".to_string(),
-            },
-            ValidationError::BelowMinimum {
-                instance_path: JsonPointer::root(),
-                minimum: num("2"),
-                actual: num("1.5"),
-            },
+            ValidationError::new(
+                ValidationErrorKind::ExpectedInteger {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root(),
+                kl("/type"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::BelowMinimum {
+                    minimum: num("2"),
+                    actual: num("1.5"),
+                },
+                JsonPointer::root(),
+                kl("/minimum"),
+            ),
         ]);
         let actual: ValidationResult = validate_text(
             r#"{"type":"integer","minimum":2}"#,
@@ -4765,11 +5043,14 @@ mod tests {
 
     #[test]
     fn minimum_beyond_f64_precision_rejects_smaller_integer() {
-        let expected: ValidationResult = Err(vec![ValidationError::BelowMinimum {
-            instance_path: JsonPointer::root(),
-            minimum: num("9007199254740993"),
-            actual: num("9007199254740992"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::BelowMinimum {
+                minimum: num("9007199254740993"),
+                actual: num("9007199254740992"),
+            },
+            JsonPointer::root(),
+            kl("/minimum"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"type":"integer","minimum":9007199254740993}"#,
             "9007199254740992",
@@ -4790,11 +5071,14 @@ mod tests {
 
     #[test]
     fn maximum_integer_rejects_float_just_above() {
-        let expected: ValidationResult = Err(vec![ValidationError::AboveMaximum {
-            instance_path: JsonPointer::root(),
-            maximum: num("300"),
-            actual: num("300.5"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::AboveMaximum {
+                maximum: num("300"),
+                actual: num("300.5"),
+            },
+            JsonPointer::root(),
+            kl("/maximum"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"maximum":300}"#,
             "300.5",
@@ -4822,11 +5106,14 @@ mod tests {
 
     #[test]
     fn exclusive_minimum_rejects_boundary() {
-        let expected: ValidationResult = Err(vec![ValidationError::NotAboveExclusiveMinimum {
-            instance_path: JsonPointer::root(),
-            exclusive_minimum: num("1.1"),
-            actual: num("1.1"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotAboveExclusiveMinimum {
+                exclusive_minimum: num("1.1"),
+                actual: num("1.1"),
+            },
+            JsonPointer::root(),
+            kl("/exclusiveMinimum"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"exclusiveMinimum":1.1}"#,
             "1.1",
@@ -4844,11 +5131,14 @@ mod tests {
 
     #[test]
     fn exclusive_maximum_rejects_boundary() {
-        let expected: ValidationResult = Err(vec![ValidationError::NotBelowExclusiveMaximum {
-            instance_path: JsonPointer::root(),
-            exclusive_maximum: num("3"),
-            actual: num("3.0"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotBelowExclusiveMaximum {
+                exclusive_maximum: num("3"),
+                actual: num("3.0"),
+            },
+            JsonPointer::root(),
+            kl("/exclusiveMaximum"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"exclusiveMaximum":3}"#,
             "3.0",
@@ -4876,11 +5166,14 @@ mod tests {
 
     #[test]
     fn draft4_boolean_exclusive_minimum_rejects_boundary() {
-        let expected: ValidationResult = Err(vec![ValidationError::NotAboveExclusiveMinimum {
-            instance_path: JsonPointer::root(),
-            exclusive_minimum: num("1.1"),
-            actual: num("1.1"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotAboveExclusiveMinimum {
+                exclusive_minimum: num("1.1"),
+                actual: num("1.1"),
+            },
+            JsonPointer::root(),
+            kl("/exclusiveMinimum"),
+        )]);
         let actual: ValidationResult = validate_text(
             &format!(r#"{{"$schema":"{DRAFT4}","minimum":1.1,"exclusiveMinimum":true}}"#),
             "1.1",
@@ -4901,11 +5194,14 @@ mod tests {
 
     #[test]
     fn multiple_of_rejects_non_multiple() {
-        let expected: ValidationResult = Err(vec![ValidationError::NotMultipleOf {
-            instance_path: JsonPointer::root(),
-            multiple_of: num("1.5"),
-            actual: num("35"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotMultipleOf {
+                multiple_of: num("1.5"),
+                actual: num("35"),
+            },
+            JsonPointer::root(),
+            kl("/multipleOf"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"multipleOf":1.5}"#,
             "35",
@@ -4958,11 +5254,14 @@ mod tests {
 
     #[test]
     fn const_null_rejects_zero() {
-        let expected: ValidationResult = Err(vec![ValidationError::NotConst {
-            instance_path: JsonPointer::root(),
-            expected: "null".to_string(),
-            actual: "0".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotConst {
+                expected: "null".to_string(),
+                actual: "0".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/const"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"const":null}"#,
             "0",
@@ -4987,10 +5286,13 @@ mod tests {
 
     #[test]
     fn unique_items_applies_without_type() {
-        let expected: ValidationResult = Err(vec![ValidationError::DuplicateArrayItems {
-            instance_path: JsonPointer::root(),
-            duplicate_value: r#"{"a":1,"b":2}"#.to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::DuplicateArrayItems {
+                duplicate_value: r#"{"a":1,"b":2}"#.to_string(),
+            },
+            JsonPointer::root(),
+            kl("/uniqueItems"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"uniqueItems":true}"#,
             r#"[{"a": 1, "b": 2}, {"b": 2, "a": 1}]"#,
@@ -5013,10 +5315,13 @@ mod tests {
     fn unique_items_rejects_duplicate_in_long_array() {
         let mut items: Vec<String> = (0..40).map(|i| i.to_string()).collect();
         items.push("17.0".to_string());
-        let expected: ValidationResult = Err(vec![ValidationError::DuplicateArrayItems {
-            instance_path: JsonPointer::root(),
-            duplicate_value: "17.0".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::DuplicateArrayItems {
+                duplicate_value: "17.0".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/uniqueItems"),
+        )]);
         let actual: ValidationResult = validate_text(
             r#"{"uniqueItems":true}"#,
             &format!("[{}]", items.join(",")),
@@ -5087,11 +5392,14 @@ mod tests {
 
     #[test]
     fn type_array_rejects_unlisted_type() {
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
-            instance_path: JsonPointer::root(),
-            expected: integer_or_string(),
-            got: "boolean".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedType {
+                expected: integer_or_string(),
+                got: "boolean".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult =
             validate_document(r#"{"type":["integer","string"]}"#, "true");
         assert_eq!(expected, actual);
@@ -5106,53 +5414,68 @@ mod tests {
 
     #[test]
     fn type_null_rejects_string() {
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNull {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNull {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"type":"null"}"#, r#""x""#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn type_null_rejects_number() {
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedNull {
-            instance_path: JsonPointer::root(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedNull {
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"type":"null"}"#, "1");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn empty_type_set_rejects_null() {
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
-            instance_path: JsonPointer::root(),
-            expected: crate::json_schema::TypeSet::empty(),
-            got: "null".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedType {
+                expected: crate::json_schema::TypeSet::empty(),
+                got: "null".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"type":[]}"#, "null");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn empty_type_set_rejects_object() {
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
-            instance_path: JsonPointer::root(),
-            expected: crate::json_schema::TypeSet::empty(),
-            got: "object".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedType {
+                expected: crate::json_schema::TypeSet::empty(),
+                got: "object".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"type":[]}"#, "{}");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn type_array_with_integer_rejects_zero_fraction_float_under_draft4() {
-        let expected: ValidationResult = Err(vec![ValidationError::ExpectedType {
-            instance_path: JsonPointer::root(),
-            expected: integer_or_string(),
-            got: "number".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::ExpectedType {
+                expected: integer_or_string(),
+                got: "number".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        )]);
         let actual: ValidationResult = validate_document(
             &format!(r#"{{"$schema":"{DRAFT4}","type":["integer","string"]}}"#),
             "1.0",
@@ -5179,9 +5502,11 @@ mod tests {
 
     #[test]
     fn root_false_schema_rejects_at_root() {
-        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
-            instance_path: JsonPointer::root(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::FalseSchema,
+            JsonPointer::root(),
+            kl(""),
+        )]);
         let actual: ValidationResult = validate_document("false", "null");
         assert_eq!(expected, actual);
     }
@@ -5195,18 +5520,22 @@ mod tests {
 
     #[test]
     fn root_false_schema_ref_rejects_at_root() {
-        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
-            instance_path: JsonPointer::root(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::FalseSchema,
+            JsonPointer::root(),
+            kl(""),
+        )]);
         let actual: ValidationResult = validate(SchemaRef::Bool(false), &json!("x"));
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn false_property_schema_rejects_present_property() {
-        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
-            instance_path: JsonPointer::root().push("a"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::FalseSchema,
+            JsonPointer::root().push("a"),
+            kl("/properties/a"),
+        )]);
         let actual: ValidationResult =
             validate_document(r#"{"properties":{"a":false}}"#, r#"{"a":1}"#);
         assert_eq!(expected, actual);
@@ -5223,12 +5552,16 @@ mod tests {
     #[test]
     fn false_items_rejects_each_element() {
         let expected: ValidationResult = Err(vec![
-            ValidationError::FalseSchema {
-                instance_path: JsonPointer::root().push("0"),
-            },
-            ValidationError::FalseSchema {
-                instance_path: JsonPointer::root().push("1"),
-            },
+            ValidationError::new(
+                ValidationErrorKind::FalseSchema,
+                JsonPointer::root().push("0"),
+                kl("/items"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::FalseSchema,
+                JsonPointer::root().push("1"),
+                kl("/items"),
+            ),
         ]);
         let actual: ValidationResult = validate_document(r#"{"items":false}"#, "[1,2]");
         assert_eq!(expected, actual);
@@ -5260,9 +5593,11 @@ mod tests {
 
     #[test]
     fn ref_to_false_def_rejects() {
-        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
-            instance_path: JsonPointer::root().push("a"),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::FalseSchema,
+            JsonPointer::root().push("a"),
+            kl("/properties/a/$ref"),
+        )]);
         let actual: ValidationResult = validate_document(
             r##"{"$defs":{"never":false},"properties":{"a":{"$ref":"#/$defs/never"}}}"##,
             r#"{"a":1}"#,
@@ -5289,31 +5624,39 @@ mod tests {
 
     #[test]
     fn all_of_true_and_false_fails() {
-        let expected: ValidationResult = Err(vec![ValidationError::FalseSchema {
-            instance_path: JsonPointer::root(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::FalseSchema,
+            JsonPointer::root(),
+            kl("/allOf/1"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"allOf":[true,false]}"#, "1");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn one_of_two_true_schemas_fails() {
-        let expected: ValidationResult = Err(vec![ValidationError::MultipleSubschemasMatched {
-            instance_path: JsonPointer::root(),
-            subschema_count: 2,
-            match_count: 2,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::MultipleSubschemasMatched {
+                subschema_count: 2,
+                match_count: 2,
+            },
+            JsonPointer::root(),
+            kl("/oneOf"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"oneOf":[true,true]}"#, "1");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn min_length_applies_without_type() {
-        let expected: ValidationResult = Err(vec![ValidationError::TooShort {
-            instance_path: JsonPointer::root(),
-            min_length: 2,
-            actual_length: 1,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooShort {
+                min_length: 2,
+                actual_length: 1,
+            },
+            JsonPointer::root(),
+            kl("/minLength"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"minLength":2}"#, r#""a""#);
         assert_eq!(expected, actual);
     }
@@ -5327,21 +5670,27 @@ mod tests {
 
     #[test]
     fn min_items_applies_without_type() {
-        let expected: ValidationResult = Err(vec![ValidationError::TooFewItems {
-            instance_path: JsonPointer::root(),
-            min_items: 2,
-            actual_count: 1,
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::TooFewItems {
+                min_items: 2,
+                actual_count: 1,
+            },
+            JsonPointer::root(),
+            kl("/minItems"),
+        )]);
         let actual: ValidationResult = validate_document(r#"{"minItems":2}"#, "[1]");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn required_applies_with_object_or_null_type() {
-        let expected: ValidationResult = Err(vec![ValidationError::MissingRequired {
-            instance_path: JsonPointer::root().push("a"),
-            property: "a".to_string(),
-        }]);
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::MissingRequired {
+                property: "a".to_string(),
+            },
+            JsonPointer::root().push("a"),
+            kl("/required"),
+        )]);
         let actual: ValidationResult =
             validate_document(r#"{"type":["object","null"],"required":["a"]}"#, "{}");
         assert_eq!(expected, actual);
@@ -5358,15 +5707,21 @@ mod tests {
     #[test]
     fn type_mismatch_reports_other_keywords_too() {
         let expected: ValidationResult = Err(vec![
-            ValidationError::ExpectedString {
-                instance_path: JsonPointer::root(),
-                got: "number".to_string(),
-            },
-            ValidationError::BelowMinimum {
-                instance_path: JsonPointer::root(),
-                minimum: num("5"),
-                actual: num("1"),
-            },
+            ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
+                },
+                JsonPointer::root(),
+                kl("/type"),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::BelowMinimum {
+                    minimum: num("5"),
+                    actual: num("1"),
+                },
+                JsonPointer::root(),
+                kl("/minimum"),
+            ),
         ]);
         let actual: ValidationResult = validate_document(r#"{"type":"string","minimum":5}"#, "1");
         assert_eq!(expected, actual);
@@ -5374,9 +5729,11 @@ mod tests {
 
     #[test]
     fn validation_error_false_schema_display() {
-        let err: ValidationError = ValidationError::FalseSchema {
-            instance_path: JsonPointer::root().push("a"),
-        };
+        let err: ValidationError = ValidationError::new(
+            ValidationErrorKind::FalseSchema,
+            JsonPointer::root().push("a"),
+            kl("/properties/a"),
+        );
         let expected: String = "/a: no value is allowed here (schema is false)".to_string();
         let actual: String = err.to_string();
         assert_eq!(expected, actual);
@@ -5384,10 +5741,13 @@ mod tests {
 
     #[test]
     fn validation_error_expected_null_display() {
-        let err: ValidationError = ValidationError::ExpectedNull {
-            instance_path: JsonPointer::root(),
-            got: "string".to_string(),
-        };
+        let err: ValidationError = ValidationError::new(
+            ValidationErrorKind::ExpectedNull {
+                got: "string".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        );
         let expected: String = "root: expected null, got string".to_string();
         let actual: String = err.to_string();
         assert_eq!(expected, actual);
@@ -5395,11 +5755,14 @@ mod tests {
 
     #[test]
     fn validation_error_expected_type_display() {
-        let err: ValidationError = ValidationError::ExpectedType {
-            instance_path: JsonPointer::root(),
-            expected: integer_or_string(),
-            got: "boolean".to_string(),
-        };
+        let err: ValidationError = ValidationError::new(
+            ValidationErrorKind::ExpectedType {
+                expected: integer_or_string(),
+                got: "boolean".to_string(),
+            },
+            JsonPointer::root(),
+            kl("/type"),
+        );
         let expected: String = "root: expected one of [integer, string], got boolean".to_string();
         let actual: String = err.to_string();
         assert_eq!(expected, actual);

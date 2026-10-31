@@ -53,6 +53,54 @@ fn encode(segments: &[String]) -> String {
     out
 }
 
+/// Appends `segments` as a JSON Pointer in a URI fragment (RFC 6901 §6): each segment escaped
+/// for the pointer (`~0`, `~1`), then every byte a fragment may not hold as written
+/// percent-encoded (RFC 3986 §3.5: unreserved characters, sub-delimiters, `:`, `@`, `/` and `?`
+/// stay; non-ASCII characters are kept, as an IRI allows).
+pub(crate) fn push_uri_fragment<'s>(segments: impl Iterator<Item = &'s str>, out: &mut String) {
+    let mut escaped: String = String::new();
+    for segment in segments {
+        out.push('/');
+        escaped.clear();
+        encode_segment(segment, &mut escaped);
+        for c in escaped.chars() {
+            let keep: bool = !c.is_ascii()
+                || c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '-' | '.'
+                        | '_'
+                        | '~'
+                        | '!'
+                        | '$'
+                        | '&'
+                        | '\''
+                        | '('
+                        | ')'
+                        | '*'
+                        | '+'
+                        | ','
+                        | ';'
+                        | '='
+                        | ':'
+                        | '@'
+                        | '/'
+                        | '?'
+                );
+            if keep {
+                out.push(c);
+            } else {
+                // ASCII: one byte, two hex digits.
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                let byte: usize = c as usize;
+                out.push('%');
+                out.push(char::from(HEX[byte >> 4]));
+                out.push(char::from(HEX[byte & 0xF]));
+            }
+        }
+    }
+}
+
 /// Decode one reference token: first `~1` → `/`, then `~0` → `~`.
 fn decode_token(token: &str) -> Result<String, JsonPointerError> {
     let mut out = String::with_capacity(token.len());
