@@ -1,8 +1,8 @@
 //! Integration test: public API for schema parsing and code generation, and CLI binary.
 
 use json_schema_rs::{
-    CodeGenSettings, DedupeMode, JsonSchema, JsonType, ModelNameSource, Schema, SpecVersion,
-    UnknownProperties, generate_rust, validate,
+    CodeGenInput, CodeGenSettings, DedupeMode, JsonSchema, JsonType, ModelNameSource, Schema,
+    SpecVersion, UnknownProperties, generate_rust, validate,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -4032,6 +4032,95 @@ fn main() {
                 main_rs,
             )
         }
+        "cross_file_refs" => {
+            // Five documents at `file:` URIs that refer to each other by relative `$ref`: a
+            // sibling file's root, a fragment inside a sibling file, and two files referring
+            // to each other. Every input is reachable by its URI, so no retriever is needed.
+            let documents: Vec<(&str, &str)> = vec![
+                (
+                    "order",
+                    r#"{"title":"Order","type":"object","properties":{"customer":{"$ref":"customer.json"},"item":{"$ref":"catalog.json#/$defs/Thing"}},"required":["customer","item"]}"#,
+                ),
+                (
+                    "customer",
+                    r#"{"title":"Customer","type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#,
+                ),
+                (
+                    "catalog",
+                    r##"{"$defs":{"Thing":{"type":"object","properties":{"sku":{"type":"string"}},"required":["sku"]}},"title":"Catalog","type":"object","properties":{"things":{"type":"array","items":{"$ref":"#/$defs/Thing"}}}}"##,
+                ),
+                (
+                    "tree",
+                    r#"{"title":"Tree","type":"object","properties":{"name":{"type":"string"},"parent":{"$ref":"parent.json"}},"required":["name"]}"#,
+                ),
+                (
+                    "parent",
+                    r#"{"title":"Parent","type":"object","properties":{"label":{"type":"string"},"tree":{"$ref":"tree.json"}},"required":["label"]}"#,
+                ),
+            ];
+            let schemas: Vec<(&str, JsonSchema)> = documents
+                .iter()
+                .map(|(name, json)| (*name, JsonSchema::try_from(*json).expect("parse")))
+                .collect();
+            let mut input: CodeGenInput<'_> = CodeGenInput::new();
+            for (name, schema) in &schemas {
+                input = input.schema_at(format!("file:///schemas/{name}.json"), schema);
+            }
+            let output = generate_rust(input, default_code_gen).expect("generate");
+            let shared_bytes: Vec<u8> = output
+                .shared
+                .clone()
+                .expect("types used by two documents are shared");
+            let lib_rs: String = std::iter::once("shared")
+                .chain(schemas.iter().map(|(name, _)| *name))
+                .map(|name| format!("pub mod {name};"))
+                .collect::<Vec<String>>()
+                .join("\n")
+                + "\n";
+            let mut extra: Vec<(PathBuf, Vec<u8>)> =
+                vec![(PathBuf::from("shared.rs"), shared_bytes)];
+            for ((name, _), bytes) in schemas.iter().zip(output.per_schema) {
+                extra.push((PathBuf::from(format!("{name}.rs")), bytes));
+            }
+            let main_rs = r#"fn main() {
+    let order_json: serde_json::Value = serde_json::json!({
+        "customer": {"name": "Ada"},
+        "item": {"sku": "A-1"}
+    });
+    let tree_json: serde_json::Value = serde_json::json!({
+        "name": "leaf",
+        "parent": {"label": "p", "tree": {"name": "root", "parent": {"label": "q"}}}
+    });
+    let order: compile_test::order::Order = serde_json::from_value(order_json.clone()).unwrap();
+    // The referenced types are the referenced documents' own types.
+    let customer: compile_test::customer::Customer = order.customer.clone();
+    let thing: compile_test::catalog::Thing = order.item.clone();
+    let tree: compile_test::tree::Tree = serde_json::from_value(tree_json.clone()).unwrap();
+    let grandparent: Option<String> = tree
+        .parent
+        .as_ref()
+        .and_then(|parent: &compile_test::parent::Parent| parent.tree.as_ref())
+        .and_then(|tree| tree.parent.as_ref())
+        .map(|parent| parent.label.clone());
+    let expected: (String, String, Option<String>, serde_json::Value, serde_json::Value) = (
+        "Ada".to_string(),
+        "A-1".to_string(),
+        Some("q".to_string()),
+        order_json,
+        tree_json,
+    );
+    let actual: (String, String, Option<String>, serde_json::Value, serde_json::Value) = (
+        customer.name,
+        thing.sku,
+        grandparent,
+        serde_json::to_value(&order).unwrap(),
+        serde_json::to_value(&tree).unwrap(),
+    );
+    assert_eq!(expected, actual);
+}
+"#;
+            (lib_rs.into_bytes(), extra, main_rs)
+        }
         _ => type_graph_scenario(scenario_name, default_code_gen),
     };
 
@@ -4230,6 +4319,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "unknown_keys_captured",
         "unknown_keys_dropped",
         "non_string_enum",
+        "cross_file_refs",
     ];
 
     for name in &scenario_list {
@@ -4663,5 +4753,453 @@ fn cli_validate_lists_every_registry_problem() {
     let output = child.wait_with_output().expect("wait jsonschemars");
     let expected: &str = "root: could not resolve $ref \"#/$defs/missing\": $ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nroot: could not resolve $ref \"#/$defs/gone\": $ref \"#/$defs/gone\" at /properties/b (\"json-schema:///#/$defs/gone\") does not resolve: no such location\nerror: validation failed with 2 error(s)\n";
     let actual: String = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert_eq!(expected, actual);
+}
+
+// --- CLI: cross-file `$ref` (sibling files, file root, remote retrieval) ---
+
+/// A schema that refers to a sibling file's root.
+const ORDER_REFS_CUSTOMER: &str = r#"{"title":"Order","type":"object","properties":{"customer":{"$ref":"customer.json"}},"required":["customer"]}"#;
+/// The sibling file `customer.json`.
+const CUSTOMER: &str = r#"{"title":"Customer","type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#;
+
+/// Creates a fresh directory holding `files` (name, JSON); returns it and its canonical path
+/// (the path the CLI reports, e.g. `/private/var/...` on macOS).
+fn cross_file_dir(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    for (name, json) in files {
+        fs::write(dir.path().join(name), json).expect("write schema file");
+    }
+    let canonical: PathBuf = dir.path().canonicalize().expect("canonical temp dir");
+    (dir, canonical)
+}
+
+/// Runs `jsonschemars generate rust -o <out> <extra_args> <inputs>` from `cwd`; returns whether it
+/// exited successfully, every output file (relative path → contents) and its stderr.
+fn cli_generate_from(
+    cwd: &Path,
+    inputs: &[&str],
+    extra_args: &[&str],
+) -> (bool, BTreeMap<String, String>, String) {
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .current_dir(cwd)
+        .args(["generate", "rust", "-o", out_dir.path().to_str().unwrap()])
+        .args(extra_args)
+        .args(inputs)
+        .output()
+        .expect("run jsonschemars");
+    let mut files: BTreeMap<String, String> = BTreeMap::new();
+    for entry in fs::read_dir(out_dir.path()).expect("read out dir") {
+        let path: PathBuf = entry.expect("dir entry").path();
+        let name: String = path.file_name().unwrap().to_string_lossy().to_string();
+        files.insert(name, fs::read_to_string(&path).expect("read output file"));
+    }
+    (
+        output.status.success(),
+        files,
+        String::from_utf8(output.stderr).expect("utf8 stderr"),
+    )
+}
+
+#[test]
+fn cli_generate_rust_sibling_file_ref_with_both_inputs_shares_the_type() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["order.json", "customer.json"], &[]);
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        true,
+        BTreeMap::from([
+            (
+                "customer.rs".to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Customer;
+
+"
+                .to_string(),
+            ),
+            (
+                "mod.rs".to_string(),
+                "pub mod customer;\npub mod order;\npub mod shared;\n".to_string(),
+            ),
+            (
+                "order.rs".to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub use super::shared::Customer;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Order")]
+pub struct Order {
+    pub customer: Customer,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            (
+                "shared.rs".to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Customer")]
+pub struct Customer {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+        ]),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_rust_sibling_file_fragment_ref_resolves_into_defs() {
+    let order = r#"{"title":"Order","type":"object","properties":{"item":{"$ref":"catalog.json#/$defs/Thing"}},"required":["item"]}"#;
+    let catalog = r##"{"$defs":{"Thing":{"type":"object","properties":{"sku":{"type":"string"}},"required":["sku"]}},"title":"Catalog","type":"object","properties":{"things":{"type":"array","items":{"$ref":"#/$defs/Thing"}}}}"##;
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("order.json", order), ("catalog.json", catalog)]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["order.json", "catalog.json"], &[]);
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        true,
+        BTreeMap::from([
+            (
+                "catalog.rs".to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub use super::shared::Thing;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Catalog")]
+pub struct Catalog {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub things: Option<Vec<Thing>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            (
+                "mod.rs".to_string(),
+                "pub mod catalog;\npub mod order;\npub mod shared;\n".to_string(),
+            ),
+            (
+                "order.rs".to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub use super::shared::Thing;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Order")]
+pub struct Order {
+    pub item: Thing,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            (
+                "shared.rs".to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Thing {
+    pub sku: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"
+                .to_string(),
+            ),
+        ]),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_rust_files_referring_to_each_other_box_the_back_edge() {
+    let tree = r#"{"title":"Tree","type":"object","properties":{"name":{"type":"string"},"parent":{"$ref":"parent.json"}},"required":["name"]}"#;
+    let parent = r#"{"title":"Parent","type":"object","properties":{"label":{"type":"string"},"tree":{"$ref":"tree.json"}},"required":["label"]}"#;
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("tree.json", tree), ("parent.json", parent)]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["tree.json", "parent.json"], &[]);
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        true,
+        BTreeMap::from([
+            (
+                "mod.rs".to_string(),
+                "pub mod parent;\npub mod shared;\npub mod tree;\n".to_string(),
+            ),
+            (
+                "parent.rs".to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Parent;
+
+"
+                .to_string(),
+            ),
+            (
+                "shared.rs".to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Tree")]
+pub struct Tree {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<Parent>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Parent")]
+pub struct Parent {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tree: Option<Box<Tree>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+            (
+                "tree.rs".to_string(),
+                r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Tree;
+
+"
+                .to_string(),
+            ),
+        ]),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_rust_sibling_file_not_an_input_is_read_from_the_file_root() {
+    // Only `order.json` is an input; `customer.json` beside it is inside the default file root
+    // (the current directory), so it is read and its type generated into `order.rs`.
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["order.json"], &[]);
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        true,
+        BTreeMap::from([
+            ("mod.rs".to_string(), "pub mod order;\n".to_string()),
+            (
+                "order.rs".to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Customer")]
+pub struct Customer {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Order")]
+pub struct Order {
+    pub customer: Customer,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+        ]),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_rust_sibling_file_outside_the_file_root_errors_naming_the_uri() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let root: PathBuf = path.join("elsewhere");
+    fs::create_dir(&root).expect("create file root");
+    let actual: (bool, BTreeMap<String, String>, String) = cli_generate_from(
+        &path,
+        &["order.json"],
+        &["--cgs-file-root", root.to_str().unwrap()],
+    );
+    let dir: String = path.display().to_string();
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        false,
+        BTreeMap::new(),
+        format!(
+            "error: schema at index 0: $ref \"customer.json\" at /properties/customer (\"file://{dir}/customer.json\") does not resolve: could not retrieve \"file://{dir}/customer.json\": {dir}/customer.json is outside the file root {dir}/elsewhere (set it with --cgs-file-root)\n"
+        ),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(not(windows))]
+fn cli_generate_rust_missing_ref_file_errors_naming_the_uri() {
+    let order = r#"{"type":"object","properties":{"customer":{"$ref":"missing.json"}}}"#;
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("order.json", order)]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["order.json"], &[]);
+    let dir: String = path.display().to_string();
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        false,
+        BTreeMap::new(),
+        format!(
+            "error: schema at index 0: $ref \"missing.json\" at /properties/customer (\"file://{dir}/missing.json\") does not resolve: could not retrieve \"file://{dir}/missing.json\": {dir}/missing.json cannot be read: No such file or directory (os error 2)\n"
+        ),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_rust_remote_ref_without_allow_remote_refs_errors_naming_the_uri() {
+    let order = r#"{"type":"object","properties":{"customer":{"$ref":"https://example.com/customer.json"}}}"#;
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("order.json", order)]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["order.json"], &[]);
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        false,
+        BTreeMap::new(),
+        "error: schema at index 0: $ref \"https://example.com/customer.json\" at /properties/customer (\"https://example.com/customer.json\") does not resolve: could not retrieve \"https://example.com/customer.json\": remote retrieval is off (enable it with --cgs-allow-remote-refs)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(not(feature = "http"))]
+#[test]
+fn cli_generate_rust_allow_remote_refs_without_http_feature_errors() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("customer.json", CUSTOMER)]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["customer.json"], &["--cgs-allow-remote-refs"]);
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        false,
+        BTreeMap::new(),
+        "error: --cgs-allow-remote-refs needs jsonschemars built with the `http` feature\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+/// Serves `body` as `application/json` to every request on a loopback port (no outside
+/// network); returns the server's base URL. The thread ends with the test process.
+#[cfg(feature = "http")]
+fn serve_json_on_loopback(body: &'static str) -> String {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let address: std::net::SocketAddr = listener.local_addr().expect("local address");
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream: std::net::TcpStream = stream.expect("accept");
+            let mut request: [u8; 8192] = [0; 8192];
+            let _ = stream.read(&mut request).expect("read request");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("write response");
+        }
+    });
+    format!("http://{address}")
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn cli_generate_rust_allow_remote_refs_retrieves_http_document() {
+    let base: String = serve_json_on_loopback(CUSTOMER);
+    let order: String = format!(
+        r#"{{"title":"Order","type":"object","properties":{{"customer":{{"$ref":"{base}/customer.json"}}}},"required":["customer"]}}"#
+    );
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("order.json", &order)]);
+    let actual: (bool, BTreeMap<String, String>, String) =
+        cli_generate_from(&path, &["order.json"], &["--cgs-allow-remote-refs"]);
+    let expected: (bool, BTreeMap<String, String>, String) = (
+        true,
+        BTreeMap::from([
+            ("mod.rs".to_string(), "pub mod order;\n".to_string()),
+            (
+                "order.rs".to_string(),
+                r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Customer")]
+pub struct Customer {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Order")]
+pub struct Order {
+    pub customer: Customer,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#
+                .to_string(),
+            ),
+        ]),
+        String::new(),
+    );
     assert_eq!(expected, actual);
 }

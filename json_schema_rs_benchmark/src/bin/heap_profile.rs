@@ -8,7 +8,7 @@
 //!   cell: the peak heap the operation allocated above the heap in use when it started.
 //!
 //! Each measured cell runs once as warmup (populating lazy statics and caches), then once
-//! measured. Inputs (schema text, compiled schema, parsed instance) are prepared before the
+//! measured. Inputs (schema and resource texts, compiled schema, parsed instance) are prepared before the
 //! measurement starts, so only the operation itself is counted. Rows follow fixture id, then
 //! operation, then tool order, so output is deterministic.
 //!
@@ -20,7 +20,7 @@
 
 use clap::{Arg, Command};
 use json_schema_rs_benchmark::adapters::{self, Compiled, Operation, Tool};
-use json_schema_rs_benchmark::fixtures::{self, Fixture};
+use json_schema_rs_benchmark::fixtures::{self, Fixture, Resource};
 use peak_alloc::PeakAlloc;
 use serde_json::Value;
 use std::fmt::Write as _;
@@ -118,19 +118,30 @@ fn measure(tool: Tool, fixture: &Fixture, operation: Operation) -> Option<u64> {
     match operation {
         Operation::Codegen => {
             let text: &str = &fixture.schema_text;
+            let resources: &[Resource] = &fixture.resources;
             Some(peak_of(|| {
-                drop(black_box(adapters::codegen(tool, black_box(text))));
+                drop(black_box(adapters::codegen(
+                    tool,
+                    black_box(text),
+                    black_box(resources),
+                )));
             }))
         }
         Operation::SchemaCompile => {
             let text: &str = &fixture.schema_text;
+            let resources: &[Resource] = &fixture.resources;
             Some(peak_of(|| {
-                drop(black_box(adapters::compile(tool, black_box(text))));
+                drop(black_box(adapters::compile(
+                    tool,
+                    black_box(text),
+                    black_box(resources),
+                )));
             }))
         }
         Operation::ValidateValid | Operation::ValidateInvalid => {
             let instance: Value = adapters::parse_instance(operation.instance(fixture)?).ok()?;
-            let compiled: Compiled = adapters::compile(tool, &fixture.schema_text).ok()?;
+            let compiled: Compiled =
+                adapters::compile(tool, &fixture.schema_text, &fixture.resources).ok()?;
             Some(peak_of(|| {
                 black_box(adapters::validate(
                     black_box(&compiled),

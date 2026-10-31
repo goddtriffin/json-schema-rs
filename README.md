@@ -129,8 +129,10 @@ reverse codegen details. **`$ref`** resolves through a shared `Registry` for bot
 validation and Rust codegen: JSON Pointer fragments into any schema location (including
 unknown keywords), `$id` / draft-4 `id` resources with RFC 3986 base-URI resolution,
 `$anchor` / `$dynamicAnchor`, URNs, the embedded standard
-metaschemas, and other documents you supply (in memory or through a `Retrieve`
-implementation; nothing is fetched by default). A custom `$schema` metaschema's
+metaschemas, and other documents: other input schemas (by file URI or `$id`),
+documents you supply in memory, or a `Retrieve` implementation such as the built-in
+`FileRetriever` (files inside a root directory) or `HttpRetriever` (`http`
+feature, off by default). The library fetches nothing unless given a retriever. A custom `$schema` metaschema's
 `$vocabulary` decides which keyword groups apply. The validator resolves
 `$dynamicRef` (2020-12) and `$recursiveRef` (2019-09) against the dynamic scope.
 
@@ -213,6 +215,24 @@ to prefer property keys over `title` for struct names. CLI:
 them (faster deserialization), or `Capture` to keep them even where
 `additionalProperties` is `false`.
 
+**Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
+`CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a
+document shares with another input go in the shared buffer:
+
+```rust
+use json_schema_rs::{CodeGenInput, CodeGenSettings, FileRetriever, JsonSchema, file_uri, generate_rust};
+use std::path::Path;
+
+let path = Path::new("/schemas/package.json");
+let schema: JsonSchema = path.try_into()?;
+let input = CodeGenInput::new()
+    .schema_at(file_uri(path).unwrap(), &schema)
+    .retriever(FileRetriever::new("/schemas")); // `$ref: "ava.json"` reads /schemas/ava.json
+let output = generate_rust(input, &CodeGenSettings::builder().build())?;
+```
+
+A document that cannot be retrieved is an error naming its URI.
+
 **Drafts.** Behaviour that differs between drafts follows the document's draft by
 default, so nothing needs configuring. `JsonSchemaSettings::builder()` can
 `.default_spec_version(SpecVersion::Draft07)` (the draft for a document without
@@ -270,6 +290,10 @@ emitted in a **separate Rust module** to avoid name collisions: one module per
 JSON Schema. Module names come from the file stem for paths (e.g. `simple` from
 `simple.json`) or `schema_0`, `schema_1`, … for inline strings. Use the
 generated types via those modules (e.g. `simple::Root`, `schema_0::Root`).
+A `$ref` from a path schema to another file resolves against that schema's
+path: the file is read if it is inside your crate root (passing it to the same
+macro call also shares its types between the modules). The macro never uses the
+network.
 
 **Reverse codegen (Rust → JSON Schema).** Every generated struct implements
 **ToJsonSchema** (e.g. `Root::json_schema()`). Hand-written structs can use
@@ -356,6 +380,13 @@ jsonschemars generate rust -o out/ schema.json
 jsonschemars generate rust -o out/ dir1/ dir2/ foo.json
 jsonschemars generate rust -o out/ -   # one schema from stdin → out/stdin.rs
 ```
+
+A `$ref` to another file resolves against the referring file's path (or its
+`$id`). Files passed as INPUTs reach each other by path or `$id`; any other file
+is read only from inside `--cgs-file-root DIR` (default: the current directory).
+`http:` / `https:` documents are fetched only with `--cgs-allow-remote-refs`,
+which needs the binary built with the `http` feature
+(`cargo install json-schema-rs --features http`).
 
 **Validate a JSON payload against a schema** (one schema, one payload; schema
 via `-s`, payload from stdin or `-p`):

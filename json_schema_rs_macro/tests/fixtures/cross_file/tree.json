@@ -1,0 +1,1 @@
+{"title":"Tree","type":"object","properties":{"name":{"type":"string"},"parent":{"$ref":"parent.json"}},"required":["name"]}

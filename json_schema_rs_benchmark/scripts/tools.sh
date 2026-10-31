@@ -23,8 +23,9 @@
 #   tool_version <cmd>               -> version number of an external tool (e.g. 1.20.0)
 #   codegen_tools                    -> space-separated codegen tool ids
 #   validation_tools                 -> space-separated validation tool ids
-#   codegen_cmd  <tool> <schema> <out_dir>   -> ECHO the codegen command line
-#   validate_cmd <tool> <schema> <payload>   -> ECHO the validation command line
+#   loads_resources <tool> <operation>       -> 0 if the tool's CLI can take extra documents
+#   codegen_cmd  <tool> <schema> <out_dir> [resource...]  -> ECHO the codegen command line
+#   validate_cmd <tool> <schema> <payload> [resource...]  -> ECHO the validation command line
 #   run_cmd <command_line>           -> execute a command line produced by the two functions above
 #   run_cmd_offline <command_line>   -> same, with network access denied where supported
 #   offline_supported                -> true when run_cmd_offline can deny network access
@@ -36,25 +37,34 @@
 #
 # Exit-code convention for validation: 0 = instance valid; non-zero = invalid (or error).
 #
+# Resources: a fixture may vendor the documents its schema references (fixtures/<size>/<name>/
+# resources/*.json, each with an absolute root `$id`). They are passed to a tool's CLI only where
+# that CLI can take extra documents (see loads_resources); every other cell on such a fixture is a
+# compatibility failure, never a run without the documents.
+#
 # ---------------------------------------------------------------------------------------
 # TOOL CLI SYNTAXES
 #
 #   jsonschemars (our CLI, "$REPO_ROOT/target/release/jsonschemars"):
-#       codegen:  jsonschemars generate rust -o <out_dir> <schema>
-#       validate: jsonschemars validate -s <schema> -p <payload>
+#       codegen:  jsonschemars generate rust -o <out_dir> <schema> [resource...]
+#                 (every input file is reachable from the others by its file URI and root $id;
+#                 each also gets its own output file)
+#       validate: jsonschemars validate -s <schema> -p <payload>   (no extra documents)
 #
 #   typify (https://github.com/oxidecomputer/typify, `cargo install cargo-typify`):
-#       cargo-typify typify <schema> --output <out_dir>/<base>.rs
+#       cargo-typify typify <schema> --output <out_dir>/<base>.rs   (no extra documents)
 #     The `cargo-typify` binary is invoked DIRECTLY. Going through `cargo typify` would add the
 #     cargo wrapper's own startup to every measurement. When run directly, cargo subcommands take
 #     their subcommand name as the first argument, hence the repeated `typify`.
 #
 #   jsonschema-cli (https://github.com/Stranger6667/jsonschema, `cargo install jsonschema-cli`):
-#       jsonschema-cli validate <schema> -i <payload>
+#       jsonschema-cli validate <schema> -i <payload>   (no extra documents)
 #
 #   boon (our thin wrapper bin over the boon crate, "$REPO_ROOT/target/release/boon_validate";
 #         boon ships no CLI of its own):
-#       boon_validate -s <schema> -p <payload>
+#       boon_validate -s <schema> [-r <resource>]... -p <payload>
+#     (each -r registers a document under its root $id, as boon's Compiler::add_resource does
+#     in-process)
 #
 # schemafy is not on the CLI tier: it is a proc-macro/library crate with no command-line tool.
 # ---------------------------------------------------------------------------------------
@@ -128,15 +138,37 @@ validation_tools() { printf '%s\n' "jsonschemars jsonschema-cli boon"; }
 
 # --- command lines ---------------------------------------------------------------------
 
-# codegen_cmd <tool> <schema> <out_dir>: echo the command line generating Rust for <schema> into
-# <out_dir> (which must already exist). Returns 2 for an unknown tool.
+# loads_resources <tool> <operation>: true when <tool>'s CLI can take a fixture's resource
+# documents for <operation> (codegen, validate_valid, validate_invalid).
+loads_resources() {
+    case "$1:$2" in
+        jsonschemars:codegen)   return 0 ;;
+        boon:validate_*)        return 0 ;;
+        *)                      return 1 ;;
+    esac
+}
+
+# _no_resources <tool> <operation> <resource count>: fail (status 3) when resources were given
+# to a tool whose CLI cannot take them (callers check loads_resources first).
+_no_resources() {
+    if [[ "$3" -gt 0 ]]; then
+        echo "$1 cannot take resource documents for $2" >&2
+        return 3
+    fi
+}
+
+# codegen_cmd <tool> <schema> <out_dir> [resource...]: echo the command line generating Rust for
+# <schema> into <out_dir> (which must already exist), with the resource documents the schema
+# references. Returns 2 for an unknown tool, 3 for resources the tool cannot take.
 codegen_cmd() {
     local tool="$1" schema="$2" out_dir="$3" base
+    shift 3
     case "${tool}" in
         jsonschemars)
-            _quote_argv "$(_jsonschemars_bin)" generate rust -o "${out_dir}" "${schema}"
+            _quote_argv "$(_jsonschemars_bin)" generate rust -o "${out_dir}" "${schema}" ${1+"$@"}
             ;;
         typify)
+            _no_resources "${tool}" codegen "$#" || return
             base="$(basename "${schema}")"
             base="${base%.*}"
             _quote_argv cargo-typify typify "${schema}" --output "${out_dir}/${base}.rs"
@@ -148,14 +180,29 @@ codegen_cmd() {
     esac
 }
 
-# validate_cmd <tool> <schema> <payload>: echo the command line validating <payload> against
-# <schema> (exit 0 = valid). Returns 2 for an unknown tool.
+# validate_cmd <tool> <schema> <payload> [resource...]: echo the command line validating
+# <payload> against <schema> (exit 0 = valid), with the resource documents the schema references.
+# Returns 2 for an unknown tool, 3 for resources the tool cannot take.
 validate_cmd() {
-    local tool="$1" schema="$2" payload="$3"
+    local tool="$1" schema="$2" payload="$3" resource
+    local -a resource_args
+    shift 3
     case "${tool}" in
-        jsonschemars)   _quote_argv "$(_jsonschemars_bin)" validate -s "${schema}" -p "${payload}" ;;
-        jsonschema-cli) _quote_argv jsonschema-cli validate "${schema}" -i "${payload}" ;;
-        boon)           _quote_argv "$(_boon_bin)" -s "${schema}" -p "${payload}" ;;
+        jsonschemars)
+            _no_resources "${tool}" validate "$#" || return
+            _quote_argv "$(_jsonschemars_bin)" validate -s "${schema}" -p "${payload}"
+            ;;
+        jsonschema-cli)
+            _no_resources "${tool}" validate "$#" || return
+            _quote_argv jsonschema-cli validate "${schema}" -i "${payload}"
+            ;;
+        boon)
+            resource_args=()
+            for resource in ${1+"$@"}; do
+                resource_args+=(-r "${resource}")
+            done
+            _quote_argv "$(_boon_bin)" -s "${schema}" ${resource_args[@]+"${resource_args[@]}"} -p "${payload}"
+            ;;
         *)
             echo "validate_cmd: unknown validation tool '${tool}'" >&2
             return 2
