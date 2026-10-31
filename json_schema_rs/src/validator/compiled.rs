@@ -23,7 +23,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// A problem that keeps a schema from compiling, with its location.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -445,6 +445,9 @@ pub struct CompiledSchema {
     pub(crate) patterns: Vec<Pattern>,
     /// Distinct `enum` lists.
     pub(crate) enums: Box<[Box<[Value]>]>,
+    /// Each `enum` list's values as error messages show them, serialized at the first error
+    /// that needs them (a failing combinator's causes can report one list many times).
+    pub(crate) enum_display: Box<[OnceLock<Box<[String]>>]>,
     /// `properties` lists, each sorted by name.
     pub(crate) properties: Box<[PropertyList]>,
     /// `$dynamicAnchor` targets: resource → (anchor name, node) for every anchor name a dynamic
@@ -567,6 +570,16 @@ impl CompiledSchema {
 
     pub(crate) fn enum_values(&self, id: EnumId) -> &[Value] {
         &self.enums[id.0 as usize]
+    }
+
+    /// The `enum` list `id`, each value serialized for error messages.
+    pub(crate) fn enum_display(&self, id: EnumId) -> &[String] {
+        self.enum_display[id.0 as usize].get_or_init(|| {
+            self.enum_values(id)
+                .iter()
+                .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "?".to_string()))
+                .collect()
+        })
     }
 
     pub(crate) fn property_list(&self, id: PropertiesId) -> &[(Box<str>, NodeId)] {
@@ -897,6 +910,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             nodes,
             root,
             patterns: self.patterns,
+            enum_display: self.enums.iter().map(|_| OnceLock::new()).collect(),
             enums: self.enums.into_boxed_slice(),
             properties: self.properties.into_boxed_slice(),
             dynamic_anchors,

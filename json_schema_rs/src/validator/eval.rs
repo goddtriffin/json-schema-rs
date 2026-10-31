@@ -18,14 +18,15 @@
 //! evaluated again in the collect mode, only to attach their errors as the failure's causes.
 
 use super::compiled::{
-    CompiledSchema, Contains, DynamicRef, Keyword, KnownProperties, Kw, Node, NodeId, PrefixItems,
-    RegexId, Required,
+    CompiledSchema, Contains, DynamicRef, EnumId, Keyword, KnownProperties, Kw, Node, NodeId,
+    PrefixItems, RegexId, Required,
 };
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
 use crate::json_pointer::{self, JsonPointer};
 use crate::json_schema::{JsonType, Scope, TypeSet};
 use crate::number::{self, JsonEqKey};
 use serde_json::{Map, Number, Value};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -119,24 +120,17 @@ impl<'a> Location<'a> {
     }
 
     fn pointer(&self) -> JsonPointer {
-        let mut count: usize = 0;
+        let mut segments: Vec<Cow<'_, str>> = Vec::with_capacity(8);
         let mut cursor: Option<&Location<'_>> = Some(self);
-        while let Some(location) = cursor {
-            count += usize::from(matches!(location.step, Step::Key(..) | Step::Index(..)));
-            cursor = location.parent;
-        }
-        let mut segments: Vec<String> = Vec::with_capacity(count);
-        cursor = Some(self);
         while let Some(location) = cursor {
             match location.step {
                 Step::Root | Step::Ref { .. } | Step::InPlace(_) => {}
-                Step::Key(key, _) => segments.push(key.to_string()),
-                Step::Index(index, _) => segments.push(index.to_string()),
+                Step::Key(key, _) => segments.push(Cow::Borrowed(key)),
+                Step::Index(index, _) => segments.push(Cow::Owned(index.to_string())),
             }
             cursor = location.parent;
         }
-        segments.reverse();
-        JsonPointer::from(segments)
+        JsonPointer::from_segments(segments.iter().rev().map(|s| &**s))
     }
 }
 
@@ -382,20 +376,20 @@ impl CompiledSchema {
         keyword: Option<Kw>,
         kind: ValidationErrorKind,
     ) -> ValidationError {
-        // Segments leaf first, reversed at the end; `after_ref` is how many were collected when
-        // the nearest reference was reached, and its target.
-        let mut segments: Vec<String> = Vec::new();
+        // Segments leaf first; `after_ref` is how many were collected when the nearest
+        // reference was reached, and its target.
+        let mut segments: Vec<Cow<'_, str>> = Vec::with_capacity(16);
         let mut after_ref: Option<(usize, NodeId)> = None;
         if let Some(keyword) = keyword {
-            segments.push(keyword.as_str().to_string());
+            segments.push(Cow::Borrowed(keyword.as_str()));
         }
         let mut cursor: Option<&Location<'_>> = Some(location);
         while let Some(frame) = cursor {
             match frame.step {
                 Step::Root => {}
-                Step::Key(key, via) => self.push_via(via, Some(key), &mut segments),
+                Step::Key(key, via) => self.push_via(via, Some(Cow::Borrowed(key)), &mut segments),
                 Step::Index(index, via) => {
-                    self.push_via(via, Some(&index.to_string()), &mut segments);
+                    self.push_via(via, Some(Cow::Owned(index.to_string())), &mut segments);
                 }
                 Step::InPlace(via) => self.push_via(via, None, &mut segments),
                 Step::Ref {
@@ -404,24 +398,21 @@ impl CompiledSchema {
                     if after_ref.is_none() {
                         after_ref = Some((segments.len(), target));
                     }
-                    segments.push(keyword.as_str().to_string());
+                    segments.push(Cow::Borrowed(keyword.as_str()));
                 }
             }
             cursor = frame.parent;
         }
         let absolute: Option<String> = after_ref.and_then(|(count, target)| {
             let base: &str = self.target_uris.get(&target)?;
-            let mut uri: String = base.to_string();
-            json_pointer::push_uri_fragment(
-                segments[..count].iter().rev().map(String::as_str),
-                &mut uri,
-            );
+            let mut uri: String = String::with_capacity(base.len() + 64);
+            uri.push_str(base);
+            json_pointer::push_uri_fragment(segments[..count].iter().rev().map(|s| &**s), &mut uri);
             Some(uri)
         });
-        segments.reverse();
         ValidationError {
             instance_path: location.pointer(),
-            keyword_location: JsonPointer::from(segments),
+            keyword_location: JsonPointer::from_segments(segments.iter().rev().map(|s| &**s)),
             absolute_keyword_location: absolute,
             kind,
         }
@@ -429,25 +420,30 @@ impl CompiledSchema {
 
     /// Pushes the schema segments of `via`, last first; `member` is the member name or item
     /// index of the step.
-    fn push_via(&self, via: Via<'_>, member: Option<&str>, segments: &mut Vec<String>) {
+    fn push_via<'s>(
+        &'s self,
+        via: Via<'s>,
+        member: Option<Cow<'s, str>>,
+        segments: &mut Vec<Cow<'s, str>>,
+    ) {
         match via {
             Via::None => {}
-            Via::Keyword(keyword) => segments.push(keyword.as_str().to_string()),
+            Via::Keyword(keyword) => segments.push(Cow::Borrowed(keyword.as_str())),
             Via::Member(keyword) => {
-                segments.push(member.unwrap_or_default().to_string());
-                segments.push(keyword.as_str().to_string());
+                segments.push(member.unwrap_or_default());
+                segments.push(Cow::Borrowed(keyword.as_str()));
             }
             Via::Index(keyword, index) => {
-                segments.push(index.to_string());
-                segments.push(keyword.as_str().to_string());
+                segments.push(Cow::Owned(index.to_string()));
+                segments.push(Cow::Borrowed(keyword.as_str()));
             }
             Via::Name(keyword, name) => {
-                segments.push(name.to_string());
-                segments.push(keyword.as_str().to_string());
+                segments.push(Cow::Borrowed(name));
+                segments.push(Cow::Borrowed(keyword.as_str()));
             }
             Via::Pattern(id) => {
-                segments.push(self.pattern(id).source.clone());
-                segments.push(Kw::PatternProperties.as_str().to_string());
+                segments.push(Cow::Borrowed(&self.pattern(id).source));
+                segments.push(Cow::Borrowed(Kw::PatternProperties.as_str()));
             }
         }
     }
@@ -560,7 +556,7 @@ impl CompiledSchema {
                     || self.type_error::<COLLECT>(*types, at, cx)
             }
             (Keyword::Const(expected), _) => self.const_check::<COLLECT>(expected, at, cx),
-            (Keyword::Enum(id), _) => self.enum_check::<COLLECT>(self.enum_values(*id), at, cx),
+            (Keyword::Enum(id), _) => self.enum_check::<COLLECT>(*id, at, cx),
             (
                 Keyword::Minimum(_)
                 | Keyword::Maximum(_)
@@ -893,11 +889,13 @@ impl CompiledSchema {
 
     fn enum_check<const COLLECT: bool>(
         &self,
-        allowed: &[Value],
+        id: EnumId,
         at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
-        allowed.iter().any(|a| number::json_equal(a, at.instance))
+        self.enum_values(id)
+            .iter()
+            .any(|a| number::json_equal(a, at.instance))
             || fail!(
                 COLLECT,
                 self,
@@ -906,7 +904,7 @@ impl CompiledSchema {
                 Kw::Enum,
                 ValidationErrorKind::NotInEnum {
                     invalid_value: value_to_display_string(at.instance),
-                    allowed: allowed.iter().map(value_to_display_string).collect(),
+                    allowed: self.enum_display(id).to_vec(),
                 }
             )
     }
