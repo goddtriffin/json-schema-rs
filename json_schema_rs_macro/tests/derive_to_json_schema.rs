@@ -1907,6 +1907,74 @@ fn derive_field_default_round_trip_serializes_and_parses() {
     assert_eq!(expected, actual);
 }
 
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithExactDefaults {
+    #[json_schema(default = 18446744073709551615)]
+    big: Option<u64>,
+    #[json_schema(default = -5)]
+    negative: Option<i64>,
+    #[json_schema(default = -1.5)]
+    ratio: Option<f64>,
+    #[json_schema(default = true)]
+    flag: Option<bool>,
+    plain: Option<i64>,
+}
+
+#[test]
+fn derive_field_defaults_are_exact_json_values() {
+    let schema: JsonSchema = WithExactDefaults::json_schema().expect("schema");
+    let expected: Vec<(String, Option<serde_json::Value>)> = vec![
+        (
+            "big".to_string(),
+            Some(serde_json::json!(18_446_744_073_709_551_615_u64)),
+        ),
+        ("flag".to_string(), Some(serde_json::json!(true))),
+        ("negative".to_string(), Some(serde_json::json!(-5))),
+        ("plain".to_string(), None),
+        ("ratio".to_string(), Some(serde_json::json!(-1.5))),
+    ];
+    let actual: Vec<(String, Option<serde_json::Value>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            let default: Option<serde_json::Value> =
+                property.as_object().and_then(|p| p.default_value.clone());
+            (key.clone(), default)
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithUniqueItemsVec {
+    #[json_schema(unique_items)]
+    tags: Vec<String>,
+    #[json_schema(unique_items, min_items = 1)]
+    ids: Option<Vec<i64>>,
+    plain: Vec<String>,
+}
+
+#[test]
+fn derive_unique_items_flag_sets_unique_items_on_vec_fields() {
+    let schema: JsonSchema = WithUniqueItemsVec::json_schema().expect("schema");
+    let expected: Vec<(String, Option<bool>, Option<u64>)> = vec![
+        ("ids".to_string(), Some(true), Some(1)),
+        ("plain".to_string(), None, None),
+        ("tags".to_string(), Some(true), None),
+    ];
+    let actual: Vec<(String, Option<bool>, Option<u64>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            let p: &JsonSchema = property.as_object().expect("schema object");
+            (key.clone(), p.unique_items, p.min_items)
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}
+
 #[cfg(feature = "uuid")]
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]

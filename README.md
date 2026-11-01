@@ -19,7 +19,7 @@ codegen turns into `serde_json::Value` for `true` and an enum with no variants f
 validator: instance must equal const, numbers by value so `1` equals `1.0`; codegen: single-value enum (string or any other JSON value); reverse: single-variant unit enum → const), **enum**
 (validator compares numbers by value; codegen emits Rust enums for string enums and value enums with exact serde impls for numbers, booleans, null and mixed values), **items** (array with single-schema
 items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
-codegen emits `HashSet<T>` for hashable item types and the validator enforces
+codegen emits `Vec<T>` (element order survives a round trip) with `#[json_schema(unique_items)]`, and the validator enforces
 uniqueness, with `1` and `1.0` equal and object key order ignored), **minItems** and **maxItems** (array/set length constraints;
 validator enforces; codegen emits
 `#[json_schema(min_items = ..., max_items = ...)]` on generated array/set
@@ -35,7 +35,7 @@ on generated string fields; reverse codegen supports the same attributes on
 String fields), **pattern** (string constraint as ECMA 262 regex; validator
 enforces via regress with Unicode semantics, accepting patterns written for the
 grammar without the `u` flag such as `\-` and `\:`; codegen emits `#[json_schema(pattern = "...")]`;
-reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen emits `#[serde(default)]` or `#[serde(default = "fn")]` so missing keys get the schema default; reverse codegen via `#[json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
+reverse codegen supports the same attribute on String fields), **default** (meta-data only; codegen never fills it in, so an absent key stays absent and a deserialize → serialize round trip gives back the same instance; an optional field gets a `<field>_or_default()` accessor that applies it; codegen and reverse codegen carry it as `#[json_schema(default = ...)]`), **description** (codegen emits Rust doc comments; reverse
 codegen from `///` doc comments on structs, enums and fields, or `#[json_schema(description = "...")]`),
 **examples** (draft-06+; meta-data only; stored and round-tripped; codegen emits examples in doc comments for structs and enums; not used for validation; Full dedupe includes in key, Functional excludes), **deprecated** (draft 2019-09+; meta-data only; codegen emits `#[deprecated]` on the corresponding field or struct; reverse codegen via `#[json_schema(deprecated = true)]`), **$comment** (draft-07+; stored and round-tripped; not used for validation; reverse codegen via `#[json_schema(comment = "...")]`), and **$schema**
 (stored and round-tripped; selects the draft's rules, per schema resource, unless a draft is forced;

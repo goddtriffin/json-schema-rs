@@ -103,12 +103,11 @@ enum Home {
 
 /// Names the Rust prelude, std collections or the generated code's imports already use: an
 /// item with one of these names would shadow it.
-const RESERVED_NAMES: [&str; 14] = [
+const RESERVED_NAMES: [&str; 13] = [
     "BTreeMap",
     "Box",
     "Deserialize",
     "Err",
-    "HashSet",
     "None",
     "Ok",
     "Option",
@@ -445,13 +444,8 @@ fn rust_type(
             TypeNode::Number(FloatWidth::F32) => out.push_str("f32"),
             TypeNode::Number(FloatWidth::F64) => out.push_str("f64"),
             TypeNode::String { format, .. } => out.push_str(string_type(*format, imports)),
-            TypeNode::Array { items, unique, .. } => {
-                if *unique && is_hashable(graph, *items) {
-                    imports.uses.insert("std::collections::HashSet");
-                    out.push_str("HashSet<");
-                } else {
-                    out.push_str("Vec<");
-                }
+            TypeNode::Array { items, .. } => {
+                out.push_str("Vec<");
                 stack.push(Part::Text(">"));
                 stack.push(Part::Node(*items));
             }
@@ -508,15 +502,6 @@ fn string_type(format: StringFormat, imports: &mut Imports) -> &'static str {
         }
         StringFormat::Plain => "String",
     }
-}
-
-/// Whether the Rust type for `id` implements `Hash + Eq` (so `uniqueItems` can use `HashSet`):
-/// strings, integers and booleans.
-fn is_hashable(graph: &TypeGraph, id: TypeId) -> bool {
-    matches!(
-        graph.node(id),
-        TypeNode::String { .. } | TypeNode::Integer(_) | TypeNode::Boolean
-    )
 }
 
 /// Whether the Rust type for `id` can hold JSON `null` itself: any value, `()`, or a union
@@ -656,20 +641,20 @@ fn item_docs(annotations: &Annotations) -> String {
     out
 }
 
-/// A Rust expression for a scalar JSON default of the value type `node`, and whether it equals
-/// that type's `Default` (so `#[serde(default)]` suffices). `None` when the default does not fit
-/// the type (a string for a number, `300` for a `u8`, a UUID string): `default` is an
-/// annotation, so it is left out rather than emitted as code that does not compile.
-fn default_literal(value: &Value, node: &TypeNode) -> Option<(String, bool)> {
+/// A Rust literal for a scalar JSON default of the value type `node` (a string default is a
+/// `&str` literal). `None` when the default does not fit the type (a string for a number, `300`
+/// for a `u8`, a UUID string): the field then has no default accessor, rather than one that
+/// does not compile.
+fn default_literal(value: &Value, node: &TypeNode) -> Option<String> {
     match (node, value) {
-        (TypeNode::Boolean, Value::Bool(b)) => Some((b.to_string(), !*b)),
+        (TypeNode::Boolean, Value::Bool(b)) => Some(b.to_string()),
         (
             TypeNode::String {
                 format: StringFormat::Plain,
                 ..
             },
             Value::String(text),
-        ) => Some((format!("\"{}\".to_string()", escape(text)), text.is_empty())),
+        ) => Some(format!("\"{}\"", escape(text))),
         (TypeNode::Integer(width), Value::Number(n)) => {
             // An integer value (`3` or `3.0`): its ceiling and floor agree.
             let exact: i128 = number::integer_lower_bound(n, false)?;
@@ -677,16 +662,66 @@ fn default_literal(value: &Value, node: &TypeNode) -> Option<(String, bool)> {
                 return None;
             }
             let (lo, hi): (i128, i128) = int_bounds(*width);
-            (lo..=hi)
-                .contains(&exact)
-                .then(|| (exact.to_string(), exact == 0))
+            (lo..=hi).contains(&exact).then(|| exact.to_string())
         }
-        (TypeNode::Number(_), Value::Number(n)) => {
+        (TypeNode::Number(width), Value::Number(n)) => {
             let f: f64 = n.as_f64()?;
-            Some((format!("{f:?}"), f == 0.0))
+            #[expect(clippy::cast_possible_truncation, reason = "checks the value fits f32")]
+            let fits: bool = *width == FloatWidth::F64 || (f as f32).is_finite();
+            fits.then(|| format!("{f:?}"))
         }
         _ => None,
     }
+}
+
+/// The `#[json_schema(default = ...)]` argument for a field's `default`, so the derive gives the
+/// property schema its `default` back: a string, number or boolean, written as the JSON value
+/// (`5` stays an integer, `2.5` a float). Other values (`null`, arrays, objects) have no
+/// attribute form.
+fn default_annotation(value: &Value) -> Option<String> {
+    match value {
+        Value::Bool(b) => Some(format!("default = {b}")),
+        Value::Number(n) => Some(format!("default = {n}")),
+        Value::String(text) => Some(format!("default = \"{}\"", escape(text))),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// The accessor for an optional field with a scalar `default`: the field's value, or the default
+/// when the key is absent. The field itself keeps absence (`None`), so a deserialize →
+/// serialize round trip writes back only the keys the instance had.
+fn render_default_accessor(
+    name: &str,
+    shape: FieldShape,
+    node: &TypeNode,
+    value_ty: &str,
+    literal: &str,
+) -> Option<String> {
+    let string: bool = matches!(node, TypeNode::String { .. });
+    let (ret, body): (String, String) = match (shape, string) {
+        (FieldShape::Optional, false) => (
+            value_ty.to_string(),
+            format!("self.{name}.unwrap_or({literal})"),
+        ),
+        (FieldShape::Optional, true) => (
+            "&str".to_string(),
+            format!("self.{name}.as_deref().unwrap_or({literal})"),
+        ),
+        (FieldShape::OptionalNullable, false) => (
+            format!("Option<{value_ty}>"),
+            format!("self.{name}.unwrap_or(Some({literal}))"),
+        ),
+        (FieldShape::OptionalNullable, true) => (
+            "Option<&str>".to_string(),
+            format!(
+                "match &self.{name} {{\n            Some(value) => value.as_deref(),\n            None => Some({literal}),\n        }}"
+            ),
+        ),
+        (FieldShape::Plain | FieldShape::RequiredNullable, _) => return None,
+    };
+    Some(format!(
+        "    /// The field's value, or its schema `default` when the key is absent.\n    #[must_use]\n    pub fn {name}_or_default(&self) -> {ret} {{\n        {body}\n    }}\n"
+    ))
 }
 
 /// The values an integer width holds.
@@ -722,16 +757,15 @@ struct RenderedField {
     name: String,
     ty: String,
     attrs: String,
-    /// `fn default_...() -> T { ... }` when the field needs a default function.
-    default_fn: Option<String>,
+    /// `pub fn <name>_or_default(&self) -> T { ... }` when the field has a default accessor.
+    default_accessor: Option<String>,
 }
 
-/// Renders the fields of `object` (named `struct_name`).
+/// Renders the fields of `object`.
 fn render_fields(
     graph: &TypeGraph,
     plan: &Plan,
     home: Home,
-    struct_name: &str,
     object: &ObjectNode,
     imports: &mut Imports,
 ) -> Vec<RenderedField> {
@@ -746,15 +780,7 @@ fn render_fields(
     let names: Vec<String> = unique_idents(&bases, "");
     let mut out: Vec<RenderedField> = Vec::new();
     for (field, name) in object.fields.iter().zip(&names) {
-        out.push(render_field(
-            graph,
-            plan,
-            home,
-            struct_name,
-            field,
-            name,
-            imports,
-        ));
+        out.push(render_field(graph, plan, home, field, name, imports));
     }
     if let Some(additional) = object.additional {
         let value: String = rust_type(graph, plan, home, additional, imports);
@@ -763,18 +789,16 @@ fn render_fields(
             name: names.last().expect("additional field name").clone(),
             ty: format!("BTreeMap<String, {value}>"),
             attrs: "    #[serde(flatten)]\n".to_string(),
-            default_fn: None,
+            default_accessor: None,
         });
     }
     out
 }
 
-#[expect(clippy::too_many_lines)]
 fn render_field(
     graph: &TypeGraph,
     plan: &Plan,
     home: Home,
-    struct_name: &str,
     field: &Field,
     name: &str,
     imports: &mut Imports,
@@ -805,34 +829,13 @@ fn render_field(
     if name != field.json_key {
         serde_args.push(format!("rename = \"{}\"", escape(&field.json_key)));
     }
-    // Defaults apply to scalar fields that hold their value directly (`T` or `Option<T>`).
-    let mut default_fn: Option<String> = None;
-    let scalar: bool = matches!(
-        graph.node(value_id),
-        TypeNode::String { .. } | TypeNode::Integer(_) | TypeNode::Number(_) | TypeNode::Boolean
-    );
-    if let Some(ref value) = field.default
-        && scalar
-        && shape != FieldShape::OptionalNullable
-        && let Some((expr, is_rust_default)) = default_literal(value, graph.node(value_id))
-    {
-        let is_optional: bool = shape != FieldShape::Plain;
-        if is_rust_default && !is_optional {
-            serde_args.push("default".to_string());
-        } else {
-            // An associated function of the struct, so its name cannot clash in the module.
-            let fn_name: String = format!("default_{name}");
-            let expr: String = if is_optional {
-                format!("Some({expr})")
-            } else {
-                expr
-            };
-            serde_args.push(format!("default = \"{struct_name}::{fn_name}\""));
-            default_fn = Some(format!(
-                "    fn {fn_name}() -> {ty} {{\n        {expr}\n    }}\n"
-            ));
-        }
-    }
+    // `default` is an annotation: deserializing never fills it in (absent stays absent, and a
+    // required key stays required). An optional scalar field gets an accessor that applies it.
+    let default_accessor: Option<String> = field.default.as_ref().and_then(|value: &Value| {
+        let node: &TypeNode = graph.node(value_id);
+        let literal: String = default_literal(value, node)?;
+        render_default_accessor(name, shape, node, &value_ty, &literal)
+    });
     match shape {
         FieldShape::Plain => {}
         FieldShape::Optional => {
@@ -843,9 +846,7 @@ fn render_field(
         }
         FieldShape::OptionalNullable => {
             imports.deserialize_some = true;
-            if !serde_args.iter().any(|a| a.starts_with("default")) {
-                serde_args.push("default".to_string());
-            }
+            serde_args.push("default".to_string());
             serde_args.push("deserialize_with = \"deserialize_some\"".to_string());
             serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
         }
@@ -878,15 +879,25 @@ fn render_field(
                 schema_args.push(format!("pattern = \"{}\"", escape(p)));
             }
         }
-        TypeNode::Array { constraints, .. } => {
+        TypeNode::Array {
+            constraints,
+            unique,
+            ..
+        } => {
             if let Some(n) = constraints.min_items {
                 schema_args.push(format!("min_items = {n}"));
             }
             if let Some(n) = constraints.max_items {
                 schema_args.push(format!("max_items = {n}"));
             }
+            if *unique {
+                schema_args.push("unique_items".to_string());
+            }
         }
         _ => {}
+    }
+    if let Some(arg) = field.default.as_ref().and_then(default_annotation) {
+        schema_args.push(arg);
     }
     if !schema_args.is_empty() {
         let _ = writeln!(attrs, "    #[json_schema({})]", schema_args.join(", "));
@@ -895,7 +906,7 @@ fn render_field(
         name: name.to_string(),
         ty,
         attrs,
-        default_fn,
+        default_accessor,
     }
 }
 
@@ -913,8 +924,11 @@ fn render_struct(
     object: &ObjectNode,
     imports: &mut Imports,
 ) -> String {
-    let fields: Vec<RenderedField> = render_fields(graph, plan, home, name, object, imports);
-    let default_fns: Vec<String> = fields.iter().filter_map(|f| f.default_fn.clone()).collect();
+    let fields: Vec<RenderedField> = render_fields(graph, plan, home, object, imports);
+    let default_accessors: Vec<String> = fields
+        .iter()
+        .filter_map(|f| f.default_accessor.clone())
+        .collect();
     let mut out: String = String::new();
     let a: &Annotations = &object.annotations;
     out.push_str(&item_docs(a));
@@ -936,9 +950,9 @@ fn render_struct(
         let _ = writeln!(out, "    pub {}: {},", field.name, field.ty);
     }
     out.push_str("}\n\n");
-    if !default_fns.is_empty() {
+    if !default_accessors.is_empty() {
         let _ = writeln!(out, "impl {name} {{");
-        out.push_str(&default_fns.join("\n"));
+        out.push_str(&default_accessors.join("\n"));
         out.push_str("}\n\n");
     }
     out
@@ -2566,8 +2580,8 @@ pub struct Root {
     }
 
     #[test]
-    fn default_function_name_uses_snake_case() {
-        let json = r#"{"type":"object","properties":{"person":{"title":"ValerieHunter","type":"object","properties":{"toddGriffin":{"type":"string","default":"bar"}},"required":["toddGriffin"]}},"required":["person"]}"#;
+    fn default_accessor_name_uses_snake_case_field_name() {
+        let json = r#"{"type":"object","properties":{"person":{"title":"ValerieHunter","type":"object","properties":{"toddGriffin":{"type":"string","default":"bar"}}}},"required":["person"]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
@@ -2580,15 +2594,18 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "ValerieHunter")]
 pub struct ValerieHunter {
-    #[serde(rename = "toddGriffin", default = "ValerieHunter::default_todd_griffin")]
-    pub todd_griffin: String,
+    #[serde(rename = "toddGriffin", skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "bar")]
+    pub todd_griffin: Option<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 impl ValerieHunter {
-    fn default_todd_griffin() -> String {
-        "bar".to_string()
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn todd_griffin_or_default(&self) -> &str {
+        self.todd_griffin.as_deref().unwrap_or("bar")
     }
 }
 
@@ -2973,7 +2990,7 @@ pub struct Root {
 
     #[test]
     fn integer_default_above_i64_max_is_exact() {
-        let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":18446744073709551615,"default":18446744073709551615}},"required":["n"]}"#;
+        let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":18446744073709551615,"default":18446744073709551615}}}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
@@ -2985,15 +3002,18 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default = "Root::default_n")]
-    pub n: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 18446744073709551615)]
+    pub n: Option<u64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 impl Root {
-    fn default_n() -> u64 {
-        18446744073709551615
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn n_or_default(&self) -> u64 {
+        self.n.unwrap_or(18446744073709551615)
     }
 }
 
@@ -3192,7 +3212,7 @@ pub struct Root {
     }
 
     #[test]
-    fn array_items_boolean_unique_items_emits_hash_set_bool() {
+    fn array_items_boolean_unique_items_emits_vec_bool() {
         let json = r#"{"type":"object","properties":{"flags":{"type":"array","items":{"type":"boolean"},"uniqueItems":true}},"required":["flags"]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -3202,11 +3222,11 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub flags: HashSet<bool>,
+    #[json_schema(unique_items)]
+    pub flags: Vec<bool>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -3216,7 +3236,7 @@ pub struct Root {
     }
 
     #[test]
-    fn boolean_property_with_default_emits_default_attr() {
+    fn boolean_property_with_default_emits_accessor() {
         let json =
             r#"{"type":"object","properties":{"enabled":{"type":"boolean","default":true}}}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
@@ -3230,15 +3250,18 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default = "Root::default_enabled", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = true)]
     pub enabled: Option<bool>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 impl Root {
-    fn default_enabled() -> Option<bool> {
-        Some(true)
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn enabled_or_default(&self) -> bool {
+        self.enabled.unwrap_or(true)
     }
 }
 
@@ -3270,7 +3293,7 @@ pub struct Root {
     }
 
     #[test]
-    fn array_with_unique_items_true_emits_hash_set_string() {
+    fn array_with_unique_items_true_emits_vec_string() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -3280,11 +3303,11 @@ pub struct Root {
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub tags: HashSet<String>,
+    #[json_schema(unique_items)]
+    pub tags: Vec<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -3338,6 +3361,7 @@ pub struct Items {
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[json_schema(unique_items)]
     pub items: Vec<Items>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
@@ -6880,7 +6904,7 @@ pub struct Root {
 
     /// Defaults that fit the field type become functions; a default that does not fit (300 for u8, a UUID string) is left out.
     #[test]
-    fn defaults_that_do_not_fit_the_type_are_left_out() {
+    fn defaults_that_do_not_fit_the_type_get_no_accessor() {
         let schema: Schema = Schema::try_from(r#"{"type": "object", "properties": {"x": {"type": "number", "default": 5}, "y": {"type": "number", "default": 2.5}, "u": {"type": "string", "format": "uuid", "default": "00000000-0000-0000-0000-000000000000"}, "b": {"type": "integer", "maximum": 10, "minimum": 0, "default": 300}, "c": {"type": "integer", "maximum": 10, "minimum": 0, "default": 7}, "s": {"type": "string", "default": "a\r\"b"}}, "required": ["x"]}"#).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
@@ -6894,36 +6918,43 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 300)]
     pub b: Option<u8>,
-    #[serde(default = "Root::default_c", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 7)]
     pub c: Option<u8>,
-    #[serde(default = "Root::default_s", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "a\r\"b")]
     pub s: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "00000000-0000-0000-0000-000000000000")]
     pub u: Option<Uuid>,
-    #[serde(default = "Root::default_x")]
+    #[json_schema(default = 5)]
     pub x: f64,
-    #[serde(default = "Root::default_y", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 2.5)]
     pub y: Option<f64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 impl Root {
-    fn default_c() -> Option<u8> {
-        Some(7)
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn c_or_default(&self) -> u8 {
+        self.c.unwrap_or(7)
     }
 
-    fn default_s() -> Option<String> {
-        Some("a\r\"b".to_string())
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn s_or_default(&self) -> &str {
+        self.s.as_deref().unwrap_or("a\r\"b")
     }
 
-    fn default_x() -> f64 {
-        5.0
-    }
-
-    fn default_y() -> Option<f64> {
-        Some(2.5)
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn y_or_default(&self) -> f64 {
+        self.y.unwrap_or(2.5)
     }
 }
 
@@ -6933,7 +6964,163 @@ impl Root {
 
     /// Default functions are associated functions, so `FooBar.baz` and `Foo.bar_baz` cannot clash.
     #[test]
-    fn default_functions_with_same_snake_case_name_do_not_clash() {
+    fn required_field_defaults_are_annotations_only() {
+        let schema: Schema = Schema::try_from(r#"{"type": "object", "properties": {"a": {"type": "string", "default": "x"}, "b": {"type": ["integer", "null"], "default": 3}}, "required": ["a", "b"]}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[json_schema(default = "x")]
+    pub a: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[json_schema(required, default = 3)]
+    pub b: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn optional_nullable_field_default_accessor_keeps_null() {
+        let schema: Schema = Schema::try_from(r#"{"type": "object", "properties": {"m": {"type": ["integer", "null"], "default": -3}, "n": {"type": ["string", "null"], "default": "z"}}}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = -3)]
+    pub m: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "z")]
+    pub n: Option<Option<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Root {
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn m_or_default(&self) -> Option<i64> {
+        self.m.unwrap_or(Some(-3))
+    }
+
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn n_or_default(&self) -> Option<&str> {
+        match &self.n {
+            Some(value) => value.as_deref(),
+            None => Some("z"),
+        }
+    }
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_scalar_and_null_defaults_have_no_attribute_or_accessor() {
+        let schema: Schema = Schema::try_from(r#"{"type": "object", "properties": {"a": {"type": "array", "items": {"type": "string"}, "default": ["x"]}, "o": {"type": "object", "properties": {"k": {"type": "string"}}, "default": {"k": "v"}}, "z": {"type": ["string", "null"], "default": null}}}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct O {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub o: Option<O>,
+    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub z: Option<Option<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn float_default_outside_f32_gets_no_accessor() {
+        let schema: Schema = Schema::try_from(r#"{"type": "object", "properties": {"f": {"type": "number", "minimum": 0, "maximum": 1, "default": 1e300}, "g": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5}}}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 1e+300)]
+    pub f: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 0.5)]
+    pub g: Option<f32>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Root {
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn g_or_default(&self) -> f32 {
+        self.g.unwrap_or(0.5)
+    }
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn default_accessors_are_methods_of_their_own_struct() {
         let schema: Schema = Schema::try_from(r#"{"$defs":{"FooBar":{"type":"object","properties":{"baz":{"type":"integer","default":1}}},"Foo":{"type":"object","properties":{"bar_baz":{"type":"integer","default":2}}}}}"#).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
@@ -6945,29 +7132,35 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Foo {
-    #[serde(default = "Foo::default_bar_baz", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 2)]
     pub bar_baz: Option<i64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 impl Foo {
-    fn default_bar_baz() -> Option<i64> {
-        Some(2)
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn bar_baz_or_default(&self) -> i64 {
+        self.bar_baz.unwrap_or(2)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct FooBar {
-    #[serde(default = "FooBar::default_baz", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 1)]
     pub baz: Option<i64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 impl FooBar {
-    fn default_baz() -> Option<i64> {
-        Some(1)
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn baz_or_default(&self) -> i64 {
+        self.baz.unwrap_or(1)
     }
 }
 

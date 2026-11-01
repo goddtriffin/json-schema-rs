@@ -78,15 +78,18 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default = "Root::default_name", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "foo")]
     pub name: Option<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 impl Root {
-    fn default_name() -> Option<String> {
-        Some("foo".to_string())
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn name_or_default(&self) -> &str {
+        self.name.as_deref().unwrap_or("foo")
     }
 }
 
@@ -889,11 +892,11 @@ fn cli_generate_rust_array_unique_items_true() {
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub tags: HashSet<String>,
+    #[json_schema(unique_items)]
+    pub tags: Vec<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -2722,11 +2725,11 @@ fn integration_parse_and_generate_array_unique_items_true() {
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub tags: HashSet<String>,
+    #[json_schema(unique_items)]
+    pub tags: Vec<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -3800,19 +3803,86 @@ fn write_workspace_scenario_member(
                 main_rs,
             )
         }
-        "default" => {
-            // Optional property with default: a missing key gets the schema default.
-            let schema_json =
-                r#"{"type":"object","properties":{"name":{"type":"string","default":"foo"}}}"#;
-            let main_rs = r##"fn main() {
-    let missing: compile_test::Root = serde_json::from_str(r#"{}"#).unwrap();
-    let present: compile_test::Root = serde_json::from_str(r#"{"name":"bar"}"#).unwrap();
-    let expected: (Option<String>, Option<String>) =
-        (Some("foo".to_string()), Some("bar".to_string()));
-    let actual: (Option<String>, Option<String>) = (missing.name, present.name);
+        "default_round_trip" => {
+            // `default` is an annotation: absent keys stay absent through a deserialize →
+            // serialize round trip, the accessors apply the defaults, and the derive gives the
+            // property schemas their `default` back (exact for big and negative numbers).
+            let schema_json = r#"{"type":"object","properties":{"singleQuote":{"type":"boolean","default":false},"tabWidth":{"type":"integer","minimum":0,"maximum":255,"default":2},"semi":{"type":"boolean","default":true},"parser":{"type":"string","default":"babel"},"printWidth":{"type":["integer","null"],"default":80},"ratio":{"type":"number","default":-1.5},"big":{"type":"integer","default":18446744073709551615}}}"#;
+            let main_rs = r#"fn main() {
+    use json_schema_rs::ToJsonSchema;
+    let partial: serde_json::Value = serde_json::json!({"singleQuote": false, "tabWidth": 4});
+    let root: compile_test::Root = serde_json::from_value(partial.clone()).unwrap();
+    let schema: json_schema_rs::JsonSchema = compile_test::Root::json_schema().unwrap();
+    let defaults: Vec<(String, Option<serde_json::Value>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            let default: Option<serde_json::Value> =
+                property.as_object().and_then(|p| p.default_value.clone());
+            (key.clone(), default)
+        })
+        .collect();
+    type Accessors<'a> = (bool, u8, bool, &'a str, Option<i64>, f64);
+    let expected: (serde_json::Value, Accessors<'_>, Vec<(String, Option<serde_json::Value>)>) = (
+        partial,
+        (false, 4, true, "babel", Some(80), -1.5),
+        vec![
+            ("big".to_string(), Some(serde_json::json!(18446744073709551615_u64))),
+            ("parser".to_string(), Some(serde_json::json!("babel"))),
+            ("printWidth".to_string(), Some(serde_json::json!(80))),
+            ("ratio".to_string(), Some(serde_json::json!(-1.5))),
+            ("semi".to_string(), Some(serde_json::json!(true))),
+            ("singleQuote".to_string(), Some(serde_json::json!(false))),
+            ("tabWidth".to_string(), Some(serde_json::json!(2))),
+        ],
+    );
+    let actual: (serde_json::Value, Accessors<'_>, Vec<(String, Option<serde_json::Value>)>) = (
+        serde_json::to_value(&root).unwrap(),
+        (
+            root.single_quote_or_default(),
+            root.tab_width_or_default(),
+            root.semi_or_default(),
+            root.parser_or_default(),
+            root.print_width_or_default(),
+            root.ratio_or_default(),
+        ),
+        defaults,
+    );
     assert_eq!(expected, actual);
 }
-"##;
+"#;
+            (
+                generate_single(schema_json, default_code_gen),
+                vec![],
+                main_rs,
+            )
+        }
+        "unique_items_round_trip" => {
+            // A `uniqueItems` array keeps its element order through a deserialize → serialize
+            // round trip, and the derive gives the property schemas `uniqueItems` back.
+            let schema_json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"ids":{"type":"array","items":{"type":"integer"},"uniqueItems":true,"minItems":1}},"required":["tags"]}"#;
+            let main_rs = r#"fn main() {
+    use json_schema_rs::ToJsonSchema;
+    let instance: serde_json::Value =
+        serde_json::json!({"tags": ["core", "generated", "alpha"], "ids": [3, 1, 2]});
+    let root: compile_test::Root = serde_json::from_value(instance.clone()).unwrap();
+    let schema: json_schema_rs::JsonSchema = compile_test::Root::json_schema().unwrap();
+    let unique: Vec<(String, Option<bool>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            (key.clone(), property.as_object().and_then(|p| p.unique_items))
+        })
+        .collect();
+    let expected: (serde_json::Value, Vec<(String, Option<bool>)>) = (
+        instance,
+        vec![("ids".to_string(), Some(true)), ("tags".to_string(), Some(true))],
+    );
+    let actual: (serde_json::Value, Vec<(String, Option<bool>)>) =
+        (serde_json::to_value(&root).unwrap(), unique);
+    assert_eq!(expected, actual);
+}
+"#;
             (
                 generate_single(schema_json, default_code_gen),
                 vec![],
@@ -3824,11 +3894,10 @@ fn write_workspace_scenario_member(
             // round-trip unchanged, with no key falling through to the unknown-key map.
             let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"},"enabled":{"type":"boolean"},"flag":{"type":"boolean"},"value_required":{"type":"number"},"value_optional":{"type":"number"},"count_required":{"type":"integer"},"count_optional":{"type":"integer"},"byte":{"type":"integer","minimum":0,"maximum":255},"byte_exclusive":{"type":"integer","exclusiveMinimum":-1,"exclusiveMaximum":256},"big_unsigned":{"type":"integer","minimum":0,"maximum":18446744073709551615},"value_f32":{"type":"number","minimum":0.0,"maximum":100.0},"tags_required":{"type":"array","items":{"type":"string"}},"tags_optional":{"type":"array","items":{"type":"string"}},"tags_unique":{"type":"array","items":{"type":"string"},"uniqueItems":true},"tags_min_max":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5},"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}},"name_bounded":{"type":"string","minLength":2,"maxLength":50},"foo-bar":{"type":"string"},"status":{"enum":["open","closed"]},"fixed":{"const":"only"},"name_opt":{"type":"string"}},"required":["id","enabled","value_required","count_required","byte","byte_exclusive","big_unsigned","value_f32","tags_required","tags_unique","tags_min_max","name_bounded","status","fixed"]}"#;
             let main_rs = r##"fn main() {
-    use std::collections::HashSet;
     let expected: serde_json::Value = serde_json::from_str(r#"{"id":"x","enabled":true,"flag":false,"value_required":3.14,"value_optional":2.5,"count_required":42,"count_optional":1,"byte":42,"byte_exclusive":255,"big_unsigned":18446744073709551615,"value_f32":0.5,"tags_required":["a","b","c"],"tags_optional":["x","y"],"tags_unique":["a"],"tags_min_max":["a","b","c"],"address":{"city":"NYC","street_address":"5th Ave"},"name_bounded":"Alice","foo-bar":"baz","status":"open","fixed":"only","name_opt":"optional"}"#).unwrap();
     let root: compile_test::Root = serde_json::from_value(expected.clone()).unwrap();
     // The Rust types the generator picks, checked at compile time.
-    let _: (&u8, &u8, &u64, &f32, &HashSet<String>, &compile_test::Status, &compile_test::Fixed, &Option<compile_test::Address>, &Option<String>) = (
+    let _: (&u8, &u8, &u64, &f32, &Vec<String>, &compile_test::Status, &compile_test::Fixed, &Option<compile_test::Address>, &Option<String>) = (
         &root.byte,
         &root.byte_exclusive,
         &root.big_unsigned,
@@ -4393,7 +4462,8 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "additional_properties_false",
         "additional_properties_schema",
         "string_pattern",
-        "default",
+        "default_round_trip",
+        "unique_items_round_trip",
         "examples_annotation",
         "deprecated_property",
         "self_reference_root",
