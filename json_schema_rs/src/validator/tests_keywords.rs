@@ -27,7 +27,10 @@ fn schema_in(json: &str, version: SpecVersion) -> JsonSchema {
 }
 
 fn schema_with(json: &str, settings: &JsonSchemaSettings) -> JsonSchema {
-    JsonSchema::new_from_str(json, settings).expect("parse schema")
+    Schema::new_from_str(json, settings)
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object")
 }
 
 /// Compiles `schema` through a default registry.
@@ -2674,8 +2677,7 @@ fn strict_parse_accepts_invalid_raw_keyword_value() {
     let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
         .disallow_unknown_fields(true)
         .build();
-    let actual: bool =
-        JsonSchema::new_from_str(r#"{"not":{"minContains":"x"}}"#, &settings).is_ok();
+    let actual: bool = Schema::new_from_str(r#"{"not":{"minContains":"x"}}"#, &settings).is_ok();
     let expected: bool = true;
     assert_eq!(expected, actual);
 }

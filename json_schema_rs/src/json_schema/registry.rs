@@ -1948,7 +1948,10 @@ mod tests {
 
     /// Parses `value` with default settings.
     fn parse(value: &Value) -> JsonSchema {
-        JsonSchema::try_from(value).expect("parse schema")
+        Schema::try_from(value)
+            .expect("parse schema")
+            .into_object()
+            .expect("schema object")
     }
 
     /// The build error of a registry for `schema` with the defaults.
@@ -2520,7 +2523,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft07)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({
                 "$id": "https://example.com/root.json",
                 "definitions": {
@@ -2531,7 +2534,9 @@ mod tests {
             }),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
@@ -2570,14 +2575,16 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft07)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({
                 "definitions": {"a": {"$id": "#foo", "type": "integer"}},
                 "properties": {"p": {"$ref": "#foo"}}
             }),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
@@ -2857,7 +2864,10 @@ mod tests {
     /// [`mixed_dialect_root`]'s schema text parsed with `settings`.
     fn mixed_dialect_root_with(settings: &JsonSchemaSettings) -> JsonSchema {
         let value: Value = serde_json::to_value(mixed_dialect_root()).expect("serialize");
-        JsonSchema::new_from_serde_value(&value, settings).expect("parse schema")
+        Schema::new_from_serde_value(&value, settings)
+            .expect("parse schema")
+            .into_object()
+            .expect("schema object")
     }
 
     #[test]
@@ -2910,7 +2920,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .format_mode(FormatMode::Annotation)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({
                 "$defs": {"inner": {
                     "$id": "inner.json",
@@ -2920,7 +2930,9 @@ mod tests {
             }),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
         let resolved: Resolved<'_> = registry
             .resolve(root_inner_scope(&registry, &schema), "inner.json")
@@ -2940,11 +2952,13 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft202012)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({"$ref": "https://example.com/old.json"}),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let registry: Registry<'_> = Registry::builder()
             .document(
                 "https://example.com/old.json",

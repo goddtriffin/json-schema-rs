@@ -14,8 +14,8 @@
 //! Official-suite failures are tracked separately in `suite_xfail.json`.
 
 use json_schema_rs::{
-    CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchema, JsonSchemaSettings,
-    ValidationError, ValidationErrorKind, ValidationResult, generate_rust, validate,
+    CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchemaSettings, Schema, ValidationError,
+    ValidationErrorKind, ValidationResult, generate_rust, validate,
 };
 use serde_json::json;
 use std::io::Read;
@@ -136,8 +136,8 @@ fn known_failure_harness_reports_child_not_run() {
     assert_eq!(expected, actual);
 }
 
-fn parse(schema_json: &str) -> JsonSchema {
-    JsonSchema::new_from_str(schema_json, &JsonSchemaSettings::default()).expect("schema parses")
+fn parse(schema_json: &str) -> Schema {
+    Schema::new_from_str(schema_json, &JsonSchemaSettings::default()).expect("schema parses")
 }
 
 /// Validator verdict for `instance_json` against `schema_json` (default settings, 2020-12).
@@ -189,7 +189,7 @@ fn unknown_type_name_fails_to_parse() {
                             \"object\", \"string\" at line 1 column 15"
         .to_string();
     let actual: String =
-        JsonSchema::new_from_str(r#"{"type":"strng"}"#, &JsonSchemaSettings::default())
+        Schema::new_from_str(r#"{"type":"strng"}"#, &JsonSchemaSettings::default())
             .expect_err("unknown type name is a parse error")
             .to_string();
     assert_eq!(expected, actual);

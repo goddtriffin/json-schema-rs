@@ -111,11 +111,13 @@ mod tests {
     #[test]
     fn default_settings_resolve_to_draft202012() {
         let schema: JsonSchema = JsonSchema::default();
-        let expected: ResolvedDialect =
-            resolve_dialect(&schema, &JsonSchemaSettings::builder()
-                    .forced_spec_version(SpecVersion::Draft202012)
-                    .build())
-                .expect("resolve");
+        let expected: ResolvedDialect = resolve_dialect(
+            &schema,
+            &JsonSchemaSettings::builder()
+                .forced_spec_version(SpecVersion::Draft202012)
+                .build(),
+        )
+        .expect("resolve");
         let actual: ResolvedDialect =
             resolve_dialect(&schema, &JsonSchemaSettings::default()).expect("resolve");
         assert_eq!(expected, actual);

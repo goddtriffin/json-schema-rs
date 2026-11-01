@@ -1,11 +1,11 @@
 //! `jsonschemars generate` subcommand: generate Rust from JSON Schema files.
 
 use super::utils::{
-    collect_schema_entries, display_schema_path, read_json_schema_from_path, write_mod_rs_files,
+    collect_schema_entries, display_schema_path, read_schema_from_path, write_mod_rs_files,
 };
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, DedupeMode, FileRetriever, JsonSchema, JsonSchemaSettings,
-    ModelNameSource, Retrieve, RetrieveError, UnknownProperties, file_uri, generate_rust,
+    CodeGenInput, CodeGenSettings, DedupeMode, FileRetriever, JsonSchemaSettings, ModelNameSource,
+    Retrieve, RetrieveError, Schema, UnknownProperties, file_uri, generate_rust,
 };
 use serde_json::Value;
 use std::fs;
@@ -123,10 +123,10 @@ pub(crate) fn run_generate(
 
     // Standalone ingestion step: try every file, log each failure to stderr, do not short-circuit.
     let retriever: CliRetriever = CliRetriever::new(retrieval)?;
-    let mut successful: Vec<(JsonSchema, PathBuf)> = Vec::with_capacity(entries.len());
+    let mut successful: Vec<(Schema, PathBuf)> = Vec::with_capacity(entries.len());
     let mut had_errors = false;
     for (input_path, output_relative) in &entries {
-        match read_json_schema_from_path(input_path, schema_settings) {
+        match read_schema_from_path(input_path, schema_settings) {
             Ok(schema) => successful.push((schema, output_relative.clone())),
             Err(e) => {
                 // One line per problem the schema has, each naming the file.
@@ -144,8 +144,7 @@ pub(crate) fn run_generate(
         ));
     }
 
-    let (schemas, output_relatives): (Vec<JsonSchema>, Vec<PathBuf>) =
-        successful.into_iter().unzip();
+    let (schemas, output_relatives): (Vec<Schema>, Vec<PathBuf>) = successful.into_iter().unzip();
     // Each file is retrieved from its own `file:` URI, so its relative `$ref`s reach its
     // siblings, and the other inputs reach it by that URI or its `$id`.
     let mut input: CodeGenInput<'_> = CodeGenInput::new()

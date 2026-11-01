@@ -1,8 +1,8 @@
 //! Code generation: schema → source in a target language.
 //!
-//! A [`CodeGenBackend`] takes the intermediate [`JsonSchema`] and returns generated
-//! source as bytes. The CLI matches on the language argument and calls the
-//! appropriate backend (e.g. the Rust backend).
+//! A [`CodeGenBackend`] takes parsed [`Schema`](crate::Schema) documents (a schema object or a
+//! boolean schema) and returns generated source as bytes. The CLI matches on the language
+//! argument and calls the appropriate backend (e.g. the Rust backend).
 
 mod error;
 mod input;

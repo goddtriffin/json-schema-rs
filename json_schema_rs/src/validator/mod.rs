@@ -46,10 +46,11 @@ use crate::json_schema::{Registry, RegistryError, SchemaRef};
 /// # Example
 ///
 /// ```
-/// use json_schema_rs::{JsonSchema, Schema, validate};
+/// use json_schema_rs::{Schema, validate};
 /// use serde_json::json;
 ///
-/// let schema: JsonSchema = serde_json::from_str(r#"{"type":"object","properties":{"name":{"type":"string"}}}"#).unwrap();
+/// let schema: Schema =
+///     Schema::try_from(r#"{"type":"object","properties":{"name":{"type":"string"}}}"#).unwrap();
 /// let instance = json!({"name": "Alice"});
 /// assert!(validate(&schema, &instance).is_ok());
 ///
@@ -77,10 +78,10 @@ pub fn validate<'a>(
 /// # Example
 ///
 /// ```
-/// use json_schema_rs::{CompiledSchema, JsonSchema, Registry, validate_with_registry};
+/// use json_schema_rs::{CompiledSchema, Registry, Schema, validate_with_registry};
 /// use serde_json::json;
 ///
-/// let schema: JsonSchema = JsonSchema::try_from(
+/// let schema: Schema = Schema::try_from(
 ///     r#"{"$id":"https://example.com/root.json","items":{"$ref":"item.json"},
 ///        "$defs":{"item":{"$id":"item.json","type":"integer"}}}"#,
 /// )
@@ -4764,7 +4765,10 @@ mod tests {
         schema_json: &str,
         settings: &crate::JsonSchemaSettings,
     ) -> ValidationResult {
-        let schema: JsonSchema = JsonSchema::new_from_str(schema_json, settings).expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(schema_json, settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         validate(&schema, &json!("not-valid"))
     }
 
@@ -4848,7 +4852,9 @@ mod tests {
         let expected: ValidationResult = invalid_format_errors("ipv4");
         let actual: ValidationResult = validate_not_valid(
             r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,
-            &crate::JsonSchemaSettings::builder().forced_spec_version(crate::SpecVersion::Draft07).build(),
+            &crate::JsonSchemaSettings::builder()
+                .forced_spec_version(crate::SpecVersion::Draft07)
+                .build(),
         );
         assert_eq!(expected, actual);
     }
@@ -4895,7 +4901,10 @@ mod tests {
         instance_json: &str,
         settings: &crate::json_schema::JsonSchemaSettings,
     ) -> ValidationResult {
-        let schema: JsonSchema = JsonSchema::new_from_str(schema_json, settings).expect("schema");
+        let schema: JsonSchema = Schema::new_from_str(schema_json, settings)
+            .expect("schema")
+            .into_object()
+            .expect("schema object");
         let instance: serde_json::Value = serde_json::from_str(instance_json).expect("instance");
         validate(&schema, &instance)
     }

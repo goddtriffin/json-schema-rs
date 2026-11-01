@@ -3,7 +3,9 @@
 //! Use with the `json-schema-rs` crate: add `json-schema-rs` with the `macro` feature
 //! (or add `json-schema-rs-macro` directly), then invoke
 //! `json_schema_to_rust!("path/to/schema.json")` or
-//! `json_schema_to_rust!(r#"{"type":"object", ...}"#)`.
+//! `json_schema_to_rust!(r#"{"type":"object", ...}"#)`. A literal that starts with `{`, or is
+//! `true` or `false` (a boolean schema), is inline JSON; any other literal is a path relative to
+//! `CARGO_MANIFEST_DIR`.
 //!
 //! For reverse codegen (Rust → JSON Schema), use `#[derive(ToJsonSchema)]` with optional
 //! `#[json_schema(title = "...")]` on the struct and `#[serde(rename = "...")]` on fields.
@@ -13,7 +15,7 @@ mod derive;
 use derive::expand_to_json_schema;
 use json_schema_rs::sanitizers::module_name_from_path;
 use json_schema_rs::{
-    CodeGenBackend, CodeGenInput, CodeGenSettings, FileRetriever, JsonSchema, file_uri,
+    CodeGenBackend, CodeGenInput, CodeGenSettings, FileRetriever, Schema, file_uri,
 };
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -63,7 +65,7 @@ fn json_schema_to_rust_impl(
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|_| syn::Error::new(Span::call_site(), "CARGO_MANIFEST_DIR not set"))?;
 
-    let mut schemas: Vec<(json_schema_rs::JsonSchema, Option<String>)> =
+    let mut schemas: Vec<(Schema, Option<String>)> =
         Vec::with_capacity(schema_inputs.literals.len());
     let mut mod_names: Vec<(String, proc_macro2::Span)> =
         Vec::with_capacity(schema_inputs.literals.len());
@@ -71,7 +73,8 @@ fn json_schema_to_rust_impl(
     for (index, lit) in schema_inputs.literals.iter().enumerate() {
         let s = lit.value();
         let s = s.trim();
-        let (json_str, mod_name, uri): (String, String, Option<String>) = if s.starts_with('{') {
+        let inline: bool = s.starts_with('{') || s == "true" || s == "false";
+        let (json_str, mod_name, uri): (String, String, Option<String>) = if inline {
             (s.to_string(), format!("schema_{index}"), None)
         } else {
             let path = std::path::Path::new(&manifest_dir).join(s);
@@ -84,7 +87,7 @@ fn json_schema_to_rust_impl(
             (contents, name, uri)
         };
 
-        let schema: json_schema_rs::JsonSchema = JsonSchema::try_from(json_str.as_str())
+        let schema: Schema = Schema::try_from(json_str.as_str())
             .map_err(|e| syn::Error::new(lit.span(), format!("invalid JSON Schema: {e}")))?;
         schemas.push((schema, uri));
         mod_names.push((mod_name, lit.span()));
