@@ -100,11 +100,14 @@ Correctness relative to the ecosystem is measured by the **`json_schema_rs_diffe
 
 ### Our top values
 
-These drive design decisions and how we rank competitors:
+These drive design decisions and how we rank competitors. The first two are ranked: spec adherence outranks performance, and performance outranks everything below.
 
-- **Spec-adherence**: behavior matches the JSON Schema specification(s) we support.
+1. **Spec adherence and correctness** (top priority): behavior matches the JSON Schema specification(s) we support. Correctness is everything.
+2. **Performance** (second priority): speed and memory, through efficient algorithms and data structures and no unnecessary work. When speed and memory conflict, speed wins: a much faster design is worth somewhat more memory.
+
+Also:
+
 - **Determinism**: same input always produces same output; stable ordering (e.g. alphabetical).
-- **Performance**: efficient algorithms and data structures; avoid unnecessary work.
 - **Testability**: core APIs work with in-memory writers (e.g. `Vec<u8>`) and test doubles, not only file I/O.
 - **Benchmarks**: we maintain benchmarks so we can measure and guard performance.
 - **Idiomatic Rust**: Code adheres to idiomatic Rust conventions, the Rust API Guidelines, and standard library patterns. We prioritize clarity and maintainability over brevity or non-Rust idioms from other languages.
@@ -117,7 +120,7 @@ These drive design decisions and how we rank competitors:
 - **Errors**: Use a custom error enum with manual `Debug`, `Display`, `Error`, and `From` impls (no thiserror unless the project adopts it).
 - **Report every problem, one error per instance**: a fallible walk (parsing, registry building) does not stop at the first problem. It records each one as its own error (its own kind and location; never one error holding many problems, never one per kind) and carries on with whatever does not depend on it, so a user fixes everything in one pass. It stops early only when continuing cannot give meaningful errors: invalid JSON, a document that is not a schema, a `$schema` refused before its draft is known. Errors come in the order the walk finds them, which is deterministic. The collection is `ErrorList<E>` (`error_list.rs`): never empty, implements `Error` (a `Vec` does not, which breaks `?` and `Box<dyn Error>`), displays one error per line, derefs to `[E]` and iterates; `first()` is for callers that want one (the Bowtie harness's skip reason). Aliases: `JsonSchemaParseErrors` (every parse entry point) and `RegistryErrors` (`Registry::new`, `RegistryBuilder::build`). The validator already collects (`ValidationResult = Result<(), Vec<ValidationError>>`) and `validate` turns each registry error into its own `ValidationError`.
 - **No unbounded recursion**: Use an explicit stack (or queue) and iterative loops instead of recursive calls so depth is limited by heap, not call stack. Avoids stack overflow on deeply nested schemas or instances. This applies to every graph algorithm and tree walk (reference crawling, cycle detection, dedup, emission order, `Drop`, error rendering). The derive's schema generator (reverse codegen) also descends natively, bounded by the number of distinct named types plus the container nesting written in the source, both fixed at compile time (see *Rust struct → JSON Schema*). The one exception for *input-driven* depth is the validator's evaluator: it recurses (as every fast JSON Schema validator does) and carries a depth counter that returns a typed `DepthLimitExceeded` error before the native stack can overflow. That limit is a crash guard sized from a stack-usage measurement on a 2 MiB thread, not a policy limit. Rationale and competitor comparison: `research/synthesis.md` §5 and open item O7.
-- **No backwards compatibility before 1.0**: until the 1.0 release the public API, behaviour and output are changed to what they should be, with no deprecation path, aliases, redundant accessors or old conventions kept alongside (CLAUDE.md, requirement 4). What the JSON Schema drafts themselves keep for compatibility (draft-04 `id`, `dependencies` and `definitions` in 2020-12, the legacy draft-04 metaschema URI) is spec behaviour and stays.
+- **No backwards compatibility before 1.0**: until the 1.0 release the public API, behaviour and output are changed to what they should be, with no deprecation path, aliases, redundant accessors or old conventions kept alongside (CLAUDE.md, requirement 4). Backwards compatibility is never a justification for a design decision. What the JSON Schema drafts themselves keep for compatibility (draft-04 `id`, `dependencies` and `definitions` in 2020-12, the legacy draft-04 metaschema URI) is spec behaviour and stays.
 - **Prefer `..Default::default()` when constructing large structs**: When constructing structs with many optional fields (e.g. `JsonSchema`), set only the fields that matter for the context and use `..Default::default()` for the rest. Improves clarity about intent.
 
 ### Schema model: struct vs enum

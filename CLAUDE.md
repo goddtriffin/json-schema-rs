@@ -5,6 +5,16 @@ suggestions. They exist so every change stays aligned with our standards and our
 For consumer-facing information see [README.md](README.md); for design and architecture
 see [design.md](design.md).
 
+## Priorities, in order
+
+1. **Spec adherence and correctness.** Behaviour matches the JSON Schema specification for
+   every draft we support. Correctness is everything: nothing outranks it.
+2. **Performance: speed, then memory.** Fast and lean, measured with `make benchmark`.
+   When speed and memory conflict, choose speed: a much faster design is worth somewhat
+   more memory.
+
+Backwards compatibility is **not** a priority and **never** a justification (requirement 4).
+
 ## Hard requirements for every code change
 
 1. **Invoke the `contribution-guide` skill before writing or changing any code.** Always.
@@ -37,7 +47,8 @@ see [design.md](design.md).
    be, directly. Rename, reshape or remove anything; never keep an old name, alias,
    re-export, redundant accessor, `#[deprecated]` shim, forwarding wrapper, old convention or
    "kept for compatibility" path because it existed before, and never ask whether to keep
-   the old behaviour. When you notice such a leftover outside your change, file an issue for
+   the old behaviour. Backwards compatibility is never a reason for any decision, in code,
+   docs, issues or PRs: make the best thing possible. When you notice such a leftover outside your change, file an issue for
    it in its place in the roadmap (#15). This is about *our own* earlier API; what a JSON
    Schema draft requires for schema authors (draft-04 `id`, `dependencies` in 2020-12,
    `definitions`) is spec behaviour and stays.
