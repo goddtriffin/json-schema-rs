@@ -5,7 +5,8 @@
 use super::ValidationErrorKind;
 use super::eval::DEPTH_LIMIT;
 use super::{
-    CompileError, CompileErrors, CompiledSchema, ValidationError, ValidationResult, validate,
+    CompileError, CompileErrors, CompiledSchema, SchemaError, ValidateError, ValidationError,
+    ValidationResult, validate, validate_usable,
 };
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
@@ -159,7 +160,7 @@ fn zeros(count: usize) -> JsonPointer {
 #[test]
 fn const_with_minimum_reports_minimum_when_const_matches() {
     let schema: JsonSchema = schema(r#"{"const":5,"minimum":10}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![below_minimum("", "/minimum", 10, 5)]);
     assert_eq!(expected, actual);
 }
@@ -167,7 +168,7 @@ fn const_with_minimum_reports_minimum_when_const_matches() {
 #[test]
 fn const_with_minimum_reports_const_when_above_minimum() {
     let schema: JsonSchema = schema(r#"{"const":5,"minimum":10}"#);
-    let actual: ValidationResult = validate(&schema, &json!(12));
+    let actual: ValidationResult = validate_usable(&schema, &json!(12));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotConst {
             expected: "5".to_string(),
@@ -182,7 +183,7 @@ fn const_with_minimum_reports_const_when_above_minimum() {
 #[test]
 fn const_with_minimum_reports_both_when_both_fail() {
     let schema: JsonSchema = schema(r#"{"const":5,"minimum":10}"#);
-    let actual: ValidationResult = validate(&schema, &json!(3));
+    let actual: ValidationResult = validate_usable(&schema, &json!(3));
     let expected: ValidationResult = Err(vec![
         ValidationError::new(
             ValidationErrorKind::NotConst {
@@ -200,7 +201,7 @@ fn const_with_minimum_reports_both_when_both_fail() {
 #[test]
 fn enum_with_minimum_reports_minimum_for_enum_member() {
     let schema: JsonSchema = schema(r#"{"enum":[1,20],"minimum":10}"#);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Err(vec![below_minimum("", "/minimum", 10, 1)]);
     assert_eq!(expected, actual);
 }
@@ -208,7 +209,7 @@ fn enum_with_minimum_reports_minimum_for_enum_member() {
 #[test]
 fn enum_with_minimum_accepts_enum_member_above_minimum() {
     let schema: JsonSchema = schema(r#"{"enum":[1,20],"minimum":10}"#);
-    let actual: ValidationResult = validate(&schema, &json!(20));
+    let actual: ValidationResult = validate_usable(&schema, &json!(20));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -216,7 +217,7 @@ fn enum_with_minimum_accepts_enum_member_above_minimum() {
 #[test]
 fn enum_with_minimum_reports_both_when_both_fail() {
     let schema: JsonSchema = schema(r#"{"enum":[1,20],"minimum":10}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![
         ValidationError::new(
             ValidationErrorKind::NotInEnum {
@@ -234,7 +235,7 @@ fn enum_with_minimum_reports_both_when_both_fail() {
 #[test]
 fn empty_enum_rejects_number() {
     let schema: JsonSchema = schema(r#"{"enum":[]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotInEnum {
             invalid_value: "1".to_string(),
@@ -249,7 +250,7 @@ fn empty_enum_rejects_number() {
 #[test]
 fn empty_enum_rejects_null() {
     let schema: JsonSchema = schema(r#"{"enum":[]}"#);
-    let actual: ValidationResult = validate(&schema, &Value::Null);
+    let actual: ValidationResult = validate_usable(&schema, &Value::Null);
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotInEnum {
             invalid_value: "null".to_string(),
@@ -264,7 +265,7 @@ fn empty_enum_rejects_null() {
 #[test]
 fn any_of_next_to_type_reports_any_of_for_matching_type() {
     let schema: JsonSchema = schema(r#"{"type":"integer","anyOf":[{"minimum":10},{"maximum":0}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![no_subschema_matched(
         "",
         "/anyOf",
@@ -287,7 +288,7 @@ fn any_of_next_to_type_reports_any_of_for_matching_type() {
 #[test]
 fn any_of_next_to_type_reports_type_only_when_branches_ignore_instance() {
     let schema: JsonSchema = schema(r#"{"type":"integer","anyOf":[{"minimum":10},{"maximum":0}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!("x"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("x"));
     let expected: ValidationResult = Err(vec![expected_integer("", "/type", "string")]);
     assert_eq!(expected, actual);
 }
@@ -295,7 +296,7 @@ fn any_of_next_to_type_reports_type_only_when_branches_ignore_instance() {
 #[test]
 fn any_of_next_to_type_accepts_matching_branch() {
     let schema: JsonSchema = schema(r#"{"type":"integer","anyOf":[{"minimum":10},{"maximum":0}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(11));
+    let actual: ValidationResult = validate_usable(&schema, &json!(11));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -303,7 +304,7 @@ fn any_of_next_to_type_accepts_matching_branch() {
 #[test]
 fn one_of_next_to_minimum_reports_multiple_matches() {
     let schema: JsonSchema = schema(r#"{"minimum":0,"oneOf":[{"multipleOf":2},{"multipleOf":3}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(6));
+    let actual: ValidationResult = validate_usable(&schema, &json!(6));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::MultipleSubschemasMatched {
             subschema_count: 2,
@@ -318,7 +319,7 @@ fn one_of_next_to_minimum_reports_multiple_matches() {
 #[test]
 fn one_of_next_to_minimum_reports_both_failures() {
     let schema: JsonSchema = schema(r#"{"minimum":0,"oneOf":[{"multipleOf":2},{"multipleOf":3}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(-1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(-1));
     let expected: ValidationResult = Err(vec![
         below_minimum("", "/minimum", 0, -1),
         no_subschema_matched(
@@ -351,7 +352,7 @@ fn one_of_next_to_minimum_reports_both_failures() {
 #[test]
 fn one_of_next_to_minimum_accepts_single_match() {
     let schema: JsonSchema = schema(r#"{"minimum":0,"oneOf":[{"multipleOf":2},{"multipleOf":3}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(4));
+    let actual: ValidationResult = validate_usable(&schema, &json!(4));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -359,7 +360,7 @@ fn one_of_next_to_minimum_accepts_single_match() {
 #[test]
 fn all_of_next_to_type_reports_failing_branch() {
     let schema: JsonSchema = schema(r#"{"type":"number","allOf":[{"minimum":1},{"maximum":3}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::AboveMaximum {
             maximum: num(3),
@@ -374,7 +375,7 @@ fn all_of_next_to_type_reports_failing_branch() {
 #[test]
 fn all_of_next_to_type_reports_type_for_other_kind() {
     let schema: JsonSchema = schema(r#"{"type":"number","allOf":[{"minimum":1},{"maximum":3}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!("x"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("x"));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::ExpectedNumber {
             got: "string".to_string(),
@@ -390,7 +391,7 @@ fn all_of_next_to_type_reports_type_for_other_kind() {
 #[test]
 fn typeless_maximum_rejects_larger_number() {
     let schema: JsonSchema = schema(r#"{"maximum":3}"#);
-    let actual: ValidationResult = validate(&schema, &json!(4));
+    let actual: ValidationResult = validate_usable(&schema, &json!(4));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::AboveMaximum {
             maximum: num(3),
@@ -405,7 +406,7 @@ fn typeless_maximum_rejects_larger_number() {
 #[test]
 fn typeless_maximum_ignores_string() {
     let schema: JsonSchema = schema(r#"{"maximum":3}"#);
-    let actual: ValidationResult = validate(&schema, &json!("4"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("4"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -413,7 +414,7 @@ fn typeless_maximum_ignores_string() {
 #[test]
 fn typeless_max_items_rejects_longer_array() {
     let schema: JsonSchema = schema(r#"{"maxItems":1}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooManyItems {
             max_items: 1,
@@ -428,7 +429,7 @@ fn typeless_max_items_rejects_longer_array() {
 #[test]
 fn typeless_max_items_ignores_object() {
     let schema: JsonSchema = schema(r#"{"maxItems":1}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 2}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -436,7 +437,7 @@ fn typeless_max_items_ignores_object() {
 #[test]
 fn typeless_pattern_rejects_non_matching_string() {
     let schema: JsonSchema = schema(r#"{"pattern":"^a"}"#);
-    let actual: ValidationResult = validate(&schema, &json!("b"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("b"));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::PatternMismatch {
             pattern: "^a".to_string(),
@@ -451,7 +452,7 @@ fn typeless_pattern_rejects_non_matching_string() {
 #[test]
 fn typeless_pattern_ignores_number() {
     let schema: JsonSchema = schema(r#"{"pattern":"^a"}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -459,7 +460,7 @@ fn typeless_pattern_ignores_number() {
 #[test]
 fn typeless_items_rejects_wrong_item() {
     let schema: JsonSchema = schema(r#"{"items":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, "x"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "x"]));
     let expected: ValidationResult = Err(vec![expected_integer("/1", "/items/type", "string")]);
     assert_eq!(expected, actual);
 }
@@ -467,7 +468,7 @@ fn typeless_items_rejects_wrong_item() {
 #[test]
 fn typeless_items_ignores_object() {
     let schema: JsonSchema = schema(r#"{"items":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"0": "x"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"0": "x"}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -475,7 +476,7 @@ fn typeless_items_ignores_object() {
 #[test]
 fn typeless_required_ignores_string() {
     let schema: JsonSchema = schema(r#"{"required":["a"]}"#);
-    let actual: ValidationResult = validate(&schema, &json!("a"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("a"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -490,7 +491,7 @@ const REF_SIBLINGS_DEFINITIONS: &str =
 #[test]
 fn ref_siblings_evaluated_in_2020_12() {
     let schema: JsonSchema = schema_in(REF_SIBLINGS_DEFS, SpecVersion::Draft202012);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![below_minimum("", "/minimum", 10, 5)]);
     assert_eq!(expected, actual);
 }
@@ -498,7 +499,7 @@ fn ref_siblings_evaluated_in_2020_12() {
 #[test]
 fn ref_siblings_evaluated_in_2019_09() {
     let schema: JsonSchema = schema_in(REF_SIBLINGS_DEFS, SpecVersion::Draft201909);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![below_minimum("", "/minimum", 10, 5)]);
     assert_eq!(expected, actual);
 }
@@ -506,7 +507,7 @@ fn ref_siblings_evaluated_in_2019_09() {
 #[test]
 fn ref_siblings_ignored_in_draft_7() {
     let schema: JsonSchema = schema_in(REF_SIBLINGS_DEFINITIONS, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -514,7 +515,7 @@ fn ref_siblings_ignored_in_draft_7() {
 #[test]
 fn ref_siblings_ignored_in_draft_6() {
     let schema: JsonSchema = schema_in(REF_SIBLINGS_DEFINITIONS, SpecVersion::Draft06);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -522,7 +523,7 @@ fn ref_siblings_ignored_in_draft_6() {
 #[test]
 fn ref_siblings_ignored_in_draft_4() {
     let schema: JsonSchema = schema_in(REF_SIBLINGS_DEFINITIONS, SpecVersion::Draft04);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -530,7 +531,7 @@ fn ref_siblings_ignored_in_draft_4() {
 #[test]
 fn ref_target_still_applies_in_draft_7() {
     let schema: JsonSchema = schema_in(REF_SIBLINGS_DEFINITIONS, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!("x"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("x"));
     let expected: ValidationResult = Err(vec![expected_integer("", "/$ref/type", "string")]);
     assert_eq!(expected, actual);
 }
@@ -542,7 +543,7 @@ fn ref_siblings_setting_evaluated_overrides_draft_7() {
         .ref_siblings(RefSiblings::Evaluated)
         .build();
     let schema: JsonSchema = schema_with(REF_SIBLINGS_DEFINITIONS, &settings);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![below_minimum("", "/minimum", 10, 5)]);
     assert_eq!(expected, actual);
 }
@@ -553,7 +554,7 @@ fn ref_siblings_setting_ignored_overrides_2020_12() {
         .ref_siblings(RefSiblings::Ignored)
         .build();
     let schema: JsonSchema = schema_with(REF_SIBLINGS_DEFS, &settings);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -565,7 +566,7 @@ fn ref_siblings_setting_ignored_overrides_2019_09() {
         .ref_siblings(RefSiblings::Ignored)
         .build();
     let schema: JsonSchema = schema_with(REF_SIBLINGS_DEFS, &settings);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -577,7 +578,7 @@ const ANY_OF_SELF: &str = r##"{"anyOf":[{"type":"string"},{"$ref":"#"}]}"##;
 #[test]
 fn any_of_self_ref_rejects_non_string() {
     let schema: JsonSchema = schema(ANY_OF_SELF);
-    let actual: ValidationResult = validate(&schema, &json!({"x": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"x": 1}));
     let expected: ValidationResult = Err(vec![no_subschema_matched(
         "",
         "/anyOf",
@@ -601,7 +602,7 @@ fn any_of_self_ref_rejects_non_string() {
 #[test]
 fn any_of_self_ref_accepts_string() {
     let schema: JsonSchema = schema(ANY_OF_SELF);
-    let actual: ValidationResult = validate(&schema, &json!("hi"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("hi"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -611,7 +612,7 @@ const ONE_OF_SELF: &str = r##"{"oneOf":[{"type":"string"},{"$ref":"#"}]}"##;
 #[test]
 fn one_of_self_ref_rejects_non_string() {
     let schema: JsonSchema = schema(ONE_OF_SELF);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![no_subschema_matched(
         "",
         "/oneOf",
@@ -637,7 +638,7 @@ fn one_of_self_ref_rejects_non_string() {
 #[test]
 fn one_of_self_ref_counts_reentered_branch_for_string() {
     let schema: JsonSchema = schema(ONE_OF_SELF);
-    let actual: ValidationResult = validate(&schema, &json!("hi"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("hi"));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::MultipleSubschemasMatched {
             subschema_count: 2,
@@ -652,7 +653,7 @@ fn one_of_self_ref_counts_reentered_branch_for_string() {
 #[test]
 fn all_of_self_ref_reports_ref_cycle() {
     let schema: JsonSchema = schema(r##"{"allOf":[{"$ref":"#"}]}"##);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Err(vec![ref_cycle("", "/allOf/0/$ref/allOf/0/$ref", "#")]);
     assert_eq!(expected, actual);
 }
@@ -660,7 +661,7 @@ fn all_of_self_ref_reports_ref_cycle() {
 #[test]
 fn all_of_self_ref_reports_sibling_errors_and_ref_cycle() {
     let schema: JsonSchema = schema(r##"{"type":"integer","allOf":[{"$ref":"#"}]}"##);
-    let actual: ValidationResult = validate(&schema, &json!("x"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("x"));
     let expected: ValidationResult = Err(vec![
         expected_integer("", "/type", "string"),
         expected_integer("", "/allOf/0/$ref/type", "string"),
@@ -683,7 +684,7 @@ fn all_of_self_ref_compiled_is_valid_is_false() {
 #[test]
 fn not_self_ref_rejects_every_instance() {
     let schema: JsonSchema = schema(r##"{"not":{"$ref":"#"}}"##);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotSchemaMatched,
         root(),
@@ -697,7 +698,7 @@ fn mutual_defs_recursion_reports_ref_cycle() {
     let schema: JsonSchema = schema(
         r##"{"$defs":{"A":{"$ref":"#/$defs/B"},"B":{"$ref":"#/$defs/A"}},"$ref":"#/$defs/A"}"##,
     );
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Err(vec![ref_cycle("", "/$ref/$ref/$ref", "#/$defs/A")]);
     assert_eq!(expected, actual);
 }
@@ -713,7 +714,7 @@ const MUTUAL_ANY_OF: &str = r##"{
 #[test]
 fn mutual_defs_recursion_through_any_of_rejects_non_string() {
     let schema: JsonSchema = schema(MUTUAL_ANY_OF);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Err(vec![no_subschema_matched(
         "",
         "/$ref/anyOf",
@@ -729,7 +730,7 @@ fn mutual_defs_recursion_through_any_of_rejects_non_string() {
 #[test]
 fn mutual_defs_recursion_through_any_of_accepts_string() {
     let schema: JsonSchema = schema(MUTUAL_ANY_OF);
-    let actual: ValidationResult = validate(&schema, &json!("s"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("s"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -752,7 +753,7 @@ fn recursive_tree_accepts_nested_instance() {
             {"name": "e"}
         ]
     });
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -763,7 +764,7 @@ fn recursive_tree_reports_invalid_leaf_at_depth_three() {
     let instance: Value = json!({
         "children": [{"children": [{"children": [{"name": 5}]}]}]
     });
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Err(vec![expected_string(
         "/children/0/children/0/children/0/name",
         "/properties/children/items/$ref/properties/children/items/$ref/properties/children/items/$ref/properties/name/type",
@@ -780,7 +781,7 @@ fn recursive_tree_reports_invalid_leaf_at_depth_three() {
 fn depth_guard_accepts_deepest_nesting_within_limit() {
     let schema: JsonSchema = schema(r##"{"items":{"$ref":"#"}}"##);
     let instance: Value = nested_arrays(DEPTH_LIMIT / 2);
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -789,7 +790,7 @@ fn depth_guard_accepts_deepest_nesting_within_limit() {
 fn depth_guard_rejects_one_level_past_limit() {
     let schema: JsonSchema = schema(r##"{"items":{"$ref":"#"}}"##);
     let instance: Value = nested_arrays(DEPTH_LIMIT / 2 + 1);
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::DepthLimitExceeded { limit: DEPTH_LIMIT },
         zeros(DEPTH_LIMIT / 2),
@@ -805,7 +806,7 @@ fn depth_guard_fits_two_mib_thread() {
     let actual: ValidationResult = std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(2 * 1024 * 1024)
-            .spawn_scoped(scope, || validate(&schema, &instance))
+            .spawn_scoped(scope, || validate_usable(&schema, &instance))
             .expect("spawn thread")
             .join()
             .expect("validation thread did not panic")
@@ -843,7 +844,7 @@ const NOT_DEEP: &str =
 fn depth_guard_inside_not_does_not_accept_instance() {
     let schema: JsonSchema = schema(NOT_DEEP);
     let instance: Value = nested_arrays(DEPTH_LIMIT);
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::DepthLimitExceeded { limit: DEPTH_LIMIT },
         zeros(DEPTH_LIMIT / 2 - 1),
@@ -858,7 +859,7 @@ fn depth_guard_inside_not_does_not_accept_instance() {
 #[test]
 fn not_of_accept_all_rejects_shallow_nested_arrays() {
     let schema: JsonSchema = schema(NOT_DEEP);
-    let actual: ValidationResult = validate(&schema, &nested_arrays(3));
+    let actual: ValidationResult = validate_usable(&schema, &nested_arrays(3));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotSchemaMatched,
         root(),
@@ -873,7 +874,7 @@ fn depth_guard_inside_any_of_reports_depth_limit() {
         r##"{"$defs":{"deep":{"items":{"$ref":"#/$defs/deep"}}},"anyOf":[{"$ref":"#/$defs/deep"}]}"##,
     );
     let instance: Value = nested_arrays(DEPTH_LIMIT);
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::DepthLimitExceeded { limit: DEPTH_LIMIT },
         zeros(DEPTH_LIMIT / 2 - 1),
@@ -886,17 +887,16 @@ fn depth_guard_inside_any_of_reports_depth_limit() {
 }
 
 #[test]
-fn root_raw_keyword_with_invalid_value_is_an_invalid_schema() {
+fn root_raw_keyword_with_invalid_value_is_a_compile_error() {
     let schema: JsonSchema = schema(r#"{"minProperties":"x"}"#);
-    let actual: ValidationResult = validate(&schema, &json!({}));
-    let expected: ValidationResult = Err(vec![ValidationError::new(
-        ValidationErrorKind::InvalidSchema {
-            reason: "root: the value of \"minProperties\" must be a non-negative integer"
-                .to_string(),
-        },
-        root(),
-        kl("/minProperties"),
-    )]);
+    let actual: Result<(), ValidateError> = validate(&schema, &json!({}));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+        CompileErrors::new(CompileError::InvalidKeywordValue {
+            location: String::new(),
+            keyword: "minProperties".to_string(),
+            expected: "a non-negative integer",
+        }),
+    )));
     assert_eq!(expected, actual);
 }
 
@@ -905,7 +905,7 @@ fn root_raw_keyword_with_invalid_value_is_an_invalid_schema() {
 #[test]
 fn not_rejects_matching_instance() {
     let schema: JsonSchema = schema(r#"{"not":{"type":"string"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!("x"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("x"));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotSchemaMatched,
         root(),
@@ -917,7 +917,7 @@ fn not_rejects_matching_instance() {
 #[test]
 fn not_accepts_non_matching_instance() {
     let schema: JsonSchema = schema(r#"{"not":{"type":"string"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -925,7 +925,7 @@ fn not_accepts_non_matching_instance() {
 #[test]
 fn not_true_rejects_everything() {
     let schema: JsonSchema = schema(r#"{"not":true}"#);
-    let actual: ValidationResult = validate(&schema, &Value::Null);
+    let actual: ValidationResult = validate_usable(&schema, &Value::Null);
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotSchemaMatched,
         root(),
@@ -937,7 +937,7 @@ fn not_true_rejects_everything() {
 #[test]
 fn not_false_accepts_everything() {
     let schema: JsonSchema = schema(r#"{"not":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": [1]}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": [1]}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -945,7 +945,7 @@ fn not_false_accepts_everything() {
 #[test]
 fn not_reports_nested_location() {
     let schema: JsonSchema = schema(r#"{"properties":{"a":{"not":{"const":1}}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotSchemaMatched,
         ptr("/a"),
@@ -962,7 +962,7 @@ const IF_THEN_ELSE: &str =
 #[test]
 fn if_passes_then_passes() {
     let schema: JsonSchema = schema(IF_THEN_ELSE);
-    let actual: ValidationResult = validate(&schema, &json!(12));
+    let actual: ValidationResult = validate_usable(&schema, &json!(12));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -970,7 +970,7 @@ fn if_passes_then_passes() {
 #[test]
 fn if_passes_then_fails() {
     let schema: JsonSchema = schema(IF_THEN_ELSE);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![below_minimum("", "/then/minimum", 10, 5)]);
     assert_eq!(expected, actual);
 }
@@ -978,7 +978,7 @@ fn if_passes_then_fails() {
 #[test]
 fn if_fails_else_passes() {
     let schema: JsonSchema = schema(IF_THEN_ELSE);
-    let actual: ValidationResult = validate(&schema, &json!("x"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("x"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -986,7 +986,7 @@ fn if_fails_else_passes() {
 #[test]
 fn if_fails_else_fails() {
     let schema: JsonSchema = schema(IF_THEN_ELSE);
-    let actual: ValidationResult = validate(&schema, &Value::Null);
+    let actual: ValidationResult = validate_usable(&schema, &Value::Null);
     let expected: ValidationResult = Err(vec![expected_string("", "/else/type", "null")]);
     assert_eq!(expected, actual);
 }
@@ -994,7 +994,7 @@ fn if_fails_else_fails() {
 #[test]
 fn if_passes_without_then_accepts() {
     let schema: JsonSchema = schema(r#"{"if":{"type":"integer"},"else":{"type":"string"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1002,7 +1002,7 @@ fn if_passes_without_then_accepts() {
 #[test]
 fn if_fails_without_then_applies_else() {
     let schema: JsonSchema = schema(r#"{"if":{"type":"integer"},"else":{"type":"string"}}"#);
-    let actual: ValidationResult = validate(&schema, &Value::Null);
+    let actual: ValidationResult = validate_usable(&schema, &Value::Null);
     let expected: ValidationResult = Err(vec![expected_string("", "/else/type", "null")]);
     assert_eq!(expected, actual);
 }
@@ -1010,7 +1010,7 @@ fn if_fails_without_then_applies_else() {
 #[test]
 fn if_fails_without_else_accepts() {
     let schema: JsonSchema = schema(r#"{"if":{"type":"integer"},"then":{"minimum":10}}"#);
-    let actual: ValidationResult = validate(&schema, &Value::Null);
+    let actual: ValidationResult = validate_usable(&schema, &Value::Null);
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1018,7 +1018,7 @@ fn if_fails_without_else_accepts() {
 #[test]
 fn if_passes_without_else_applies_then() {
     let schema: JsonSchema = schema(r#"{"if":{"type":"integer"},"then":{"minimum":10}}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![below_minimum("", "/then/minimum", 10, 5)]);
     assert_eq!(expected, actual);
 }
@@ -1026,7 +1026,7 @@ fn if_passes_without_else_applies_then() {
 #[test]
 fn then_without_if_is_ignored() {
     let schema: JsonSchema = schema(r#"{"then":{"minimum":10},"else":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1037,7 +1037,7 @@ fn if_then_ignored_in_draft_6() {
         r#"{"if":{"type":"integer"},"then":{"minimum":10}}"#,
         SpecVersion::Draft06,
     );
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1048,7 +1048,7 @@ fn if_then_applies_in_draft_7() {
         r#"{"if":{"type":"integer"},"then":{"minimum":10}}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Err(vec![below_minimum("", "/then/minimum", 10, 5)]);
     assert_eq!(expected, actual);
 }
@@ -1058,7 +1058,7 @@ fn if_then_applies_in_draft_7() {
 #[test]
 fn dependent_required_reports_each_missing_property() {
     let schema: JsonSchema = schema(r#"{"dependentRequired":{"a":["b","c"]}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![
         ValidationError::new(
             ValidationErrorKind::MissingDependentProperty {
@@ -1083,7 +1083,7 @@ fn dependent_required_reports_each_missing_property() {
 #[test]
 fn dependent_required_accepts_all_present() {
     let schema: JsonSchema = schema(r#"{"dependentRequired":{"a":["b","c"]}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 2, "c": 3}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 2, "c": 3}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1091,7 +1091,7 @@ fn dependent_required_accepts_all_present() {
 #[test]
 fn dependent_required_accepts_trigger_absent() {
     let schema: JsonSchema = schema(r#"{"dependentRequired":{"a":["b","c"]}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"b": 2}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1099,7 +1099,7 @@ fn dependent_required_accepts_trigger_absent() {
 #[test]
 fn dependent_required_ignores_non_object() {
     let schema: JsonSchema = schema(r#"{"dependentRequired":{"a":["b"]}}"#);
-    let actual: ValidationResult = validate(&schema, &json!(["a"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1108,7 +1108,7 @@ fn dependent_required_ignores_non_object() {
 fn dependent_required_ignored_in_draft_7() {
     let schema: JsonSchema =
         schema_in(r#"{"dependentRequired":{"a":["b"]}}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1116,7 +1116,7 @@ fn dependent_required_ignored_in_draft_7() {
 #[test]
 fn dependent_schemas_applies_when_trigger_present() {
     let schema: JsonSchema = schema(r#"{"dependentSchemas":{"a":{"required":["b"]}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::MissingRequired {
             property: "b".to_string(),
@@ -1130,7 +1130,7 @@ fn dependent_schemas_applies_when_trigger_present() {
 #[test]
 fn dependent_schemas_skipped_when_trigger_absent() {
     let schema: JsonSchema = schema(r#"{"dependentSchemas":{"a":{"required":["b"]}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"c": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"c": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1138,7 +1138,7 @@ fn dependent_schemas_skipped_when_trigger_absent() {
 #[test]
 fn dependent_schemas_false_rejects_trigger() {
     let schema: JsonSchema = schema(r#"{"dependentSchemas":{"a":false}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![false_schema("", "/dependentSchemas/a")]);
     assert_eq!(expected, actual);
 }
@@ -1146,7 +1146,7 @@ fn dependent_schemas_false_rejects_trigger() {
 #[test]
 fn dependencies_array_form_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"dependencies":{"a":["b"]}}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::MissingDependentProperty {
             property: "b".to_string(),
@@ -1161,7 +1161,7 @@ fn dependencies_array_form_in_draft_7() {
 #[test]
 fn dependencies_array_form_accepts_present_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"dependencies":{"a":["b"]}}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 2}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1172,7 +1172,7 @@ fn dependencies_schema_form_in_draft_7() {
         r#"{"dependencies":{"a":{"properties":{"b":{"type":"string"}}}}}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 2}));
     let expected: ValidationResult = Err(vec![expected_string(
         "/b",
         "/dependencies/a/properties/b/type",
@@ -1187,7 +1187,7 @@ fn dependencies_schema_form_skipped_without_trigger_in_draft_7() {
         r#"{"dependencies":{"a":{"properties":{"b":{"type":"string"}}}}}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"b": 2}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1196,7 +1196,7 @@ fn dependencies_schema_form_skipped_without_trigger_in_draft_7() {
 #[test]
 fn dependencies_applies_in_2020_12_for_compatibility() {
     let schema: JsonSchema = schema(r#"{"dependencies":{"a":["b"]}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::MissingDependentProperty {
             property: "b".to_string(),
@@ -1211,7 +1211,7 @@ fn dependencies_applies_in_2020_12_for_compatibility() {
 #[test]
 fn dependent_schemas_ignored_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"dependentSchemas":{"a":false}}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1224,7 +1224,7 @@ const PREFIX_ITEMS: &str =
 #[test]
 fn prefix_items_and_items_accept_matching_array() {
     let schema: JsonSchema = schema(PREFIX_ITEMS);
-    let actual: ValidationResult = validate(&schema, &json!([1, "a", true, false]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "a", true, false]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1232,7 +1232,7 @@ fn prefix_items_and_items_accept_matching_array() {
 #[test]
 fn items_applies_after_prefix_items() {
     let schema: JsonSchema = schema(PREFIX_ITEMS);
-    let actual: ValidationResult = validate(&schema, &json!([1, "a", 3]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "a", 3]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::ExpectedBoolean {
             got: "number".to_string(),
@@ -1246,7 +1246,7 @@ fn items_applies_after_prefix_items() {
 #[test]
 fn prefix_items_reports_each_position() {
     let schema: JsonSchema = schema(PREFIX_ITEMS);
-    let actual: ValidationResult = validate(&schema, &json!(["a", 1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a", 1]));
     let expected: ValidationResult = Err(vec![
         expected_integer("/0", "/prefixItems/0/type", "string"),
         expected_string("/1", "/prefixItems/1/type", "number"),
@@ -1257,7 +1257,7 @@ fn prefix_items_reports_each_position() {
 #[test]
 fn prefix_items_accepts_shorter_array() {
     let schema: JsonSchema = schema(PREFIX_ITEMS);
-    let actual: ValidationResult = validate(&schema, &json!([1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1265,7 +1265,7 @@ fn prefix_items_accepts_shorter_array() {
 #[test]
 fn items_false_after_prefix_accepts_prefix_only() {
     let schema: JsonSchema = schema(r#"{"prefixItems":[{"type":"integer"}],"items":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1273,7 +1273,7 @@ fn items_false_after_prefix_accepts_prefix_only() {
 #[test]
 fn items_false_after_prefix_rejects_extra_item() {
     let schema: JsonSchema = schema(r#"{"prefixItems":[{"type":"integer"}],"items":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2, 3]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2, 3]));
     let expected: ValidationResult = Err(vec![
         false_schema("/1", "/items"),
         false_schema("/2", "/items"),
@@ -1287,7 +1287,7 @@ fn prefix_items_ignored_in_draft_7() {
         r#"{"prefixItems":[{"type":"integer"}]}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!(["x"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["x"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1298,23 +1298,22 @@ fn prefix_items_ignored_in_2019_09() {
         r#"{"prefixItems":[{"type":"integer"}]}"#,
         SpecVersion::Draft201909,
     );
-    let actual: ValidationResult = validate(&schema, &json!(["x"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["x"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
 
 #[test]
-fn array_items_in_2020_12_is_an_invalid_schema() {
+fn array_items_in_2020_12_is_a_compile_error() {
     let schema: JsonSchema = schema(r#"{"items":[{"type":"integer"}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1]));
-    let expected: ValidationResult = Err(vec![ValidationError::new(
-        ValidationErrorKind::InvalidSchema {
-            reason: "root: the value of \"items\" must be a schema (an object or a boolean)"
-                .to_string(),
-        },
-        root(),
-        kl("/items"),
-    )]);
+    let actual: Result<(), ValidateError> = validate(&schema, &json!([1]));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+        CompileErrors::new(CompileError::InvalidKeywordValue {
+            location: String::new(),
+            keyword: "items".to_string(),
+            expected: "a schema (an object or a boolean)",
+        }),
+    )));
     assert_eq!(expected, actual);
 }
 
@@ -1323,7 +1322,7 @@ const TUPLE_ITEMS: &str = r#"{"items":[{"type":"integer"}],"additionalItems":{"t
 #[test]
 fn array_items_and_additional_items_accept_in_draft_7() {
     let schema: JsonSchema = schema_in(TUPLE_ITEMS, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!([1, "a", "b"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "a", "b"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1331,7 +1330,7 @@ fn array_items_and_additional_items_accept_in_draft_7() {
 #[test]
 fn additional_items_rejects_in_draft_7() {
     let schema: JsonSchema = schema_in(TUPLE_ITEMS, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!(["x", 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["x", 2]));
     let expected: ValidationResult = Err(vec![
         expected_integer("/0", "/items/0/type", "string"),
         expected_string("/1", "/additionalItems/type", "number"),
@@ -1342,7 +1341,7 @@ fn additional_items_rejects_in_draft_7() {
 #[test]
 fn additional_items_rejects_in_2019_09() {
     let schema: JsonSchema = schema_in(TUPLE_ITEMS, SpecVersion::Draft201909);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Err(vec![expected_string(
         "/1",
         "/additionalItems/type",
@@ -1357,7 +1356,7 @@ fn additional_items_false_rejects_extra_item_in_draft_7() {
         r#"{"items":[{"type":"integer"}],"additionalItems":false}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Err(vec![false_schema("/1", "/additionalItems")]);
     assert_eq!(expected, actual);
 }
@@ -1365,7 +1364,7 @@ fn additional_items_false_rejects_extra_item_in_draft_7() {
 #[test]
 fn array_items_without_additional_items_accepts_extra_item_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"items":[{"type":"integer"}]}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!([1, "x"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "x"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1376,7 +1375,7 @@ fn additional_items_ignored_next_to_schema_items_in_draft_7() {
         r#"{"items":{"type":"integer"},"additionalItems":false}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1384,7 +1383,7 @@ fn additional_items_ignored_next_to_schema_items_in_draft_7() {
 #[test]
 fn schema_items_applies_to_every_item_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"items":{"type":"integer"}}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!([1, "x"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "x"]));
     let expected: ValidationResult = Err(vec![expected_integer("/1", "/items/type", "string")]);
     assert_eq!(expected, actual);
 }
@@ -1394,7 +1393,7 @@ fn schema_items_applies_to_every_item_in_draft_7() {
 #[test]
 fn contains_accepts_array_with_match() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!(["a", 1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a", 1]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1402,7 +1401,7 @@ fn contains_accepts_array_with_match() {
 #[test]
 fn contains_rejects_array_without_match() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!(["a"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a"]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooFewContains {
             min_contains: 1,
@@ -1417,7 +1416,7 @@ fn contains_rejects_array_without_match() {
 #[test]
 fn contains_rejects_empty_array() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!([]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooFewContains {
             min_contains: 1,
@@ -1432,7 +1431,7 @@ fn contains_rejects_empty_array() {
 #[test]
 fn contains_ignores_non_array() {
     let schema: JsonSchema = schema(r#"{"contains":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1440,7 +1439,7 @@ fn contains_ignores_non_array() {
 #[test]
 fn min_contains_rejects_too_few_matches() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"},"minContains":2}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, "a"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "a"]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooFewContains {
             min_contains: 2,
@@ -1455,7 +1454,7 @@ fn min_contains_rejects_too_few_matches() {
 #[test]
 fn min_contains_accepts_enough_matches() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"},"minContains":2}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, "a", 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "a", 2]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1463,7 +1462,7 @@ fn min_contains_accepts_enough_matches() {
 #[test]
 fn max_contains_rejects_too_many_matches() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"},"maxContains":1}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2, "a"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2, "a"]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooManyContains {
             max_contains: 1,
@@ -1478,7 +1477,7 @@ fn max_contains_rejects_too_many_matches() {
 #[test]
 fn max_contains_accepts_at_most_max_matches() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"},"maxContains":1}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, "a"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "a"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1486,7 +1485,7 @@ fn max_contains_accepts_at_most_max_matches() {
 #[test]
 fn min_contains_zero_accepts_empty_array() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"},"minContains":0}"#);
-    let actual: ValidationResult = validate(&schema, &json!([]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1494,7 +1493,7 @@ fn min_contains_zero_accepts_empty_array() {
 #[test]
 fn min_contains_zero_accepts_no_match() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"integer"},"minContains":0}"#);
-    let actual: ValidationResult = validate(&schema, &json!(["a"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1503,7 +1502,7 @@ fn min_contains_zero_accepts_no_match() {
 fn min_contains_zero_still_checks_max_contains() {
     let schema: JsonSchema =
         schema(r#"{"contains":{"type":"integer"},"minContains":0,"maxContains":1}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooManyContains {
             max_contains: 1,
@@ -1518,7 +1517,7 @@ fn min_contains_zero_still_checks_max_contains() {
 #[test]
 fn min_contains_without_contains_is_ignored() {
     let schema: JsonSchema = schema(r#"{"minContains":2,"maxContains":0}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1526,7 +1525,7 @@ fn min_contains_without_contains_is_ignored() {
 #[test]
 fn contains_rejects_empty_array_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"contains":{"type":"integer"}}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!([]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooFewContains {
             min_contains: 1,
@@ -1544,7 +1543,7 @@ fn min_contains_zero_ignored_in_draft_7() {
         r#"{"contains":{"type":"integer"},"minContains":0}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!([]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([]));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooFewContains {
             min_contains: 1,
@@ -1562,7 +1561,7 @@ fn max_contains_ignored_in_draft_7() {
         r#"{"contains":{"type":"integer"},"maxContains":1}"#,
         SpecVersion::Draft07,
     );
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1570,7 +1569,7 @@ fn max_contains_ignored_in_draft_7() {
 #[test]
 fn contains_ignored_in_draft_4() {
     let schema: JsonSchema = schema_in(r#"{"contains":{"type":"integer"}}"#, SpecVersion::Draft04);
-    let actual: ValidationResult = validate(&schema, &json!([]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1580,7 +1579,7 @@ fn contains_ignored_in_draft_4() {
 #[test]
 fn property_names_reports_each_bad_name() {
     let schema: JsonSchema = schema(r#"{"propertyNames":{"maxLength":3}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"ab": 1, "abcd": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"ab": 1, "abcd": 2}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidPropertyName {
             property: "abcd".to_string(),
@@ -1594,7 +1593,7 @@ fn property_names_reports_each_bad_name() {
 #[test]
 fn property_names_accepts_good_names() {
     let schema: JsonSchema = schema(r#"{"propertyNames":{"maxLength":3}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"ab": 1, "abc": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"ab": 1, "abc": 2}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1602,7 +1601,7 @@ fn property_names_accepts_good_names() {
 #[test]
 fn property_names_false_rejects_any_member() {
     let schema: JsonSchema = schema(r#"{"propertyNames":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidPropertyName {
             property: "a".to_string(),
@@ -1616,7 +1615,7 @@ fn property_names_false_rejects_any_member() {
 #[test]
 fn property_names_false_accepts_empty_object() {
     let schema: JsonSchema = schema(r#"{"propertyNames":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1624,7 +1623,7 @@ fn property_names_false_accepts_empty_object() {
 #[test]
 fn property_names_ignored_in_draft_4() {
     let schema: JsonSchema = schema_in(r#"{"propertyNames":false}"#, SpecVersion::Draft04);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1634,7 +1633,7 @@ fn property_names_ignored_in_draft_4() {
 #[test]
 fn pattern_properties_rejects_matching_member() {
     let schema: JsonSchema = schema(r#"{"patternProperties":{"^s_":{"type":"string"}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"other": 1, "s_a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"other": 1, "s_a": 1}));
     let expected: ValidationResult = Err(vec![expected_string(
         "/s_a",
         "/patternProperties/^s_/type",
@@ -1646,7 +1645,7 @@ fn pattern_properties_rejects_matching_member() {
 #[test]
 fn pattern_properties_ignores_non_matching_member() {
     let schema: JsonSchema = schema(r#"{"patternProperties":{"^s_":{"type":"string"}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"other": 1, "s_a": "x"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"other": 1, "s_a": "x"}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1655,7 +1654,7 @@ fn pattern_properties_ignores_non_matching_member() {
 fn pattern_properties_applies_every_matching_pattern() {
     let schema: JsonSchema =
         schema(r#"{"patternProperties":{"^a":{"type":"integer"},"b$":{"minimum":10}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"ab": 5}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"ab": 5}));
     let expected: ValidationResult = Err(vec![below_minimum(
         "/ab",
         "/patternProperties/b$/minimum",
@@ -1668,7 +1667,7 @@ fn pattern_properties_applies_every_matching_pattern() {
 #[test]
 fn pattern_properties_is_unanchored() {
     let schema: JsonSchema = schema(r#"{"patternProperties":{"x":{"type":"integer"}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"axb": "s"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"axb": "s"}));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/axb",
         "/patternProperties/x/type",
@@ -1686,7 +1685,8 @@ const ADDITIONAL_SCHEMA: &str = r#"{
 #[test]
 fn additional_properties_schema_skips_known_members() {
     let schema: JsonSchema = schema(ADDITIONAL_SCHEMA);
-    let actual: ValidationResult = validate(&schema, &json!({"id": "s", "n": 1, "x-a": "s"}));
+    let actual: ValidationResult =
+        validate_usable(&schema, &json!({"id": "s", "n": 1, "x-a": "s"}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1694,7 +1694,7 @@ fn additional_properties_schema_skips_known_members() {
 #[test]
 fn additional_properties_schema_rejects_other_member() {
     let schema: JsonSchema = schema(ADDITIONAL_SCHEMA);
-    let actual: ValidationResult = validate(&schema, &json!({"id": "s", "other": "s"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"id": "s", "other": "s"}));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/other",
         "/additionalProperties/type",
@@ -1712,7 +1712,7 @@ const ADDITIONAL_FALSE: &str = r#"{
 #[test]
 fn additional_properties_false_with_pattern_properties_accepts_known() {
     let schema: JsonSchema = schema(ADDITIONAL_FALSE);
-    let actual: ValidationResult = validate(&schema, &json!({"id": 1, "x-y": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"id": 1, "x-y": 2}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1720,7 +1720,8 @@ fn additional_properties_false_with_pattern_properties_accepts_known() {
 #[test]
 fn additional_properties_false_with_pattern_properties_rejects_each_other() {
     let schema: JsonSchema = schema(ADDITIONAL_FALSE);
-    let actual: ValidationResult = validate(&schema, &json!({"id": 1, "w": 1, "x-y": 2, "z": 3}));
+    let actual: ValidationResult =
+        validate_usable(&schema, &json!({"id": 1, "w": 1, "x-y": 2, "z": 3}));
     let expected: ValidationResult = Err(vec![
         ValidationError::new(
             ValidationErrorKind::DisallowedAdditionalProperty {
@@ -1745,7 +1746,7 @@ fn additional_properties_false_with_pattern_properties_rejects_each_other() {
 #[test]
 fn min_properties_rejects_too_few() {
     let schema: JsonSchema = schema(r#"{"minProperties":2}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooFewProperties {
             min_properties: 2,
@@ -1760,7 +1761,7 @@ fn min_properties_rejects_too_few() {
 #[test]
 fn min_properties_accepts_exact_count() {
     let schema: JsonSchema = schema(r#"{"minProperties":2}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 2}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1768,7 +1769,7 @@ fn min_properties_accepts_exact_count() {
 #[test]
 fn min_properties_zero_accepts_empty_object() {
     let schema: JsonSchema = schema(r#"{"minProperties":0}"#);
-    let actual: ValidationResult = validate(&schema, &json!({}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1776,7 +1777,7 @@ fn min_properties_zero_accepts_empty_object() {
 #[test]
 fn max_properties_rejects_too_many() {
     let schema: JsonSchema = schema(r#"{"maxProperties":1}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 2}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::TooManyProperties {
             max_properties: 1,
@@ -1791,7 +1792,7 @@ fn max_properties_rejects_too_many() {
 #[test]
 fn max_properties_accepts_exact_count() {
     let schema: JsonSchema = schema(r#"{"maxProperties":1}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1799,7 +1800,7 @@ fn max_properties_accepts_exact_count() {
 #[test]
 fn min_max_properties_ignore_non_object() {
     let schema: JsonSchema = schema(r#"{"minProperties":2,"maxProperties":0}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1840,7 +1841,7 @@ const GENERIC_TREE: &str = r##"{
 fn dynamic_ref_strict_tree_accepts_known_members() {
     let schema: JsonSchema = schema(STRICT_TREE);
     let instance: Value = json!({"children": [{"data": 1, "children": [{"data": 2}]}], "data": 0});
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1852,7 +1853,7 @@ fn dynamic_ref_strict_tree_accepts_known_members() {
 fn dynamic_ref_strict_tree_rejects_nested_unknown_member() {
     let schema: JsonSchema = schema(STRICT_TREE);
     let instance: Value = json!({"children": [{"daat": 1}]});
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Err(vec![
         unevaluated(
             "/children/0/daat",
@@ -1869,7 +1870,7 @@ fn dynamic_ref_strict_tree_rejects_nested_unknown_member() {
 fn dynamic_ref_generic_tree_accepts_nested_unknown_member() {
     let schema: JsonSchema = schema(GENERIC_TREE);
     let instance: Value = json!({"children": [{"daat": 1}]});
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1878,7 +1879,7 @@ fn dynamic_ref_generic_tree_accepts_nested_unknown_member() {
 fn dynamic_ref_generic_tree_rejects_non_object_node() {
     let schema: JsonSchema = schema(GENERIC_TREE);
     let instance: Value = json!({"children": [{"children": [5]}]});
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Err(vec![
         ValidationError::new(
             ValidationErrorKind::ExpectedObject {
@@ -1897,7 +1898,7 @@ fn dynamic_ref_to_json_pointer_acts_like_ref() {
     let schema: JsonSchema = schema(
         r##"{"$defs":{"int":{"type":"integer"}},"properties":{"a":{"$dynamicRef":"#/$defs/int"}}}"##,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"a": "x"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": "x"}));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/a",
         "/properties/a/$dynamicRef/type",
@@ -1925,7 +1926,7 @@ fn dynamic_ref_to_plain_anchor_acts_like_ref() {
   }
 }"##,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"a": "x"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": "x"}));
     let expected: ValidationResult = Err(vec![
         expected_string("", "/type", "object"),
         expected_integer("/a", "/properties/a/$ref/$dynamicRef/type", "string")
@@ -1977,7 +1978,7 @@ const RECURSIVE_STRICT_TREE_UNANCHORED: &str = r##"{
 fn recursive_ref_strict_tree_accepts_known_members() {
     let schema: JsonSchema = schema(RECURSIVE_STRICT_TREE);
     let instance: Value = json!({"children": [{"data": 1}]});
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -1986,7 +1987,7 @@ fn recursive_ref_strict_tree_accepts_known_members() {
 fn recursive_ref_strict_tree_rejects_nested_unknown_member() {
     let schema: JsonSchema = schema(RECURSIVE_STRICT_TREE);
     let instance: Value = json!({"children": [{"daat": 1}]});
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Err(vec![
         unevaluated(
             "/children/0/daat",
@@ -2005,7 +2006,7 @@ fn recursive_ref_strict_tree_rejects_nested_unknown_member() {
 fn recursive_ref_without_anchor_acts_like_ref() {
     let schema: JsonSchema = schema(RECURSIVE_STRICT_TREE_UNANCHORED);
     let instance: Value = json!({"children": [{"daat": 1}]});
-    let actual: ValidationResult = validate(&schema, &instance);
+    let actual: ValidationResult = validate_usable(&schema, &instance);
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2015,7 +2016,7 @@ fn recursive_ref_without_anchor_acts_like_ref() {
 #[test]
 fn unevaluated_properties_false_rejects_unknown_member() {
     let schema: JsonSchema = schema(r#"{"properties":{"a":{}},"unevaluatedProperties":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 2}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 2}));
     let expected: ValidationResult = Err(vec![unevaluated("/b", "/unevaluatedProperties", "b")]);
     assert_eq!(expected, actual);
 }
@@ -2023,7 +2024,7 @@ fn unevaluated_properties_false_rejects_unknown_member() {
 #[test]
 fn unevaluated_properties_false_accepts_known_member() {
     let schema: JsonSchema = schema(r#"{"properties":{"a":{}},"unevaluatedProperties":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2031,7 +2032,7 @@ fn unevaluated_properties_false_accepts_known_member() {
 #[test]
 fn unevaluated_properties_schema_rejects_bad_member() {
     let schema: JsonSchema = schema(r#"{"unevaluatedProperties":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": "x"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": "x"}));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/a",
         "/unevaluatedProperties/type",
@@ -2043,7 +2044,7 @@ fn unevaluated_properties_schema_rejects_bad_member() {
 #[test]
 fn unevaluated_properties_schema_accepts_good_member() {
     let schema: JsonSchema = schema(r#"{"unevaluatedProperties":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2052,7 +2053,7 @@ fn unevaluated_properties_schema_accepts_good_member() {
 fn unevaluated_properties_sees_through_all_of() {
     let schema: JsonSchema =
         schema(r#"{"allOf":[{"properties":{"a":{}}}],"unevaluatedProperties":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/b", "/unevaluatedProperties", "b")]);
     assert_eq!(expected, actual);
 }
@@ -2065,7 +2066,7 @@ const UNEVALUATED_ANY_OF: &str = r#"{
 #[test]
 fn unevaluated_properties_sees_every_passing_any_of_branch() {
     let schema: JsonSchema = schema(UNEVALUATED_ANY_OF);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2073,7 +2074,7 @@ fn unevaluated_properties_sees_every_passing_any_of_branch() {
 #[test]
 fn unevaluated_properties_ignores_failing_any_of_branch() {
     let schema: JsonSchema = schema(UNEVALUATED_ANY_OF);
-    let actual: ValidationResult = validate(&schema, &json!({"a": "x", "b": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": "x", "b": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/a", "/unevaluatedProperties", "a")]);
     assert_eq!(expected, actual);
 }
@@ -2089,7 +2090,7 @@ const UNEVALUATED_ONE_OF: &str = r#"{
 #[test]
 fn unevaluated_properties_sees_through_one_of() {
     let schema: JsonSchema = schema(UNEVALUATED_ONE_OF);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2097,7 +2098,7 @@ fn unevaluated_properties_sees_through_one_of() {
 #[test]
 fn unevaluated_properties_rejects_member_outside_one_of_match() {
     let schema: JsonSchema = schema(UNEVALUATED_ONE_OF);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "c": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "c": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/c", "/unevaluatedProperties", "c")]);
     assert_eq!(expected, actual);
 }
@@ -2112,7 +2113,7 @@ const UNEVALUATED_IF: &str = r#"{
 #[test]
 fn unevaluated_properties_sees_through_if_and_then() {
     let schema: JsonSchema = schema(UNEVALUATED_IF);
-    let actual: ValidationResult = validate(&schema, &json!({"kind": "x", "x": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"kind": "x", "x": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2120,7 +2121,7 @@ fn unevaluated_properties_sees_through_if_and_then() {
 #[test]
 fn unevaluated_properties_ignores_else_when_if_passes() {
     let schema: JsonSchema = schema(UNEVALUATED_IF);
-    let actual: ValidationResult = validate(&schema, &json!({"kind": "x", "y": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"kind": "x", "y": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/y", "/unevaluatedProperties", "y")]);
     assert_eq!(expected, actual);
 }
@@ -2128,7 +2129,7 @@ fn unevaluated_properties_ignores_else_when_if_passes() {
 #[test]
 fn unevaluated_properties_sees_through_else() {
     let schema: JsonSchema = schema(UNEVALUATED_IF);
-    let actual: ValidationResult = validate(&schema, &json!({"y": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"y": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2136,7 +2137,7 @@ fn unevaluated_properties_sees_through_else() {
 #[test]
 fn unevaluated_properties_ignores_failing_if() {
     let schema: JsonSchema = schema(UNEVALUATED_IF);
-    let actual: ValidationResult = validate(&schema, &json!({"kind": "z", "y": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"kind": "z", "y": 1}));
     let expected: ValidationResult =
         Err(vec![unevaluated("/kind", "/unevaluatedProperties", "kind")]);
     assert_eq!(expected, actual);
@@ -2147,7 +2148,7 @@ fn unevaluated_properties_sees_through_ref() {
     let schema: JsonSchema = schema(
         r##"{"$defs":{"base":{"properties":{"a":{}}}},"$ref":"#/$defs/base","unevaluatedProperties":false}"##,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/b", "/unevaluatedProperties", "b")]);
     assert_eq!(expected, actual);
 }
@@ -2161,7 +2162,7 @@ const UNEVALUATED_DEPENDENT: &str = r#"{
 #[test]
 fn unevaluated_properties_sees_through_dependent_schemas() {
     let schema: JsonSchema = schema(UNEVALUATED_DEPENDENT);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1, "b": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2169,7 +2170,7 @@ fn unevaluated_properties_sees_through_dependent_schemas() {
 #[test]
 fn unevaluated_properties_ignores_untriggered_dependent_schema() {
     let schema: JsonSchema = schema(UNEVALUATED_DEPENDENT);
-    let actual: ValidationResult = validate(&schema, &json!({"b": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"b": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/b", "/unevaluatedProperties", "b")]);
     assert_eq!(expected, actual);
 }
@@ -2178,7 +2179,7 @@ fn unevaluated_properties_ignores_untriggered_dependent_schema() {
 fn unevaluated_properties_does_not_see_through_not() {
     let schema: JsonSchema =
         schema(r#"{"not":{"not":{"properties":{"a":{}}}},"unevaluatedProperties":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/a", "/unevaluatedProperties", "a")]);
     assert_eq!(expected, actual);
 }
@@ -2188,7 +2189,7 @@ fn unevaluated_properties_sees_pattern_and_additional_properties() {
     let schema: JsonSchema = schema(
         r#"{"patternProperties":{"^p":{}},"additionalProperties":{"type":"integer"},"unevaluatedProperties":false}"#,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"other": 1, "pa": "s"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"other": 1, "pa": "s"}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2201,7 +2202,8 @@ fn unevaluated_properties_nested_reports_each_level() {
   "unevaluatedProperties": false
 }"#,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"inner": {"x": 1, "y": 2}, "z": 3}));
+    let actual: ValidationResult =
+        validate_usable(&schema, &json!({"inner": {"x": 1, "y": 2}, "z": 3}));
     let expected: ValidationResult = Err(vec![
         unevaluated("/inner/y", "/properties/inner/unevaluatedProperties", "y"),
         unevaluated("/z", "/unevaluatedProperties", "z"),
@@ -2213,7 +2215,7 @@ fn unevaluated_properties_nested_reports_each_level() {
 fn unevaluated_properties_inner_does_not_see_outer_siblings() {
     let schema: JsonSchema =
         schema(r#"{"properties":{"a":{}},"allOf":[{"unevaluatedProperties":false}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![unevaluated(
         "/a",
         "/allOf/0/unevaluatedProperties",
@@ -2225,7 +2227,7 @@ fn unevaluated_properties_inner_does_not_see_outer_siblings() {
 #[test]
 fn unevaluated_properties_ignored_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"unevaluatedProperties":false}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2236,7 +2238,7 @@ fn unevaluated_properties_applies_in_2019_09() {
         r#"{"unevaluatedProperties":false}"#,
         SpecVersion::Draft201909,
     );
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     let expected: ValidationResult = Err(vec![unevaluated("/a", "/unevaluatedProperties", "a")]);
     assert_eq!(expected, actual);
 }
@@ -2247,7 +2249,7 @@ fn unevaluated_properties_applies_in_2019_09() {
 fn unevaluated_items_false_after_prefix_items_rejects_extra() {
     let schema: JsonSchema =
         schema(r#"{"prefixItems":[{"type":"integer"}],"unevaluatedItems":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Err(vec![false_schema("/1", "/unevaluatedItems")]);
     assert_eq!(expected, actual);
 }
@@ -2256,7 +2258,7 @@ fn unevaluated_items_false_after_prefix_items_rejects_extra() {
 fn unevaluated_items_false_after_prefix_items_accepts_prefix() {
     let schema: JsonSchema =
         schema(r#"{"prefixItems":[{"type":"integer"}],"unevaluatedItems":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2264,7 +2266,7 @@ fn unevaluated_items_false_after_prefix_items_accepts_prefix() {
 #[test]
 fn unevaluated_items_false_after_items_accepts_all() {
     let schema: JsonSchema = schema(r#"{"items":{"type":"integer"},"unevaluatedItems":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2272,7 +2274,7 @@ fn unevaluated_items_false_after_items_accepts_all() {
 #[test]
 fn unevaluated_items_schema_rejects_bad_item() {
     let schema: JsonSchema = schema(r#"{"unevaluatedItems":{"type":"integer"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, "x"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "x"]));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/1",
         "/unevaluatedItems/type",
@@ -2284,7 +2286,7 @@ fn unevaluated_items_schema_rejects_bad_item() {
 #[test]
 fn unevaluated_items_sees_contains_in_2020_12() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"string"},"unevaluatedItems":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!(["a", "b"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a", "b"]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2292,7 +2294,7 @@ fn unevaluated_items_sees_contains_in_2020_12() {
 #[test]
 fn unevaluated_items_rejects_non_contained_in_2020_12() {
     let schema: JsonSchema = schema(r#"{"contains":{"type":"string"},"unevaluatedItems":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!(["a", 1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a", 1]));
     let expected: ValidationResult = Err(vec![false_schema("/1", "/unevaluatedItems")]);
     assert_eq!(expected, actual);
 }
@@ -2303,7 +2305,7 @@ fn unevaluated_items_ignores_contains_in_2019_09() {
         r#"{"contains":{"type":"string"},"unevaluatedItems":false}"#,
         SpecVersion::Draft201909,
     );
-    let actual: ValidationResult = validate(&schema, &json!(["a"]));
+    let actual: ValidationResult = validate_usable(&schema, &json!(["a"]));
     let expected: ValidationResult = Err(vec![false_schema("/0", "/unevaluatedItems")]);
     assert_eq!(expected, actual);
 }
@@ -2314,7 +2316,7 @@ fn unevaluated_items_after_array_items_in_2019_09() {
         r#"{"items":[{"type":"integer"}],"unevaluatedItems":false}"#,
         SpecVersion::Draft201909,
     );
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Err(vec![false_schema("/1", "/unevaluatedItems")]);
     assert_eq!(expected, actual);
 }
@@ -2325,7 +2327,7 @@ fn unevaluated_items_sees_additional_items_in_2019_09() {
         r#"{"items":[{"type":"integer"}],"additionalItems":true,"unevaluatedItems":false}"#,
         SpecVersion::Draft201909,
     );
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2334,7 +2336,7 @@ fn unevaluated_items_sees_additional_items_in_2019_09() {
 fn unevaluated_items_sees_through_all_of() {
     let schema: JsonSchema =
         schema(r#"{"allOf":[{"prefixItems":[true]}],"unevaluatedItems":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!([1, 2]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, 2]));
     let expected: ValidationResult = Err(vec![false_schema("/1", "/unevaluatedItems")]);
     assert_eq!(expected, actual);
 }
@@ -2342,7 +2344,7 @@ fn unevaluated_items_sees_through_all_of() {
 #[test]
 fn unevaluated_items_ignored_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"unevaluatedItems":false}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!([1]));
+    let actual: ValidationResult = validate_usable(&schema, &json!([1]));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2352,7 +2354,7 @@ fn unevaluated_items_ignored_in_draft_7() {
 #[test]
 fn format_is_annotation_in_2020_12() {
     let schema: JsonSchema = schema(r#"{"format":"date"}"#);
-    let actual: ValidationResult = validate(&schema, &json!("nope"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("nope"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2360,7 +2362,7 @@ fn format_is_annotation_in_2020_12() {
 #[test]
 fn format_is_annotation_in_2019_09() {
     let schema: JsonSchema = schema_in(r#"{"format":"date"}"#, SpecVersion::Draft201909);
-    let actual: ValidationResult = validate(&schema, &json!("nope"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("nope"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2368,7 +2370,7 @@ fn format_is_annotation_in_2019_09() {
 #[test]
 fn format_is_asserted_in_draft_7() {
     let schema: JsonSchema = schema_in(r#"{"format":"date"}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!("nope"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("nope"));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "date".to_string(),
@@ -2383,7 +2385,7 @@ fn format_is_asserted_in_draft_7() {
 #[test]
 fn format_asserted_in_draft_7_accepts_valid_value() {
     let schema: JsonSchema = schema_in(r#"{"format":"date"}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!("2024-01-31"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("2024-01-31"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2394,7 +2396,7 @@ fn format_assertion_setting_asserts_in_2020_12() {
         .format_mode(FormatMode::Assertion)
         .build();
     let schema: JsonSchema = schema_with(r#"{"properties":{"d":{"format":"date"}}}"#, &settings);
-    let actual: ValidationResult = validate(&schema, &json!({"d": "nope"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"d": "nope"}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "date".to_string(),
@@ -2413,7 +2415,7 @@ fn format_annotation_setting_ignores_in_draft_7() {
         .format_mode(FormatMode::Annotation)
         .build();
     let schema: JsonSchema = schema_with(r#"{"format":"date"}"#, &settings);
-    let actual: ValidationResult = validate(&schema, &json!("nope"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("nope"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2421,7 +2423,7 @@ fn format_annotation_setting_ignores_in_draft_7() {
 #[test]
 fn unknown_format_ignored_when_asserting() {
     let schema: JsonSchema = schema_in(r#"{"format":"no-such-format"}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!("anything"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("anything"));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2429,7 +2431,7 @@ fn unknown_format_ignored_when_asserting() {
 #[test]
 fn format_ignores_non_string_when_asserting() {
     let schema: JsonSchema = schema_in(r#"{"format":"date"}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!(5));
+    let actual: ValidationResult = validate_usable(&schema, &json!(5));
     let expected: ValidationResult = Ok(());
     assert_eq!(expected, actual);
 }
@@ -2438,7 +2440,7 @@ fn format_ignores_non_string_when_asserting() {
 fn format_in_raw_subschema_is_asserted_in_draft_7() {
     let schema: JsonSchema =
         schema_in(r#"{"not":{"not":{"format":"ipv4"}}}"#, SpecVersion::Draft07);
-    let actual: ValidationResult = validate(&schema, &json!("999.1.1.1"));
+    let actual: ValidationResult = validate_usable(&schema, &json!("999.1.1.1"));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::NotSchemaMatched,
         root(),
@@ -2720,30 +2722,30 @@ fn display_compile_error_unknown_ref() {
 }
 
 #[test]
-fn validate_maps_invalid_pattern_to_invalid_pattern_in_schema() {
+fn validate_reports_invalid_pattern_as_compile_error() {
     let schema: JsonSchema = schema(r#"{"properties":{"a":{"pattern":"("}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a": "x"}));
-    let expected: ValidationResult = Err(vec![ValidationError::new(
-        ValidationErrorKind::InvalidPatternInSchema {
+    let actual: Result<(), ValidateError> = validate(&schema, &json!({"a": "x"}));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+        CompileErrors::new(CompileError::InvalidPattern {
+            location: "/properties/a/pattern".to_string(),
             pattern: "(".to_string(),
-        },
-        root(),
-        kl("/properties/a/pattern"),
-    )]);
+            reason: regex_reason("("),
+        }),
+    )));
     assert_eq!(expected, actual);
 }
 
 #[test]
-fn validate_maps_invalid_keyword_value_to_invalid_schema() {
+fn validate_reports_invalid_keyword_value_as_compile_error() {
     let schema: JsonSchema = schema(r#"{"not":{"minContains":"x"}}"#);
-    let actual: ValidationResult = validate(&schema, &json!(1));
-    let expected: ValidationResult = Err(vec![ValidationError::new(
-        ValidationErrorKind::InvalidSchema {
-            reason: "/not: the value of \"minContains\" must be a non-negative integer".to_string(),
-        },
-        root(),
-        kl("/not/minContains"),
-    )]);
+    let actual: Result<(), ValidateError> = validate(&schema, &json!(1));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+        CompileErrors::new(CompileError::InvalidKeywordValue {
+            location: "/not".to_string(),
+            keyword: "minContains".to_string(),
+            expected: "a non-negative integer",
+        }),
+    )));
     assert_eq!(expected, actual);
 }
 
@@ -2776,7 +2778,7 @@ fn is_valid_equals_validate_is_ok() {
     ];
     let expected: Vec<bool> = cases
         .iter()
-        .map(|(json, instance)| validate(&schema(json), instance).is_ok())
+        .map(|(json, instance)| validate_usable(&schema(json), instance).is_ok())
         .collect();
     let actual: Vec<bool> = cases
         .iter()
@@ -2789,7 +2791,7 @@ fn is_valid_equals_validate_is_ok() {
 fn one_of_three_matching_branches_reports_match_count() {
     let schema: JsonSchema =
         schema(r#"{"oneOf":[{"type":"integer"},{"minimum":0},{"multipleOf":1}]}"#);
-    let actual: ValidationResult = validate(&schema, &json!(3));
+    let actual: ValidationResult = validate_usable(&schema, &json!(3));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::MultipleSubschemasMatched {
             subschema_count: 3,
@@ -2831,7 +2833,7 @@ fn compiled_schema_validates_many_instances() {
 fn boolean_root_schema_false_rejects() {
     let schema: Schema =
         Schema::new_from_str("false", &JsonSchemaSettings::default()).expect("parse schema");
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     let expected: ValidationResult = Err(vec![false_schema("", "")]);
     assert_eq!(expected, actual);
 }
@@ -2841,7 +2843,7 @@ fn boolean_root_schema_false_rejects() {
 #[test]
 fn instance_location_escapes_slash_in_key() {
     let schema: JsonSchema = schema(r#"{"properties":{"a/b":{"type":"integer"}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a/b": "x"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a/b": "x"}));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/a~1b",
         "/properties/a~1b/type",
@@ -2853,7 +2855,7 @@ fn instance_location_escapes_slash_in_key() {
 #[test]
 fn instance_location_escapes_tilde_in_key() {
     let schema: JsonSchema = schema(r#"{"properties":{"m~n":{"type":"integer"}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"m~n": "x"}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"m~n": "x"}));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/m~0n",
         "/properties/m~0n/type",
@@ -2866,7 +2868,7 @@ fn instance_location_escapes_tilde_in_key() {
 fn instance_location_escapes_nested_keys() {
     let schema: JsonSchema =
         schema(r#"{"properties":{"a/b":{"properties":{"m~n":{"items":{"type":"integer"}}}}}}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"a/b": {"m~n": [1, "x"]}}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a/b": {"m~n": [1, "x"]}}));
     let expected: ValidationResult = Err(vec![expected_integer(
         "/a~1b/m~0n/1",
         "/properties/a~1b/properties/m~0n/items/type",
@@ -2878,7 +2880,7 @@ fn instance_location_escapes_nested_keys() {
 #[test]
 fn missing_required_path_escapes_key() {
     let schema: JsonSchema = schema(r#"{"required":["a/b"]}"#);
-    let actual: ValidationResult = validate(&schema, &json!({}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({}));
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::MissingRequired {
             property: "a/b".to_string(),
@@ -2892,7 +2894,7 @@ fn missing_required_path_escapes_key() {
 #[test]
 fn unevaluated_property_path_escapes_key() {
     let schema: JsonSchema = schema(r#"{"unevaluatedProperties":false}"#);
-    let actual: ValidationResult = validate(&schema, &json!({"m~n": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"m~n": 1}));
     let expected: ValidationResult =
         Err(vec![unevaluated("/m~0n", "/unevaluatedProperties", "m~n")]);
     assert_eq!(expected, actual);
@@ -3403,12 +3405,12 @@ fn schema_value(value: &Value) -> JsonSchema {
 }
 
 /// `{"pattern": pattern}` validating the string `text`.
-fn pattern_result(pattern: &str, text: &str) -> ValidationResult {
+fn pattern_result(pattern: &str, text: &str) -> Result<(), ValidateError> {
     validate(&schema_value(&json!({ "pattern": pattern })), &json!(text))
 }
 
 /// `{"patternProperties": {pattern: {"type": "integer"}}}` validating `{key: "x"}`.
-fn pattern_properties_result(pattern: &str, key: &str) -> ValidationResult {
+fn pattern_properties_result(pattern: &str, key: &str) -> Result<(), ValidateError> {
     let schema: JsonSchema =
         schema_value(&json!({ "patternProperties": { pattern: { "type": "integer" } } }));
     validate(&schema, &json!({ key: "x" }))
@@ -3416,25 +3418,25 @@ fn pattern_properties_result(pattern: &str, key: &str) -> ValidationResult {
 
 /// A draft 7 `{"format": "regex"}` (asserted by default) validating the string `value`.
 fn format_regex_result(value: &str) -> ValidationResult {
-    validate(
+    validate_usable(
         &schema_in(r#"{"format":"regex"}"#, SpecVersion::Draft07),
         &json!(value),
     )
 }
 
-/// The error of a `pattern` (`keyword_location` `/pattern`) or `patternProperties` key that does
-/// not compile.
-fn invalid_pattern_in_schema(pattern: &str, keyword_location: JsonPointer) -> ValidationResult {
-    Err(vec![ValidationError::new(
-        ValidationErrorKind::InvalidPatternInSchema {
+/// The error of a `pattern` (at `location`, `/pattern`) or `patternProperties` key that does not
+/// compile.
+fn invalid_pattern_in_schema(pattern: &str, location: &JsonPointer) -> Result<(), ValidateError> {
+    Err(ValidateError::Schema(SchemaError::Compile(
+        CompileErrors::new(CompileError::InvalidPattern {
+            location: location.to_string(),
             pattern: pattern.to_string(),
-        },
-        root(),
-        keyword_location,
-    )])
+            reason: regex_reason(pattern),
+        }),
+    )))
 }
 
-/// The keyword location of the `patternProperties` key `pattern`.
+/// The location of the `patternProperties` key `pattern`.
 fn pattern_properties_key(pattern: &str) -> JsonPointer {
     root().push("patternProperties").push(pattern)
 }
@@ -3452,136 +3454,136 @@ fn invalid_regex_format(value: &str) -> ValidationResult {
 
 #[test]
 fn pattern_accepts_escaped_hyphen() {
-    let actual: ValidationResult = pattern_result(r"^a\-b$", "a-b");
-    let expected: ValidationResult = Ok(());
+    let actual: Result<(), ValidateError> = pattern_result(r"^a\-b$", "a-b");
+    let expected: Result<(), ValidateError> = Ok(());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_accepts_escaped_colon() {
-    let actual: ValidationResult = pattern_result(r"\:", "x:y");
-    let expected: ValidationResult = Ok(());
+    let actual: Result<(), ValidateError> = pattern_result(r"\:", "x:y");
+    let expected: Result<(), ValidateError> = Ok(());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_accepts_escaped_quote() {
-    let actual: ValidationResult = pattern_result(r#"\""#, r#"say "hi""#);
-    let expected: ValidationResult = Ok(());
+    let actual: Result<(), ValidateError> = pattern_result(r#"\""#, r#"say "hi""#);
+    let expected: Result<(), ValidateError> = Ok(());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_accepts_lone_brace() {
-    let actual: ValidationResult = pattern_result("^a{$", "a{");
-    let expected: ValidationResult = Ok(());
+    let actual: Result<(), ValidateError> = pattern_result("^a{$", "a{");
+    let expected: Result<(), ValidateError> = Ok(());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_accepts_lone_bracket() {
-    let actual: ValidationResult = pattern_result("^]$", "]");
-    let expected: ValidationResult = Ok(());
+    let actual: Result<(), ValidateError> = pattern_result("^]$", "]");
+    let expected: Result<(), ValidateError> = Ok(());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_rejects_escaped_underscore() {
-    let actual: ValidationResult = pattern_result(r"a\_b", "a_b");
-    let expected: ValidationResult = invalid_pattern_in_schema(r"a\_b", ptr("/pattern"));
+    let actual: Result<(), ValidateError> = pattern_result(r"a\_b", "a_b");
+    let expected: Result<(), ValidateError> = invalid_pattern_in_schema(r"a\_b", &ptr("/pattern"));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_rejects_escaped_letter_a() {
-    let actual: ValidationResult = pattern_result(r"\a", "a");
-    let expected: ValidationResult = invalid_pattern_in_schema(r"\a", ptr("/pattern"));
+    let actual: Result<(), ValidateError> = pattern_result(r"\a", "a");
+    let expected: Result<(), ValidateError> = invalid_pattern_in_schema(r"\a", &ptr("/pattern"));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_rejects_escaped_letter_e() {
-    let actual: ValidationResult = pattern_result(r"\e", "e");
-    let expected: ValidationResult = invalid_pattern_in_schema(r"\e", ptr("/pattern"));
+    let actual: Result<(), ValidateError> = pattern_result(r"\e", "e");
+    let expected: Result<(), ValidateError> = invalid_pattern_in_schema(r"\e", &ptr("/pattern"));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_accepts_escaped_hyphen() {
-    let actual: ValidationResult = pattern_properties_result(r"^a\-b$", "a-b");
-    let expected: ValidationResult = Err(vec![expected_integer(
+    let actual: Result<(), ValidateError> = pattern_properties_result(r"^a\-b$", "a-b");
+    let expected: Result<(), ValidateError> = Err(ValidateError::Instance(vec![expected_integer(
         "/a-b",
         "/patternProperties/^a\\-b$/type",
         "string",
-    )]);
+    )]));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_accepts_escaped_colon() {
-    let actual: ValidationResult = pattern_properties_result(r"\:", "x:y");
-    let expected: ValidationResult = Err(vec![expected_integer(
+    let actual: Result<(), ValidateError> = pattern_properties_result(r"\:", "x:y");
+    let expected: Result<(), ValidateError> = Err(ValidateError::Instance(vec![expected_integer(
         "/x:y",
         "/patternProperties/\\:/type",
         "string",
-    )]);
+    )]));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_accepts_escaped_quote() {
-    let actual: ValidationResult = pattern_properties_result(r#"\""#, r#"say "hi""#);
-    let expected: ValidationResult = Err(vec![expected_integer(
+    let actual: Result<(), ValidateError> = pattern_properties_result(r#"\""#, r#"say "hi""#);
+    let expected: Result<(), ValidateError> = Err(ValidateError::Instance(vec![expected_integer(
         r#"/say "hi""#,
         "/patternProperties/\\\"/type",
         "string",
-    )]);
+    )]));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_accepts_lone_brace() {
-    let actual: ValidationResult = pattern_properties_result("^a{$", "a{");
-    let expected: ValidationResult = Err(vec![expected_integer(
+    let actual: Result<(), ValidateError> = pattern_properties_result("^a{$", "a{");
+    let expected: Result<(), ValidateError> = Err(ValidateError::Instance(vec![expected_integer(
         "/a{",
         "/patternProperties/^a{$/type",
         "string",
-    )]);
+    )]));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_accepts_lone_bracket() {
-    let actual: ValidationResult = pattern_properties_result("^]$", "]");
-    let expected: ValidationResult = Err(vec![expected_integer(
+    let actual: Result<(), ValidateError> = pattern_properties_result("^]$", "]");
+    let expected: Result<(), ValidateError> = Err(ValidateError::Instance(vec![expected_integer(
         "/]",
         "/patternProperties/^]$/type",
         "string",
-    )]);
+    )]));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_rejects_escaped_underscore() {
-    let actual: ValidationResult = pattern_properties_result(r"a\_b", "a_b");
-    let expected: ValidationResult =
-        invalid_pattern_in_schema(r"a\_b", pattern_properties_key(r"a\_b"));
+    let actual: Result<(), ValidateError> = pattern_properties_result(r"a\_b", "a_b");
+    let expected: Result<(), ValidateError> =
+        invalid_pattern_in_schema(r"a\_b", &pattern_properties_key(r"a\_b"));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_rejects_escaped_letter_a() {
-    let actual: ValidationResult = pattern_properties_result(r"\a", "a");
-    let expected: ValidationResult =
-        invalid_pattern_in_schema(r"\a", pattern_properties_key(r"\a"));
+    let actual: Result<(), ValidateError> = pattern_properties_result(r"\a", "a");
+    let expected: Result<(), ValidateError> =
+        invalid_pattern_in_schema(r"\a", &pattern_properties_key(r"\a"));
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn pattern_properties_rejects_escaped_letter_e() {
-    let actual: ValidationResult = pattern_properties_result(r"\e", "e");
-    let expected: ValidationResult =
-        invalid_pattern_in_schema(r"\e", pattern_properties_key(r"\e"));
+    let actual: Result<(), ValidateError> = pattern_properties_result(r"\e", "e");
+    let expected: Result<(), ValidateError> =
+        invalid_pattern_in_schema(r"\e", &pattern_properties_key(r"\e"));
     assert_eq!(expected, actual);
 }
 
@@ -3780,7 +3782,7 @@ fn absolute_location_is_omitted_without_an_absolute_id() {
         root(),
         kl("/$ref/minimum"),
     )]);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     assert_eq!(expected, actual);
 }
 
@@ -3800,7 +3802,7 @@ fn absolute_location_uses_the_target_resource_id() {
         )
         .with_absolute_keyword_location("https://ex.com/item#/minimum"),
     ]);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     assert_eq!(expected, actual);
 }
 
@@ -3818,7 +3820,7 @@ fn one_of_without_match_reports_causes() {
         root(),
         kl("/oneOf"),
     )]);
-    let actual: ValidationResult = validate(&schema, &json!(1));
+    let actual: ValidationResult = validate_usable(&schema, &json!(1));
     assert_eq!(expected, actual);
 }
 
@@ -3832,6 +3834,6 @@ fn dependencies_schema_form_location_names_dependencies_in_2020_12() {
         root(),
         kl("/dependencies/a/required"),
     )]);
-    let actual: ValidationResult = validate(&schema, &json!({"a": 1}));
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     assert_eq!(expected, actual);
 }

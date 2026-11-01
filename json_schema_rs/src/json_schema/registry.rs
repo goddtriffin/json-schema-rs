@@ -1942,7 +1942,7 @@ mod tests {
     use crate::json_schema::json_schema::{JsonSchema, Schema, SchemaRef};
     use crate::json_schema::settings::JsonSchemaSettings;
     use crate::json_schema::spec_version::SpecVersion;
-    use crate::validator::{ValidationError, ValidationResult, validate_with_registry};
+    use crate::validator::{CompiledSchema, ValidationError, ValidationResult};
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
@@ -1961,10 +1961,17 @@ mod tests {
             .map_err(RegistryErrors::into_vec)
     }
 
+    /// Validates `instance` against the root schema of `registry`, compiled for this call.
+    fn validate_compiled(registry: &Registry<'_>, instance: &Value) -> ValidationResult {
+        CompiledSchema::new(registry)
+            .expect("compile schema")
+            .validate(instance)
+    }
+
     /// Validates `instance` against `schema` through a registry with the defaults.
     fn validate_default(schema: &JsonSchema, instance: &Value) -> ValidationResult {
         let registry: Registry<'_> = Registry::new(schema).expect("build registry");
-        validate_with_registry(&registry, instance)
+        validate_compiled(&registry, instance)
     }
 
     /// The scope inside the root of `registry` (after its own `$id`, if any).
@@ -2283,7 +2290,7 @@ mod tests {
     fn mutual_refs_across_documents_reject_through_both_hops() {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
-        let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": {"a": "s"}}));
+        let actual: ValidationResult = validate_compiled(&registry, &json!({"b": {"a": "s"}}));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedInteger {
@@ -2301,7 +2308,7 @@ mod tests {
     fn mutual_refs_across_documents_accept_through_both_hops() {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
-        let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": {"a": 1}}));
+        let actual: ValidationResult = validate_compiled(&registry, &json!({"b": {"a": 1}}));
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2310,7 +2317,7 @@ mod tests {
     fn mutual_refs_first_hop_rejects_wrong_container() {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
-        let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": 1}));
+        let actual: ValidationResult = validate_compiled(&registry, &json!({"b": 1}));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedObject {
@@ -2335,7 +2342,7 @@ mod tests {
             .retriever(documents)
             .build(&root)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedString {
@@ -2356,7 +2363,7 @@ mod tests {
             "$ref": "HTTPS://EXAMPLE.com:443/./a.json"
         }));
         let registry: Registry<'_> = Registry::new(&root).expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedString {
@@ -2377,7 +2384,7 @@ mod tests {
             .document("HTTPS://Example.com/remote.json", json!({"type": "string"}))
             .build(&root)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedString {
@@ -2685,7 +2692,7 @@ mod tests {
             )
             .build(&root)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2966,7 +2973,7 @@ mod tests {
             )
             .build(&schema)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1.0));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1.0));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedInteger {
@@ -3439,7 +3446,7 @@ mod tests {
                 builder.parsed_document(*uri, *document)
             });
         let registry: Registry<'_> = builder.build(root).expect("build registry");
-        validate_with_registry(&registry, instance)
+        validate_compiled(&registry, instance)
     }
 
     /// The `type: string` failure of the number `1` at the root, reached through `$ref`s:

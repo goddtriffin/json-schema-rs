@@ -1,9 +1,96 @@
+use super::compiled::CompileErrors;
 use crate::json_pointer::JsonPointer;
-use crate::json_schema::TypeSet;
+use crate::json_schema::{RegistryErrors, TypeSet};
 use serde_json::Number;
 use std::fmt;
 
 pub type ValidationResult = Result<(), Vec<ValidationError>>;
+
+/// Why [`validate`](crate::validate) did not accept an instance: the schema cannot be used, or
+/// the instance does not conform to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidateError {
+    /// The schema cannot be used, whatever the instance: its registry could not be built or it
+    /// did not compile.
+    Schema(SchemaError),
+    /// The instance does not conform to the schema: every failure, one error each.
+    Instance(Vec<ValidationError>),
+}
+
+/// Prints the schema's problems, or the instance's errors, one per line.
+impl fmt::Display for ValidateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidateError::Schema(error) => write!(f, "{error}"),
+            ValidateError::Instance(errors) => {
+                for (index, error) in errors.iter().enumerate() {
+                    if index > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{error}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ValidateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ValidateError::Schema(error) => Some(error),
+            ValidateError::Instance(_) => None,
+        }
+    }
+}
+
+impl From<SchemaError> for ValidateError {
+    fn from(error: SchemaError) -> Self {
+        ValidateError::Schema(error)
+    }
+}
+
+/// Why a schema cannot be used for validation: every problem found at the step that failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaError {
+    /// The schema's `$ref` registry could not be built (a `$ref` that does not resolve, a
+    /// duplicate `$id` or anchor, a metaschema requiring an unsupported vocabulary, ...).
+    Registry(RegistryErrors),
+    /// The schema did not compile (a `pattern` that is not a valid regular expression, a raw
+    /// keyword whose value has the wrong shape, ...).
+    Compile(CompileErrors),
+}
+
+/// Prints every problem, one per line.
+impl fmt::Display for SchemaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SchemaError::Registry(errors) => write!(f, "{errors}"),
+            SchemaError::Compile(errors) => write!(f, "{errors}"),
+        }
+    }
+}
+
+impl std::error::Error for SchemaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SchemaError::Registry(errors) => Some(errors),
+            SchemaError::Compile(errors) => Some(errors),
+        }
+    }
+}
+
+impl From<RegistryErrors> for SchemaError {
+    fn from(errors: RegistryErrors) -> Self {
+        SchemaError::Registry(errors)
+    }
+}
+
+impl From<CompileErrors> for SchemaError {
+    fn from(errors: CompileErrors) -> Self {
+        SchemaError::Compile(errors)
+    }
+}
 
 /// A single validation failure: what is wrong ([`ValidationErrorKind`]), where in the instance,
 /// and which schema keyword found it.
@@ -74,13 +161,6 @@ impl fmt::Display for ValidationError {
 /// context (actual value, count, length, or "got" type) and the schema constraint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationErrorKind {
-    /// Schema had an invalid or unsupported `$ref`, or the reference could not be resolved.
-    InvalidRef {
-        /// The `$ref` string from the schema.
-        ref_str: String,
-        /// Human-readable reason (for user-facing context).
-        reason: String,
-    },
     /// Schema had `type: "object"` but the instance was not an object.
     ExpectedObject {
         /// JSON type of the instance (for user-facing context).
@@ -125,13 +205,6 @@ pub enum ValidationErrorKind {
     },
     /// The schema at this location was the boolean schema `false`, which no value satisfies.
     FalseSchema,
-    /// The schema cannot be used: its `$ref` registry could not be built for a reason other
-    /// than one `$ref` (a duplicate `$id` or anchor, a metaschema requiring an unsupported
-    /// vocabulary, ...). Reported once, at the instance root.
-    InvalidSchema {
-        /// Why the schema cannot be used.
-        reason: String,
-    },
     /// Schema had `uniqueItems: true` but the array contained duplicate elements.
     DuplicateArrayItems {
         /// Serialized duplicate value (for user-facing context).
@@ -231,11 +304,6 @@ pub enum ValidationErrorKind {
         /// The instance string value (for user-facing context).
         value: String,
     },
-    /// Schema had an invalid `pattern` (not a valid ECMA 262 regex); compilation failed.
-    InvalidPatternInSchema {
-        /// The invalid pattern string from the schema.
-        pattern: String,
-    },
     /// The string instance is not in the `format` the schema asserts (only when formats are
     /// asserted: see `FormatMode`).
     InvalidFormat {
@@ -328,11 +396,6 @@ impl fmt::Display for ValidationErrorKind {
     #[expect(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ValidationErrorKind::InvalidRef {
-                ref_str, reason, ..
-            } => {
-                write!(f, "could not resolve $ref \"{ref_str}\": {reason}")
-            }
             ValidationErrorKind::ExpectedObject { got, .. } => {
                 write!(f, "expected object, got {got}")
             }
@@ -359,9 +422,6 @@ impl fmt::Display for ValidationErrorKind {
             }
             ValidationErrorKind::FalseSchema => {
                 write!(f, "no value is allowed here (schema is false)")
-            }
-            ValidationErrorKind::InvalidSchema { reason, .. } => {
-                write!(f, "the schema cannot be used: {reason}")
             }
             ValidationErrorKind::DuplicateArrayItems {
                 duplicate_value, ..
@@ -472,9 +532,6 @@ impl fmt::Display for ValidationErrorKind {
             }
             ValidationErrorKind::PatternMismatch { pattern, value, .. } => {
                 write!(f, "string \"{value}\" does not match pattern \"{pattern}\"")
-            }
-            ValidationErrorKind::InvalidPatternInSchema { pattern, .. } => {
-                write!(f, "schema has invalid pattern \"{pattern}\"")
             }
             ValidationErrorKind::InvalidFormat { format, value, .. } => {
                 write!(f, "string \"{value}\" is not a valid {format}")

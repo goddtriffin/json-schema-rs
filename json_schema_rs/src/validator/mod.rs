@@ -2,7 +2,7 @@
 //!
 //! A schema is compiled once into a [`CompiledSchema`] (an arena of nodes with every `$ref`
 //! resolved and every regular expression compiled), which then validates any number of
-//! instances. [`validate`] and [`validate_with_registry`] compile and validate in one call.
+//! instances. [`validate`] builds the registry, compiles and validates in one call.
 
 mod compiled;
 mod ecma_regex;
@@ -17,14 +17,15 @@ mod tests_keywords;
 pub use compiled::{
     CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, FormatCheck,
 };
-pub use error::{ValidationError, ValidationErrorKind, ValidationResult};
+pub use error::{
+    SchemaError, ValidateError, ValidationError, ValidationErrorKind, ValidationResult,
+};
 pub use output::{BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
 
-use crate::json_pointer::JsonPointer;
-use crate::json_schema::{Registry, RegistryError, SchemaRef};
+use crate::json_schema::{Registry, SchemaRef};
 
-/// Validates a JSON instance against a schema. Collects **all** validation errors
-/// and returns them in a single result (no fail-fast).
+/// Validates a JSON instance against a schema in one call. Collects **all** validation errors
+/// (no fail-fast).
 ///
 /// The schema is a schema object (`&JsonSchema`) or a whole document that may be a boolean
 /// schema (`&Schema`): `true` accepts every instance and `false` none. Boolean schemas are
@@ -33,147 +34,65 @@ use crate::json_schema::{Registry, RegistryError, SchemaRef};
 ///
 /// `$ref` is resolved through a [`Registry`] built for this call with the defaults of
 /// [`Registry::new`] (in-document references, `$id` / `$anchor` resources, the embedded
-/// standard metaschemas; no retrieval), and the schema is compiled for this call. A schema whose
-/// registry cannot be built (a dangling `$ref`, a duplicate `$id`, ...) or that cannot be
-/// compiled (an invalid `pattern`) fails every instance with one error per problem. To validate
-/// many instances, build the registry and the [`CompiledSchema`] once.
+/// standard metaschemas; no retrieval), and the schema is compiled for this call. To validate
+/// many instances, or to let `$ref` reach other documents, build the registry and the
+/// [`CompiledSchema`] once and call [`CompiledSchema::validate`].
 ///
 /// # Errors
 ///
-/// Returns `Err(errors)` when the instance does not conform to the schema, with
-/// one or more [`ValidationError`] values describing each failure.
+/// - [`ValidateError::Schema`] when the schema cannot be used, whatever the instance: its
+///   registry could not be built ([`SchemaError::Registry`]: a `$ref` that does not resolve, a
+///   duplicate `$id`, ...) or it did not compile ([`SchemaError::Compile`]: a `pattern` that is
+///   not a valid regular expression, ...). Every problem is listed.
+/// - [`ValidateError::Instance`] when the instance does not conform to the schema, with one
+///   [`ValidationError`] per failure.
 ///
 /// # Example
 ///
 /// ```
-/// use json_schema_rs::{Schema, validate};
+/// use json_schema_rs::{Schema, SchemaError, ValidateError, validate};
 /// use serde_json::json;
 ///
 /// let schema: Schema =
 ///     Schema::try_from(r#"{"type":"object","properties":{"name":{"type":"string"}}}"#).unwrap();
-/// let instance = json!({"name": "Alice"});
-/// assert!(validate(&schema, &instance).is_ok());
+/// assert!(validate(&schema, &json!({"name": "Alice"})).is_ok());
 ///
-/// let never: Schema = Schema::try_from("false").unwrap();
-/// assert!(validate(&never, &instance).is_err());
+/// // The instance does not conform: one error per problem.
+/// match validate(&schema, &json!({"name": 1})) {
+///     Err(ValidateError::Instance(errors)) => {
+///         assert_eq!("/name: expected string, got number", errors[0].to_string());
+///     }
+///     other => panic!("expected instance errors, got {other:?}"),
+/// }
+///
+/// // The schema cannot be used: its `$ref` does not resolve.
+/// let broken: Schema = Schema::try_from(r##"{"$ref":"#/$defs/missing"}"##).unwrap();
+/// assert!(matches!(
+///     validate(&broken, &json!(1)),
+///     Err(ValidateError::Schema(SchemaError::Registry(_)))
+/// ));
 /// ```
 pub fn validate<'a>(
     schema: impl Into<SchemaRef<'a>>,
     instance: &serde_json::Value,
-) -> ValidationResult {
-    match Registry::new(schema) {
-        Ok(registry) => validate_with_registry(&registry, instance),
-        Err(errors) => Err(errors.iter().map(registry_error).collect()),
-    }
+) -> Result<(), ValidateError> {
+    let registry: Registry<'a> = Registry::new(schema).map_err(SchemaError::Registry)?;
+    let compiled: CompiledSchema = CompiledSchema::new(&registry).map_err(SchemaError::Compile)?;
+    compiled.validate(instance).map_err(ValidateError::Instance)
 }
 
-/// Validates `instance` against the root schema of `registry`, resolving every `$ref` through
-/// it. Compiles the schema for this call; to validate many instances, compile it once with
-/// [`CompiledSchema::new`]. See [`validate`] for what is checked.
-///
-/// # Errors
-///
-/// Returns `Err(errors)` when the instance does not conform to the schema.
-///
-/// # Example
-///
-/// ```
-/// use json_schema_rs::{CompiledSchema, Registry, Schema, validate_with_registry};
-/// use serde_json::json;
-///
-/// let schema: Schema = Schema::try_from(
-///     r#"{"$id":"https://example.com/root.json","items":{"$ref":"item.json"},
-///        "$defs":{"item":{"$id":"item.json","type":"integer"}}}"#,
-/// )
-/// .unwrap();
-/// let registry: Registry<'_> = Registry::new(&schema).unwrap();
-/// assert!(validate_with_registry(&registry, &json!([1, 2])).is_ok());
-///
-/// let compiled: CompiledSchema = CompiledSchema::new(&registry).unwrap();
-/// assert!(!compiled.is_valid(&json!(["a"])));
-/// ```
-pub fn validate_with_registry(
-    registry: &Registry<'_>,
+/// [`validate`] for a schema the test knows is usable: the instance errors alone, panicking when
+/// the schema cannot be used.
+#[cfg(test)]
+pub(crate) fn validate_usable<'a>(
+    schema: impl Into<SchemaRef<'a>>,
     instance: &serde_json::Value,
 ) -> ValidationResult {
-    match CompiledSchema::new(registry) {
-        Ok(compiled) => compiled.validate(instance),
-        Err(errors) => Err(errors.iter().map(compile_error).collect()),
+    match validate(schema, instance) {
+        Ok(()) => Ok(()),
+        Err(ValidateError::Instance(errors)) => Err(errors),
+        Err(ValidateError::Schema(error)) => panic!("the schema cannot be used: {error}"),
     }
-}
-
-/// A keyword location within the schema's documents: `location` (a JSON Pointer as written in
-/// an error) with `keyword` appended. A location that does not parse (it never should) gives
-/// the root.
-fn schema_location(location: &str, keyword: Option<&str>) -> JsonPointer {
-    let pointer: JsonPointer = JsonPointer::try_from(location).unwrap_or_else(|_| {
-        log::debug!("schema location {location:?} is not a JSON Pointer");
-        JsonPointer::root()
-    });
-    match keyword {
-        Some(keyword) => pointer.push(keyword),
-        None => pointer,
-    }
-}
-
-/// The error every instance gets for one problem that kept the schema's registry from being
-/// built (one per problem): at the instance root, with the keyword location of the `$ref` when
-/// the problem is one (else the schema root).
-fn registry_error(error: &RegistryError) -> ValidationError {
-    let kind: ValidationErrorKind = match error.ref_str() {
-        Some(ref_str) => ValidationErrorKind::InvalidRef {
-            ref_str: ref_str.to_string(),
-            reason: error.to_string(),
-        },
-        None => ValidationErrorKind::InvalidSchema {
-            reason: error.to_string(),
-        },
-    };
-    let keyword_location: JsonPointer = match error {
-        RegistryError::UnresolvableRef { location, .. }
-        | RegistryError::RefTargetNotSchema { location, .. } => {
-            schema_location(location, Some("$ref"))
-        }
-        _ => JsonPointer::root(),
-    };
-    ValidationError::new(kind, JsonPointer::root(), keyword_location)
-}
-
-/// The error every instance gets for one problem that kept the schema from compiling (one per
-/// problem): at the instance root, with the keyword location of the problem.
-fn compile_error(error: &CompileError) -> ValidationError {
-    let (kind, keyword_location): (ValidationErrorKind, JsonPointer) = match error {
-        CompileError::InvalidPattern {
-            location, pattern, ..
-        } => (
-            ValidationErrorKind::InvalidPatternInSchema {
-                pattern: pattern.clone(),
-            },
-            schema_location(location, None),
-        ),
-        CompileError::UnknownRef { location, ref_str } => (
-            ValidationErrorKind::InvalidRef {
-                ref_str: ref_str.clone(),
-                reason: error.to_string(),
-            },
-            schema_location(location, Some("$ref")),
-        ),
-        CompileError::InvalidKeywordValue {
-            location, keyword, ..
-        } => (
-            ValidationErrorKind::InvalidSchema {
-                reason: error.to_string(),
-            },
-            schema_location(location, Some(keyword)),
-        ),
-        CompileError::UnknownFormat { location, .. } => (
-            ValidationErrorKind::InvalidSchema {
-                reason: error.to_string(),
-            },
-            schema_location(location, Some("format")),
-        ),
-    };
-    ValidationError::new(kind, JsonPointer::root(), keyword_location)
 }
 
 #[cfg(test)]
@@ -184,10 +103,14 @@ mod tests {
     fn kl(pointer: &str) -> crate::json_pointer::JsonPointer {
         crate::json_pointer::JsonPointer::try_from(pointer).expect("valid JSON Pointer")
     }
-    use super::{ValidationError, ValidationResult, validate};
+    use super::{
+        CompileError, CompileErrors, SchemaError, ValidateError, ValidationError, ValidationResult,
+        validate, validate_usable,
+    };
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::JsonSchema;
     use crate::json_schema::RegistryError;
+    use crate::json_schema::RegistryErrors;
     use crate::json_schema::{JsonType, Schema, SchemaRef};
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -230,13 +153,13 @@ mod tests {
         )
         .expect("parse schema");
         let instance = json!({"address": {"city": "NYC"}});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn validate_ref_to_missing_defs_emits_invalid_ref() {
+    fn validate_ref_to_missing_defs_is_a_registry_error() {
         let schema: JsonSchema = serde_json::from_str(
             r##"{
   "type": "object",
@@ -244,23 +167,15 @@ mod tests {
 }"##,
         )
         .expect("parse schema");
-        let instance = json!({"x": "hi"});
-        let actual: ValidationResult = validate(&schema, &instance);
-        let expected_reason: String = RegistryError::UnresolvableRef {
-            ref_str: "#/$defs/Missing".to_string(),
-            location: "/properties/x".to_string(),
-            target: "json-schema:///#/$defs/Missing".to_string(),
-            reason: "no such location".to_string(),
-        }
-        .to_string();
-        let expected: ValidationResult = Err(vec![ValidationError::new(
-            ValidationErrorKind::InvalidRef {
+        let actual: Result<(), ValidateError> = validate(&schema, &json!({"x": "hi"}));
+        let expected: Result<(), ValidateError> = Err(ValidateError::Schema(
+            SchemaError::Registry(RegistryErrors::new(RegistryError::UnresolvableRef {
                 ref_str: "#/$defs/Missing".to_string(),
-                reason: expected_reason,
-            },
-            JsonPointer::root(),
-            kl("/properties/x/$ref"),
-        )]);
+                location: "/properties/x".to_string(),
+                target: "json-schema:///#/$defs/Missing".to_string(),
+                reason: "no such location".to_string(),
+            })),
+        ));
         assert_eq!(expected, actual);
     }
 
@@ -279,49 +194,160 @@ mod tests {
 }"##,
         )
         .expect("parse schema");
-        let actual: ValidationResult = validate(&schema, &json!({}));
-        let expected: ValidationResult = Err(vec![
-            ValidationError::new(
-                ValidationErrorKind::InvalidSchema {
-                    reason: RegistryError::DuplicateId {
+        let actual: Result<(), ValidateError> = validate(&schema, &json!({}));
+        let expected: Result<(), ValidateError> =
+            Err(ValidateError::Schema(SchemaError::Registry(
+                RegistryErrors::from_vec(vec![
+                    RegistryError::DuplicateId {
                         uri: "https://example.com/s.json".to_string(),
                         first: "/$defs/a".to_string(),
                         second: "/$defs/b".to_string(),
-                    }
-                    .to_string(),
-                },
-                JsonPointer::root(),
-                kl(""),
-            ),
-            ValidationError::new(
-                ValidationErrorKind::InvalidRef {
-                    ref_str: "#/$defs/missing".to_string(),
-                    reason: RegistryError::UnresolvableRef {
+                    },
+                    RegistryError::UnresolvableRef {
                         ref_str: "#/$defs/missing".to_string(),
                         location: "/properties/x".to_string(),
                         target: "json-schema:///#/$defs/missing".to_string(),
                         reason: "no such location".to_string(),
-                    }
-                    .to_string(),
-                },
-                JsonPointer::root(),
-                kl("/properties/x/$ref"),
-            ),
-            ValidationError::new(
-                ValidationErrorKind::InvalidRef {
-                    ref_str: "#/$defs/gone".to_string(),
-                    reason: RegistryError::UnresolvableRef {
+                    },
+                    RegistryError::UnresolvableRef {
                         ref_str: "#/$defs/gone".to_string(),
                         location: "/properties/y".to_string(),
                         target: "json-schema:///#/$defs/gone".to_string(),
                         reason: "no such location".to_string(),
-                    }
-                    .to_string(),
+                    },
+                ])
+                .expect("non-empty"),
+            )));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_accepts_conforming_instance() {
+        let schema: JsonSchema = serde_json::from_str(r#"{"type":"string"}"#).expect("parse");
+        let actual: Result<(), ValidateError> = validate(&schema, &json!("a"));
+        let expected: Result<(), ValidateError> = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_reports_instance_errors() {
+        let schema: JsonSchema =
+            serde_json::from_str(r#"{"type":"string","minLength":2}"#).expect("parse");
+        let actual: Result<(), ValidateError> = validate(&schema, &json!(1));
+        let expected: Result<(), ValidateError> =
+            Err(ValidateError::Instance(vec![ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
                 },
                 JsonPointer::root(),
-                kl("/properties/y/$ref"),
+                kl("/type"),
+            )]));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_reports_compile_errors_whatever_the_instance() {
+        let schema: JsonSchema = serde_json::from_str(r#"{"minProperties":"x"}"#).expect("parse");
+        let actual: Result<(), ValidateError> = validate(&schema, &json!({}));
+        let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+            CompileErrors::new(CompileError::InvalidKeywordValue {
+                location: String::new(),
+                keyword: "minProperties".to_string(),
+                expected: "a non-negative integer",
+            }),
+        )));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn display_validate_error_instance_is_one_error_per_line() {
+        let error: ValidateError = ValidateError::Instance(vec![
+            ValidationError::new(
+                ValidationErrorKind::FalseSchema,
+                JsonPointer::root(),
+                JsonPointer::root(),
+            ),
+            ValidationError::new(
+                ValidationErrorKind::MissingRequired {
+                    property: "a".to_string(),
+                },
+                kl("/b"),
+                kl("/required"),
             ),
         ]);
+        let expected: &str =
+            "root: no value is allowed here (schema is false)\n/b: missing required property \"a\"";
+        let actual: String = error.to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn display_validate_error_registry_is_one_problem_per_line() {
+        let error: ValidateError = ValidateError::Schema(SchemaError::Registry(
+            RegistryErrors::from_vec(vec![
+                RegistryError::UnresolvableRef {
+                    ref_str: "#/$defs/missing".to_string(),
+                    location: "/properties/x".to_string(),
+                    target: "json-schema:///#/$defs/missing".to_string(),
+                    reason: "no such location".to_string(),
+                },
+                RegistryError::UnsupportedVocabulary {
+                    metaschema: "https://example.com/meta".to_string(),
+                    vocabulary: "https://example.com/vocab".to_string(),
+                },
+            ])
+            .expect("non-empty"),
+        ));
+        let expected: &str = "$ref \"#/$defs/missing\" at /properties/x (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nmetaschema \"https://example.com/meta\" requires the unsupported vocabulary \"https://example.com/vocab\"";
+        let actual: String = error.to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn display_validate_error_compile_is_one_problem_per_line() {
+        let error: ValidateError = ValidateError::Schema(SchemaError::Compile(
+            CompileErrors::from_vec(vec![
+                CompileError::InvalidPattern {
+                    location: "/pattern".to_string(),
+                    pattern: "(".to_string(),
+                    reason: "unbalanced".to_string(),
+                },
+                CompileError::UnknownFormat {
+                    location: String::new(),
+                    format: "custom".to_string(),
+                },
+            ])
+            .expect("non-empty"),
+        ));
+        let expected: &str = "/pattern: invalid regular expression \"(\": unbalanced\nroot: unknown format \"custom\" under the format-assertion vocabulary";
+        let actual: String = error.to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_error_schema_source_is_the_schema_error() {
+        let error: ValidateError = ValidateError::Schema(SchemaError::Compile(CompileErrors::new(
+            CompileError::UnknownFormat {
+                location: String::new(),
+                format: "custom".to_string(),
+            },
+        )));
+        let expected: Option<String> = Some(
+            "root: unknown format \"custom\" under the format-assertion vocabulary".to_string(),
+        );
+        let actual: Option<String> = std::error::Error::source(&error).map(ToString::to_string);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_error_instance_has_no_source() {
+        let error: ValidateError = ValidateError::Instance(vec![ValidationError::new(
+            ValidationErrorKind::FalseSchema,
+            JsonPointer::root(),
+            JsonPointer::root(),
+        )]);
+        let expected: bool = true;
+        let actual: bool = std::error::Error::source(&error).is_none();
         assert_eq!(expected, actual);
     }
 
@@ -339,7 +365,7 @@ mod tests {
         )
         .expect("parse schema");
         let instance = json!({"x": 42});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::RefCycle {
                 ref_str: "#/$defs/A".to_string(),
@@ -371,7 +397,7 @@ mod tests {
             m
         });
         let instance = json!({"a": "x", "b": "y"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -390,7 +416,7 @@ mod tests {
             m
         });
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::MissingRequired {
                 property: "name".to_string(),
@@ -415,7 +441,7 @@ mod tests {
             m
         });
         let instance = json!({"a": "x", "extra": 1});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -435,7 +461,7 @@ mod tests {
         });
         schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({"a": "x", "extra": 1});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::DisallowedAdditionalProperty {
                 property: "extra".to_string(),
@@ -461,7 +487,7 @@ mod tests {
         });
         schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({"a": "x", "extra1": 1, "extra2": 2});
-        let actual_result: ValidationResult = validate(&schema, &instance);
+        let actual_result: ValidationResult = validate_usable(&schema, &instance);
         let expected_errors: Vec<ValidationError> = vec![
             ValidationError::new(
                 ValidationErrorKind::DisallowedAdditionalProperty {
@@ -510,7 +536,7 @@ mod tests {
         });
         schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -530,7 +556,7 @@ mod tests {
         });
         schema.additional_properties = Some(Schema::Bool(false));
         let instance = json!({"a": "x"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -559,7 +585,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"a": "x", "extra": "allowed"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -588,7 +614,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"a": "x", "extra": "not_an_integer"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "string".to_string(),
@@ -641,7 +667,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"a": "ok", "b": 1});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -678,7 +704,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"a": "x"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert!(matches!(
             actual,
             Err(ref e) if e.iter().any(|err| matches!(&err.kind, ValidationErrorKind::MissingRequired { property, .. } if property == "b"))
@@ -729,7 +755,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"a": 1, "b": "x"});
-        let result: ValidationResult = validate(&schema, &instance);
+        let result: ValidationResult = validate_usable(&schema, &instance);
         let errs = result.unwrap_err();
         let expected: usize = 2;
         let actual: usize = errs.len();
@@ -743,7 +769,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -782,7 +808,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"s": "c"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert!(matches!(actual, Err(ref e) if !e.is_empty()));
         let errs = actual.unwrap_err();
         assert!(
@@ -809,11 +835,11 @@ mod tests {
             ..Default::default()
         };
         let instance_str = json!("hello");
-        let actual_str: ValidationResult = validate(&schema, &instance_str);
+        let actual_str: ValidationResult = validate_usable(&schema, &instance_str);
         let expected_str: ValidationResult = Ok(());
         assert_eq!(expected_str, actual_str);
         let instance_int = json!(42);
-        let actual_int: ValidationResult = validate(&schema, &instance_int);
+        let actual_int: ValidationResult = validate_usable(&schema, &instance_int);
         let expected_int: ValidationResult = Ok(());
         assert_eq!(expected_int, actual_int);
     }
@@ -836,7 +862,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(true);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.unwrap_err();
         let expected: usize = 1;
         let actual_count: usize = errs.len();
@@ -857,7 +883,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(1);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.unwrap_err();
         let expected: usize = 1;
         let actual_count: usize = errs.len();
@@ -884,7 +910,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(std::f64::consts::PI);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -902,7 +928,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
@@ -932,7 +958,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hello");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -955,7 +981,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(1.5);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
@@ -981,7 +1007,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("x");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
@@ -1001,7 +1027,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(1);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
@@ -1026,7 +1052,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(std::f64::consts::PI);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1044,7 +1070,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.unwrap_err();
         assert_eq!(1, errs.len());
         assert!(errs.iter().any(|e| matches!(
@@ -1063,7 +1089,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("not an object");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedObject {
                 got: "string".to_string(),
@@ -1136,10 +1162,10 @@ mod tests {
             ..Default::default()
         };
         let valid_instance = json!({"name": "Alice"});
-        let actual_valid: ValidationResult = validate(&schema, &valid_instance);
+        let actual_valid: ValidationResult = validate_usable(&schema, &valid_instance);
         assert_eq!(Ok(()), actual_valid);
         let invalid_instance = json!({"name": 42});
-        let actual_invalid: ValidationResult = validate(&schema, &invalid_instance);
+        let actual_invalid: ValidationResult = validate_usable(&schema, &invalid_instance);
         assert!(actual_invalid.is_err());
     }
 
@@ -1150,7 +1176,7 @@ mod tests {
         )
         .expect("parse schema");
         let instance = json!({"x": "valid"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1162,7 +1188,7 @@ mod tests {
         )
         .expect("parse schema");
         let instance = json!({"legacy": "still-valid"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1174,7 +1200,7 @@ mod tests {
         )
         .expect("parse schema");
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::MissingRequired {
                 property: "x".to_string(),
@@ -1241,11 +1267,13 @@ mod tests {
         };
         let valid_instance = json!("hello");
         let invalid_instance = json!(42);
-        let expected_valid: ValidationResult = validate(&schema_without, &valid_instance);
-        let actual_valid: ValidationResult = validate(&schema_with_comment, &valid_instance);
+        let expected_valid: ValidationResult = validate_usable(&schema_without, &valid_instance);
+        let actual_valid: ValidationResult = validate_usable(&schema_with_comment, &valid_instance);
         assert_eq!(expected_valid, actual_valid);
-        let expected_invalid: ValidationResult = validate(&schema_without, &invalid_instance);
-        let actual_invalid: ValidationResult = validate(&schema_with_comment, &invalid_instance);
+        let expected_invalid: ValidationResult =
+            validate_usable(&schema_without, &invalid_instance);
+        let actual_invalid: ValidationResult =
+            validate_usable(&schema_with_comment, &invalid_instance);
         assert_eq!(expected_invalid, actual_invalid);
     }
 
@@ -1367,8 +1395,8 @@ mod tests {
             ..Default::default()
         };
         let empty_instance = json!({});
-        let expected: ValidationResult = validate(&schema_without, &empty_instance);
-        let actual: ValidationResult = validate(&schema_with_default, &empty_instance);
+        let expected: ValidationResult = validate_usable(&schema_without, &empty_instance);
+        let actual: ValidationResult = validate_usable(&schema_with_default, &empty_instance);
         assert_eq!(expected, actual);
     }
 
@@ -1401,7 +1429,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("ok");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1435,7 +1463,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1469,7 +1497,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"x": 1});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedString {
                 got: "object".to_string(),
@@ -1509,7 +1537,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedString {
                 got: "number".to_string(),
@@ -1549,7 +1577,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(null);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedString {
                 got: "null".to_string(),
@@ -1589,7 +1617,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(true);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedString {
                 got: "boolean".to_string(),
@@ -1607,7 +1635,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(true);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1619,7 +1647,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(false);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1631,7 +1659,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hello");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedBoolean {
                 got: "string".to_string(),
@@ -1671,7 +1699,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedString {
                 got: "array".to_string(),
@@ -1692,7 +1720,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("open");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1707,7 +1735,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("pending");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::NotInEnum {
                 invalid_value: "\"pending\"".to_string(),
@@ -1730,7 +1758,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("a");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1746,7 +1774,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("c");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::NotInEnum {
                 invalid_value: "\"c\"".to_string(),
@@ -1765,7 +1793,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("ok");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1777,7 +1805,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("actual");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.as_ref().expect_err("expected NotConst error");
         assert_eq!(errs.len(), 1);
         assert!(matches!(&errs[0].kind, ValidationErrorKind::NotConst {
@@ -1795,7 +1823,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1832,7 +1860,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("a");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1869,7 +1897,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("b");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let errs = actual.as_ref().expect_err("expected NotConst");
         assert_eq!(errs.len(), 1);
         assert!(matches!(
@@ -1923,7 +1951,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1957,7 +1985,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(0);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -1991,7 +2019,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(-1);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2025,7 +2053,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(2.5);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "number".to_string(),
@@ -2065,7 +2093,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("42");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "string".to_string(),
@@ -2105,7 +2133,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(null);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "null".to_string(),
@@ -2145,7 +2173,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"x": 1});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "object".to_string(),
@@ -2185,7 +2213,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "array".to_string(),
@@ -2225,7 +2253,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(true);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "boolean".to_string(),
@@ -2250,7 +2278,7 @@ mod tests {
             m
         });
         let instance = json!({"count": 10});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2269,7 +2297,7 @@ mod tests {
             m
         });
         let instance = json!({"count": 2.5});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
                 got: "number".to_string(),
@@ -2294,7 +2322,7 @@ mod tests {
             m
         });
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::MissingRequired {
                 property: "count".to_string(),
@@ -2334,7 +2362,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(2.5);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2368,7 +2396,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2402,7 +2430,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("3.14");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedNumber {
                 got: "string".to_string(),
@@ -2442,7 +2470,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(null);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedNumber {
                 got: "null".to_string(),
@@ -2482,7 +2510,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedNumber {
                 got: "object".to_string(),
@@ -2522,7 +2550,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1.0]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedNumber {
                 got: "array".to_string(),
@@ -2562,7 +2590,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(true);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedNumber {
                 got: "boolean".to_string(),
@@ -2602,7 +2630,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(100);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2636,7 +2664,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(5);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::BelowMinimum {
                 minimum: 10_u64.into(),
@@ -2677,7 +2705,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(20);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::AboveMaximum {
                 maximum: 10_u64.into(),
@@ -2718,7 +2746,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2752,7 +2780,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(50.0);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2786,7 +2814,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(0.5);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::BelowMinimum {
                 minimum: 1_u64.into(),
@@ -2827,7 +2855,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(2.5);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::AboveMaximum {
                 maximum: 1_u64.into(),
@@ -2932,7 +2960,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"low": 5, "high": 200});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::AboveMaximum {
@@ -2983,7 +3011,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3017,7 +3045,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2, 3]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3051,7 +3079,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("not an array");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedArray {
                 got: "string".to_string(),
@@ -3117,7 +3145,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(["a", "b", "c"]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3177,7 +3205,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(["a", 42, "c"]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedString {
                 got: "number".to_string(),
@@ -3243,7 +3271,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(["a", "b", "c"]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3303,7 +3331,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(["a", "b", "a"]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected_has_duplicate_error: bool = actual.as_ref().err().is_some_and(|e| {
             e.iter()
                 .any(|err| matches!(&err.kind, ValidationErrorKind::DuplicateArrayItems { .. }))
@@ -3369,7 +3397,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(["a", "a"]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3429,7 +3457,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(["a", "a"]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3463,7 +3491,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3497,7 +3525,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2, 3]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3531,7 +3559,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooFewItems {
                 min_items: 3,
@@ -3572,7 +3600,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3606,7 +3634,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3640,7 +3668,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2, 3]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooManyItems {
                 max_items: 2,
@@ -3681,7 +3709,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3715,7 +3743,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2, 3]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3749,7 +3777,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooFewItems {
                 min_items: 2,
@@ -3790,7 +3818,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2, 3, 4, 5, 6]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooManyItems {
                 max_items: 5,
@@ -3831,7 +3859,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2, 3]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3865,7 +3893,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("not an array");
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedArray {
                 got: "string".to_string(),
@@ -3890,7 +3918,7 @@ mod tests {
             m
         });
         let instance = json!({"value": 2.5});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -3909,7 +3937,7 @@ mod tests {
             m
         });
         let instance = json!({"value": "3.14"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedNumber {
                 got: "string".to_string(),
@@ -3934,7 +3962,7 @@ mod tests {
             m
         });
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::MissingRequired {
                 property: "value".to_string(),
@@ -3974,7 +4002,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(42);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedObject {
                 got: "number".to_string(),
@@ -4014,7 +4042,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!(null);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedObject {
                 got: "null".to_string(),
@@ -4054,7 +4082,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!([1, 2]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedObject {
                 got: "array".to_string(),
@@ -4105,7 +4133,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!({"name": "Alice"});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -4157,7 +4185,7 @@ mod tests {
             m
         });
         let instance = json!({"address": {}});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::MissingRequired {
                 property: "city".to_string(),
@@ -4182,7 +4210,7 @@ mod tests {
             m
         });
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -4215,7 +4243,7 @@ mod tests {
             m
         });
         let instance = json!({});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::MissingRequired {
@@ -4296,7 +4324,7 @@ mod tests {
             m
         });
         let instance = json!({"nested": {}});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::MissingRequired {
@@ -4359,7 +4387,7 @@ mod tests {
             obj.insert("child".to_string(), instance_value);
             instance_value = serde_json::Value::Object(obj);
         }
-        let actual: ValidationResult = validate(&inner, &instance_value);
+        let actual: ValidationResult = validate_usable(&inner, &instance_value);
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -4378,7 +4406,7 @@ mod tests {
             m
         });
         let instance = json!({"a/b": 123});
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedString {
                 got: "number".to_string(),
@@ -4397,7 +4425,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("abc");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4408,7 +4436,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hi");
-        let actual = validate(&schema, &instance);
+        let actual = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooShort {
                 min_length: 5,
@@ -4428,7 +4456,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hello");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4438,7 +4466,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4449,7 +4477,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hello");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4460,7 +4488,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hello");
-        let actual = validate(&schema, &instance);
+        let actual = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooLong {
                 max_length: 3,
@@ -4480,7 +4508,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hi");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4490,7 +4518,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("this is a very long string with no max length constraint");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4501,7 +4529,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4512,7 +4540,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("x");
-        let actual = validate(&schema, &instance);
+        let actual = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooLong {
                 max_length: 0,
@@ -4532,7 +4560,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4544,7 +4572,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hello");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4556,7 +4584,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hi");
-        let actual = validate(&schema, &instance);
+        let actual = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooShort {
                 min_length: 5,
@@ -4577,7 +4605,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("hello world");
-        let actual = validate(&schema, &instance);
+        let actual = validate_usable(&schema, &instance);
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::TooLong {
                 max_length: 4,
@@ -4599,7 +4627,7 @@ mod tests {
             ..Default::default()
         };
         let instance = json!("日本語");
-        assert_eq!(Ok(()), validate(&schema, &instance));
+        assert_eq!(Ok(()), validate_usable(&schema, &instance));
     }
 
     #[test]
@@ -4611,7 +4639,7 @@ mod tests {
         };
         let instance = json!("cat");
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4623,7 +4651,7 @@ mod tests {
         };
         let instance = json!("l'école");
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4642,7 +4670,7 @@ mod tests {
             JsonPointer::root(),
             kl("/pattern"),
         )]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4655,7 +4683,7 @@ mod tests {
         };
         let instance = json!("123");
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4675,7 +4703,7 @@ mod tests {
             JsonPointer::root(),
             kl("/pattern"),
         )]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4694,7 +4722,7 @@ mod tests {
             JsonPointer::root(),
             kl("/type"),
         )]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4705,15 +4733,16 @@ mod tests {
             pattern: Some("[".to_string()),
             ..Default::default()
         };
-        let instance = json!("x");
-        let expected: ValidationResult = Err(vec![ValidationError::new(
-            ValidationErrorKind::InvalidPatternInSchema {
+        let actual: Result<(), ValidateError> = validate(&schema, &json!("x"));
+        let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+            CompileErrors::new(CompileError::InvalidPattern {
+                location: "/pattern".to_string(),
                 pattern: "[".to_string(),
-            },
-            JsonPointer::root(),
-            kl("/pattern"),
-        )]);
-        let actual: ValidationResult = validate(&schema, &instance);
+                reason: regress::Regex::with_flags("[", "u")
+                    .expect_err("invalid pattern")
+                    .to_string(),
+            }),
+        )));
         assert_eq!(expected, actual);
     }
 
@@ -4744,7 +4773,7 @@ mod tests {
                 kl("/pattern"),
             ),
         ]);
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4754,7 +4783,7 @@ mod tests {
             serde_json::from_str(r#"{"type":"string","format":"uuid"}"#).unwrap();
         let instance = json!("550e8400-e29b-41d4-a716-446655440000");
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate(&schema, &instance);
+        let actual: ValidationResult = validate_usable(&schema, &instance);
         assert_eq!(expected, actual);
     }
 
@@ -4769,7 +4798,7 @@ mod tests {
             .expect("parse")
             .into_object()
             .expect("schema object");
-        validate(&schema, &json!("not-valid"))
+        validate_usable(&schema, &json!("not-valid"))
     }
 
     fn invalid_format_errors(format: &str) -> ValidationResult {
@@ -4906,7 +4935,7 @@ mod tests {
             .into_object()
             .expect("schema object");
         let instance: serde_json::Value = serde_json::from_str(instance_json).expect("instance");
-        validate(&schema, &instance)
+        validate_usable(&schema, &instance)
     }
 
     /// Whether `instance_json` is valid against `schema_json` under default settings.
@@ -5376,7 +5405,7 @@ mod tests {
     fn validate_document(schema_json: &str, instance_json: &str) -> ValidationResult {
         let schema: Schema = Schema::try_from(schema_json).expect("schema");
         let instance: serde_json::Value = serde_json::from_str(instance_json).expect("instance");
-        validate(&schema, &instance)
+        validate_usable(&schema, &instance)
     }
 
     /// `type: ["integer", "string"]`.
@@ -5523,7 +5552,7 @@ mod tests {
     #[test]
     fn root_true_schema_ref_accepts_anything() {
         let expected: ValidationResult = Ok(());
-        let actual: ValidationResult = validate(SchemaRef::Bool(true), &json!("x"));
+        let actual: ValidationResult = validate_usable(SchemaRef::Bool(true), &json!("x"));
         assert_eq!(expected, actual);
     }
 
@@ -5534,7 +5563,7 @@ mod tests {
             JsonPointer::root(),
             kl(""),
         )]);
-        let actual: ValidationResult = validate(SchemaRef::Bool(false), &json!("x"));
+        let actual: ValidationResult = validate_usable(SchemaRef::Bool(false), &json!("x"));
         assert_eq!(expected, actual);
     }
 

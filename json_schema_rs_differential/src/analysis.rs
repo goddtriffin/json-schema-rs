@@ -620,9 +620,9 @@ pub struct UnsupportedReason {
 /// Normalize one skip message from our harness to a grouping reason.
 ///
 /// The harness contract: `unsupported keyword "<key>" at <path>` (grouped by keyword, the path
-/// is dropped), `unsupported schema: <detail>` (grouped by detail), `unsupported $ref: "<ref>":
-/// <reason>` (grouped by reason, the reference is dropped), and
-/// `unsupported: <detail>`. Anything else is kept verbatim under `unrecognized skip: `.
+/// is dropped), `unsupported schema: <detail>` (grouped by detail), and `unsupported $ref:
+/// "<ref>": <reason>` (grouped by reason, the reference is dropped). Anything else is kept
+/// verbatim under `unrecognized skip: `.
 #[must_use]
 pub fn skip_reason(message: &str) -> String {
     if let Some(rest) = message.strip_prefix("unsupported keyword ") {
@@ -644,9 +644,6 @@ pub fn skip_reason(message: &str) -> String {
             return format!("$ref: {}", &detail[end + 3..]);
         }
         return format!("$ref: {detail}");
-    }
-    if let Some(detail) = message.strip_prefix("unsupported: ") {
-        return detail.to_string();
     }
     if message.trim().is_empty() {
         return "skipped without a message".to_string();
@@ -1291,7 +1288,6 @@ mod tests {
             "schema: boolean schema".to_string(),
             "$ref: remote reference http://x".to_string(),
             "$ref: remote references are not supported".to_string(),
-            "format \"email\"".to_string(),
             "skipped without a message".to_string(),
             "unrecognized skip: nope".to_string(),
         ];
@@ -1302,7 +1298,6 @@ mod tests {
             "unsupported schema: boolean schema",
             "unsupported $ref: remote reference http://x",
             "unsupported $ref: \"http://localhost:1234/a.json\": remote references are not supported",
-            "unsupported: format \"email\"",
             "  ",
             "nope",
         ]
@@ -1343,7 +1338,7 @@ mod tests {
                 "draft7",
                 "3",
                 Some(true),
-                &[(OURS, skipped("unsupported: a"))],
+                &[(OURS, skipped("unsupported schema: a"))],
             ),
             record("draft7", "9", Some(true), &[(OURS, Verdict::Valid)]),
         ];
@@ -1358,7 +1353,7 @@ mod tests {
                 ]),
             },
             UnsupportedReason {
-                reason: "a".to_string(),
+                reason: "schema: a".to_string(),
                 tests: 1,
                 cases: 1,
                 by_group: BTreeMap::from([("draft7".to_string(), 1)]),

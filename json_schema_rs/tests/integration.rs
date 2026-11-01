@@ -1,8 +1,9 @@
 //! Integration test: public API for schema parsing and code generation, and CLI binary.
 
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, DedupeMode, JsonSchema, JsonType, ModelNameSource, Schema,
-    SpecVersion, UnknownProperties, generate_rust, validate,
+    CodeGenInput, CodeGenSettings, CompileError, CompileErrors, DedupeMode, JsonSchema, JsonType,
+    ModelNameSource, RegistryError, RegistryErrors, Schema, SchemaError, SpecVersion,
+    UnknownProperties, ValidateError, generate_rust, validate,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -2078,51 +2079,35 @@ pub struct Root {
 
 #[test]
 fn cli_validate_valid_payload_exit_zero() {
-    let schema_json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
-    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
-    schema_file.flush().expect("flush schema");
-    let payload_json = r#"{"x":"ok"}"#;
-    let mut child = Command::new(jsonschemars_bin())
-        .args(["validate", "-s", schema_file.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn jsonschemars");
-    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload_json.as_bytes())
-        .expect("write payload");
-    let output = child.wait_with_output().expect("wait jsonschemars");
-    assert!(
-        output.status.success(),
-        "validate should succeed: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"type":"object","properties":{"x":{"type":"string"}}}"#,
+        r#"{"x":"ok"}"#,
+        &[],
     );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
 }
 
 #[test]
-fn cli_validate_invalid_payload_exit_nonzero_and_stderr() {
-    let schema_json = r#"{"type":"object","required":["id"]}"#;
-    let payload_json = r"{}";
-    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
-    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
-    schema_file.flush().expect("flush schema");
-    let mut child = Command::new(jsonschemars_bin())
-        .args(["validate", "-s", schema_file.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn jsonschemars");
-    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload_json.as_bytes())
-        .expect("write payload");
-    let output = child.wait_with_output().expect("wait jsonschemars");
-    assert!(!output.status.success(), "validate should fail");
-    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
-    assert!(
-        stderr.contains("missing required"),
-        "stderr should mention missing required: {stderr}"
+fn cli_validate_invalid_payload_exits_one_with_every_error() {
+    let (_, actual): (String, (i32, String)) =
+        run_cli_validate(r#"{"type":"object","required":["id"]}"#, "{}", &[]);
+    let expected: (i32, String) = (
+        1,
+        "root: missing required property \"id\"\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
     );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_unparseable_payload_exits_two() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(r#"{"type":"object"}"#, "{", &[]);
+    let expected: (i32, String) = (
+        2,
+        "error: invalid JSON payload: EOF while parsing an object at line 1 column 1\n".to_string(),
+    );
+    assert_eq!(expected, actual);
 }
 
 #[test]
@@ -2934,18 +2919,51 @@ fn integration_validator_pattern_mismatch_fails() {
     let schema: Schema =
         Schema::try_from(r#"{"type":"string","pattern":"^[0-9]+$"}"#).expect("parse");
     let instance = serde_json::json!("12a3");
-    let actual: Result<(), _> = json_schema_rs::validate(&schema, &instance);
-    let errs = actual.unwrap_err();
-    let expected: Vec<json_schema_rs::ValidationError> =
-        vec![json_schema_rs::ValidationError::new(
+    let actual: Result<(), ValidateError> = json_schema_rs::validate(&schema, &instance);
+    let expected: Result<(), ValidateError> = Err(ValidateError::Instance(vec![
+        json_schema_rs::ValidationError::new(
             json_schema_rs::ValidationErrorKind::PatternMismatch {
                 pattern: "^[0-9]+$".to_string(),
                 value: "12a3".to_string(),
             },
             json_schema_rs::JsonPointer::root(),
             json_schema_rs::JsonPointer::try_from("/pattern").expect("pointer"),
-        )];
-    assert_eq!(expected, errs);
+        ),
+    ]));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn integration_validator_unresolvable_ref_is_a_schema_error() {
+    let schema: Schema = Schema::try_from(r##"{"$ref":"#/$defs/missing"}"##).expect("parse");
+    let actual: Result<(), ValidateError> =
+        json_schema_rs::validate(&schema, &serde_json::json!(1));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Registry(
+        RegistryErrors::new(RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: String::new(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }),
+    )));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn integration_validator_invalid_pattern_is_a_schema_error() {
+    let schema: Schema = Schema::try_from(r#"{"pattern":"("}"#).expect("parse");
+    let actual: Result<(), ValidateError> =
+        json_schema_rs::validate(&schema, &serde_json::json!("x"));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+        CompileErrors::new(CompileError::InvalidPattern {
+            location: "/pattern".to_string(),
+            pattern: "(".to_string(),
+            reason: regress::Regex::with_flags("(", "u")
+                .expect_err("invalid pattern")
+                .to_string(),
+        }),
+    )));
+    assert_eq!(expected, actual);
 }
 
 #[test]
@@ -4422,12 +4440,12 @@ members = [{members}]
 // --- CLI: dialect settings (`--jss-forced-spec-version`, `--jss-default-spec-version`, `--jss-format-mode`, `--jss-unknown-schema-uri`) ---
 
 /// Runs `jsonschemars validate` on `schema_json` with `payload_json` on stdin and `extra_args`;
-/// returns the schema file's path, whether it exited successfully, and its stderr.
+/// returns the schema file's path, its exit code, and its stderr.
 fn run_cli_validate(
     schema_json: &str,
     payload_json: &str,
     extra_args: &[&str],
-) -> (String, (bool, String)) {
+) -> (String, (i32, String)) {
     let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
     std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
     schema_file.flush().expect("flush schema");
@@ -4445,18 +4463,21 @@ fn run_cli_validate(
         .expect("write payload");
     let output = child.wait_with_output().expect("wait jsonschemars");
     let stderr: String = String::from_utf8(output.stderr).expect("utf8 stderr");
-    (schema_path, (output.status.success(), stderr))
+    (
+        schema_path,
+        (output.status.code().expect("exit code"), stderr),
+    )
 }
 
 #[test]
 fn cli_validate_unknown_schema_uri_warns_and_falls_back() {
-    let (path, actual): (String, (bool, String)) = run_cli_validate(
+    let (path, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#,
         r#""ok""#,
         &[],
     );
-    let expected: (bool, String) = (
-        true,
+    let expected: (i32, String) = (
+        0,
         format!(
             "warning: {path}: unknown $schema \"https://example.com/custom-meta\"; using JSON Schema Draft 2020-12 rules\n"
         ),
@@ -4466,13 +4487,13 @@ fn cli_validate_unknown_schema_uri_warns_and_falls_back() {
 
 #[test]
 fn cli_validate_unknown_schema_uri_rejected_with_flag() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#,
         r#""ok""#,
         &["--jss-unknown-schema-uri", "reject"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        2,
         "error: unknown $schema \"https://example.com/custom-meta\"\n".to_string(),
     );
     assert_eq!(expected, actual);
@@ -4480,13 +4501,13 @@ fn cli_validate_unknown_schema_uri_rejected_with_flag() {
 
 #[test]
 fn cli_validate_pre_draft4_schema_warns() {
-    let (path, actual): (String, (bool, String)) = run_cli_validate(
+    let (path, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"http://json-schema.org/draft-03/schema#","type":"string"}"#,
         r#""ok""#,
         &[],
     );
-    let expected: (bool, String) = (
-        true,
+    let expected: (i32, String) = (
+        0,
         format!(
             "warning: {path}: Draft03 has no rule set of its own; using JSON Schema Draft 4 rules\n"
         ),
@@ -4534,24 +4555,24 @@ fn cli_generate_unknown_schema_uri_warns() {
 #[cfg(feature = "uuid")]
 #[test]
 fn cli_validate_uuid_format_is_annotation_by_default_in_2020_12() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"string","format":"uuid"}"#,
         r#""not-a-uuid""#,
         &[],
     );
-    let expected: (bool, String) = (true, String::new());
+    let expected: (i32, String) = (0, String::new());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn cli_validate_format_mode_assertion_flag_checks_uuid() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"string","format":"uuid"}"#,
         r#""not-a-uuid""#,
         &["--jss-format-mode", "assertion"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: string \"not-a-uuid\" is not a valid uuid\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4560,13 +4581,13 @@ fn cli_validate_format_mode_assertion_flag_checks_uuid() {
 
 #[test]
 fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,
         r#""not-valid""#,
         &["--jss-forced-spec-version", "draft-07"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: string \"not-valid\" is not a valid ipv4\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4575,13 +4596,13 @@ fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
 
 #[test]
 fn cli_validate_default_spec_version_flag_applies_without_schema_keyword() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"integer"}"#,
         "1.0",
         &["--jss-default-spec-version", "draft-04"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: expected integer, got number\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4590,24 +4611,24 @@ fn cli_validate_default_spec_version_flag_applies_without_schema_keyword() {
 
 #[test]
 fn cli_validate_default_spec_version_flag_yields_to_schema_keyword() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"integer"}"#,
         "1.0",
         &["--jss-default-spec-version", "draft-04"],
     );
-    let expected: (bool, String) = (true, String::new());
+    let expected: (i32, String) = (0, String::new());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn cli_validate_integer_semantics_flag_overrides_draft() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"integer"}"#,
         "1.0",
         &["--jss-integer-semantics", "lexical"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: expected integer, got number\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4616,13 +4637,13 @@ fn cli_validate_integer_semantics_flag_overrides_draft() {
 
 #[test]
 fn cli_validate_exclusive_bounds_flag_reads_boolean_modifier() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"maximum":3,"exclusiveMaximum":true}"#,
         "3",
         &["--jss-exclusive-bounds", "boolean-modifier"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: value 3 is not below exclusiveMaximum 3\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4631,13 +4652,13 @@ fn cli_validate_exclusive_bounds_flag_reads_boolean_modifier() {
 
 #[test]
 fn cli_validate_ref_siblings_flag_ignores_id_next_to_ref() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$id":"http://example.com/root.json","$defs":{"int":{"$id":"http://example.com/int.json","type":"integer"},"str":{"$id":"http://example.com/nested/int.json","type":"string"}},"properties":{"x":{"$id":"http://example.com/nested/","$ref":"int.json"}}}"#,
         r#"{"x":"a"}"#,
         &["--jss-ref-siblings", "ignored"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "/x: expected integer, got string\nerror: validation failed with 1 error(s)\n".to_string(),
     );
     assert_eq!(expected, actual);
@@ -4645,13 +4666,13 @@ fn cli_validate_ref_siblings_flag_ignores_id_next_to_ref() {
 
 #[test]
 fn cli_validate_ref_siblings_flag_evaluates_id_next_to_ref() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"http://json-schema.org/draft-07/schema#","$id":"http://example.com/root.json","definitions":{"int":{"$id":"http://example.com/int.json","type":"integer"},"str":{"$id":"http://example.com/nested/int.json","type":"string"}},"properties":{"x":{"$id":"http://example.com/nested/","$ref":"int.json"}}}"#,
         r#"{"x":1}"#,
         &["--jss-ref-siblings", "evaluated"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "/x: expected string, got number\nerror: validation failed with 1 error(s)\n".to_string(),
     );
     assert_eq!(expected, actual);
@@ -4659,16 +4680,16 @@ fn cli_validate_ref_siblings_flag_evaluates_id_next_to_ref() {
 
 #[test]
 fn cli_validate_true_schema_accepts_payload() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate("true", r#"{"a":[1]}"#, &[]);
-    let expected: (bool, String) = (true, String::new());
+    let (_, actual): (String, (i32, String)) = run_cli_validate("true", r#"{"a":[1]}"#, &[]);
+    let expected: (i32, String) = (0, String::new());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn cli_validate_false_schema_rejects_payload() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate("false", "1", &[]);
-    let expected: (bool, String) = (
-        false,
+    let (_, actual): (String, (i32, String)) = run_cli_validate("false", "1", &[]);
+    let expected: (i32, String) = (
+        1,
         "root: no value is allowed here (schema is false)\nerror: validation failed with 1 error(s)\n".to_string(),
     );
     assert_eq!(expected, actual);
@@ -4817,23 +4838,30 @@ fn cli_generate_strict_lists_every_unknown_key() {
 }
 
 #[test]
-fn cli_validate_lists_every_registry_problem() {
-    let schema_json =
-        r##"{"properties":{"a":{"$ref":"#/$defs/missing"},"b":{"$ref":"#/$defs/gone"}}}"##;
-    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
-    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
-    schema_file.flush().expect("flush schema");
-    let mut child = Command::new(jsonschemars_bin())
-        .args(["validate", "-s", schema_file.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn jsonschemars");
-    std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"{}").expect("write payload");
-    let output = child.wait_with_output().expect("wait jsonschemars");
-    let expected: &str = "root: could not resolve $ref \"#/$defs/missing\": $ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nroot: could not resolve $ref \"#/$defs/gone\": $ref \"#/$defs/gone\" at /properties/b (\"json-schema:///#/$defs/gone\") does not resolve: no such location\nerror: validation failed with 2 error(s)\n";
-    let actual: String = String::from_utf8(output.stderr).expect("utf8 stderr");
+fn cli_validate_lists_every_registry_problem_as_schema_error() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r##"{"properties":{"a":{"$ref":"#/$defs/missing"},"b":{"$ref":"#/$defs/gone"}}}"##,
+        "{}",
+        &[],
+    );
+    let expected: (i32, String) = (
+        2,
+        "schema error: $ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nschema error: $ref \"#/$defs/gone\" at /properties/b (\"json-schema:///#/$defs/gone\") does not resolve: no such location\nerror: the schema cannot be used: 2 problem(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_lists_every_compile_problem_as_schema_error() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"minProperties":"x","properties":{"a":{"maxContains":-1}}}"#,
+        "{}",
+        &[],
+    );
+    let expected: (i32, String) = (
+        2,
+        "schema error: root: the value of \"minProperties\" must be a non-negative integer\nschema error: /properties/a: the value of \"maxContains\" must be a non-negative integer\nerror: the schema cannot be used: 2 problem(s)\n".to_string(),
+    );
     assert_eq!(expected, actual);
 }
 

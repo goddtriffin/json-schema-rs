@@ -329,20 +329,29 @@ hand-written `impl ToJsonSchema` only needs `json_schema()`; implement
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
 
 ```rust
-use json_schema_rs::{validate, Schema};
+use json_schema_rs::{validate, Schema, ValidateError};
 use serde_json::Value;
 
 let schema: Schema = Schema::try_from(schema_json)?;
 let instance: Value = serde_json::from_str(instance_json)?;
-let result = validate(&schema, &instance);
-if let Err(errors) = result {
-    for err in &errors {
-        eprintln!("{}", err);
+match validate(&schema, &instance) {
+    Ok(()) => {}
+    // The instance does not conform: one error per problem.
+    Err(ValidateError::Instance(errors)) => {
+        for err in &errors {
+            eprintln!("{err}");
+        }
     }
+    // The schema cannot be used (a `$ref` that does not resolve, an invalid
+    // `pattern`, ...): every problem, whatever the instance.
+    Err(ValidateError::Schema(problems)) => eprintln!("{problems}"),
 }
 ```
 
 `validate` builds the schema's `$ref` registry and compiles the schema on every call.
+A schema that cannot be used is `ValidateError::Schema`, never an instance error:
+`SchemaError::Registry` when the registry cannot be built, `SchemaError::Compile`
+when the schema does not compile, each listing every problem.
 To validate many instances, or to let `$ref` reach other documents, build the
 registry and compile the schema once; `is_valid` is the fastest check when you only
 need the verdict:
@@ -422,7 +431,10 @@ jsonschemars validate -s schema.json < payload.json
 ```
 
 Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use
-`-s -` to read the schema from stdin (payload then from `-p` or stdin).
+`-s -` to read the schema from stdin (payload then from `-p` or stdin). Exit
+codes: `0` the payload conforms; `1` it does not (one line per error on stderr);
+`2` no verdict, because the schema or payload could not be read or parsed, or the
+schema cannot be used (one `schema error:` line per problem).
 
 To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of
 using the macro, use the library API from a `build.rs` script:
