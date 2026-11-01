@@ -49,7 +49,8 @@
 #       codegen:  jsonschemars generate rust -o <out_dir> <schema> [resource...]
 #                 (every input file is reachable from the others by its file URI and root $id;
 #                 each also gets its own output file)
-#       validate: jsonschemars validate -s <schema> -p <payload>   (no extra documents)
+#       validate: jsonschemars validate -s <schema> [-r <resource>]... -p <payload>
+#                 (each -r registers a document under its file URI and root $id)
 #
 #   typify (https://github.com/oxidecomputer/typify, `cargo install cargo-typify`):
 #       cargo-typify typify <schema> --output <out_dir>/<base>.rs   (no extra documents)
@@ -142,7 +143,7 @@ validation_tools() { printf '%s\n' "jsonschemars jsonschema-cli boon"; }
 # documents for <operation> (codegen, validate_valid, validate_invalid).
 loads_resources() {
     case "$1:$2" in
-        jsonschemars:codegen)   return 0 ;;
+        jsonschemars:*)         return 0 ;;
         boon:validate_*)        return 0 ;;
         *)                      return 1 ;;
     esac
@@ -189,8 +190,11 @@ validate_cmd() {
     shift 3
     case "${tool}" in
         jsonschemars)
-            _no_resources "${tool}" validate "$#" || return
-            _quote_argv "$(_jsonschemars_bin)" validate -s "${schema}" -p "${payload}"
+            resource_args=()
+            for resource in ${1+"$@"}; do
+                resource_args+=(-r "${resource}")
+            done
+            _quote_argv "$(_jsonschemars_bin)" validate -s "${schema}" ${resource_args[@]+"${resource_args[@]}"} -p "${payload}"
             ;;
         jsonschema-cli)
             _no_resources "${tool}" validate "$#" || return

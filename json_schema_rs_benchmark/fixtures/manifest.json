@@ -68,7 +68,7 @@
     "apples_to_apples": true,
     "source": "https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/package.json",
     "license": "Apache-2.0 (SchemaStore)",
-    "notes": "Real-world npm package.json schema (draft-07, root $id https://json.schemastore.org/package.json). Its external $refs (ava.json, eslintrc.json, ...; eslintrc.json in turn references partial-eslint-plugins.json) are vendored under resources/, so the fixture is hermetic: every tool registers each resource under its root $id where it can. Our lib parses, validates, and codegens it (generated code compiles). typify, jsonschema-cli, and the jsonschemars validate CLI cannot load extra documents.",
+    "notes": "Real-world npm package.json schema (draft-07, root $id https://json.schemastore.org/package.json). Its external $refs (ava.json, eslintrc.json, ...; eslintrc.json in turn references partial-eslint-plugins.json) are vendored under resources/, so the fixture is hermetic: every tool registers each resource under its root $id where it can. Our lib parses, validates, and codegens it (generated code compiles). typify and jsonschema-cli cannot load extra documents.",
     "resources": [
       {
         "path": "medium/package-json/resources/ava.json",

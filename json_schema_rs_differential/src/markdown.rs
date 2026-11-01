@@ -364,7 +364,7 @@ fn render_errored(out: &mut String, list: &[ErroredTest]) {
 }
 
 fn render_fixtures(out: &mut String, report: &DifferentialReport) {
-    out.push_str("## Fixtures\n\nReal-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run through Bowtie (`bowtie validate`). Expected verdicts come from the manifest's valid/invalid instance lists.\n\n");
+    out.push_str("## Fixtures\n\nReal-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run through Bowtie (`bowtie run`, with each fixture's vendored resource documents in the case registry). Expected verdicts come from the manifest's valid/invalid instance lists.\n\n");
     for fixture in &report.fixtures {
         render_fixture(out, report, fixture);
     }
@@ -748,7 +748,7 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 
 ## Fixtures
 
-Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run through Bowtie (`bowtie validate`). Expected verdicts come from the manifest's valid/invalid instance lists.
+Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run through Bowtie (`bowtie run`, with each fixture's vendored resource documents in the case registry). Expected verdicts come from the manifest's valid/invalid instance lists.
 
 ### small/x
 
