@@ -1907,6 +1907,123 @@ fn derive_field_default_round_trip_serializes_and_parses() {
     assert_eq!(expected, actual);
 }
 
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithSetFields {
+    hashed: HashSet<String>,
+    sorted: std::collections::BTreeSet<i64>,
+    listed: Vec<String>,
+}
+
+#[test]
+fn derive_set_fields_emit_unique_items_true() {
+    let schema: JsonSchema = WithSetFields::json_schema().expect("schema");
+    let expected: Vec<(String, Option<bool>)> = vec![
+        ("hashed".to_string(), Some(true)),
+        ("listed".to_string(), None),
+        ("sorted".to_string(), Some(true)),
+    ];
+    let actual: Vec<(String, Option<bool>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            (
+                key.clone(),
+                property.as_object().and_then(|p| p.unique_items),
+            )
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "indexmap")]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithIndexSetField {
+    tags: indexmap::IndexSet<String>,
+}
+
+#[cfg(feature = "indexmap")]
+#[test]
+fn derive_index_set_field_emits_unique_items_true() {
+    let schema: JsonSchema = WithIndexSetField::json_schema().expect("schema");
+    let expected: Option<bool> = Some(true);
+    let actual: Option<bool> = schema
+        .properties
+        .get("tags")
+        .and_then(Schema::as_object)
+        .and_then(|p| p.unique_items);
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithExactDefaults {
+    #[json_schema(default = 18446744073709551615)]
+    big: Option<u64>,
+    #[json_schema(default = -5)]
+    negative: Option<i64>,
+    #[json_schema(default = -1.5)]
+    ratio: Option<f64>,
+    #[json_schema(default = true)]
+    flag: Option<bool>,
+    plain: Option<i64>,
+}
+
+#[test]
+fn derive_field_defaults_are_exact_json_values() {
+    let schema: JsonSchema = WithExactDefaults::json_schema().expect("schema");
+    let expected: Vec<(String, Option<serde_json::Value>)> = vec![
+        (
+            "big".to_string(),
+            Some(serde_json::json!(18_446_744_073_709_551_615_u64)),
+        ),
+        ("flag".to_string(), Some(serde_json::json!(true))),
+        ("negative".to_string(), Some(serde_json::json!(-5))),
+        ("plain".to_string(), None),
+        ("ratio".to_string(), Some(serde_json::json!(-1.5))),
+    ];
+    let actual: Vec<(String, Option<serde_json::Value>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            let default: Option<serde_json::Value> =
+                property.as_object().and_then(|p| p.default_value.clone());
+            (key.clone(), default)
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithUniqueItemsVec {
+    #[json_schema(unique_items)]
+    tags: Vec<String>,
+    #[json_schema(unique_items, min_items = 1)]
+    ids: Option<Vec<i64>>,
+    plain: Vec<String>,
+}
+
+#[test]
+fn derive_unique_items_flag_sets_unique_items_on_vec_fields() {
+    let schema: JsonSchema = WithUniqueItemsVec::json_schema().expect("schema");
+    let expected: Vec<(String, Option<bool>, Option<u64>)> = vec![
+        ("ids".to_string(), Some(true), Some(1)),
+        ("plain".to_string(), None, None),
+        ("tags".to_string(), Some(true), None),
+    ];
+    let actual: Vec<(String, Option<bool>, Option<u64>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            let p: &JsonSchema = property.as_object().expect("schema object");
+            (key.clone(), p.unique_items, p.min_items)
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}
+
 #[cfg(feature = "uuid")]
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]

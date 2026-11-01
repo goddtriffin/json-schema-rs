@@ -14,7 +14,8 @@ pub use error::{CodeGenError, CodeGenResult};
 pub use input::CodeGenInput;
 pub use rust_backend::{RustBackend, generate_rust};
 pub use settings::{
-    CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, ModelNameSource, UnknownProperties,
+    CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, ModelNameSource, UniqueItemsType,
+    UnknownProperties,
 };
 
 /// Output of Rust code generation: optional shared buffer plus one buffer per input schema.

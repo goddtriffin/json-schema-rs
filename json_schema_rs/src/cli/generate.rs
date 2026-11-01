@@ -5,7 +5,7 @@ use super::utils::{
 };
 use json_schema_rs::{
     CodeGenInput, CodeGenSettings, DedupeMode, FileRetriever, JsonSchemaSettings, ModelNameSource,
-    Retrieve, RetrieveError, Schema, UnknownProperties, file_uri, generate_rust,
+    Retrieve, RetrieveError, Schema, UniqueItemsType, UnknownProperties, file_uri, generate_rust,
 };
 use serde_json::Value;
 use std::fs;
@@ -100,6 +100,7 @@ pub(crate) fn run_generate(
     cgs_model_name_source: Option<&str>,
     cgs_dedupe_mode: Option<&str>,
     cgs_unknown_properties: Option<&str>,
+    cgs_unique_items: Option<&str>,
     retrieval: &RefRetrieval,
 ) -> Result<(), String> {
     if !lang.eq_ignore_ascii_case("rust") {
@@ -119,7 +120,8 @@ pub(crate) fn run_generate(
         cgs_model_name_source,
         cgs_dedupe_mode,
         cgs_unknown_properties,
-    );
+        cgs_unique_items,
+    )?;
 
     // Standalone ingestion step: try every file, log each failure to stderr, do not short-circuit.
     let retriever: CliRetriever = CliRetriever::new(retrieval)?;
@@ -195,12 +197,21 @@ pub(crate) fn run_generate(
     Ok(())
 }
 
-/// Codegen settings from the `--cgs-*` flags.
+/// Codegen settings from the `--cgs-*` flags. Fails for `--cgs-unique-items index-set` when
+/// `jsonschemars` is built without the `indexmap` feature.
+#[cfg_attr(
+    feature = "indexmap",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fails only without the `indexmap` feature"
+    )
+)]
 fn code_gen_settings(
     cgs_model_name_source: Option<&str>,
     cgs_dedupe_mode: Option<&str>,
     cgs_unknown_properties: Option<&str>,
-) -> CodeGenSettings {
+    cgs_unique_items: Option<&str>,
+) -> Result<CodeGenSettings, String> {
     let mut b = CodeGenSettings::builder();
     if let Some(src) = cgs_model_name_source {
         b = b.model_name_source(match src {
@@ -221,5 +232,21 @@ fn code_gen_settings(
             _ => UnknownProperties::Drop,
         });
     }
-    b.build()
+    if let Some(kind) = cgs_unique_items {
+        b = b.unique_items(match kind {
+            "hash-set" => UniqueItemsType::HashSet,
+            "btree-set" => UniqueItemsType::BTreeSet,
+            #[cfg(feature = "indexmap")]
+            "index-set" => UniqueItemsType::IndexSet,
+            #[cfg(not(feature = "indexmap"))]
+            "index-set" => {
+                return Err(
+                    "--cgs-unique-items index-set needs jsonschemars built with the `indexmap` feature"
+                        .to_string(),
+                );
+            }
+            _ => UniqueItemsType::Vec,
+        });
+    }
+    Ok(b.build())
 }

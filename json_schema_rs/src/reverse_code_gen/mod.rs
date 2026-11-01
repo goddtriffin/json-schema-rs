@@ -1212,19 +1212,44 @@ impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
     }
 }
 
-#[expect(clippy::implicit_hasher)]
-impl<T: ToJsonSchema + std::hash::Hash + Eq> ToJsonSchema for std::collections::HashSet<T> {
+/// The schema of a set of `T`: an array of `T` with `uniqueItems`.
+fn set_schema<T: ToJsonSchema>(generator: &mut SchemaGenerator) -> JsonSchema {
+    JsonSchema {
+        type_: Some(JsonType::Array.into()),
+        items: Some(T::json_schema_with(generator).into()),
+        unique_items: Some(true),
+        ..Default::default()
+    }
+}
+
+impl<T: ToJsonSchema, S> ToJsonSchema for std::collections::HashSet<T, S> {
     fn json_schema() -> ReverseCodeGenResult {
         root_schema_for::<Self>()
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
-        JsonSchema {
-            type_: Some(JsonType::Array.into()),
-            items: Some(T::json_schema_with(generator).into()),
-            unique_items: Some(true),
-            ..Default::default()
-        }
+        set_schema::<T>(generator)
+    }
+}
+
+impl<T: ToJsonSchema> ToJsonSchema for BTreeSet<T> {
+    fn json_schema() -> ReverseCodeGenResult {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        set_schema::<T>(generator)
+    }
+}
+
+#[cfg(feature = "indexmap")]
+impl<T: ToJsonSchema, S> ToJsonSchema for indexmap::IndexSet<T, S> {
+    fn json_schema() -> ReverseCodeGenResult {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        set_schema::<T>(generator)
     }
 }
 
@@ -1283,7 +1308,7 @@ mod tests {
         ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema, root_schema_for,
     };
     use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// `result` with the schema serialized to JSON text.
     fn serialized(result: ReverseCodeGenResult) -> Result<String, Vec<ReverseCodeGenError>> {
@@ -1564,6 +1589,31 @@ mod tests {
             ..Default::default()
         });
         let actual: ReverseCodeGenResult = HashSet::<String>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn btree_set_string_json_schema_has_unique_items_true() {
+        let expected: ReverseCodeGenResult = Ok(JsonSchema {
+            type_: Some(JsonType::Array.into()),
+            items: Some(string_schema().into()),
+            unique_items: Some(true),
+            ..Default::default()
+        });
+        let actual: ReverseCodeGenResult = BTreeSet::<String>::json_schema();
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "indexmap")]
+    #[test]
+    fn index_set_string_json_schema_has_unique_items_true() {
+        let expected: ReverseCodeGenResult = Ok(JsonSchema {
+            type_: Some(JsonType::Array.into()),
+            items: Some(string_schema().into()),
+            unique_items: Some(true),
+            ..Default::default()
+        });
+        let actual: ReverseCodeGenResult = indexmap::IndexSet::<String>::json_schema();
         assert_eq!(expected, actual);
     }
 

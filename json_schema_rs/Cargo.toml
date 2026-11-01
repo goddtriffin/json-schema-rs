@@ -28,12 +28,16 @@ uuid = ["dep:uuid"]
 # Retrieve `http:` / `https:` documents a `$ref` names (`HttpRetriever`, the CLI's
 # `--cgs-allow-remote-refs`). Off by default: no network access unless asked for.
 http = ["dep:reqwest"]
+# `UniqueItemsType::IndexSet` (codegen emits `indexmap::IndexSet` for `uniqueItems` arrays) and
+# `ToJsonSchema for IndexSet`. Off by default: generated code then needs no extra crate.
+indexmap = ["dep:indexmap"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 # RFC 3986 / 3987 URI parsing, reference resolution and normalisation for `$id` / `$ref`.
 fluent-uri = "0.4"
 heck = "0.5"
+indexmap = { workspace = true, optional = true }
 log.workspace = true
 # SIMD substring search for the draft-4 parse prefilter (already in the tree via serde_json).
 memchr = "2.7"
