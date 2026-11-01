@@ -36,6 +36,6 @@ pub use reverse_code_gen::{
 };
 pub use validator::{
     BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, FlagOutput,
-    FormatCheck, Output, OutputFormat, OutputUnit, ValidationError, ValidationErrorKind,
-    ValidationResult, validate, validate_with_registry,
+    FormatCheck, Output, OutputFormat, OutputUnit, SchemaError, ValidateError, ValidationError,
+    ValidationErrorKind, ValidationResult, validate,
 };

@@ -17,7 +17,7 @@ use super::type_graph::{
     self, Annotations, EnumNode, Field, FloatWidth, IntWidth, NameProposal, NameTier, ObjectNode,
     StringFormat, TypeGraph, TypeId, TypeNode, UnionKind, UnionNode,
 };
-use crate::json_schema::{JsonSchema, Registry};
+use crate::json_schema::{Registry, Schema};
 use crate::number;
 use crate::sanitizers::{
     enum_variant_name_from_value, sanitize_field_name, sanitize_struct_name, to_pascal_case,
@@ -37,7 +37,7 @@ impl CodeGenBackend for RustBackend {
         input: &CodeGenInput<'_>,
         settings: &CodeGenSettings,
     ) -> CodeGenResult<GenerateRustOutput> {
-        let schemas: Vec<&JsonSchema> = input.schemas().collect();
+        let schemas: Vec<&Schema> = input.schemas().collect();
         let retriever: CachingRetriever<'_> = input.caching_retriever();
         let registries: Vec<Registry<'_>> = schemas
             .iter()
@@ -1216,7 +1216,7 @@ mod tests {
     use crate::code_gen::settings::{
         CodeGenSettings, DedupeMode, ModelNameSource, UnknownProperties,
     };
-    use crate::json_schema::{JsonSchema, JsonType, RegistryError};
+    use crate::json_schema::{JsonSchema, JsonType, RegistryError, Schema};
 
     fn default_settings() -> CodeGenSettings {
         CodeGenSettings::builder().build()
@@ -1234,15 +1234,15 @@ mod tests {
     }
 
     /// Parses each JSON value as a schema.
-    fn schemas_of(values: &[serde_json::Value]) -> Vec<JsonSchema> {
+    fn schemas_of(values: &[serde_json::Value]) -> Vec<Schema> {
         values
             .iter()
-            .map(|v| JsonSchema::try_from(v.to_string().as_str()).unwrap())
+            .map(|v| Schema::try_from(v.to_string().as_str()).unwrap())
             .collect()
     }
 
     /// `a.json` with an optional `b` property referring to `b_ref`, and `b.json` titled `Bee`.
-    fn sibling_documents(b_ref: &str) -> Vec<JsonSchema> {
+    fn sibling_documents(b_ref: &str) -> Vec<Schema> {
         schemas_of(&[
             serde_json::json!({"type": "object", "properties": {"b": {"$ref": b_ref}}}),
             serde_json::json!({
@@ -1256,7 +1256,7 @@ mod tests {
 
     #[test]
     fn cross_document_ref_to_sibling_input_shares_its_type() {
-        let schemas: Vec<JsonSchema> = sibling_documents("b.json");
+        let schemas: Vec<Schema> = sibling_documents("b.json");
         let input: CodeGenInput<'_> = CodeGenInput::new()
             .schema_at("file:///s/a.json", &schemas[0])
             .schema_at("file:///s/b.json", &schemas[1]);
@@ -1311,7 +1311,7 @@ pub use super::shared::Bee;
 
     #[test]
     fn cross_document_ref_to_fragment_of_sibling_input() {
-        let schemas: Vec<JsonSchema> = schemas_of(&[
+        let schemas: Vec<Schema> = schemas_of(&[
             serde_json::json!({"type": "object", "properties": {"t": {"$ref": "b.json#/$defs/Thing"}}}),
             serde_json::json!({
                 "$defs": {"Thing": {"type": "object", "properties": {"n": {"type": "string"}}}},
@@ -1374,7 +1374,7 @@ pub type Root = String;
 
     #[test]
     fn cross_document_refs_between_two_inputs_in_both_directions() {
-        let schemas: Vec<JsonSchema> = schemas_of(&[
+        let schemas: Vec<Schema> = schemas_of(&[
             serde_json::json!({
                 "title": "Parent",
                 "type": "object",
@@ -1439,7 +1439,7 @@ pub use super::shared::Child;
 
     #[test]
     fn cross_document_ref_to_retrieved_document_is_generated_with_the_referrer() {
-        let schemas: Vec<JsonSchema> = sibling_documents("b.json");
+        let schemas: Vec<Schema> = sibling_documents("b.json");
         let documents: std::collections::HashMap<String, serde_json::Value> =
             std::collections::HashMap::from([(
                 "file:///s/b.json".to_string(),
@@ -1483,7 +1483,7 @@ pub struct Root {
 
     #[test]
     fn cross_document_ref_to_missing_document_is_an_error_naming_its_uri() {
-        let schemas: Vec<JsonSchema> = sibling_documents("b.json");
+        let schemas: Vec<Schema> = sibling_documents("b.json");
         let input: CodeGenInput<'_> =
             CodeGenInput::new().schema_at("file:///s/a.json", &schemas[0]);
         let actual: String = generate_rust(input, &default_settings())
@@ -1495,7 +1495,7 @@ pub struct Root {
 
     #[test]
     fn cross_document_ref_reaches_input_without_uri_by_its_root_id() {
-        let schemas: Vec<JsonSchema> = schemas_of(&[
+        let schemas: Vec<Schema> = schemas_of(&[
             serde_json::json!({"type": "object", "properties": {"b": {"$ref": "https://example.com/b.json"}}}),
             serde_json::json!({"$id": "https://example.com/b.json", "title": "Bee", "type": "string"}),
         ]);
@@ -1532,7 +1532,7 @@ pub type Bee = String;
 
     #[test]
     fn cross_document_input_with_relative_uri_is_an_error_at_its_own_index() {
-        let schemas: Vec<JsonSchema> = schemas_of(&[
+        let schemas: Vec<Schema> = schemas_of(&[
             serde_json::json!({"type": "string"}),
             serde_json::json!({"type": "integer"}),
         ]);
@@ -1563,7 +1563,7 @@ pub type Bee = String;
 
     #[test]
     fn cross_document_retrieves_a_document_two_inputs_reach_once() {
-        let schemas: Vec<JsonSchema> = schemas_of(&[
+        let schemas: Vec<Schema> = schemas_of(&[
             serde_json::json!({"$ref": "https://example.com/common.json"}),
             serde_json::json!({"$ref": "https://example.com/common.json"}),
         ]);
@@ -1580,7 +1580,7 @@ pub type Bee = String;
     #[test]
     fn schema_with_id_emits_id_attribute() {
         let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{"name":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1605,7 +1605,7 @@ pub struct Root {
     #[test]
     fn additional_properties_false_emits_deny_unknown_fields() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1628,7 +1628,7 @@ pub struct Root {
     fn deprecated_property_emits_deprecated_attr() {
         let json =
             r#"{"type":"object","properties":{"legacy":{"type":"string","deprecated":true}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1653,7 +1653,7 @@ pub struct Root {
     #[test]
     fn deprecated_property_with_description_emits_deprecated_with_message() {
         let json = r#"{"type":"object","properties":{"old":{"type":"string","deprecated":true,"description":"Use 'new' instead"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1679,7 +1679,7 @@ pub struct Root {
     #[test]
     fn deprecated_false_emits_no_attr() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string","deprecated":false}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1703,7 +1703,7 @@ pub struct Root {
     #[test]
     fn additional_properties_schema_emits_flattened_map_field() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":{"type":"string"}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1728,7 +1728,7 @@ pub struct Root {
     #[test]
     fn optional_property_type_string_or_null_emits_option_option_string() {
         let json = r#"{"type":"object","properties":{"name":{"type":["string","null"]}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1761,7 +1761,7 @@ pub struct Root {
     #[test]
     fn optional_property_type_null_or_string_emits_option_option_string() {
         let json = r#"{"type":"object","properties":{"name":{"type":["null","string"]}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1794,7 +1794,7 @@ pub struct Root {
     #[test]
     fn property_type_with_two_non_null_types_emits_untagged_union() {
         let json = r#"{"type":"object","properties":{"id":{"type":["integer","string"]},"name":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1829,7 +1829,7 @@ pub struct Root {
     #[test]
     fn property_true_schema_emits_optional_value_field() {
         let json = r#"{"type":"object","properties":{"anything":true,"name":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1864,7 +1864,7 @@ pub struct Root {
     #[test]
     fn property_false_schema_is_omitted() {
         let json = r#"{"type":"object","properties":{"never":false,"name":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1889,7 +1889,7 @@ pub struct Root {
     #[test]
     fn array_items_true_emits_vec_of_value() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":true}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1915,7 +1915,7 @@ pub struct Root {
     #[test]
     fn additional_properties_true_captures_unknown_keys_in_value_map() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":true}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1940,7 +1940,7 @@ pub struct Root {
     #[test]
     fn root_type_object_or_null_with_properties_emits_struct() {
         let json = r#"{"type":["object","null"],"properties":{"name":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1964,7 +1964,7 @@ pub struct Root {
     #[test]
     fn single_string_property() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -1989,7 +1989,7 @@ pub struct Root {
     fn string_property_with_pattern_emits_attribute() {
         let json =
             r#"{"type":"object","properties":{"name":{"type":"string","pattern":"^[a-z]+$"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2014,7 +2014,7 @@ pub struct Root {
     #[test]
     fn required_field_emits_without_option() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2048,7 +2048,7 @@ pub struct Root {
   "properties": { "address": { "$ref": "#/$defs/Address" } },
   "required": ["address"]
 }"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2081,7 +2081,7 @@ pub struct Root {
   "type": "object",
   "properties": { "x": { "$ref": "#/$defs/Missing" } }
 }"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let actual: super::CodeGenResult<super::GenerateRustOutput> =
             generate_rust(&[schema], &settings);
@@ -2109,7 +2109,7 @@ pub struct Root {
     #[test]
     fn pure_ref_loop_emits_value() {
         let json: &str = r##"{"$defs":{"A":{"$ref":"#/$defs/B"},"B":{"$ref":"#/$defs/A"}},"type":"object","properties":{"a":{"$ref":"#/$defs/A"}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2141,7 +2141,7 @@ pub struct Root {
     #[test]
     fn required_enum_property_emits_enum_and_struct() {
         let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2172,7 +2172,7 @@ pub struct Root {
     #[test]
     fn const_string_property_emits_single_variant_enum() {
         let json = r#"{"type":"object","properties":{"key":{"const":"only"}},"required":["key"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2201,7 +2201,7 @@ pub struct Root {
     #[test]
     fn all_of_merged_object_golden() {
         let json = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}},"required":["b"]}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2226,7 +2226,7 @@ pub struct Root {
     #[test]
     fn anyof_property_golden() {
         let json = r#"{"type":"object","properties":{"foo":{"anyOf":[{"type":"string"},{"type":"object","properties":{"x":{"type":"integer"}}}]}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2265,7 +2265,7 @@ pub struct Root {
     #[test]
     fn anyof_root_golden() {
         let json = r#"{"anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2304,7 +2304,7 @@ pub enum RootAnyOf {
     #[test]
     fn oneof_property_golden() {
         let json = r#"{"type":"object","properties":{"foo":{"oneOf":[{"type":"string"},{"type":"object","properties":{"x":{"type":"integer"}}}]}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2344,7 +2344,7 @@ pub struct Root {
     #[test]
     fn oneof_root_golden() {
         let json = r#"{"oneOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2384,7 +2384,7 @@ pub enum RootOneOf {
     #[test]
     fn optional_enum_property_emits_enum_and_struct() {
         let json = r#"{"type":"object","properties":{"level":{"enum":["low","medium","high"]}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2418,7 +2418,7 @@ pub struct Root {
     #[test]
     fn enum_dedupe_two_properties_same_enum_emits_one_enum() {
         let json = r#"{"type":"object","properties":{"a":{"enum":["x","y"]},"b":{"enum":["x","y"]}},"required":["a"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2451,7 +2451,7 @@ pub struct Root {
     #[test]
     fn enum_collision_emits_suffixed_variants() {
         let json = r#"{"type":"object","properties":{"t":{"enum":["a","A"]}},"required":["t"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2482,7 +2482,7 @@ pub struct Root {
     #[test]
     fn enum_duplicate_values_in_schema_emits_single_variant_per_value() {
         let json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2513,7 +2513,7 @@ pub struct Root {
     #[test]
     fn enum_non_rust_compliant_values_emits_valid_variants() {
         let json = r#"{"type":"object","properties":{"id":{"enum":["/8633","todd.griffin"]}},"required":["id"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2544,7 +2544,7 @@ pub struct Root {
     #[test]
     fn camel_case_property_emits_snake_case_field() {
         let json = r#"{"type":"object","properties":{"toddGriffin":{"type":"string"}},"required":["toddGriffin"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2568,7 +2568,7 @@ pub struct Root {
     #[test]
     fn default_function_name_uses_snake_case() {
         let json = r#"{"type":"object","properties":{"person":{"title":"ValerieHunter","type":"object","properties":{"toddGriffin":{"type":"string","default":"bar"}},"required":["toddGriffin"]}},"required":["person"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2607,7 +2607,7 @@ pub struct Root {
     fn mixed_type_enum_emits_value_enum_with_json_equal_impls() {
         let json =
             r#"{"type":"object","properties":{"tag":{"enum":["foo",1,true]}},"required":["tag"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2668,7 +2668,7 @@ pub struct Root {
     fn single_required_integer_property() {
         let json =
             r#"{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2691,7 +2691,7 @@ pub struct Root {
     #[test]
     fn single_optional_integer_property() {
         let json = r#"{"type":"object","properties":{"count":{"type":"integer"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2716,7 +2716,7 @@ pub struct Root {
     fn single_required_float_property() {
         let json =
             r#"{"type":"object","properties":{"value":{"type":"number"}},"required":["value"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2739,7 +2739,7 @@ pub struct Root {
     #[test]
     fn single_optional_float_property() {
         let json = r#"{"type":"object","properties":{"value":{"type":"number"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2763,7 +2763,7 @@ pub struct Root {
     #[test]
     fn integer_with_minimum_maximum_u8_range_emits_u8() {
         let json = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2786,7 +2786,7 @@ pub struct Root {
     #[test]
     fn integer_with_exclusive_bounds_emits_u8() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":-1,"exclusiveMaximum":256}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2809,7 +2809,7 @@ pub struct Root {
     #[test]
     fn integer_with_fractional_bounds_rounds_inward() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":-0.5,"maximum":255.9}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2832,7 +2832,7 @@ pub struct Root {
     #[test]
     fn integer_with_u64_range_emits_u64() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":18446744073709551615}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2855,7 +2855,7 @@ pub struct Root {
     #[test]
     fn integer_with_range_beyond_64_bits_emits_i64_fallback() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":-1,"maximum":18446744073709551615}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2878,7 +2878,7 @@ pub struct Root {
     #[test]
     fn integer_with_empty_range_emits_uninhabited_enum() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":5,"maximum":5}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2905,7 +2905,7 @@ pub struct Root {
     #[test]
     fn integer_with_tighter_exclusive_bound_wins() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":-100,"exclusiveMinimum":-1,"maximum":300,"exclusiveMaximum":200}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2928,7 +2928,7 @@ pub struct Root {
     #[test]
     fn number_with_exclusive_bounds_in_f32_range_emits_f32() {
         let json = r#"{"type":"object","properties":{"n":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":1}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2951,7 +2951,7 @@ pub struct Root {
     #[test]
     fn number_with_bound_beyond_f32_emits_f64() {
         let json = r#"{"type":"object","properties":{"n":{"type":"number","minimum":0,"maximum":1e39}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -2974,7 +2974,7 @@ pub struct Root {
     #[test]
     fn integer_default_above_i64_max_is_exact() {
         let json = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":18446744073709551615,"default":18446744073709551615}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3004,7 +3004,7 @@ impl Root {
     #[test]
     fn integer_with_only_minimum_emits_i64_fallback() {
         let json = r#"{"type":"object","properties":{"count":{"type":"integer","minimum":0}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3028,7 +3028,7 @@ pub struct Root {
     #[test]
     fn integer_with_only_maximum_emits_i64_fallback() {
         let json = r#"{"type":"object","properties":{"count":{"type":"integer","maximum":100}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3053,7 +3053,7 @@ pub struct Root {
     fn number_without_min_max_emits_f64_fallback() {
         let json =
             r#"{"type":"object","properties":{"value":{"type":"number"}},"required":["value"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3076,7 +3076,7 @@ pub struct Root {
     #[test]
     fn number_with_minimum_maximum_f32_range_emits_f32() {
         let json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3099,7 +3099,7 @@ pub struct Root {
     #[test]
     fn boolean_property_required_emits_bool() {
         let json = r#"{"type":"object","properties":{"enabled":{"type":"boolean"}},"required":["enabled"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3122,7 +3122,7 @@ pub struct Root {
     #[test]
     fn boolean_property_optional_emits_option_bool() {
         let json = r#"{"type":"object","properties":{"flag":{"type":"boolean"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3146,7 +3146,7 @@ pub struct Root {
     #[test]
     fn boolean_property_with_description_emits_doc_and_field() {
         let json = r#"{"type":"object","properties":{"flag":{"type":"boolean","description":"Is it enabled?"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3171,7 +3171,7 @@ pub struct Root {
     #[test]
     fn array_items_boolean_emits_vec_bool() {
         let json = r#"{"type":"object","properties":{"flags":{"type":"array","items":{"type":"boolean"}}},"required":["flags"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3194,7 +3194,7 @@ pub struct Root {
     #[test]
     fn array_items_boolean_unique_items_emits_hash_set_bool() {
         let json = r#"{"type":"object","properties":{"flags":{"type":"array","items":{"type":"boolean"},"uniqueItems":true}},"required":["flags"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3219,7 +3219,7 @@ pub struct Root {
     fn boolean_property_with_default_emits_default_attr() {
         let json =
             r#"{"type":"object","properties":{"enabled":{"type":"boolean","default":true}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3249,7 +3249,7 @@ impl Root {
     #[test]
     fn array_required_string_property() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3272,7 +3272,7 @@ pub struct Root {
     #[test]
     fn array_with_unique_items_true_emits_hash_set_string() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3296,7 +3296,7 @@ pub struct Root {
     #[test]
     fn array_with_unique_items_false_emits_vec_string() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":false}},"required":["tags"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3319,7 +3319,7 @@ pub struct Root {
     #[test]
     fn array_with_unique_items_true_object_items_emits_vec() {
         let json = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}},"uniqueItems":true}},"required":["items"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3350,7 +3350,7 @@ pub struct Root {
     #[test]
     fn array_with_min_items_max_items_emits_attribute() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5}},"required":["tags"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3374,7 +3374,7 @@ pub struct Root {
     #[test]
     fn array_with_min_items_only_emits_attribute() {
         let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":1}},"required":["tags"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3399,7 +3399,7 @@ pub struct Root {
     fn array_optional_string_property() {
         let json =
             r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3423,7 +3423,7 @@ pub struct Root {
     #[test]
     fn array_of_integers_property() {
         let json = r#"{"type":"object","properties":{"counts":{"type":"array","items":{"type":"integer"}}},"required":["counts"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3446,7 +3446,7 @@ pub struct Root {
     #[test]
     fn array_of_objects_property() {
         let json = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}}}},"required":["items"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3477,7 +3477,7 @@ pub struct Root {
     #[test]
     fn array_of_arrays_property() {
         let json = r#"{"type":"object","properties":{"matrix":{"type":"array","items":{"type":"array","items":{"type":"string"}}}},"required":["matrix"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3500,7 +3500,7 @@ pub struct Root {
     #[test]
     fn mixed_string_integer_float_properties() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"},"value":{"type":"number"}},"required":["id"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3527,7 +3527,7 @@ pub struct Root {
     #[test]
     fn mixed_string_and_integer_properties() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"}},"required":["id"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3564,7 +3564,7 @@ pub struct Root {
             }
           }
         }"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3616,7 +3616,7 @@ pub struct Root {
             }
           }
         }"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3687,7 +3687,7 @@ pub struct Root {
             inner = wrap;
         }
         let settings: CodeGenSettings = default_settings();
-        let actual = generate_rust(&[inner], &settings);
+        let actual = generate_rust(&[Schema::from(inner)], &settings);
         assert!(actual.is_ok(), concat!("deep schema must not ", "overflow"));
         let out = actual.unwrap();
         let output: String = String::from_utf8(out.per_schema[0].clone()).unwrap();
@@ -3704,7 +3704,7 @@ pub struct Root {
     #[test]
     fn field_rename_when_key_differs_from_identifier() {
         let json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -3729,7 +3729,7 @@ pub struct Root {
     fn generate_rust_equals_rust_backend_generate() {
         let json: &str =
             r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let actual: super::GenerateRustOutput =
             generate_rust(std::slice::from_ref(&schema), &settings).unwrap();
@@ -3742,7 +3742,7 @@ pub struct Root {
     #[test]
     fn property_key_first_uses_key_over_title_for_nested_struct() {
         let json = r#"{"type":"object","properties":{"address":{"type":"object","title":"FooBar","properties":{"city":{"type":"string"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .model_name_source(ModelNameSource::PropertyKeyFirst)
             .build();
@@ -3778,8 +3778,8 @@ pub struct Root {
     fn generate_rust_two_schemas_returns_two_buffers() {
         let json1 = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
         let json2 = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
-        let s1: JsonSchema = serde_json::from_str(json1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(json2).unwrap();
+        let s1: Schema = serde_json::from_str(json1).unwrap();
+        let s2: Schema = serde_json::from_str(json2).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[s1, s2], &settings).unwrap();
         let actual: (Option<String>, Vec<String>) = buffers(output);
@@ -3825,8 +3825,8 @@ pub struct Root {
     fn batch_error_includes_index() {
         let valid: &str = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
         let invalid: &str = r##"{"type":"object","properties":{"x":{"$ref":"#/$defs/Missing"}}}"##;
-        let s0: JsonSchema = serde_json::from_str(valid).unwrap();
-        let s1: JsonSchema = serde_json::from_str(invalid).unwrap();
+        let s0: Schema = serde_json::from_str(valid).unwrap();
+        let s1: Schema = serde_json::from_str(invalid).unwrap();
         let settings: CodeGenSettings = default_settings();
         let actual: CodeGenError = generate_rust(&[s0, s1], &settings).unwrap_err();
         assert!(matches!(actual, CodeGenError::Batch { index: 1, .. }));
@@ -3835,7 +3835,7 @@ pub struct Root {
     #[test]
     fn dedupe_disabled_returns_no_shared() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Disabled)
             .build();
@@ -3883,8 +3883,8 @@ pub struct Root {
     #[test]
     fn dedupe_disabled_two_schemas_same_shape_two_buffers_no_shared() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
-        let s1: JsonSchema = serde_json::from_str(json).unwrap();
-        let s2: JsonSchema = serde_json::from_str(json).unwrap();
+        let s1: Schema = serde_json::from_str(json).unwrap();
+        let s2: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Disabled)
             .build();
@@ -3931,8 +3931,8 @@ pub struct Root {
     #[test]
     fn dedupe_full_two_identical_schemas_produces_shared() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
-        let s1: JsonSchema = serde_json::from_str(json).unwrap();
-        let s2: JsonSchema = serde_json::from_str(json).unwrap();
+        let s1: Schema = serde_json::from_str(json).unwrap();
+        let s2: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -3977,7 +3977,7 @@ pub use super::shared::Root;
     #[test]
     fn dedupe_full_single_schema_no_shared() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4010,8 +4010,8 @@ pub struct Root {
     fn dedupe_full_two_different_schemas_no_shared() {
         let j1 = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
         let j2 = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4064,7 +4064,7 @@ pub struct Root {
                 "addr2": { "type": "object", "properties": { "street": { "type": "string" } } }
             }
         }"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4106,7 +4106,7 @@ pub struct Root {
     #[test]
     fn description_root_struct_single_line() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"A root type"}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4131,7 +4131,7 @@ pub struct Root {
     #[test]
     fn description_root_struct_multi_line() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}},"description":"Line one\nLine two"}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4158,7 +4158,7 @@ pub struct Root {
     fn description_empty_emits_no_doc() {
         let json: &str =
             r#"{"type":"object","properties":{"a":{"type":"string"}},"description":""}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4183,7 +4183,7 @@ pub struct Root {
     fn description_whitespace_only_emits_no_doc() {
         let json: &str =
             r#"{"type":"object","properties":{"a":{"type":"string"}},"description":"   \n  "}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4207,7 +4207,7 @@ pub struct Root {
     #[test]
     fn description_nested_object_struct_doc() {
         let json = r#"{"type":"object","properties":{"nested":{"type":"object","description":"Inner type","properties":{"v":{"type":"string"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4241,7 +4241,7 @@ pub struct Root {
     #[test]
     fn description_property_field_doc() {
         let json = r#"{"type":"object","properties":{"name":{"type":"string","description":"User full name"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4266,7 +4266,7 @@ pub struct Root {
     #[test]
     fn description_enum_property_emits_enum_doc() {
         let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"],"description":"Issue status"}},"required":["status"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4301,8 +4301,8 @@ pub struct Root {
         let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"First"}"#;
         let j2 =
             r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"Second"}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Functional)
             .build();
@@ -4350,8 +4350,8 @@ pub use super::shared::Root;
         let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"First"}"#;
         let j2 =
             r#"{"type":"object","properties":{"id":{"type":"string"}},"description":"Second"}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4401,8 +4401,8 @@ pub struct Root {
     fn dedupe_functional_same_shape_different_comment_one_struct() {
         let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"First"}"#;
         let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"Second"}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Functional)
             .build();
@@ -4448,8 +4448,8 @@ pub use super::shared::Root;
     fn dedupe_full_same_shape_different_comment_two_structs() {
         let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"First"}"#;
         let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"$comment":"Second"}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4496,7 +4496,7 @@ pub struct Root {
     #[test]
     fn examples_golden_with_examples_emits_doc() {
         let json: &str = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":[{"x":"foo"}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4523,7 +4523,7 @@ pub struct Root {
     #[test]
     fn examples_struct_doc_contains_examples() {
         let json: &str = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":["a",1]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4551,7 +4551,7 @@ pub struct Root {
     #[test]
     fn examples_enum_doc_contains_examples() {
         let json: &str = r#"{"type":"object","properties":{"status":{"enum":["open"],"examples":["open"]}},"required":["status"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4584,7 +4584,7 @@ pub struct Root {
     #[test]
     fn examples_empty_array_emits_no_doc() {
         let json: &str = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":[]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::default();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4608,8 +4608,8 @@ pub struct Root {
     fn dedupe_full_same_shape_different_examples_two_structs() {
         let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[1]}"#;
         let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[2]}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4665,8 +4665,8 @@ pub struct Root {
     fn dedupe_functional_same_shape_different_examples_one_struct() {
         let j1 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[1]}"#;
         let j2 = r#"{"type":"object","properties":{"id":{"type":"string"}},"examples":[2]}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Functional)
             .build();
@@ -4716,8 +4716,8 @@ pub use super::shared::Root;
     fn dedupe_full_same_shape_different_id_two_structs() {
         let j1 = r#"{"$id":"http://example.com/a","type":"object","properties":{"x":{"type":"string"}}}"#;
         let j2 = r#"{"$id":"http://example.com/b","type":"object","properties":{"x":{"type":"string"}}}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4767,8 +4767,8 @@ pub struct Root {
     fn dedupe_functional_same_shape_different_id_one_struct() {
         let j1 = r#"{"$id":"http://example.com/a","type":"object","properties":{"x":{"type":"string"}}}"#;
         let j2 = r#"{"$id":"http://example.com/b","type":"object","properties":{"x":{"type":"string"}}}"#;
-        let s1: JsonSchema = serde_json::from_str(j1).unwrap();
-        let s2: JsonSchema = serde_json::from_str(j2).unwrap();
+        let s1: Schema = serde_json::from_str(j1).unwrap();
+        let s2: Schema = serde_json::from_str(j2).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Functional)
             .build();
@@ -4814,8 +4814,8 @@ pub use super::shared::Root;
     #[test]
     fn dedupe_functional_same_as_full_when_no_description() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
-        let s1: JsonSchema = serde_json::from_str(json).unwrap();
-        let s2: JsonSchema = serde_json::from_str(json).unwrap();
+        let s1: Schema = serde_json::from_str(json).unwrap();
+        let s2: Schema = serde_json::from_str(json).unwrap();
         let settings_full: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Full)
             .build();
@@ -4843,7 +4843,7 @@ pub use super::shared::Root;
     #[test]
     fn uuid_required_property() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4868,7 +4868,7 @@ pub struct Root {
     #[test]
     fn uuid_optional_property() {
         let json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4894,7 +4894,7 @@ pub struct Root {
     #[test]
     fn uuid_array_items() {
         let json = r#"{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string","format":"uuid"}}},"required":["ids"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4919,7 +4919,7 @@ pub struct Root {
     #[test]
     fn root_without_keywords_emits_value_type_alias() {
         let json: &str = r"{}";
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4935,7 +4935,7 @@ pub type Root = serde_json::Value;
     #[test]
     fn root_object_without_properties_emits_map_type_alias() {
         let json: &str = r#"{"type":"object"}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4953,7 +4953,7 @@ pub type Root = BTreeMap<String, serde_json::Value>;
     #[test]
     fn root_string_emits_type_alias() {
         let json: &str = r#"{"type":"string"}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4969,7 +4969,7 @@ pub type Root = String;
     #[test]
     fn root_object_with_only_additional_properties_emits_map_type_alias() {
         let json: &str = r#"{"type":"object","additionalProperties":{"type":"integer"}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -4987,7 +4987,7 @@ pub type Root = BTreeMap<String, i64>;
     #[test]
     fn root_all_of_objects_without_properties_emits_map_type_alias() {
         let json: &str = r#"{"allOf":[{"type":"object"},{"type":"object"}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5001,11 +5001,87 @@ pub type Root = BTreeMap<String, serde_json::Value>;
         assert_eq!(expected, actual);
     }
 
+    /// A `true` document accepts every value, like `{}`: the root is `serde_json::Value`.
+    #[test]
+    fn root_true_schema_emits_value_alias() {
+        let schema: Schema = Schema::try_from("true").unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = "//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = serde_json::Value;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A `false` document accepts no value: the root is an uninhabited enum.
+    #[test]
+    fn root_false_schema_emits_uninhabited_enum() {
+        let schema: Schema = Schema::try_from("false").unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = "//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Root {
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// Boolean documents next to an object schema in one batch: each gets its own root, and the
+    /// object schema's output is unchanged.
+    #[test]
+    fn boolean_roots_in_a_batch_each_get_a_root() {
+        let schemas: Vec<Schema> = vec![
+            Schema::Bool(true),
+            Schema::Bool(false),
+            serde_json::from_str(r#"{"type":"string"}"#).unwrap(),
+        ];
+        let settings: CodeGenSettings = default_settings();
+        let actual: (Option<String>, Vec<String>) =
+            buffers(generate_rust(&schemas, &settings).unwrap());
+        let expected: (Option<String>, Vec<String>) = (
+            None,
+            vec![
+                "//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = serde_json::Value;
+
+"
+                .to_string(),
+                "//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Root {
+}
+
+"
+                .to_string(),
+                "//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = String;
+
+"
+                .to_string(),
+            ],
+        );
+        assert_eq!(expected, actual);
+    }
+
     /// An empty `anyOf` has no valid value: an uninhabited untagged enum.
     #[test]
     fn root_empty_any_of_emits_uninhabited_enum() {
         let json: &str = r#"{"anyOf":[]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5026,7 +5102,7 @@ pub enum RootAnyOf {
     #[test]
     fn root_empty_one_of_emits_uninhabited_enum() {
         let json: &str = r#"{"oneOf":[]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5048,7 +5124,7 @@ pub enum RootOneOf {
     #[test]
     fn property_empty_any_of_emits_uninhabited_enum() {
         let json: &str = r#"{"type":"object","properties":{"a":{"anyOf":[]}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5078,7 +5154,7 @@ pub struct Root {
     #[test]
     fn all_of_same_const_emits_single_variant_enum() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","const":"same"}}},{"type":"object","properties":{"x":{"type":"string","const":"same"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5109,7 +5185,7 @@ pub struct Root {
     #[test]
     fn all_of_conflicting_const_emits_uninhabited_enum() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","const":"a"}}},{"type":"object","properties":{"x":{"type":"string","const":"b"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5138,7 +5214,7 @@ pub struct Root {
     #[test]
     fn all_of_same_pattern_keeps_pattern() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}},{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5164,7 +5240,7 @@ pub struct Root {
     #[test]
     fn all_of_conflicting_property_types_emits_uninhabited_enum() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"k":{"type":"string"}}},{"type":"object","properties":{"k":{"type":"integer"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5193,7 +5269,7 @@ pub struct Root {
     #[test]
     fn all_of_conflicting_required_property_types_emits_required_uninhabited_field() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"k":{"type":"string"}},"required":["k"]},{"type":"object","properties":{"k":{"type":"integer"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5221,7 +5297,7 @@ pub struct Root {
     #[test]
     fn all_of_object_and_string_emits_uninhabited_root() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"string"}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5241,7 +5317,7 @@ pub enum Root {
     #[test]
     fn all_of_enums_emit_intersection() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"s":{"enum":["a","b","c"]}}},{"type":"object","properties":{"s":{"enum":["b","c","d"]}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5274,7 +5350,7 @@ pub struct Root {
     #[test]
     fn all_of_disjoint_enums_emits_uninhabited_enum() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"s":{"enum":["a","b"]}}},{"type":"object","properties":{"s":{"enum":["x","y"]}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5303,7 +5379,7 @@ pub struct Root {
     #[test]
     fn all_of_integer_bounds_take_tightest_range() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":1000}}},{"type":"object","properties":{"n":{"type":"integer","minimum":10,"maximum":200}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5328,7 +5404,7 @@ pub struct Root {
     #[test]
     fn all_of_disjoint_integer_bounds_emits_uninhabited_enum() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"n":{"type":"integer","minimum":0,"maximum":10}}},{"type":"object","properties":{"n":{"type":"integer","minimum":20,"maximum":30}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5358,7 +5434,7 @@ pub struct Root {
     #[test]
     fn all_of_integer_bounds_beyond_f64_precision_compare_exactly() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993}}},{"type":"object","properties":{"n":{"type":"integer","maximum":9007199254740992}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5387,7 +5463,7 @@ pub struct Root {
     #[test]
     fn self_reference_through_root_boxes_back_edge() {
         let json: &str = r##"{"title":"Node","type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#"}},"required":["value"]}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5414,7 +5490,7 @@ pub struct Node {
     #[test]
     fn self_reference_through_defs_boxes_back_edge() {
         let json: &str = r##"{"type":"object","properties":{"head":{"$ref":"#/$defs/Node"}},"$defs":{"Node":{"type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#/$defs/Node"}},"required":["value"]}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5448,7 +5524,7 @@ pub struct Root {
     #[test]
     fn mutual_recursion_boxes_one_edge() {
         let json: &str = r##"{"type":"object","properties":{"a":{"$ref":"#/$defs/A"}},"$defs":{"A":{"type":"object","properties":{"b":{"$ref":"#/$defs/B"}}},"B":{"type":"object","properties":{"a":{"$ref":"#/$defs/A"}}}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5481,7 +5557,7 @@ pub struct B {
     #[test]
     fn self_reference_in_array_items_is_not_boxed() {
         let json: &str = r##"{"title":"Node","type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#"},"children":{"type":"array","items":{"$ref":"#"}}},"required":["value"]}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5511,7 +5587,7 @@ pub struct Node {
     #[test]
     fn all_of_single_ref_merges_root_into_definition() {
         let json: &str = r##"{"type":"object","allOf":[{"$ref":"#/definitions/base"}],"definitions":{"base":{"type":"object","properties":{"a":{"type":"string"}}}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5536,7 +5612,7 @@ pub struct Base {
     #[test]
     fn root_identical_to_definition_takes_definition_name() {
         let json: &str = r#"{"type":"object","properties":{"a":{"type":"string"}},"$defs":{"Thing":{"type":"object","properties":{"a":{"type":"string"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5562,7 +5638,7 @@ pub struct Thing {
     #[test]
     fn ref_with_sibling_properties_merges_into_one_struct() {
         let json: &str = r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"p":{"$ref":"#/$defs/Base","properties":{"extra":{"type":"integer"}},"required":["extra"]}},"$defs":{"Base":{"type":"object","properties":{"a":{"type":"string"}}}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5604,7 +5680,7 @@ pub struct Base {
     #[test]
     fn colliding_struct_names_get_numeric_suffixes() {
         let json: &str = r#"{"type":"object","properties":{"first":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}},"second":{"title":"Item","type":"object","properties":{"b":{"type":"integer"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5649,7 +5725,7 @@ pub struct Root {
     #[test]
     fn reserved_struct_name_gets_numeric_suffix() {
         let json: &str = r#"{"type":"object","properties":{"s":{"title":"String","type":"object","properties":{"a":{"type":"string"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5683,7 +5759,7 @@ pub struct Root {
     #[test]
     fn colliding_field_names_get_numeric_suffixes() {
         let json: &str = r#"{"type":"object","properties":{"fooBar":{"type":"string"},"foo_bar":{"type":"integer"}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5710,7 +5786,7 @@ pub struct Root {
     #[test]
     fn any_of_ref_branches_name_variants_after_targets() {
         let json: &str = r##"{"type":"object","properties":{"pet":{"anyOf":[{"$ref":"#/$defs/Cat"},{"$ref":"#/$defs/Dog"}]}},"$defs":{"Cat":{"type":"object","properties":{"meow":{"type":"boolean"}}},"Dog":{"type":"object","properties":{"bark":{"type":"boolean"}}}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5759,7 +5835,7 @@ pub struct Root {
     #[test]
     fn one_of_ref_branches_name_variants_after_targets() {
         let json: &str = r##"{"type":"object","properties":{"pet":{"oneOf":[{"$ref":"#/$defs/Cat"},{"$ref":"#/$defs/Dog"}]}},"$defs":{"Cat":{"type":"object","properties":{"meow":{"type":"boolean"}}},"Dog":{"type":"object","properties":{"bark":{"type":"boolean"}}}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5808,7 +5884,7 @@ pub struct Root {
     #[test]
     fn required_any_of_type_and_null_emits_required_nullable_field() {
         let json: &str = r#"{"type":"object","properties":{"name":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["name"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5834,7 +5910,7 @@ pub struct Root {
     #[test]
     fn optional_one_of_null_and_type_emits_optional_nullable_field() {
         let json: &str = r#"{"type":"object","properties":{"name":{"oneOf":[{"type":"null"},{"type":"string"}]}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5867,7 +5943,7 @@ pub struct Root {
     #[test]
     fn type_array_union_orders_integer_before_number() {
         let json: &str = r#"{"type":"object","properties":{"v":{"type":["string","number","integer","boolean"]}},"required":["v"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5901,7 +5977,7 @@ pub struct Root {
     fn integer_enum_emits_value_enum_with_json_equal_impls() {
         let json: &str =
             r#"{"type":"object","properties":{"level":{"enum":[1,2,3]}},"required":["level"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -5963,7 +6039,7 @@ pub struct Root {
     fn const_integer_emits_single_variant_value_enum() {
         let json: &str =
             r#"{"type":"object","properties":{"version":{"const":2}},"required":["version"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6012,7 +6088,7 @@ pub struct Root {
     #[test]
     fn required_property_type_string_or_null_emits_required_nullable_field() {
         let json: &str = r#"{"type":"object","properties":{"name":{"type":["string","null"]}},"required":["name"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6038,7 +6114,7 @@ pub struct Root {
     #[test]
     fn properties_with_additional_properties_schema_emits_flattened_map() {
         let json: &str = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":{"type":"integer"}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6062,7 +6138,7 @@ pub struct Root {
     #[test]
     fn object_property_with_only_additional_properties_emits_map() {
         let json: &str = r#"{"type":"object","properties":{"labels":{"type":"object","additionalProperties":{"type":"string"}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6087,7 +6163,7 @@ pub struct Root {
     #[test]
     fn required_typeless_property_emits_value() {
         let json: &str = r#"{"type":"object","properties":{"data":{}},"required":["data"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6112,7 +6188,7 @@ pub struct Root {
     #[test]
     fn optional_typeless_property_emits_option_value_with_deserialize_some() {
         let json: &str = r#"{"type":"object","properties":{"data":{}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6146,7 +6222,7 @@ pub struct Root {
     #[test]
     fn then_else_properties_emit_optional_fields() {
         let json: &str = r#"{"type":"object","properties":{"kind":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"properties":{"a":{"type":"string"},"shared":{"type":"string"}}},"else":{"properties":{"b":{"type":"integer"},"shared":{"type":"integer"}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6185,7 +6261,7 @@ pub struct Root {
     fn not_is_ignored_for_the_type() {
         let json: &str =
             r#"{"type":"object","properties":{"a":{"type":"string","not":{"const":"x"}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6210,7 +6286,7 @@ pub struct Root {
     #[test]
     fn unreferenced_definition_is_emitted() {
         let json: &str = r#"{"type":"object","properties":{"a":{"type":"string"}},"$defs":{"Unused":{"type":"object","properties":{"z":{"type":"boolean"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6244,8 +6320,8 @@ pub struct Unused {
     fn defs_key_order_does_not_change_output() {
         let json_a: &str = r##"{"type":"object","properties":{"x":{"$ref":"#/$defs/X"},"y":{"$ref":"#/$defs/Y"}},"$defs":{"X":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}}}},"Y":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"b":{"type":"string"}}}}}}}"##;
         let json_b: &str = r##"{"type":"object","properties":{"x":{"$ref":"#/$defs/X"},"y":{"$ref":"#/$defs/Y"}},"$defs":{"Y":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"b":{"type":"string"}}}}},"X":{"type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}}}}}}"##;
-        let schema_a: JsonSchema = serde_json::from_str(json_a).unwrap();
-        let schema_b: JsonSchema = serde_json::from_str(json_b).unwrap();
+        let schema_a: Schema = serde_json::from_str(json_a).unwrap();
+        let schema_b: Schema = serde_json::from_str(json_b).unwrap();
         let settings: CodeGenSettings = default_settings();
         let expected: super::GenerateRustOutput = generate_rust(&[schema_a], &settings).unwrap();
         let actual: super::GenerateRustOutput = generate_rust(&[schema_b], &settings).unwrap();
@@ -6257,8 +6333,8 @@ pub struct Unused {
     fn unrelated_schema_in_batch_does_not_change_output() {
         let json: &str = r#"{"type":"object","properties":{"first":{"title":"Item","type":"object","properties":{"a":{"type":"string"}}},"second":{"title":"Item","type":"object","properties":{"b":{"type":"integer"}}}}}"#;
         let other: &str = r#"{"title":"Other","type":"object","properties":{"item":{"title":"Item","type":"object","properties":{"c":{"type":"boolean"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
-        let other_schema: JsonSchema = serde_json::from_str(other).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let other_schema: Schema = serde_json::from_str(other).unwrap();
         let settings: CodeGenSettings = default_settings();
         let alone: super::GenerateRustOutput =
             generate_rust(std::slice::from_ref(&schema), &settings).unwrap();
@@ -6274,7 +6350,7 @@ pub struct Unused {
     #[test]
     fn dedupe_disabled_identical_inline_objects_get_numeric_suffixes() {
         let json: &str = r#"{"type":"object","properties":{"a":{"title":"Point","type":"object","properties":{"x":{"type":"integer"}}},"b":{"title":"Point","type":"object","properties":{"x":{"type":"integer"}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .dedupe_mode(DedupeMode::Disabled)
             .build();
@@ -6323,7 +6399,7 @@ pub struct Root {
     fn additional_properties_absent_captures_unknown_keys_in_value_map() {
         let json: &str =
             r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6348,7 +6424,7 @@ pub struct Root {
     #[test]
     fn unknown_properties_capture_overrides_additional_properties_false() {
         let json: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .unknown_properties(UnknownProperties::Capture)
             .build();
@@ -6375,7 +6451,7 @@ pub struct Root {
     fn unknown_properties_drop_omits_map_when_additional_properties_absent() {
         let json: &str =
             r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .unknown_properties(UnknownProperties::Drop)
             .build();
@@ -6398,7 +6474,7 @@ pub struct Root {
     #[test]
     fn unknown_properties_drop_omits_typed_map() {
         let json: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":{"type":"integer"}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .unknown_properties(UnknownProperties::Drop)
             .build();
@@ -6421,7 +6497,7 @@ pub struct Root {
     #[test]
     fn unknown_properties_drop_keeps_deny_unknown_fields() {
         let json: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
             .unknown_properties(UnknownProperties::Drop)
             .build();
@@ -6445,7 +6521,7 @@ pub struct Root {
     #[test]
     fn property_named_additional_collides_with_unknown_keys_map() {
         let json: &str = r#"{"type":"object","properties":{"additional":{"type":"string"}},"required":["additional"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6470,7 +6546,7 @@ pub struct Root {
     #[test]
     fn all_of_different_patterns_combine_into_lookaheads() {
         let json: &str = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string","pattern":"^[a-z]+$"}}},{"type":"object","properties":{"x":{"type":"string","pattern":"^[0-9]+$"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6496,7 +6572,7 @@ pub struct Root {
     #[test]
     fn number_with_empty_range_emits_uninhabited_enum() {
         let json: &str = r#"{"type":"object","properties":{"n":{"type":"number","minimum":1.5,"exclusiveMaximum":1.5}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6524,7 +6600,7 @@ pub struct Root {
     #[test]
     fn integer_with_equal_bounds_emits_narrowest_type() {
         let json: &str = r#"{"type":"object","properties":{"n":{"type":"integer","minimum":5,"maximum":5}},"required":["n"]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6548,7 +6624,7 @@ pub struct Root {
     #[test]
     fn map_value_struct_is_named_after_property_key() {
         let json: &str = r#"{"type":"object","properties":{"foo":{"type":"object","additionalProperties":{"type":"object","properties":{"x":{"type":"integer"}}}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6581,7 +6657,7 @@ pub struct Root {
     #[test]
     fn map_value_struct_of_root_is_named_after_root() {
         let json: &str = r#"{"type":"object","additionalProperties":{"type":"object","properties":{"x":{"type":"integer"}}}}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6608,7 +6684,7 @@ pub type Root = BTreeMap<String, RootValue>;
     #[test]
     fn union_variant_structs_of_definition_are_named_after_definition_key() {
         let json: &str = r##"{"type":"object","properties":{"s":{"$ref":"#/$defs/Shape"}},"$defs":{"Shape":{"anyOf":[{"type":"object","properties":{"r":{"type":"number"}}},{"type":"object","properties":{"w":{"type":"number"}}}]}}}"##;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6656,7 +6732,7 @@ pub struct Root {
     #[test]
     fn union_variant_structs_of_titled_root_are_named_after_title() {
         let json: &str = r#"{"title":"Shape","oneOf":[{"type":"object","properties":{"r":{"type":"number"}}},{"type":"object","properties":{"w":{"type":"number"}}}]}"#;
-        let schema: JsonSchema = serde_json::from_str(json).unwrap();
+        let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
         let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6696,7 +6772,7 @@ pub enum ShapeOneOf {
     /// Two by-value back-edges to the same struct are both boxed.
     #[test]
     fn cycle_with_two_back_edges_boxes_both() {
-        let schema: JsonSchema = JsonSchema::try_from(r##"{"title":"Tree","type":"object","properties":{"left":{"$ref":"#"},"right":{"$ref":"#"}}}"##).unwrap();
+        let schema: Schema = Schema::try_from(r##"{"title":"Tree","type":"object","properties":{"left":{"$ref":"#"},"right":{"$ref":"#"}}}"##).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6723,7 +6799,7 @@ pub struct Tree {
     /// A cycle through the root and a definition boxes each back-edge.
     #[test]
     fn cycle_through_root_and_definition_boxes_every_back_edge() {
-        let schema: JsonSchema = JsonSchema::try_from(r##"{"type":"object","properties":{"a":{"$ref":"#"},"b":{"$ref":"#/$defs/B"}},"$defs":{"B":{"type":"object","properties":{"r":{"$ref":"#"}}}}}"##).unwrap();
+        let schema: Schema = Schema::try_from(r##"{"type":"object","properties":{"a":{"$ref":"#"},"b":{"$ref":"#/$defs/B"}},"$defs":{"B":{"type":"object","properties":{"r":{"$ref":"#"}}}}}"##).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6757,8 +6833,8 @@ pub struct Root {
     /// A union of itself and null carries no type information: any value.
     #[test]
     fn nullable_self_reference_is_value() {
-        let schema: JsonSchema =
-            JsonSchema::try_from(r##"{"anyOf":[{"$ref":"#"},{"type":"null"}]}"##).unwrap();
+        let schema: Schema =
+            Schema::try_from(r##"{"anyOf":[{"$ref":"#"},{"type":"null"}]}"##).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6773,7 +6849,7 @@ pub type Root = serde_json::Value;
     /// Two definitions that are each other or null: any value.
     #[test]
     fn nullable_mutual_reference_is_value() {
-        let schema: JsonSchema = JsonSchema::try_from(r##"{"$defs":{"A":{"anyOf":[{"$ref":"#/$defs/B"},{"type":"null"}]},"B":{"anyOf":[{"$ref":"#/$defs/A"},{"type":"null"}]}},"properties":{"a":{"$ref":"#/$defs/A"}}}"##).unwrap();
+        let schema: Schema = Schema::try_from(r##"{"$defs":{"A":{"anyOf":[{"$ref":"#/$defs/B"},{"type":"null"}]},"B":{"anyOf":[{"$ref":"#/$defs/A"},{"type":"null"}]}},"properties":{"a":{"$ref":"#/$defs/A"}}}"##).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6805,7 +6881,7 @@ pub struct Root {
     /// Defaults that fit the field type become functions; a default that does not fit (300 for u8, a UUID string) is left out.
     #[test]
     fn defaults_that_do_not_fit_the_type_are_left_out() {
-        let schema: JsonSchema = JsonSchema::try_from(r#"{"type": "object", "properties": {"x": {"type": "number", "default": 5}, "y": {"type": "number", "default": 2.5}, "u": {"type": "string", "format": "uuid", "default": "00000000-0000-0000-0000-000000000000"}, "b": {"type": "integer", "maximum": 10, "minimum": 0, "default": 300}, "c": {"type": "integer", "maximum": 10, "minimum": 0, "default": 7}, "s": {"type": "string", "default": "a\r\"b"}}, "required": ["x"]}"#).unwrap();
+        let schema: Schema = Schema::try_from(r#"{"type": "object", "properties": {"x": {"type": "number", "default": 5}, "y": {"type": "number", "default": 2.5}, "u": {"type": "string", "format": "uuid", "default": "00000000-0000-0000-0000-000000000000"}, "b": {"type": "integer", "maximum": 10, "minimum": 0, "default": 300}, "c": {"type": "integer", "maximum": 10, "minimum": 0, "default": 7}, "s": {"type": "string", "default": "a\r\"b"}}, "required": ["x"]}"#).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6858,7 +6934,7 @@ impl Root {
     /// Default functions are associated functions, so `FooBar.baz` and `Foo.bar_baz` cannot clash.
     #[test]
     fn default_functions_with_same_snake_case_name_do_not_clash() {
-        let schema: JsonSchema = JsonSchema::try_from(r#"{"$defs":{"FooBar":{"type":"object","properties":{"baz":{"type":"integer","default":1}}},"Foo":{"type":"object","properties":{"bar_baz":{"type":"integer","default":2}}}}}"#).unwrap();
+        let schema: Schema = Schema::try_from(r#"{"$defs":{"FooBar":{"type":"object","properties":{"baz":{"type":"integer","default":1}}},"Foo":{"type":"object","properties":{"bar_baz":{"type":"integer","default":2}}}}}"#).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6904,7 +6980,7 @@ pub type Root = serde_json::Value;
     /// Control characters are escaped as Rust literals in renames and enum values.
     #[test]
     fn control_characters_in_keys_titles_and_enum_values_are_escaped() {
-        let schema: JsonSchema = JsonSchema::try_from(r#"{"type": "object", "title": "T\u0001", "properties": {"k\rx": {"type": "string"}, "e": {"enum": [1, "a\u0001b", {"k\"": [null, true]}]}}}"#).unwrap();
+        let schema: Schema = Schema::try_from(r#"{"type": "object", "title": "T\u0001", "properties": {"k\rx": {"type": "string"}, "e": {"enum": [1, "a\u0001b", {"k\"": [null, true]}]}}}"#).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
@@ -6969,7 +7045,7 @@ pub struct T {
     /// back to the key.
     #[test]
     fn root_keeps_root_name_when_a_property_refers_back_to_it() {
-        let schema: JsonSchema = JsonSchema::try_from(r##"{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#"}},"z":{"title":"!!","type":"object","properties":{"q":{"type":"string"}}}}}"##).unwrap();
+        let schema: Schema = Schema::try_from(r##"{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#"}},"z":{"title":"!!","type":"object","properties":{"q":{"type":"string"}}}}}"##).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();

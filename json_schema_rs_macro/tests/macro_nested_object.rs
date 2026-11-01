@@ -48,7 +48,7 @@ fn nested_object_deserializes() {
 
 #[test]
 fn nested_object_each_type_json_schema_round_trip() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema};
+    use json_schema_rs::{JsonSchema, Schema, ToJsonSchema};
     let expected: Vec<JsonSchema> = vec![
         schema_0::Root::json_schema().expect("schema"),
         schema_0::Address::json_schema().expect("schema"),
@@ -57,7 +57,10 @@ fn nested_object_each_type_json_schema_round_trip() {
         .iter()
         .map(|schema| {
             let json: String = schema.try_into().expect("serialize");
-            JsonSchema::try_from(json.as_str()).expect("parse")
+            Schema::try_from(json.as_str())
+                .expect("parse")
+                .into_object()
+                .expect("schema object")
         })
         .collect();
     assert_eq!(expected, actual);

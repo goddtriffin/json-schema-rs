@@ -1942,13 +1942,16 @@ mod tests {
     use crate::json_schema::json_schema::{JsonSchema, Schema, SchemaRef};
     use crate::json_schema::settings::JsonSchemaSettings;
     use crate::json_schema::spec_version::SpecVersion;
-    use crate::validator::{ValidationError, ValidationResult, validate_with_registry};
+    use crate::validator::{CompiledSchema, ValidationError, ValidationResult};
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
     /// Parses `value` with default settings.
     fn parse(value: &Value) -> JsonSchema {
-        JsonSchema::try_from(value).expect("parse schema")
+        Schema::try_from(value)
+            .expect("parse schema")
+            .into_object()
+            .expect("schema object")
     }
 
     /// The build error of a registry for `schema` with the defaults.
@@ -1958,10 +1961,17 @@ mod tests {
             .map_err(RegistryErrors::into_vec)
     }
 
+    /// Validates `instance` against the root schema of `registry`, compiled for this call.
+    fn validate_compiled(registry: &Registry<'_>, instance: &Value) -> ValidationResult {
+        CompiledSchema::new(registry)
+            .expect("compile schema")
+            .validate(instance)
+    }
+
     /// Validates `instance` against `schema` through a registry with the defaults.
     fn validate_default(schema: &JsonSchema, instance: &Value) -> ValidationResult {
         let registry: Registry<'_> = Registry::new(schema).expect("build registry");
-        validate_with_registry(&registry, instance)
+        validate_compiled(&registry, instance)
     }
 
     /// The scope inside the root of `registry` (after its own `$id`, if any).
@@ -2280,7 +2290,7 @@ mod tests {
     fn mutual_refs_across_documents_reject_through_both_hops() {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
-        let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": {"a": "s"}}));
+        let actual: ValidationResult = validate_compiled(&registry, &json!({"b": {"a": "s"}}));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedInteger {
@@ -2298,7 +2308,7 @@ mod tests {
     fn mutual_refs_across_documents_accept_through_both_hops() {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
-        let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": {"a": 1}}));
+        let actual: ValidationResult = validate_compiled(&registry, &json!({"b": {"a": 1}}));
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2307,7 +2317,7 @@ mod tests {
     fn mutual_refs_first_hop_rejects_wrong_container() {
         let root: JsonSchema = mutual_refs_root();
         let registry: Registry<'_> = mutual_refs_registry(&root);
-        let actual: ValidationResult = validate_with_registry(&registry, &json!({"b": 1}));
+        let actual: ValidationResult = validate_compiled(&registry, &json!({"b": 1}));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedObject {
@@ -2332,7 +2342,7 @@ mod tests {
             .retriever(documents)
             .build(&root)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedString {
@@ -2353,7 +2363,7 @@ mod tests {
             "$ref": "HTTPS://EXAMPLE.com:443/./a.json"
         }));
         let registry: Registry<'_> = Registry::new(&root).expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedString {
@@ -2374,7 +2384,7 @@ mod tests {
             .document("HTTPS://Example.com/remote.json", json!({"type": "string"}))
             .build(&root)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedString {
@@ -2520,7 +2530,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft07)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({
                 "$id": "https://example.com/root.json",
                 "definitions": {
@@ -2531,7 +2541,9 @@ mod tests {
             }),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
@@ -2570,14 +2582,16 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft07)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({
                 "definitions": {"a": {"$id": "#foo", "type": "integer"}},
                 "properties": {"p": {"$ref": "#foo"}}
             }),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let actual: ValidationResult = validate_default(&schema, &json!({"p": "s"}));
         let expected: ValidationResult = Err(vec![ValidationError::new(
             ValidationErrorKind::ExpectedInteger {
@@ -2678,7 +2692,7 @@ mod tests {
             )
             .build(&root)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1));
         let expected: ValidationResult = Ok(());
         assert_eq!(expected, actual);
     }
@@ -2857,7 +2871,10 @@ mod tests {
     /// [`mixed_dialect_root`]'s schema text parsed with `settings`.
     fn mixed_dialect_root_with(settings: &JsonSchemaSettings) -> JsonSchema {
         let value: Value = serde_json::to_value(mixed_dialect_root()).expect("serialize");
-        JsonSchema::new_from_serde_value(&value, settings).expect("parse schema")
+        Schema::new_from_serde_value(&value, settings)
+            .expect("parse schema")
+            .into_object()
+            .expect("schema object")
     }
 
     #[test]
@@ -2910,7 +2927,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .format_mode(FormatMode::Annotation)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({
                 "$defs": {"inner": {
                     "$id": "inner.json",
@@ -2920,7 +2937,9 @@ mod tests {
             }),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
         let resolved: Resolved<'_> = registry
             .resolve(root_inner_scope(&registry, &schema), "inner.json")
@@ -2940,11 +2959,13 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft202012)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_serde_value(
+        let schema: JsonSchema = Schema::new_from_serde_value(
             &json!({"$ref": "https://example.com/old.json"}),
             &settings,
         )
-        .expect("parse schema");
+        .expect("parse schema")
+        .into_object()
+        .expect("schema object");
         let registry: Registry<'_> = Registry::builder()
             .document(
                 "https://example.com/old.json",
@@ -2952,7 +2973,7 @@ mod tests {
             )
             .build(&schema)
             .expect("build registry");
-        let actual: ValidationResult = validate_with_registry(&registry, &json!(1.0));
+        let actual: ValidationResult = validate_compiled(&registry, &json!(1.0));
         let expected: ValidationResult = Err(vec![
             ValidationError::new(
                 ValidationErrorKind::ExpectedInteger {
@@ -3425,7 +3446,7 @@ mod tests {
                 builder.parsed_document(*uri, *document)
             });
         let registry: Registry<'_> = builder.build(root).expect("build registry");
-        validate_with_registry(&registry, instance)
+        validate_compiled(&registry, instance)
     }
 
     /// The `type: string` failure of the number `1` at the root, reached through `$ref`s:

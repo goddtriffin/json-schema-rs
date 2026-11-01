@@ -1,9 +1,7 @@
 //! CLI helpers: schema/payload I/O, schema file discovery, mod.rs emission.
 
 use json_schema_rs::sanitizers::{sanitize_output_relative, sanitize_path_component};
-use json_schema_rs::{
-    DialectWarning, JsonSchema, JsonSchemaParseError, JsonSchemaSettings, Schema, resolve_dialect,
-};
+use json_schema_rs::{DialectWarning, JsonSchemaSettings, Schema, resolve_dialect};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -42,18 +40,6 @@ pub(crate) fn read_schema_from_path(
         }
     }
     Ok(schema)
-}
-
-/// Reads and parses a schema document (`-` is stdin) that must be a schema object, as codegen
-/// needs: a boolean document is a [`JsonSchemaParseError::BooleanRoot`] error.
-pub(crate) fn read_json_schema_from_path(
-    path: &PathBuf,
-    schema_settings: &JsonSchemaSettings,
-) -> Result<JsonSchema, String> {
-    match read_schema_from_path(path, schema_settings)? {
-        Schema::Object(schema) => Ok(*schema),
-        Schema::Bool(value) => Err(JsonSchemaParseError::BooleanRoot { value }.to_string()),
-    }
 }
 
 /// How a schema path is shown in messages (`stdin` for `-`).

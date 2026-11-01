@@ -112,12 +112,12 @@ impl Conditionals {
     /// Parses every `then` / `else` reachable from `schemas` and the `$ref` targets of
     /// `registries`, including those nested in other `then` / `else` values.
     pub(crate) fn collect(
-        schemas: &[&JsonSchema],
+        schemas: &[&Schema],
         registries: &[Registry<'_>],
     ) -> CodeGenResult<Conditionals> {
         let mut out: Conditionals = Conditionals::default();
         let mut found: Vec<(usize, Value)> = Vec::new();
-        let mut stack: Vec<&JsonSchema> = schemas.to_vec();
+        let mut stack: Vec<&JsonSchema> = schemas.iter().filter_map(|s| s.as_object()).collect();
         for registry in registries {
             for target in registry.ref_targets() {
                 if let SchemaRef::Object(s) = target.schema {
@@ -137,13 +137,7 @@ impl Conditionals {
             if out.index.contains_key(&address) {
                 continue;
             }
-            let parsed: Box<JsonSchema> = Box::new(
-                JsonSchema::new_from_serde_value(value, &JsonSchemaSettings::default()).map_err(
-                    |e| CodeGenError::InvalidSubschema {
-                        reason: e.to_string(),
-                    },
-                )?,
-            );
+            let parsed: Box<JsonSchema> = parse_conditional(value)?;
             out.index.insert(address, out.parsed.len());
             out.parsed.push(parsed);
         }
@@ -161,18 +155,13 @@ impl Conditionals {
                 if out.index.contains_key(&address) {
                     continue;
                 }
-                let parsed: Box<JsonSchema> = Box::new(
-                    JsonSchema::new_from_serde_value(&value, &JsonSchemaSettings::default())
-                        .map_err(|e| CodeGenError::InvalidSubschema {
-                            reason: e.to_string(),
-                        })?,
-                );
+                let parsed: Box<JsonSchema> = parse_conditional(&value)?;
                 out.index.insert(address, out.parsed.len());
                 out.parsed.push(parsed);
             }
         }
         // Pair up `then` and `else` of the same schema.
-        let mut stack: Vec<&JsonSchema> = schemas.to_vec();
+        let mut stack: Vec<&JsonSchema> = schemas.iter().filter_map(|s| s.as_object()).collect();
         for registry in registries {
             for target in registry.ref_targets() {
                 if let SchemaRef::Object(s) = target.schema {
@@ -235,6 +224,20 @@ impl Conditionals {
     }
 }
 
+/// Parses a raw `then` / `else` schema object ([`queue_conditionals`] queues only objects).
+fn parse_conditional(value: &Value) -> CodeGenResult<Box<JsonSchema>> {
+    let parsed: Schema = Schema::new_from_serde_value(value, &JsonSchemaSettings::default())
+        .map_err(|e| CodeGenError::InvalidSubschema {
+            reason: e.to_string(),
+        })?;
+    match parsed {
+        Schema::Object(schema) => Ok(schema),
+        Schema::Bool(value) => Err(CodeGenError::InvalidSubschema {
+            reason: format!("expected a schema object, found `{value}`"),
+        }),
+    }
+}
+
 /// Queues `s`'s raw `then` / `else` object values with their addresses.
 fn queue_conditionals(s: &JsonSchema, found: &mut Vec<(usize, Value)>) {
     for keyword in ["then", "else"] {
@@ -266,7 +269,7 @@ fn pointer_push(pointer: &str, token: &str) -> String {
 
 /// Builds the type graph for `schemas`; `registries[i]` is `schemas[i]`'s registry.
 pub(crate) fn build(
-    schemas: &[&JsonSchema],
+    schemas: &[&Schema],
     registries: &[Registry<'_>],
     conditionals: &Conditionals,
     settings: &CodeGenSettings,
@@ -306,7 +309,14 @@ struct Builder<'g, 'r> {
 }
 
 impl<'r> Builder<'_, 'r> {
-    fn build_schema(&mut self, schema: &'r JsonSchema) -> CodeGenResult<SchemaRoots> {
+    fn build_schema(&mut self, document: &'r Schema) -> CodeGenResult<SchemaRoots> {
+        // A boolean root seeds the conjunction the way a boolean `allOf` branch does: `true`
+        // contributes nothing (any value), `false` makes it unsatisfiable.
+        let schema: &'r JsonSchema = match document {
+            Schema::Object(schema) => schema,
+            Schema::Bool(true) => empty_schema(),
+            Schema::Bool(false) => unsatisfiable_schema(),
+        };
         let root_scope: Scope = self.registry.enter(self.registry.root_scope(), schema);
         let root_conjunct: Conjunct<'r> = Conjunct {
             schema,
@@ -938,6 +948,15 @@ impl<'r> Builder<'_, 'r> {
 fn empty_schema() -> &'static JsonSchema {
     static EMPTY: std::sync::OnceLock<JsonSchema> = std::sync::OnceLock::new();
     EMPTY.get_or_init(JsonSchema::default)
+}
+
+/// `{"allOf": [false]}`: the schema object no value satisfies, standing in for a `false` root.
+fn unsatisfiable_schema() -> &'static JsonSchema {
+    static UNSATISFIABLE: std::sync::OnceLock<JsonSchema> = std::sync::OnceLock::new();
+    UNSATISFIABLE.get_or_init(|| JsonSchema {
+        all_of: Some(vec![Schema::Bool(false)]),
+        ..JsonSchema::default()
+    })
 }
 
 /// An enum with no values: no instance is valid.

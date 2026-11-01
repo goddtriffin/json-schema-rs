@@ -14,8 +14,8 @@ specs for every published draft (draft-00 through 2020-12); run
 Supported keywords include **type** (all seven types, a single name or an array of
 names; the validator accepts any listed type and rejects unknown names at parse time; codegen
 reads `["T", "null"]` as nullable (`Option`, with an absent key distinct from `null`), several non-null types as an untagged enum, and a typeless property as `serde_json::Value`), **boolean
-schemas** (`true` / `false` anywhere a schema may appear, including a whole document; parse one
-with `Schema::new_from_str`), **properties**, **required**, **const** (draft-06+;
+schemas** (`true` / `false` anywhere a schema may appear, including a whole document, which
+codegen turns into `serde_json::Value` for `true` and an enum with no variants for `false`), **properties**, **required**, **const** (draft-06+;
 validator: instance must equal const, numbers by value so `1` equals `1.0`; codegen: single-value enum (string or any other JSON value); reverse: single-variant unit enum → const), **enum**
 (validator compares numbers by value; codegen emits Rust enums for string enums and value enums with exact serde impls for numbers, booleans, null and mixed values), **items** (array with single-schema
 items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
@@ -163,35 +163,42 @@ json-schema-rs = "0.0.4"
 ```
 
 Parse one or more schemas and generate Rust (one buffer per schema, plus an
-optional shared buffer when dedupe finds identical shapes). With default
+optional shared buffer when dedupe finds identical shapes). A parsed document is a
+`Schema`: a schema object or a boolean schema (`true` / `false`). With default
 settings you can use **TryFrom**:
-`let schema = JsonSchema::try_from(schema_json)?;` or `schema_json.try_into()?`.
-For custom settings, use the constructors:
+`let schema = Schema::try_from(schema_json)?;` or `schema_json.try_into()?`
+(from `&str`, `String`, `&[u8]`, `&serde_json::Value`, `std::fs::File`, `&Path` or
+`PathBuf`). For custom settings, use the constructors:
 
 ```rust
-use json_schema_rs::{JsonSchema, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, generate_rust};
-use std::io::Read;
+use json_schema_rs::{CodeGenSettings, JsonSchemaSettings, Schema, generate_rust};
 
-// Default settings: use TryFrom (e.g. JsonSchema::try_from(schema_json_str)?). For custom settings:
 let schema_settings = JsonSchemaSettings::default();
 
 // From a string:
-let json_schema = JsonSchema::new_from_str(schema_json_str, &schema_settings)?;
+let schema = Schema::new_from_str(schema_json_str, &schema_settings)?;
 // From bytes (e.g. a buffer or file contents):
-let json_schema = JsonSchema::new_from_slice(&bytes[..], &schema_settings)?;
+let schema = Schema::new_from_slice(&bytes[..], &schema_settings)?;
 // From an already-parsed serde_json::Value (avoids string round-trips):
-let json_schema = JsonSchema::new_from_serde_value(&json_value, &schema_settings)?;
+let schema = Schema::new_from_serde_value(&json_value, &schema_settings)?;
 // From a reader (e.g. std::fs::File, std::io::Stdin):
-let json_schema = JsonSchema::new_from_reader(reader, &schema_settings)?;
+let schema = Schema::new_from_reader(reader, &schema_settings)?;
 // From a file path:
-let json_schema = JsonSchema::new_from_path("path/to/json-schema.json", &schema_settings)?;
+let schema = Schema::new_from_path("path/to/json-schema.json", &schema_settings)?;
+
+// The schema object, when you need its keywords (`None` for a boolean schema):
+let object = schema.as_object();
 
 // Then generate Rust:
 let code_gen_settings = CodeGenSettings::builder().build();
-let output = generate_rust(&[json_schema], &code_gen_settings)?;
+let output = generate_rust(&[schema], &code_gen_settings)?;
 // output.per_schema.len() == 1; write output.per_schema[0] to a file or stdout
 // When dedupe finds shared structs, output.shared is Some(shared_rust_code)
 ```
+
+A boolean document generates a root like any other schema: `true` accepts every
+value (`pub type Root = serde_json::Value;`, as `{}` does) and `false` none (an
+enum with no variants).
 
 Structurally identical types are deduplicated by default (one generated
 type per shape; types used by several schemas go in a shared buffer that each
@@ -221,11 +228,11 @@ them (faster deserialization), or `Capture` to keep them even where
 document shares with another input go in the shared buffer:
 
 ```rust
-use json_schema_rs::{CodeGenInput, CodeGenSettings, FileRetriever, JsonSchema, file_uri, generate_rust};
+use json_schema_rs::{CodeGenInput, CodeGenSettings, FileRetriever, Schema, file_uri, generate_rust};
 use std::path::Path;
 
 let path = Path::new("/schemas/package.json");
-let schema: JsonSchema = path.try_into()?;
+let schema: Schema = path.try_into()?;
 let input = CodeGenInput::new()
     .schema_at(file_uri(path).unwrap(), &schema)
     .retriever(FileRetriever::new("/schemas")); // `$ref: "ava.json"` reads /schemas/ava.json
@@ -286,6 +293,9 @@ Then `use json_schema_rs_macro::json_schema_to_rust` and use any of these forms:
 - **Multiple inline JSON Schema strings:**
   `json_schema_to_rust!(r#"..."#, r#"..."#)`
 
+A literal that starts with `{`, or is `true` or `false` (a boolean schema), is
+inline JSON; any other literal is a file path.
+
 When you pass **multiple** schemas (paths or inline), each schema’s types are
 emitted in a **separate Rust module** to avoid name collisions: one module per
 JSON Schema. Module names come from the file stem for paths (e.g. `simple` from
@@ -319,26 +329,35 @@ hand-written `impl ToJsonSchema` only needs `json_schema()`; implement
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
 
 ```rust
-use json_schema_rs::{validate, JsonSchema};
+use json_schema_rs::{validate, Schema, ValidateError};
 use serde_json::Value;
 
-let schema: JsonSchema = serde_json::from_str(schema_json)?;
+let schema: Schema = Schema::try_from(schema_json)?;
 let instance: Value = serde_json::from_str(instance_json)?;
-let result = validate(&schema, &instance);
-if let Err(errors) = result {
-    for err in &errors {
-        eprintln!("{}", err);
+match validate(&schema, &instance) {
+    Ok(()) => {}
+    // The instance does not conform: one error per problem.
+    Err(ValidateError::Instance(errors)) => {
+        for err in &errors {
+            eprintln!("{err}");
+        }
     }
+    // The schema cannot be used (a `$ref` that does not resolve, an invalid
+    // `pattern`, ...): every problem, whatever the instance.
+    Err(ValidateError::Schema(problems)) => eprintln!("{problems}"),
 }
 ```
 
 `validate` builds the schema's `$ref` registry and compiles the schema on every call.
+A schema that cannot be used is `ValidateError::Schema`, never an instance error:
+`SchemaError::Registry` when the registry cannot be built, `SchemaError::Compile`
+when the schema does not compile, each listing every problem.
 To validate many instances, or to let `$ref` reach other documents, build the
 registry and compile the schema once; `is_valid` is the fastest check when you only
 need the verdict:
 
 ```rust
-use json_schema_rs::{CompiledSchema, JsonSchema, Registry};
+use json_schema_rs::{CompiledSchema, Registry};
 use std::collections::HashMap;
 
 let remotes: HashMap<String, Value> = HashMap::from([(
@@ -412,7 +431,10 @@ jsonschemars validate -s schema.json < payload.json
 ```
 
 Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use
-`-s -` to read the schema from stdin (payload then from `-p` or stdin).
+`-s -` to read the schema from stdin (payload then from `-p` or stdin). Exit
+codes: `0` the payload conforms; `1` it does not (one line per error on stderr);
+`2` no verdict, because the schema or payload could not be read or parsed, or the
+schema cannot be used (one `schema error:` line per problem).
 
 To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of
 using the macro, use the library API from a `build.rs` script:

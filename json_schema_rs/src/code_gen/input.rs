@@ -3,7 +3,7 @@
 
 use crate::json_schema::registry::parse_uri;
 use crate::json_schema::{
-    JsonSchema, JsonSchemaSettings, OfflineRetriever, RegistryBuilder, Retrieve, RetrieveError,
+    JsonSchemaSettings, OfflineRetriever, RegistryBuilder, Retrieve, RetrieveError, Schema,
 };
 use serde_json::Value;
 use std::cell::RefCell;
@@ -23,14 +23,14 @@ use std::fmt;
 /// A slice of schemas converts into an input with no URIs and no retrieval:
 ///
 /// ```
-/// use json_schema_rs::{CodeGenSettings, JsonSchema, generate_rust};
+/// use json_schema_rs::{CodeGenSettings, Schema, generate_rust};
 ///
-/// let schema: JsonSchema = JsonSchema::try_from(r#"{"type": "string"}"#).unwrap();
+/// let schema: Schema = Schema::try_from(r#"{"type": "string"}"#).unwrap();
 /// let output = generate_rust(&[schema], &CodeGenSettings::default()).unwrap();
 /// assert_eq!(1, output.per_schema.len());
 /// ```
 pub struct CodeGenInput<'a> {
-    schemas: Vec<(&'a JsonSchema, Option<String>)>,
+    schemas: Vec<(&'a Schema, Option<String>)>,
     retriever: Box<dyn Retrieve + 'a>,
     settings: JsonSchemaSettings,
 }
@@ -64,7 +64,7 @@ impl<'a> CodeGenInput<'a> {
     /// Adds a schema with no retrieval URI (inline text, stdin): its relative `$ref`s resolve
     /// against its root `$id`, if it has one.
     #[must_use]
-    pub fn schema(mut self, schema: &'a JsonSchema) -> Self {
+    pub fn schema(mut self, schema: &'a Schema) -> Self {
         self.schemas.push((schema, None));
         self
     }
@@ -72,7 +72,7 @@ impl<'a> CodeGenInput<'a> {
     /// Adds a schema retrieved from `uri` (an absolute URI, such as the `file:` URI of its path
     /// from [`file_uri`](crate::file_uri)).
     #[must_use]
-    pub fn schema_at(mut self, uri: impl Into<String>, schema: &'a JsonSchema) -> Self {
+    pub fn schema_at(mut self, uri: impl Into<String>, schema: &'a Schema) -> Self {
         self.schemas.push((schema, Some(uri.into())));
         self
     }
@@ -94,7 +94,7 @@ impl<'a> CodeGenInput<'a> {
     }
 
     /// The input schemas, in order.
-    pub fn schemas(&self) -> impl ExactSizeIterator<Item = &'a JsonSchema> + '_ {
+    pub fn schemas(&self) -> impl ExactSizeIterator<Item = &'a Schema> + '_ {
         self.schemas.iter().map(|(schema, _)| *schema)
     }
 
@@ -123,7 +123,7 @@ impl<'a> CodeGenInput<'a> {
             // error carries its index; the other registries leave it out.
             let key: Option<&str> = uri
                 .as_deref()
-                .or(schema.id.as_deref())
+                .or(schema.as_object().and_then(|object| object.id.as_deref()))
                 .filter(|key| parse_uri(key).is_ok());
             if let Some(key) = key {
                 builder = builder.parsed_document(key, *schema);
@@ -160,22 +160,22 @@ impl Retrieve for CachingRetriever<'_> {
     }
 }
 
-impl<'a> From<&'a [JsonSchema]> for CodeGenInput<'a> {
-    fn from(schemas: &'a [JsonSchema]) -> Self {
+impl<'a> From<&'a [Schema]> for CodeGenInput<'a> {
+    fn from(schemas: &'a [Schema]) -> Self {
         schemas
             .iter()
             .fold(CodeGenInput::new(), CodeGenInput::schema)
     }
 }
 
-impl<'a> From<&'a Vec<JsonSchema>> for CodeGenInput<'a> {
-    fn from(schemas: &'a Vec<JsonSchema>) -> Self {
+impl<'a> From<&'a Vec<Schema>> for CodeGenInput<'a> {
+    fn from(schemas: &'a Vec<Schema>) -> Self {
         CodeGenInput::from(schemas.as_slice())
     }
 }
 
-impl<'a, const N: usize> From<&'a [JsonSchema; N]> for CodeGenInput<'a> {
-    fn from(schemas: &'a [JsonSchema; N]) -> Self {
+impl<'a, const N: usize> From<&'a [Schema; N]> for CodeGenInput<'a> {
+    fn from(schemas: &'a [Schema; N]) -> Self {
         CodeGenInput::from(schemas.as_slice())
     }
 }

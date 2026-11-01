@@ -21,8 +21,8 @@
 //! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`).
 
 use json_schema_rs::{
-    CompiledSchema, FormatMode, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidationError,
-    validate,
+    CompiledSchema, FormatMode, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidateError,
+    ValidationError, validate,
 };
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
@@ -165,14 +165,21 @@ fn load_remotes(root: &Path) -> Result<HashMap<String, serde_json::Value>, Strin
 
 /// Runs one suite test; a panic in our library is a failure, not a crash of the run. A schema
 /// that could not be compiled (or whose registry could not be built) is validated with
-/// [`validate`], which reports why.
+/// [`validate`], whose schema error fails every instance and says why.
 fn run_test(schema: &Schema, compiled: Option<&CompiledSchema>, test: &SuiteTest) -> Outcome {
     let result = catch_unwind(AssertUnwindSafe(|| match compiled {
         Some(compiled) => {
-            let result = compiled.validate(&test.data);
+            let result: Result<(), String> = compiled
+                .validate(&test.data)
+                .map_err(|errors: Vec<ValidationError>| describe_errors(&errors));
             (result.is_ok() == compiled.is_valid(&test.data)).then_some(result)
         }
-        None => Some(validate(schema, &test.data)),
+        None => Some(
+            validate(schema, &test.data).map_err(|error: ValidateError| match error {
+                ValidateError::Instance(errors) => describe_errors(&errors),
+                ValidateError::Schema(error) => format!("the schema cannot be used: {error}"),
+            }),
+        ),
     }));
     let result = match result {
         Ok(Some(result)) => Ok(result),
@@ -185,10 +192,9 @@ fn run_test(schema: &Schema, compiled: Option<&CompiledSchema>, test: &SuiteTest
         (Err(_), _) => Outcome::Failed("validator panicked".to_string()),
         (Ok(Ok(())), true) | (Ok(Err(_)), false) => Outcome::Passed,
         (Ok(Ok(())), false) => Outcome::Failed("expected invalid, got valid".to_string()),
-        (Ok(Err(errors)), true) => Outcome::Failed(format!(
-            "expected valid, got invalid: {}",
-            describe_errors(&errors)
-        )),
+        (Ok(Err(description)), true) => {
+            Outcome::Failed(format!("expected valid, got invalid: {description}"))
+        }
     }
 }
 

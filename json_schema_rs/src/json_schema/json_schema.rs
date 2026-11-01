@@ -84,6 +84,15 @@ impl Schema {
         }
     }
 
+    /// The owned schema object, or `None` for a boolean schema.
+    #[must_use]
+    pub fn into_object(self) -> Option<JsonSchema> {
+        match self {
+            Schema::Bool(_) => None,
+            Schema::Object(schema) => Some(*schema),
+        }
+    }
+
     /// The schema object, or `None` for a boolean schema.
     #[must_use]
     pub fn as_object_mut(&mut self) -> Option<&mut JsonSchema> {
@@ -111,11 +120,26 @@ impl Schema {
     }
 
     /// Parses a JSON Schema document (a schema object or a boolean schema) from a string with
-    /// the given settings. See [`JsonSchema::new_from_str`] for the parsing rules.
+    /// the given settings.
+    ///
+    /// When [`JsonSchemaSettings::disallow_unknown_fields`] is `false`, unknown keys
+    /// are ignored (lenient). When `true`, a key the document's draft does not define as a
+    /// keyword, in any schema object, causes an error (strict).
     ///
     /// # Errors
     ///
-    /// Same as [`JsonSchema::new_from_str`], except that a boolean document is accepted.
+    /// Returns every problem found, one [`JsonSchemaParseError`] each, in walk order (see
+    /// [`JsonSchemaParseErrors`]):
+    ///
+    /// - [`JsonSchemaParseError::UnknownField`] for each key the draft does not define as a
+    ///   keyword, when strict;
+    /// - [`JsonSchemaParseError::InvalidKeywordValue`] for each count keyword written with a
+    ///   fraction or exponent under [`IntegerSemantics::Lexical`] (draft 4);
+    /// - [`JsonSchemaParseError::Serde`] on invalid JSON, a type mismatch, or an invalid keyword
+    ///   value (e.g. `"minLength": 2.5`). The model reports only its first such error, after
+    ///   any of the above; invalid JSON is the only error;
+    /// - [`JsonSchemaParseError::UnknownSchemaUri`] alone, when `$schema` is unrecognised under
+    ///   [`UnknownSchemaUri::Reject`](super::UnknownSchemaUri::Reject).
     pub fn new_from_str(json: &str, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Self> {
         parse_raw(RawSchema::Str(json), settings)
     }
@@ -1166,14 +1190,6 @@ fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect) {
     }
 }
 
-/// The schema object of a parsed document root, or [`JsonSchemaParseError::BooleanRoot`].
-fn require_object(schema: Schema) -> JsonSchemaParseResult<JsonSchema> {
-    match schema {
-        Schema::Object(schema) => Ok(*schema),
-        Schema::Bool(value) => Err(JsonSchemaParseError::BooleanRoot { value }.into()),
-    }
-}
-
 impl JsonSchema {
     /// The effective [`Dialect`] of this schema as a document root, from its `$schema` and the
     /// [`dialect_settings`](JsonSchema::dialect_settings) it was parsed with (Draft 2020-12, or
@@ -1226,182 +1242,12 @@ impl JsonSchema {
             .filter_map(Schema::as_object_mut)
             .collect()
     }
-
-    /// Parse a JSON Schema from a string with the given settings.
-    ///
-    /// When [`JsonSchemaSettings::disallow_unknown_fields`] is `false`, unknown keys
-    /// are ignored (lenient). When `true`, a key the document's draft does not define as a
-    /// keyword, in any schema object, causes an error (strict).
-    ///
-    /// # Errors
-    ///
-    /// Returns every problem found, one [`JsonSchemaParseError`] each, in walk order (see
-    /// [`JsonSchemaParseErrors`]):
-    ///
-    /// - [`JsonSchemaParseError::UnknownField`] for each key the draft does not define as a
-    ///   keyword, when strict;
-    /// - [`JsonSchemaParseError::InvalidKeywordValue`] for each count keyword written with a
-    ///   fraction or exponent under [`IntegerSemantics::Lexical`] (draft 4);
-    /// - [`JsonSchemaParseError::Serde`] on invalid JSON, a type mismatch, or an invalid keyword
-    ///   value (e.g. `"minLength": 2.5`). The model reports only its first such error, after
-    ///   any of the above; invalid JSON is the only error;
-    /// - [`JsonSchemaParseError::UnknownSchemaUri`] alone, when `$schema` is unrecognised under
-    ///   [`UnknownSchemaUri::Reject`](super::UnknownSchemaUri::Reject);
-    /// - [`JsonSchemaParseError::BooleanRoot`] alone, when the document is a boolean schema
-    ///   (`true` / `false`), which a [`JsonSchema`] cannot hold; parse it with
-    ///   [`Schema::new_from_str`] instead.
-    pub fn new_from_str(json: &str, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Self> {
-        parse_raw(RawSchema::Str(json), settings).and_then(require_object)
-    }
-
-    /// Parse a JSON Schema from a byte slice with the given settings.
-    ///
-    /// Same as [`new_from_str`](Self::new_from_str) but takes bytes (e.g. from a file).
-    ///
-    /// # Errors
-    ///
-    /// Same as [`new_from_str`](Self::new_from_str).
-    pub fn new_from_slice(
-        slice: &[u8],
-        settings: &JsonSchemaSettings,
-    ) -> JsonSchemaParseResult<Self> {
-        parse_raw(RawSchema::Slice(slice), settings).and_then(require_object)
-    }
-
-    /// Parse a JSON Schema from an already-parsed [`serde_json::Value`] with the given settings.
-    ///
-    /// Same semantics as [`new_from_str`](Self::new_from_str); takes a value to avoid string round-trips
-    /// when the schema is already loaded as JSON (e.g. from a test case or API response).
-    ///
-    /// # Errors
-    ///
-    /// Same as [`new_from_str`](Self::new_from_str).
-    pub fn new_from_serde_value(
-        value: &serde_json::Value,
-        settings: &JsonSchemaSettings,
-    ) -> JsonSchemaParseResult<Self> {
-        parse_value(Cow::Borrowed(value), settings).and_then(require_object)
-    }
-
-    /// Parse a JSON Schema from a reader with the given settings.
-    ///
-    /// Same as [`new_from_str`](Self::new_from_str) but reads from a reader. I/O errors are
-    /// returned as [`JsonSchemaParseError::Io`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`JsonSchemaParseError::Io`] on read failure.
-    /// Otherwise same as [`new_from_str`](Self::new_from_str).
-    pub fn new_from_reader<R: Read>(
-        reader: R,
-        settings: &JsonSchemaSettings,
-    ) -> JsonSchemaParseResult<Self> {
-        let mut buf: Vec<u8> = Vec::new();
-        let mut reader = reader;
-        reader
-            .read_to_end(&mut buf)
-            .map_err(JsonSchemaParseError::Io)?;
-        Self::new_from_slice(&buf, settings)
-    }
-
-    /// Parse a JSON Schema from a file path with the given settings.
-    ///
-    /// Same as [`new_from_str`](Self::new_from_str) but reads from a file. I/O errors (e.g. file not found)
-    /// are returned as [`JsonSchemaParseError::Io`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`JsonSchemaParseError::Io`] on open or read failure.
-    /// Otherwise same as [`new_from_str`](Self::new_from_str).
-    pub fn new_from_path<P: AsRef<std::path::Path>>(
-        path: P,
-        settings: &JsonSchemaSettings,
-    ) -> JsonSchemaParseResult<Self> {
-        let f: std::fs::File = std::fs::File::open(path.as_ref())?;
-        Self::new_from_reader(f, settings)
-    }
 }
 
-// TryFrom: parse into JsonSchema with default settings
+// TryFrom: parse a document with default settings
 
-/// Parses a JSON Schema from a string using default [`JsonSchemaSettings`](super::settings::JsonSchemaSettings).
-/// For custom settings, use [`JsonSchema::new_from_str`](Self::new_from_str).
-impl TryFrom<&str> for JsonSchema {
-    type Error = JsonSchemaParseErrors;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        JsonSchema::new_from_str(value, &settings)
-    }
-}
-
-/// Parses a JSON Schema from an owned string using default settings.
-/// For custom settings, use [`JsonSchema::new_from_str`](Self::new_from_str).
-impl TryFrom<String> for JsonSchema {
-    type Error = JsonSchemaParseErrors;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        JsonSchema::new_from_str(value.as_str(), &settings)
-    }
-}
-
-/// Parses a JSON Schema from a byte slice using default settings.
-/// For custom settings, use [`JsonSchema::new_from_slice`](Self::new_from_slice).
-impl TryFrom<&[u8]> for JsonSchema {
-    type Error = JsonSchemaParseErrors;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        JsonSchema::new_from_slice(value, &settings)
-    }
-}
-
-/// Parses a JSON Schema from an already-parsed [`serde_json::Value`] using default settings.
-/// For custom settings, use [`JsonSchema::new_from_serde_value`](Self::new_from_serde_value).
-impl TryFrom<&serde_json::Value> for JsonSchema {
-    type Error = JsonSchemaParseErrors;
-
-    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        JsonSchema::new_from_serde_value(value, &settings)
-    }
-}
-
-/// Parses a JSON Schema from an open file using default settings. I/O errors are reported as [`JsonSchemaParseError::Io`].
-/// For custom settings, use [`JsonSchema::new_from_reader`](Self::new_from_reader).
-impl TryFrom<std::fs::File> for JsonSchema {
-    type Error = JsonSchemaParseErrors;
-
-    fn try_from(value: std::fs::File) -> Result<Self, Self::Error> {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        JsonSchema::new_from_reader(value, &settings)
-    }
-}
-
-/// Parses a JSON Schema from a file path using default settings. I/O errors (e.g. file not found) are reported as [`JsonSchemaParseError::Io`].
-/// For custom settings, use [`JsonSchema::new_from_path`](Self::new_from_path).
-impl TryFrom<&std::path::Path> for JsonSchema {
-    type Error = JsonSchemaParseErrors;
-
-    fn try_from(value: &std::path::Path) -> Result<Self, Self::Error> {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        JsonSchema::new_from_path(value, &settings)
-    }
-}
-
-/// Parses a JSON Schema from an owned path using default settings. I/O errors are reported as [`JsonSchemaParseError::Io`].
-/// For custom settings, use [`JsonSchema::new_from_path`](Self::new_from_path).
-impl TryFrom<std::path::PathBuf> for JsonSchema {
-    type Error = JsonSchemaParseErrors;
-
-    fn try_from(value: std::path::PathBuf) -> Result<Self, Self::Error> {
-        let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        JsonSchema::new_from_path(&value, &settings)
-    }
-}
-
-/// Parses a JSON Schema document (object or boolean) from a string using default settings.
+/// Parses a JSON Schema document from a string using default [`JsonSchemaSettings`]. For custom
+/// settings, use [`Schema::new_from_str`].
 impl TryFrom<&str> for Schema {
     type Error = JsonSchemaParseErrors;
 
@@ -1410,7 +1256,18 @@ impl TryFrom<&str> for Schema {
     }
 }
 
-/// Parses a JSON Schema document (object or boolean) from a byte slice using default settings.
+/// Parses a JSON Schema document from an owned string using default settings. For custom
+/// settings, use [`Schema::new_from_str`].
+impl TryFrom<String> for Schema {
+    type Error = JsonSchemaParseErrors;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Schema::new_from_str(&value, &JsonSchemaSettings::default())
+    }
+}
+
+/// Parses a JSON Schema document from a byte slice using default settings. For custom settings,
+/// use [`Schema::new_from_slice`].
 impl TryFrom<&[u8]> for Schema {
     type Error = JsonSchemaParseErrors;
 
@@ -1419,8 +1276,8 @@ impl TryFrom<&[u8]> for Schema {
     }
 }
 
-/// Parses a JSON Schema document (object or boolean) from a [`serde_json::Value`] using default
-/// settings.
+/// Parses a JSON Schema document from an already-parsed [`serde_json::Value`] using default
+/// settings. For custom settings, use [`Schema::new_from_serde_value`].
 impl TryFrom<&serde_json::Value> for Schema {
     type Error = JsonSchemaParseErrors;
 
@@ -1429,12 +1286,35 @@ impl TryFrom<&serde_json::Value> for Schema {
     }
 }
 
-/// Parses a JSON Schema document (object or boolean) from a file path using default settings.
+/// Parses a JSON Schema document from an open file using default settings. I/O errors are
+/// reported as [`JsonSchemaParseError::Io`]. For custom settings, use
+/// [`Schema::new_from_reader`].
+impl TryFrom<std::fs::File> for Schema {
+    type Error = JsonSchemaParseErrors;
+
+    fn try_from(value: std::fs::File) -> Result<Self, Self::Error> {
+        Schema::new_from_reader(value, &JsonSchemaSettings::default())
+    }
+}
+
+/// Parses a JSON Schema document from a file path using default settings. I/O errors (e.g. file
+/// not found) are reported as [`JsonSchemaParseError::Io`]. For custom settings, use
+/// [`Schema::new_from_path`].
 impl TryFrom<&std::path::Path> for Schema {
     type Error = JsonSchemaParseErrors;
 
     fn try_from(value: &std::path::Path) -> Result<Self, Self::Error> {
         Schema::new_from_path(value, &JsonSchemaSettings::default())
+    }
+}
+
+/// Parses a JSON Schema document from an owned path using default settings. I/O errors are
+/// reported as [`JsonSchemaParseError::Io`]. For custom settings, use [`Schema::new_from_path`].
+impl TryFrom<std::path::PathBuf> for Schema {
+    type Error = JsonSchemaParseErrors;
+
+    fn try_from(value: std::path::PathBuf) -> Result<Self, Self::Error> {
+        Schema::new_from_path(&value, &JsonSchemaSettings::default())
     }
 }
 
@@ -1522,18 +1402,30 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_parse_compare() {
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"title":"Root"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed, reparsed);
     }
 
     #[test]
     fn round_trip_via_vec_u8() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let bytes: Vec<u8> = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(bytes.as_slice()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(bytes.as_slice())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed, reparsed);
     }
 
@@ -1542,7 +1434,10 @@ mod tests {
     #[test]
     fn parse_examples_present() {
         let json = r#"{"type":"string","examples":[1,"a",{"b":true}]}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::String.into()),
             examples: Some(vec![
@@ -1558,7 +1453,10 @@ mod tests {
     #[test]
     fn parse_examples_absent() {
         let json = r#"{"type":"string"}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::String.into()),
             ..Default::default()
@@ -1569,7 +1467,10 @@ mod tests {
     #[test]
     fn parse_examples_empty_array() {
         let json = r#"{"type":"string","examples":[]}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::String.into()),
             examples: Some(vec![]),
@@ -1581,9 +1482,15 @@ mod tests {
     #[test]
     fn round_trip_examples_unchanged() {
         let json = r#"{"type":"object","examples":[1,2,3]}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = parsed;
         let actual: JsonSchema = reparsed;
         assert_eq!(expected, actual);
@@ -1595,8 +1502,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        let actual: JsonSchema =
-            JsonSchema::new_from_str(json, &settings).expect("parse with strict");
+        let actual: JsonSchema = Schema::new_from_str(json, &settings)
+            .expect("parse with strict")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
@@ -1611,7 +1520,10 @@ mod tests {
     #[test]
     fn parse_deprecated_true() {
         let json = r#"{"type":"string","deprecated":true}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::String.into()),
             deprecated: Some(true),
@@ -1623,7 +1535,10 @@ mod tests {
     #[test]
     fn parse_deprecated_false() {
         let json = r#"{"type":"string","deprecated":false}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::String.into()),
             deprecated: Some(false),
@@ -1635,7 +1550,10 @@ mod tests {
     #[test]
     fn parse_deprecated_absent() {
         let json = r#"{"type":"string"}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::String.into()),
             ..Default::default()
@@ -1646,9 +1564,15 @@ mod tests {
     #[test]
     fn round_trip_deprecated_unchanged() {
         let json = r#"{"type":"object","properties":{"old":{"type":"string","deprecated":true}}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = parsed;
         let actual: JsonSchema = reparsed;
         assert_eq!(expected, actual);
@@ -1660,8 +1584,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        let actual: JsonSchema =
-            JsonSchema::new_from_str(json, &settings).expect("parse with strict");
+        let actual: JsonSchema = Schema::new_from_str(json, &settings)
+            .expect("parse with strict")
+            .into_object()
+            .expect("schema object");
         let mut properties: BTreeMap<String, Schema> = BTreeMap::new();
         properties.insert(
             "x".to_string(),
@@ -1679,12 +1605,15 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    // TryFrom: parse into JsonSchema with default settings
+    // TryFrom: parse a document with default settings
 
     #[test]
     fn try_from_str_success() {
         let json: &str = r#"{"type":"object","properties":{}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("try_from");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("try_from")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -1692,7 +1621,7 @@ mod tests {
     #[test]
     fn try_from_str_invalid_json() {
         let json: &str = "not json";
-        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(json);
+        let result: Result<Schema, JsonSchemaParseErrors> = Schema::try_from(json);
         assert!(matches!(
             result.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Serde(_)])
@@ -1702,7 +1631,10 @@ mod tests {
     #[test]
     fn try_from_string_success() {
         let json: String = r#"{"type":"string"}"#.to_string();
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("try_from");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("try_from")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::String.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -1710,7 +1642,10 @@ mod tests {
     #[test]
     fn try_from_slice_success() {
         let bytes: &[u8] = r#"{"type":"array","items":{"type":"string"}}"#.as_bytes();
-        let actual: JsonSchema = JsonSchema::try_from(bytes).expect("try_from");
+        let actual: JsonSchema = Schema::try_from(bytes)
+            .expect("try_from")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Array.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -1719,7 +1654,10 @@ mod tests {
     fn try_from_serde_value_success() {
         let value: serde_json::Value =
             serde_json::json!({"type": "object", "properties": {"a": {"type": "integer"}}});
-        let actual: JsonSchema = JsonSchema::try_from(&value).expect("try_from");
+        let actual: JsonSchema = Schema::try_from(&value)
+            .expect("try_from")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -1727,7 +1665,7 @@ mod tests {
     #[test]
     fn try_from_serde_value_invalid_type() {
         let value: serde_json::Value = serde_json::json!("not an object");
-        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(&value);
+        let result: Result<Schema, JsonSchemaParseErrors> = Schema::try_from(&value);
         assert!(result.is_err());
     }
 
@@ -1738,7 +1676,10 @@ mod tests {
         let schema_json = r#"{"type":"object","properties":{}}"#;
         std::fs::write(&schema_path, schema_json).expect("write temp file");
         let f: std::fs::File = std::fs::File::open(&schema_path).expect("open");
-        let actual: JsonSchema = JsonSchema::try_from(f).expect("try_from");
+        let actual: JsonSchema = Schema::try_from(f)
+            .expect("try_from")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -1749,7 +1690,7 @@ mod tests {
         let schema_path = temp_dir.path().join("bad.json");
         std::fs::write(&schema_path, "not json").expect("write temp file");
         let f: std::fs::File = std::fs::File::open(&schema_path).expect("open");
-        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(f);
+        let result: Result<Schema, JsonSchemaParseErrors> = Schema::try_from(f);
         assert!(matches!(
             result.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Serde(_)])
@@ -1762,7 +1703,10 @@ mod tests {
         let schema_path: std::path::PathBuf = temp_dir.path().join("schema.json");
         let schema_json = r#"{"type":"array","items":{"type":"string"}}"#;
         std::fs::write(&schema_path, schema_json).expect("write temp file");
-        let actual: JsonSchema = JsonSchema::try_from(schema_path.as_path()).expect("try_from");
+        let actual: JsonSchema = Schema::try_from(schema_path.as_path())
+            .expect("try_from")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Array.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -1771,8 +1715,8 @@ mod tests {
     fn try_from_path_file_not_found() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let missing_path: std::path::PathBuf = temp_dir.path().join("nonexistent.json");
-        let result: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::try_from(missing_path.as_path());
+        let result: Result<Schema, JsonSchemaParseErrors> =
+            Schema::try_from(missing_path.as_path());
         assert!(matches!(
             result.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Io(_)])
@@ -1785,7 +1729,10 @@ mod tests {
         let schema_path: std::path::PathBuf = temp_dir.path().join("schema.json");
         let schema_json = r#"{"type":"number"}"#;
         std::fs::write(&schema_path, schema_json).expect("write temp file");
-        let actual: JsonSchema = JsonSchema::try_from(schema_path).expect("try_from");
+        let actual: JsonSchema = Schema::try_from(schema_path)
+            .expect("try_from")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Number.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -1833,16 +1780,25 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_parse_compare_with_items() {
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed, reparsed);
     }
 
     #[test]
     fn parse_unique_items_true() {
         let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":true}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<bool> = Some(true);
         let actual: Option<bool> = parsed.unique_items;
         assert_eq!(expected, actual);
@@ -1851,7 +1807,10 @@ mod tests {
     #[test]
     fn parse_unique_items_false() {
         let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":false}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<bool> = Some(false);
         let actual: Option<bool> = parsed.unique_items;
         assert_eq!(expected, actual);
@@ -1860,7 +1819,10 @@ mod tests {
     #[test]
     fn parse_unique_items_absent() {
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<bool> = None;
         let actual: Option<bool> = parsed.unique_items;
         assert_eq!(expected, actual);
@@ -1869,30 +1831,45 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_parse_compare_with_unique_items() {
         let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":true}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed, reparsed);
     }
 
     #[test]
     fn parse_min_length() {
         let json = r#"{"type":"string","minLength":5}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(Some(5), parsed.min_length);
     }
 
     #[test]
     fn parse_max_length() {
         let json = r#"{"type":"string","maxLength":20}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(Some(20), parsed.max_length);
     }
 
     #[test]
     fn parse_min_length_max_length_both() {
         let json = r#"{"type":"string","minLength":2,"maxLength":50}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(Some(2), parsed.min_length);
         assert_eq!(Some(50), parsed.max_length);
     }
@@ -1900,21 +1877,30 @@ mod tests {
     #[test]
     fn parse_min_length_absent() {
         let json = r#"{"type":"string"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(None, parsed.min_length);
     }
 
     #[test]
     fn parse_max_length_absent() {
         let json = r#"{"type":"string"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(None, parsed.max_length);
     }
 
     #[test]
     fn parse_pattern() {
         let json = r#"{"type":"string","pattern":"^\\d+$"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = Some(r"^\d+$".to_string());
         let actual: Option<String> = parsed.pattern.clone();
         assert_eq!(expected, actual);
@@ -1923,7 +1909,10 @@ mod tests {
     #[test]
     fn parse_pattern_absent() {
         let json = r#"{"type":"string"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = None;
         let actual: Option<String> = parsed.pattern.clone();
         assert_eq!(expected, actual);
@@ -1932,9 +1921,15 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_parse_with_pattern() {
         let json = r#"{"type":"string","pattern":"^[a-z]+$"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = parsed;
         let actual: JsonSchema = reparsed;
         assert_eq!(expected, actual);
@@ -1943,16 +1938,25 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_parse_with_min_length_max_length() {
         let json = r#"{"type":"string","minLength":2,"maxLength":50}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed, reparsed);
     }
 
     #[test]
     fn parse_format_uuid() {
         let json = r#"{"type":"string","format":"uuid"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = Some("uuid".to_string());
         let actual: Option<String> = parsed.format;
         assert_eq!(expected, actual);
@@ -1961,7 +1965,10 @@ mod tests {
     #[test]
     fn parse_format_absent() {
         let json = r#"{"type":"string"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = None;
         let actual: Option<String> = parsed.format;
         assert_eq!(expected, actual);
@@ -1970,9 +1977,15 @@ mod tests {
     #[test]
     fn round_trip_parse_serialize_format_uuid() {
         let json = r#"{"type":"string","format":"uuid"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed, reparsed);
     }
 
@@ -2003,7 +2016,10 @@ mod tests {
     #[test]
     fn parse_all_of_present() {
         let json = r#"{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}}}]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let mut props_a = BTreeMap::new();
         props_a.insert(
             "a".to_string(),
@@ -2039,7 +2055,10 @@ mod tests {
     #[test]
     fn parse_all_of_absent() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = None;
         let actual = parsed.all_of.clone();
         assert_eq!(expected, actual);
@@ -2048,7 +2067,10 @@ mod tests {
     #[test]
     fn parse_all_of_empty_array() {
         let json = r#"{"allOf":[]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = Some(vec![]);
         let actual = parsed.all_of.clone();
         assert_eq!(expected, actual);
@@ -2057,7 +2079,10 @@ mod tests {
     #[test]
     fn parse_all_of_single_subschema() {
         let json = r#"{"allOf":[{"type":"object","properties":{"x":{"type":"string"}}}]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let mut props = BTreeMap::new();
         props.insert(
             "x".to_string(),
@@ -2078,7 +2103,10 @@ mod tests {
     #[test]
     fn parse_any_of_present() {
         let json = r#"{"anyOf":[{"type":"string"},{"type":"integer"}]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = Some(vec![
             Schema::from(JsonSchema {
                 type_: Some(JsonType::String.into()),
@@ -2096,7 +2124,10 @@ mod tests {
     #[test]
     fn parse_any_of_absent() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = None;
         let actual = parsed.any_of.clone();
         assert_eq!(expected, actual);
@@ -2105,7 +2136,10 @@ mod tests {
     #[test]
     fn parse_any_of_empty_array() {
         let json = r#"{"anyOf":[]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = Some(vec![]);
         let actual = parsed.any_of.clone();
         assert_eq!(expected, actual);
@@ -2114,7 +2148,10 @@ mod tests {
     #[test]
     fn parse_any_of_single_subschema() {
         let json = r#"{"anyOf":[{"type":"object","properties":{"x":{"type":"string"}}}]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let mut props = BTreeMap::new();
         props.insert(
             "x".to_string(),
@@ -2135,7 +2172,10 @@ mod tests {
     #[test]
     fn parse_one_of_present() {
         let json = r#"{"oneOf":[{"type":"string"},{"type":"integer"}]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = Some(vec![
             Schema::from(JsonSchema {
                 type_: Some(JsonType::String.into()),
@@ -2153,7 +2193,10 @@ mod tests {
     #[test]
     fn parse_one_of_absent() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = None;
         let actual = parsed.one_of.clone();
         assert_eq!(expected, actual);
@@ -2162,7 +2205,10 @@ mod tests {
     #[test]
     fn parse_one_of_empty_array() {
         let json = r#"{"oneOf":[]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<Vec<Schema>> = Some(vec![]);
         let actual = parsed.one_of.clone();
         assert_eq!(expected, actual);
@@ -2171,7 +2217,10 @@ mod tests {
     #[test]
     fn parse_one_of_single_subschema() {
         let json = r#"{"oneOf":[{"type":"object","properties":{"x":{"type":"string"}}}]}"#;
-        let parsed = JsonSchema::try_from(json).expect("parse");
+        let parsed = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let mut props = BTreeMap::new();
         props.insert(
             "x".to_string(),
@@ -2247,7 +2296,10 @@ mod tests {
     #[test]
     fn deserialize_array_with_items() {
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::Array.into()),
             items: Some(Schema::from(JsonSchema {
@@ -2264,7 +2316,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
         let json =
             r#"{"type":"object","properties":{},"$schema":"https://example.com","unknown":42}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
@@ -2275,7 +2327,7 @@ mod tests {
             .build();
         let json = r#"{"type":"object","properties":{},"unknown":42}"#;
         let expected: StrictOutcome = unknown("unknown", "");
-        let actual: StrictOutcome = strict_outcome(JsonSchema::new_from_str(json, &settings));
+        let actual: StrictOutcome = strict_outcome(Schema::new_from_str(json, &settings));
         assert_eq!(expected, actual);
     }
 
@@ -2286,7 +2338,7 @@ mod tests {
             .build();
         let json = r#"{"type":"object","properties":{"nested":{"type":"object","properties":{},"bad":1}}}"#;
         let expected: StrictOutcome = unknown("bad", "/properties/nested");
-        let actual: StrictOutcome = strict_outcome(JsonSchema::new_from_str(json, &settings));
+        let actual: StrictOutcome = strict_outcome(Schema::new_from_str(json, &settings));
         assert_eq!(expected, actual);
     }
 
@@ -2295,7 +2347,7 @@ mod tests {
     /// failing the test.
     type StrictOutcome = Result<(), Vec<(String, String)>>;
 
-    fn strict_outcome(result: Result<JsonSchema, JsonSchemaParseErrors>) -> StrictOutcome {
+    fn strict_outcome(result: Result<Schema, JsonSchemaParseErrors>) -> StrictOutcome {
         match result {
             Ok(_) => Ok(()),
             Err(errors) => Err(errors
@@ -2314,7 +2366,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        strict_outcome(JsonSchema::new_from_str(json, &settings))
+        strict_outcome(Schema::new_from_str(json, &settings))
     }
 
     fn unknown(key: &str, path: &str) -> StrictOutcome {
@@ -2442,7 +2494,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        JsonSchema::new_from_str(json, &settings)
+        Schema::new_from_str(json, &settings)
             .map(|_| ())
             .map_err(|errors| errors.iter().map(ToString::to_string).collect())
     }
@@ -2490,7 +2542,7 @@ mod tests {
         let expected: &str = "unknown keyword \"bogus\" at root\n\
             invalid \"minLength\" value 2.0 at root: expected a non-negative integer written without a fraction or exponent\n\
             unknown keyword \"extra\" at /properties/a";
-        let actual: String = JsonSchema::new_from_str(
+        let actual: String = Schema::new_from_str(
             r#"{"$schema":"http://json-schema.org/draft-04/schema#","bogus":1,"minLength":2.0,"properties":{"a":{"extra":true}}}"#,
             &settings,
         )
@@ -2559,7 +2611,7 @@ mod tests {
             .build();
         let expected: StrictOutcome = unknown("$defs", "");
         let actual: StrictOutcome =
-            strict_outcome(JsonSchema::new_from_str(r#"{"$defs":{"a":{}}}"#, &settings));
+            strict_outcome(Schema::new_from_str(r#"{"$defs":{"a":{}}}"#, &settings));
         assert_eq!(expected, actual);
     }
 
@@ -2595,8 +2647,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let expected: StrictOutcome = unknown("bogus", "/anyOf/0");
-        let actual: StrictOutcome =
-            strict_outcome(JsonSchema::new_from_serde_value(&value, &settings));
+        let actual: StrictOutcome = strict_outcome(Schema::new_from_serde_value(&value, &settings));
         assert_eq!(expected, actual);
     }
 
@@ -2604,7 +2655,10 @@ mod tests {
     fn lenient_keeps_unknown_keys_everywhere() {
         let expected: serde_json::Value =
             serde_json::json!({"bogus": 1, "properties": {"a": {"type": "string", "bogus": 1}}});
-        let parsed: JsonSchema = JsonSchema::try_from(&expected).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(&expected)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let actual: serde_json::Value = serde_json::to_value(&parsed).expect("serialize");
         assert_eq!(expected, actual);
     }
@@ -2624,11 +2678,11 @@ mod tests {
             ("not".to_string(), serde_json::json!({"type": "null"})),
             ("x-rust-type".to_string(), serde_json::json!({"crate": "a"})),
         ]);
-        let actual: BTreeMap<String, serde_json::Value> = JsonSchema::try_from(
+        let actual: BTreeMap<String, serde_json::Value> = Schema::try_from(
             r#"{"type":"string","not":{"type":"null"},"if":{"type":"string"},"x-rust-type":{"crate":"a"}}"#,
         )
         .expect("parse")
-        .extensions;
+        .into_object().expect("schema object").extensions;
         assert_eq!(expected, actual);
     }
 
@@ -2648,8 +2702,10 @@ mod tests {
     #[test]
     fn extensions_serialize_after_fields_in_key_order() {
         let expected: &str = r#"{"type":"string","a":1,"z":2}"#;
-        let schema: JsonSchema =
-            JsonSchema::try_from(r#"{"z":2,"type":"string","a":1}"#).expect("parse");
+        let schema: JsonSchema = Schema::try_from(r#"{"z":2,"type":"string","a":1}"#)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let actual: String = String::try_from(&schema).expect("serialize");
         assert_eq!(expected, actual);
     }
@@ -2662,8 +2718,10 @@ mod tests {
         let expected: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("not".to_string(), serde_json::json!({"type": "null"}))]);
         let actual: BTreeMap<String, serde_json::Value> =
-            JsonSchema::new_from_str(r#"{"not":{"type":"null"}}"#, &settings)
+            Schema::new_from_str(r#"{"not":{"type":"null"}}"#, &settings)
                 .expect("parse")
+                .into_object()
+                .expect("schema object")
                 .extensions;
         assert_eq!(expected, actual);
     }
@@ -2673,8 +2731,10 @@ mod tests {
         let expected: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("id".to_string(), serde_json::json!(5))]);
         let actual: BTreeMap<String, serde_json::Value> =
-            JsonSchema::try_from(r#"{"$schema":"http://json-schema.org/draft-04/schema#","id":5}"#)
+            Schema::try_from(r#"{"$schema":"http://json-schema.org/draft-04/schema#","id":5}"#)
                 .expect("parse")
+                .into_object()
+                .expect("schema object")
                 .extensions;
         assert_eq!(expected, actual);
     }
@@ -2683,11 +2743,12 @@ mod tests {
     fn draft7_id_stays_in_extensions() {
         let expected: BTreeMap<String, serde_json::Value> =
             BTreeMap::from([("id".to_string(), serde_json::json!("x"))]);
-        let actual: BTreeMap<String, serde_json::Value> = JsonSchema::try_from(
-            r#"{"$schema":"http://json-schema.org/draft-07/schema#","id":"x"}"#,
-        )
-        .expect("parse")
-        .extensions;
+        let actual: BTreeMap<String, serde_json::Value> =
+            Schema::try_from(r#"{"$schema":"http://json-schema.org/draft-07/schema#","id":"x"}"#)
+                .expect("parse")
+                .into_object()
+                .expect("schema object")
+                .extensions;
         assert_eq!(expected, actual);
     }
 
@@ -2695,7 +2756,7 @@ mod tests {
     fn duplicate_field_is_an_error() {
         let expected: String =
             "invalid JSON Schema: duplicate field `title` at line 1 column 20".to_string();
-        let actual: String = JsonSchema::try_from(r#"{"title":"a","title":"b"}"#)
+        let actual: String = Schema::try_from(r#"{"title":"a","title":"b"}"#)
             .expect_err("duplicate")
             .to_string();
         assert_eq!(expected, actual);
@@ -2705,7 +2766,7 @@ mod tests {
     fn duplicate_field_after_null_is_an_error() {
         let expected: String =
             "invalid JSON Schema: duplicate field `title` at line 1 column 21".to_string();
-        let actual: String = JsonSchema::try_from(r#"{"title":null,"title":"b"}"#)
+        let actual: String = Schema::try_from(r#"{"title":null,"title":"b"}"#)
             .expect_err("duplicate")
             .to_string();
         assert_eq!(expected, actual);
@@ -2715,7 +2776,7 @@ mod tests {
     fn duplicate_extension_is_an_error() {
         let expected: String =
             "invalid JSON Schema: duplicate field `x-a` at line 1 column 17".to_string();
-        let actual: String = JsonSchema::try_from(r#"{"x-a":1,"x-a":2}"#)
+        let actual: String = Schema::try_from(r#"{"x-a":1,"x-a":2}"#)
             .expect_err("duplicate")
             .to_string();
         assert_eq!(expected, actual);
@@ -2734,8 +2795,10 @@ mod tests {
     #[test]
     fn parse_type_null() {
         let expected: Option<TypeSet> = Some(JsonType::Null.into());
-        let actual: Option<TypeSet> = JsonSchema::try_from(r#"{"type":"null"}"#)
+        let actual: Option<TypeSet> = Schema::try_from(r#"{"type":"null"}"#)
             .expect("parse")
+            .into_object()
+            .expect("schema object")
             .type_;
         assert_eq!(expected, actual);
     }
@@ -2743,7 +2806,11 @@ mod tests {
     #[test]
     fn parse_type_empty_array_is_empty_set() {
         let expected: Option<TypeSet> = Some(TypeSet::empty());
-        let actual: Option<TypeSet> = JsonSchema::try_from(r#"{"type":[]}"#).expect("parse").type_;
+        let actual: Option<TypeSet> = Schema::try_from(r#"{"type":[]}"#)
+            .expect("parse")
+            .into_object()
+            .expect("schema object")
+            .type_;
         assert_eq!(expected, actual);
     }
 
@@ -2753,7 +2820,7 @@ mod tests {
                                 \"array\", \"boolean\", \"integer\", \"null\", \"number\", \
                                 \"object\", \"string\" at line 1 column 15"
             .to_string();
-        let actual: String = JsonSchema::try_from(r#"{"type":"strng"}"#)
+        let actual: String = Schema::try_from(r#"{"type":"strng"}"#)
             .expect_err("unknown type")
             .to_string();
         assert_eq!(expected, actual);
@@ -2765,7 +2832,7 @@ mod tests {
                                 \"array\", \"boolean\", \"integer\", \"null\", \"number\", \
                                 \"object\", \"string\" at line 1 column 33"
             .to_string();
-        let actual: String = JsonSchema::try_from(r#"{"properties":{"a":{"type":["any"]}}}"#)
+        let actual: String = Schema::try_from(r#"{"properties":{"a":{"type":["any"]}}}"#)
             .expect_err("unknown type")
             .to_string();
         assert_eq!(expected, actual);
@@ -2777,7 +2844,7 @@ mod tests {
                                 \"array\", \"boolean\", \"integer\", \"null\", \"number\", \
                                 \"object\", \"string\""
             .to_string();
-        let actual: String = JsonSchema::try_from(&serde_json::json!({"type": "strng"}))
+        let actual: String = Schema::try_from(&serde_json::json!({"type": "strng"}))
             .expect_err("unknown type")
             .to_string();
         assert_eq!(expected, actual);
@@ -2821,7 +2888,9 @@ mod tests {
 
     #[test]
     fn schema_document_records_forced_spec_version() {
-        let settings: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .forced_spec_version(SpecVersion::Draft07)
+            .build();
         let expected: Option<DialectSettings> = Some(DialectSettings {
             forced_spec_version: Some(SpecVersion::Draft07),
             ..DialectSettings::default()
@@ -2835,12 +2904,48 @@ mod tests {
     }
 
     #[test]
-    fn json_schema_document_boolean_is_an_error() {
-        let expected: String =
-            "the document is the boolean schema `true`, not a schema object".to_string();
-        let actual: String = JsonSchema::try_from("true")
-            .expect_err("boolean root")
-            .to_string();
+    fn schema_document_false_from_owned_string() {
+        let expected: Schema = Schema::Bool(false);
+        let actual: Schema = Schema::try_from("false".to_string()).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_document_true_from_file() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let schema_path: std::path::PathBuf = temp_dir.path().join("schema.json");
+        std::fs::write(&schema_path, "true").expect("write temp file");
+        let f: std::fs::File = std::fs::File::open(&schema_path).expect("open");
+        let expected: Schema = Schema::Bool(true);
+        let actual: Schema = Schema::try_from(f).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_document_false_from_path_buf() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let schema_path: std::path::PathBuf = temp_dir.path().join("schema.json");
+        std::fs::write(&schema_path, "false").expect("write temp file");
+        let expected: Schema = Schema::Bool(false);
+        let actual: Schema = Schema::try_from(schema_path).expect("parse");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_object_of_boolean_schema_is_none() {
+        let expected: Option<JsonSchema> = None;
+        let actual: Option<JsonSchema> = Schema::Bool(true).into_object();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_object_of_schema_object_is_the_object() {
+        let object: JsonSchema = JsonSchema {
+            type_: Some(JsonType::String.into()),
+            ..Default::default()
+        };
+        let expected: Option<JsonSchema> = Some(object.clone());
+        let actual: Option<JsonSchema> = Schema::from(object).into_object();
         assert_eq!(expected, actual);
     }
 
@@ -2876,8 +2981,10 @@ mod tests {
             ("b".to_string(), Schema::Bool(false)),
         ]);
         let actual: BTreeMap<String, Schema> =
-            JsonSchema::try_from(r#"{"properties":{"a":true,"b":false}}"#)
+            Schema::try_from(r#"{"properties":{"a":true,"b":false}}"#)
                 .expect("parse")
+                .into_object()
+                .expect("schema object")
                 .properties;
         assert_eq!(expected, actual);
     }
@@ -2885,8 +2992,10 @@ mod tests {
     #[test]
     fn boolean_items_parses_as_bool() {
         let expected: Option<Schema> = Some(Schema::Bool(false));
-        let actual: Option<Schema> = JsonSchema::try_from(r#"{"items":false}"#)
+        let actual: Option<Schema> = Schema::try_from(r#"{"items":false}"#)
             .expect("parse")
+            .into_object()
+            .expect("schema object")
             .items;
         assert_eq!(expected, actual);
     }
@@ -2894,8 +3003,10 @@ mod tests {
     #[test]
     fn additional_properties_null_is_absent() {
         let expected: Option<Schema> = None;
-        let actual: Option<Schema> = JsonSchema::try_from(r#"{"additionalProperties":null}"#)
+        let actual: Option<Schema> = Schema::try_from(r#"{"additionalProperties":null}"#)
             .expect("parse")
+            .into_object()
+            .expect("schema object")
             .additional_properties;
         assert_eq!(expected, actual);
     }
@@ -2905,7 +3016,7 @@ mod tests {
         let expected: String = "invalid JSON Schema: invalid type: sequence, expected a schema \
                                 (an object or a boolean) at line 1 column 25"
             .to_string();
-        let actual: String = JsonSchema::try_from(r#"{"additionalProperties":[{}]}"#)
+        let actual: String = Schema::try_from(r#"{"additionalProperties":[{}]}"#)
             .expect_err("array additionalProperties")
             .to_string();
         assert_eq!(expected, actual);
@@ -2917,7 +3028,10 @@ mod tests {
             extensions: BTreeMap::from([("items".to_string(), serde_json::json!([{}, true]))]),
             ..Default::default()
         };
-        let actual: JsonSchema = JsonSchema::try_from(r#"{"items":[{},true]}"#).expect("parse");
+        let actual: JsonSchema = Schema::try_from(r#"{"items":[{},true]}"#)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(expected, actual);
     }
 
@@ -2925,7 +3039,7 @@ mod tests {
     fn tuple_items_round_trip() {
         let expected: String = r#"{"items":[{"type":"string"}]}"#.to_string();
         let actual: String = serde_json::to_string(
-            &JsonSchema::try_from(r#"{"items":[{"type":"string"}]}"#).expect("parse"),
+            &Schema::try_from(r#"{"items":[{"type":"string"}]}"#).expect("parse"),
         )
         .expect("serialize");
         assert_eq!(expected, actual);
@@ -2936,7 +3050,7 @@ mod tests {
         let expected: String = "invalid JSON Schema: invalid type: string \"x\", expected a \
                                 schema (an object or a boolean) at line 1 column 22"
             .to_string();
-        let actual: String = JsonSchema::try_from(r#"{"properties":{"a":"x"}}"#)
+        let actual: String = Schema::try_from(r#"{"properties":{"a":"x"}}"#)
             .expect_err("string schema")
             .to_string();
         assert_eq!(expected, actual);
@@ -2953,10 +3067,12 @@ mod tests {
 
     #[test]
     fn subschemas_mut_skips_boolean_schemas() {
-        let mut schema: JsonSchema = JsonSchema::try_from(
+        let mut schema: JsonSchema = Schema::try_from(
             r#"{"properties":{"a":true,"b":{"title":"B"}},"items":false,"allOf":[{"title":"C"}]}"#,
         )
-        .expect("parse");
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
         let expected: Vec<Option<String>> = vec![Some("B".to_string()), Some("C".to_string())];
         let actual: Vec<Option<String>> = schema
             .subschemas_mut()
@@ -2976,7 +3092,7 @@ mod tests {
     #[test]
     fn unknown_field_display_names_root() {
         let expected: &str = "unknown keyword \"bogus\" at root";
-        let actual: String = JsonSchema::new_from_str(
+        let actual: String = Schema::new_from_str(
             r#"{"bogus":1}"#,
             &JsonSchemaSettings::builder()
                 .disallow_unknown_fields(true)
@@ -2990,7 +3106,7 @@ mod tests {
     #[test]
     fn unknown_field_display_names_path() {
         let expected: &str = "unknown keyword \"bogus\" at /properties/a";
-        let actual: String = JsonSchema::new_from_str(
+        let actual: String = Schema::new_from_str(
             r#"{"properties":{"a":{"bogus":1}}}"#,
             &JsonSchemaSettings::builder()
                 .disallow_unknown_fields(true)
@@ -3002,57 +3118,57 @@ mod tests {
     }
 
     /// Parses `json` with default settings, mapping the error to its message.
-    fn parse_message(json: &str) -> Result<JsonSchema, String> {
-        JsonSchema::try_from(json).map_err(|e| e.to_string())
+    fn parse_message(json: &str) -> Result<Schema, String> {
+        Schema::try_from(json).map_err(|e| e.to_string())
     }
 
     #[test]
     fn null_properties_parse_as_no_properties() {
-        let expected: Result<JsonSchema, String> = parse_message(r#"{"type":"object"}"#);
-        let actual: Result<JsonSchema, String> =
+        let expected: Result<Schema, String> = parse_message(r#"{"type":"object"}"#);
+        let actual: Result<Schema, String> =
             parse_message(r#"{"type":"object","properties":null}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn min_length_integer_valued_decimal_parses_as_integer() {
-        let expected: Result<JsonSchema, String> = parse_message(r#"{"minLength":2}"#);
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":2.0}"#);
+        let expected: Result<Schema, String> = parse_message(r#"{"minLength":2}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"minLength":2.0}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn max_length_integer_valued_decimal_parses_as_integer() {
-        let expected: Result<JsonSchema, String> = parse_message(r#"{"maxLength":2}"#);
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"maxLength":2.0}"#);
+        let expected: Result<Schema, String> = parse_message(r#"{"maxLength":2}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"maxLength":2.0}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn min_items_integer_valued_decimal_parses_as_integer() {
-        let expected: Result<JsonSchema, String> = parse_message(r#"{"minItems":2}"#);
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"minItems":2.0}"#);
+        let expected: Result<Schema, String> = parse_message(r#"{"minItems":2}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"minItems":2.0}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn max_items_integer_valued_decimal_parses_as_integer() {
-        let expected: Result<JsonSchema, String> = parse_message(r#"{"maxItems":2}"#);
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"maxItems":2.0}"#);
+        let expected: Result<Schema, String> = parse_message(r#"{"maxItems":2}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"maxItems":2.0}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn count_keyword_exponent_form_parses_as_integer() {
-        let expected: Result<JsonSchema, String> = parse_message(r#"{"minLength":100}"#);
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":1e2}"#);
+        let expected: Result<Schema, String> = parse_message(r#"{"minLength":100}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"minLength":1e2}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn count_keyword_negative_zero_parses_as_zero() {
-        let expected: Result<JsonSchema, String> = parse_message(r#"{"minLength":0}"#);
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":-0.0}"#);
+        let expected: Result<Schema, String> = parse_message(r#"{"minLength":0}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"minLength":-0.0}"#);
         assert_eq!(expected, actual);
     }
 
@@ -3060,7 +3176,8 @@ mod tests {
     fn count_keyword_accepts_u64_max() {
         let expected: Result<Option<u64>, String> = Ok(Some(u64::MAX));
         let actual: Result<Option<u64>, String> =
-            parse_message(r#"{"maxLength":18446744073709551615}"#).map(|s| s.max_length);
+            parse_message(r#"{"maxLength":18446744073709551615}"#)
+                .map(|s| s.into_object().expect("schema object").max_length);
         assert_eq!(expected, actual);
     }
 
@@ -3071,8 +3188,8 @@ mod tests {
             .build();
         let expected: Result<Option<u64>, String> = Ok(Some(2));
         let actual: Result<Option<u64>, String> =
-            JsonSchema::new_from_str(r#"{"minItems":2.0}"#, &settings)
-                .map(|s| s.min_items)
+            Schema::new_from_str(r#"{"minItems":2.0}"#, &settings)
+                .map(|s| s.into_object().expect("schema object").min_items)
                 .map_err(|e| e.to_string());
         assert_eq!(expected, actual);
     }
@@ -3081,8 +3198,8 @@ mod tests {
     fn count_keyword_integer_valued_decimal_parses_from_serde_value() {
         let value: serde_json::Value = serde_json::json!({"maxItems": 3.0});
         let expected: Result<Option<u64>, String> = Ok(Some(3));
-        let actual: Result<Option<u64>, String> = JsonSchema::try_from(&value)
-            .map(|s| s.max_items)
+        let actual: Result<Option<u64>, String> = Schema::try_from(&value)
+            .map(|s| s.into_object().expect("schema object").max_items)
             .map_err(|e| e.to_string());
         assert_eq!(expected, actual);
     }
@@ -3090,60 +3207,63 @@ mod tests {
     #[test]
     fn count_keyword_integer_valued_decimal_serializes_as_integer() {
         let expected: String = r#"{"minLength":2}"#.to_string();
-        let actual: String =
-            String::try_from(&JsonSchema::try_from(r#"{"minLength":2.0}"#).expect("parse"))
-                .expect("serialize");
+        let actual: String = String::try_from(
+            &Schema::try_from(r#"{"minLength":2.0}"#)
+                .expect("parse")
+                .into_object()
+                .expect("schema object"),
+        )
+        .expect("serialize");
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn count_keyword_rejects_fraction() {
-        let expected: Result<JsonSchema, String> = Err(
+        let expected: Result<Schema, String> = Err(
             "invalid JSON Schema: expected a non-negative integer, got 2.5 at line 1 column 17"
                 .to_string(),
         );
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":2.5}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"minLength":2.5}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn count_keyword_rejects_negative_integer() {
-        let expected: Result<JsonSchema, String> = Err(
+        let expected: Result<Schema, String> = Err(
             "invalid JSON Schema: expected a non-negative integer, got -1 at line 1 column 15"
                 .to_string(),
         );
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"minItems":-1}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"minItems":-1}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn count_keyword_rejects_negative_decimal() {
-        let expected: Result<JsonSchema, String> = Err(
+        let expected: Result<Schema, String> = Err(
             "invalid JSON Schema: expected a non-negative integer, got -2.0 at line 1 column 17"
                 .to_string(),
         );
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"maxItems":-2.0}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"maxItems":-2.0}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn count_keyword_rejects_value_beyond_u64() {
-        let expected: Result<JsonSchema, String> = Err(
+        let expected: Result<Schema, String> = Err(
             "invalid JSON Schema: expected a non-negative integer, got 1.8446744073709552e+19 at line 1 column 34"
                 .to_string(),
         );
-        let actual: Result<JsonSchema, String> =
-            parse_message(r#"{"maxLength":18446744073709551616}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"maxLength":18446744073709551616}"#);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn count_keyword_rejects_string() {
-        let expected: Result<JsonSchema, String> = Err(
+        let expected: Result<Schema, String> = Err(
             "invalid JSON Schema: invalid type: string \"2\", expected a JSON number at line 1 column 16"
                 .to_string(),
         );
-        let actual: Result<JsonSchema, String> = parse_message(r#"{"minLength":"2"}"#);
+        let actual: Result<Schema, String> = parse_message(r#"{"minLength":"2"}"#);
         assert_eq!(expected, actual);
     }
 
@@ -3154,9 +3274,7 @@ mod tests {
     /// panics, failing the test.
     type KeywordValueOutcome = Result<(), Vec<(String, String, String)>>;
 
-    fn keyword_value_outcome(
-        result: Result<JsonSchema, JsonSchemaParseErrors>,
-    ) -> KeywordValueOutcome {
+    fn keyword_value_outcome(result: Result<Schema, JsonSchemaParseErrors>) -> KeywordValueOutcome {
         match result {
             Ok(_) => Ok(()),
             Err(errors) => Err(errors
@@ -3185,7 +3303,7 @@ mod tests {
     /// `body` (the keys after `$schema`) as a draft-4 document, parsed with `settings`.
     fn parse_draft4(body: &str, settings: &JsonSchemaSettings) -> KeywordValueOutcome {
         let json: String = format!(r#"{{"$schema":"{DRAFT4_SCHEMA}",{body}}}"#);
-        keyword_value_outcome(JsonSchema::new_from_str(&json, settings))
+        keyword_value_outcome(Schema::new_from_str(&json, settings))
     }
 
     #[test]
@@ -3257,7 +3375,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::json!({"$schema": DRAFT4_SCHEMA, "items": {"minLength": 2.0}});
         let expected: KeywordValueOutcome = invalid_value("minLength", "/items", "2.0");
-        let actual: KeywordValueOutcome = keyword_value_outcome(JsonSchema::try_from(&value));
+        let actual: KeywordValueOutcome = keyword_value_outcome(Schema::try_from(&value));
         assert_eq!(expected, actual);
     }
 
@@ -3278,14 +3396,14 @@ mod tests {
             .build();
         let expected: KeywordValueOutcome = invalid_value("minLength", "", "2.0");
         let actual: KeywordValueOutcome =
-            keyword_value_outcome(JsonSchema::new_from_str(r#"{"minLength":2.0}"#, &settings));
+            keyword_value_outcome(Schema::new_from_str(r#"{"minLength":2.0}"#, &settings));
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn draft6_accepts_integer_valued_decimal_count() {
         let expected: KeywordValueOutcome = Ok(());
-        let actual: KeywordValueOutcome = keyword_value_outcome(JsonSchema::try_from(
+        let actual: KeywordValueOutcome = keyword_value_outcome(Schema::try_from(
             r#"{"$schema":"http://json-schema.org/draft-06/schema#","minLength":2.0}"#,
         ));
         assert_eq!(expected, actual);
@@ -3349,7 +3467,7 @@ mod tests {
         let expected: &str = "invalid \"maxLength\" value 3.0 at /properties/a: expected a non-negative integer written without a fraction or exponent";
         let json: String =
             format!(r#"{{"$schema":"{DRAFT4_SCHEMA}","properties":{{"a":{{"maxLength":3.0}}}}}}"#);
-        let actual: String = JsonSchema::try_from(json.as_str())
+        let actual: String = Schema::try_from(json.as_str())
             .expect_err("draft 4 rejects 3.0")
             .to_string();
         assert_eq!(expected, actual);
@@ -3361,14 +3479,17 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"title":"Root"}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
     #[test]
     fn parse_with_schema_uri_preserves_schema() {
         let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> =
             Some("https://json-schema.org/draft/2020-12/schema".to_string());
         assert_eq!(expected, parsed.schema);
@@ -3377,14 +3498,20 @@ mod tests {
     #[test]
     fn parse_without_schema_uri_is_none() {
         let json = r#"{"type":"object","properties":{}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(None, parsed.schema);
     }
 
     #[test]
     fn parse_without_id_is_none() {
         let json = r#"{"type":"object","properties":{}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = None;
         assert_eq!(expected, parsed.id);
     }
@@ -3392,7 +3519,10 @@ mod tests {
     #[test]
     fn parse_with_id_preserves_id() {
         let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = Some("http://example.com/schema".to_string());
         assert_eq!(expected, parsed.id);
     }
@@ -3400,9 +3530,15 @@ mod tests {
     #[test]
     fn round_trip_preserves_id() {
         let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed.id, reparsed.id);
     }
 
@@ -3412,10 +3548,13 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"$id":"http://example.com/schema","type":"object","properties":{}}"#;
-        let result: Result<JsonSchema, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<Schema, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
         let parsed = result.unwrap();
-        assert_eq!(Some("http://example.com/schema".to_string()), parsed.id);
+        assert_eq!(
+            Some("http://example.com/schema".to_string()),
+            parsed.into_object().expect("schema object").id
+        );
     }
 
     #[test]
@@ -3424,32 +3563,41 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{}}"#;
-        let result: Result<JsonSchema, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<Schema, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
         let parsed = result.unwrap();
         assert_eq!(
             Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-            parsed.schema
+            parsed.into_object().expect("schema object").schema
         );
     }
 
     #[test]
     fn round_trip_preserves_schema_uri() {
         let json = r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object","properties":{}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
         assert!(
             serialized.contains("\"$schema\""),
             "serialized output should contain $schema key: {serialized}"
         );
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed.schema, reparsed.schema);
     }
 
     #[test]
     fn parsed_dialect_follows_schema_uri() {
         let json = r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object"}"#;
-        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let schema: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft07);
         let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
@@ -3458,7 +3606,10 @@ mod tests {
     #[test]
     fn parsed_dialect_defaults_to_2020_12_when_schema_absent() {
         let json = r#"{"type":"object","properties":{}}"#;
-        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let schema: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft202012);
         let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
@@ -3468,7 +3619,10 @@ mod tests {
     fn parsed_dialect_defaults_to_2020_12_when_schema_unknown_uri() {
         let json =
             r#"{"$schema":"https://unknown.example/schema","type":"object","properties":{}}"#;
-        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let schema: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft202012);
         let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
@@ -3477,7 +3631,10 @@ mod tests {
     #[test]
     fn parse_without_dialect_settings_records_none() {
         let json = r#"{"$schema":"http://json-schema.org/draft-07/schema#"}"#;
-        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let schema: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<DialectSettings> = None;
         let actual: Option<DialectSettings> = schema.dialect_settings;
         assert_eq!(expected, actual);
@@ -3489,7 +3646,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft07)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(json, &settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Dialect = Dialect::for_spec_version(SpecVersion::Draft07);
         let actual: Dialect = schema.dialect();
         assert_eq!(expected, actual);
@@ -3501,7 +3661,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .forced_spec_version(SpecVersion::Draft07)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(json, &settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<DialectSettings> = Some(DialectSettings {
             forced_spec_version: Some(SpecVersion::Draft07),
             ..DialectSettings::default()
@@ -3516,7 +3679,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .format_mode(FormatMode::Assertion)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(json, &settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: FormatMode = FormatMode::Assertion;
         let actual: FormatMode = schema.dialect().format_mode;
         assert_eq!(expected, actual);
@@ -3529,7 +3695,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .ref_siblings(RefSiblings::Evaluated)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(json, &settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: RefSiblings = RefSiblings::Evaluated;
         let actual: RefSiblings = schema.dialect().ref_siblings;
         assert_eq!(expected, actual);
@@ -3541,8 +3710,7 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .unknown_schema_uri(UnknownSchemaUri::Reject)
             .build();
-        let actual: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::new_from_str(json, &settings);
+        let actual: Result<Schema, JsonSchemaParseErrors> = Schema::new_from_str(json, &settings);
         assert!(matches!(
             actual.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::UnknownSchemaUri { uri }]) if uri == "https://example.com/custom-meta"
@@ -3556,8 +3724,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .unknown_schema_uri(UnknownSchemaUri::Reject)
             .build();
-        let actual: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::new_from_str(json, &settings);
+        let actual: Result<Schema, JsonSchemaParseErrors> = Schema::new_from_str(json, &settings);
         assert!(matches!(
             actual.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::UnknownSchemaUri { uri }]) if uri == "https://example.com/custom-meta"
@@ -3607,7 +3774,10 @@ mod tests {
     #[test]
     fn draft4_id_normalized_from_str() {
         let expected: Vec<Option<String>> = draft4_expected_ids();
-        let schema: JsonSchema = JsonSchema::try_from(DRAFT4_WITH_IDS).expect("parse");
+        let schema: JsonSchema = Schema::try_from(DRAFT4_WITH_IDS)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let actual: Vec<Option<String>> = ids(&schema);
         assert_eq!(expected, actual);
     }
@@ -3615,7 +3785,10 @@ mod tests {
     #[test]
     fn draft4_id_normalized_from_slice() {
         let expected: Vec<Option<String>> = draft4_expected_ids();
-        let schema: JsonSchema = JsonSchema::try_from(DRAFT4_WITH_IDS.as_bytes()).expect("parse");
+        let schema: JsonSchema = Schema::try_from(DRAFT4_WITH_IDS.as_bytes())
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let actual: Vec<Option<String>> = ids(&schema);
         assert_eq!(expected, actual);
     }
@@ -3624,7 +3797,10 @@ mod tests {
     fn draft4_id_normalized_from_serde_value() {
         let expected: Vec<Option<String>> = draft4_expected_ids();
         let value: serde_json::Value = serde_json::from_str(DRAFT4_WITH_IDS).expect("json");
-        let schema: JsonSchema = JsonSchema::try_from(&value).expect("parse");
+        let schema: JsonSchema = Schema::try_from(&value)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let actual: Vec<Option<String>> = ids(&schema);
         assert_eq!(expected, actual);
     }
@@ -3635,7 +3811,10 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        let schema: JsonSchema = JsonSchema::new_from_str(json, &settings).expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(json, &settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = Some("http://example.com/s.json".to_string());
         let actual: Option<String> = schema.id;
         assert_eq!(expected, actual);
@@ -3690,7 +3869,10 @@ mod tests {
     #[test]
     fn draft4_escaped_id_key_normalized() {
         let json = r#"{"$schema":"http://json-schema.org/draft-04/schema#","\u0069d":"http://example.com/e.json"}"#;
-        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let schema: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = Some("http://example.com/e.json".to_string());
         let actual: Option<String> = schema.id;
         assert_eq!(expected, actual);
@@ -3699,9 +3881,15 @@ mod tests {
     #[test]
     fn pinned_draft4_normalizes_id_without_schema_uri() {
         let json = r#"{"id":"http://example.com/p.json"}"#;
-        let schema: JsonSchema =
-            JsonSchema::new_from_str(json, &SpecVersion::Draft04.default_schema_settings())
-                .expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(
+            json,
+            &JsonSchemaSettings::builder()
+                .forced_spec_version(SpecVersion::Draft04)
+                .build(),
+        )
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
         let expected: Option<String> = Some("http://example.com/p.json".to_string());
         let actual: Option<String> = schema.id;
         assert_eq!(expected, actual);
@@ -3710,7 +3898,10 @@ mod tests {
     #[test]
     fn draft6_id_is_not_normalized() {
         let json = r#"{"$schema":"http://json-schema.org/draft-06/schema#","id":"http://example.com/x.json"}"#;
-        let schema: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let schema: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = None;
         let actual: Option<String> = schema.id;
         assert_eq!(expected, actual);
@@ -3727,7 +3918,10 @@ mod tests {
     #[test]
     fn parse_dollar_comment_preserved() {
         let json = r#"{"type":"object","properties":{},"$comment":"Created by John Doe"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<String> = Some("Created by John Doe".to_string());
         assert_eq!(expected, parsed.comment);
     }
@@ -3735,16 +3929,25 @@ mod tests {
     #[test]
     fn parse_without_comment_is_none() {
         let json = r#"{"type":"object","properties":{}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         assert_eq!(None, parsed.comment);
     }
 
     #[test]
     fn round_trip_preserves_dollar_comment() {
         let json = r#"{"type":"object","properties":{"country":{"type":"string","$comment":"TODO: add enum"}},"$comment":"Root schema"}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&parsed).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+        let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+            .expect("parse again")
+            .into_object()
+            .expect("schema object");
         assert_eq!(parsed.comment, reparsed.comment);
         let country_schema: &JsonSchema = reparsed
             .properties
@@ -3760,16 +3963,22 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"a":{"type":"string"}},"$comment":"Note"}"#;
-        let result: Result<JsonSchema, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<Schema, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
         let parsed = result.unwrap();
-        assert_eq!(Some("Note".to_string()), parsed.comment);
+        assert_eq!(
+            Some("Note".to_string()),
+            parsed.into_object().expect("schema object").comment
+        );
     }
 
     #[test]
     fn deserialize_schema_with_enum() {
         let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}}}"#;
-        let parsed: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let parsed: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let status_schema: &JsonSchema = parsed
             .properties
             .get("status")
@@ -3789,7 +3998,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"x":{"enum":["a","b"]}}}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
@@ -3829,7 +4038,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"x":{"const":"fixed"}}}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
@@ -3890,7 +4099,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"object","properties":{"a":{"type":"string","default":"x"}}}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         let expected: bool = true;
         let actual: bool = result.is_ok();
         assert_eq!(expected, actual);
@@ -3898,10 +4107,12 @@ mod tests {
 
     #[test]
     fn parse_object_two_properties_with_default() {
-        let one_str: JsonSchema = JsonSchema::try_from(
+        let one_str: JsonSchema = Schema::try_from(
             r#"{"type":"object","properties":{"name":{"type":"string","default":"foo"}}}"#,
         )
-        .expect("parse one string default");
+        .expect("parse one string default")
+        .into_object()
+        .expect("schema object");
         let expected: Option<&serde_json::Value> = Some(&serde_json::json!("foo"));
         let actual: Option<&serde_json::Value> = one_str
             .properties
@@ -3919,7 +4130,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"array","items":{"type":"string"}}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
@@ -3929,14 +4140,17 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"array","items":{"type":"string"},"uniqueItems":true}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
     #[test]
     fn parse_min_items_max_items() {
         let json = r#"{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected_min: Option<u64> = Some(2);
         let expected_max: Option<u64> = Some(5);
         assert_eq!(expected_min, actual.min_items);
@@ -3949,14 +4163,17 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":10}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
     #[test]
     fn deserialize_integer_with_minimum_and_maximum() {
         let json = r#"{"type":"integer","minimum":0,"maximum":255}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
             (Some(0_u64.into()), Some(255_u64.into()));
         assert_eq!(expected, (actual.minimum, actual.maximum));
@@ -3965,7 +4182,10 @@ mod tests {
     #[test]
     fn deserialize_integer_with_minimum_only() {
         let json = r#"{"type":"integer","minimum":-100}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
             (Some((-100_i64).into()), None);
         assert_eq!(expected, (actual.minimum, actual.maximum));
@@ -3974,7 +4194,10 @@ mod tests {
     #[test]
     fn deserialize_number_with_minimum_and_maximum_float() {
         let json = r#"{"type":"number","minimum":0.5,"maximum":100.5}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: (Option<serde_json::Number>, Option<serde_json::Number>) = (
             serde_json::Number::from_f64(0.5),
             serde_json::Number::from_f64(100.5),
@@ -3985,7 +4208,10 @@ mod tests {
     #[test]
     fn deserialize_integer_with_maximum_only() {
         let json = r#"{"type":"integer","maximum":100}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
             (None, Some(100_u64.into()));
         assert_eq!(expected, (actual.minimum, actual.maximum));
@@ -3994,7 +4220,10 @@ mod tests {
     #[test]
     fn deserialize_number_with_maximum_only() {
         let json = r#"{"type":"number","maximum":99.5}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: (Option<serde_json::Number>, Option<serde_json::Number>) =
             (None, serde_json::Number::from_f64(99.5));
         assert_eq!(expected, (actual.minimum, actual.maximum));
@@ -4006,7 +4235,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"integer","minimum":0,"maximum":255}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
@@ -4014,7 +4243,10 @@ mod tests {
 
     /// Parses `json` with `settings` and serializes the model back to compact JSON.
     fn reserialize(json: &str, settings: &JsonSchemaSettings) -> String {
-        let schema: JsonSchema = JsonSchema::new_from_str(json, settings).expect("parse");
+        let schema: JsonSchema = Schema::new_from_str(json, settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         String::try_from(&schema).expect("serialize")
     }
 
@@ -4040,7 +4272,10 @@ mod tests {
 
     #[test]
     fn const_null_is_present() {
-        let actual: JsonSchema = JsonSchema::try_from(r#"{"const":null}"#).expect("parse");
+        let actual: JsonSchema = Schema::try_from(r#"{"const":null}"#)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: Option<serde_json::Value> = Some(serde_json::Value::Null);
         assert_eq!(expected, actual.const_value);
     }
@@ -4059,7 +4294,7 @@ mod tests {
     fn multiple_of_zero_is_rejected() {
         let expected: String =
             "multipleOf must be strictly greater than 0, got 0 at line 1 column 16".to_string();
-        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":0}"#)
+        let actual: String = match Schema::try_from(r#"{"multipleOf":0}"#)
             .as_ref()
             .map_err(|errors| &errors[..])
         {
@@ -4073,7 +4308,7 @@ mod tests {
     fn multiple_of_negative_is_rejected() {
         let expected: String =
             "multipleOf must be strictly greater than 0, got -1.5 at line 1 column 19".to_string();
-        let actual: String = match JsonSchema::try_from(r#"{"multipleOf":-1.5}"#)
+        let actual: String = match Schema::try_from(r#"{"multipleOf":-1.5}"#)
             .as_ref()
             .map_err(|errors| &errors[..])
         {
@@ -4089,7 +4324,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let expected: String = "multipleOf must be strictly greater than 0, got 0".to_string();
-        let actual: String = match JsonSchema::new_from_str(r#"{"multipleOf":0}"#, &settings)
+        let actual: String = match Schema::new_from_str(r#"{"multipleOf":0}"#, &settings)
             .as_ref()
             .map_err(|errors| &errors[..])
         {
@@ -4101,7 +4336,7 @@ mod tests {
 
     #[test]
     fn multiple_of_zero_is_rejected_in_draft4() {
-        let actual: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(
+        let actual: Result<Schema, JsonSchemaParseErrors> = Schema::try_from(
             r#"{"$schema":"http://json-schema.org/draft-04/schema#","multipleOf":0}"#,
         );
         assert!(matches!(
@@ -4132,7 +4367,10 @@ mod tests {
 
     #[test]
     fn draft4_boolean_exclusive_bounds_normalized_from_slice() {
-        let schema: JsonSchema = JsonSchema::try_from(DRAFT4_BOUNDS.as_bytes()).expect("parse");
+        let schema: JsonSchema = Schema::try_from(DRAFT4_BOUNDS.as_bytes())
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: &str = DRAFT4_BOUNDS_NORMALIZED;
         let actual: String = String::try_from(&schema).expect("serialize");
         assert_eq!(expected, actual);
@@ -4141,7 +4379,10 @@ mod tests {
     #[test]
     fn draft4_boolean_exclusive_bounds_normalized_from_serde_value() {
         let value: serde_json::Value = serde_json::from_str(DRAFT4_BOUNDS).expect("json");
-        let schema: JsonSchema = JsonSchema::try_from(&value).expect("parse");
+        let schema: JsonSchema = Schema::try_from(&value)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: &str = DRAFT4_BOUNDS_NORMALIZED;
         let actual: String = String::try_from(&schema).expect("serialize");
         assert_eq!(expected, actual);
@@ -4169,8 +4410,8 @@ mod tests {
 
     #[test]
     fn boolean_exclusive_minimum_is_rejected_in_2020_12() {
-        let actual: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::try_from(r#"{"minimum":1,"exclusiveMinimum":true}"#);
+        let actual: Result<Schema, JsonSchemaParseErrors> =
+            Schema::try_from(r#"{"minimum":1,"exclusiveMinimum":true}"#);
         assert!(matches!(
             actual.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Serde(_)])
@@ -4182,7 +4423,7 @@ mod tests {
         let json = "{\"exclusiveMinimum\":1,\n\"minLength\":\"x\"}";
         let expected: String =
             "invalid type: string \"x\", expected a JSON number at line 2 column 15".to_string();
-        let actual: String = match JsonSchema::try_from(json)
+        let actual: String = match Schema::try_from(json)
             .as_ref()
             .map_err(|errors| &errors[..])
         {
@@ -4198,7 +4439,7 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let json = r#"{"type":"string","format":"uuid"}"#;
-        let result: Result<_, _> = JsonSchema::new_from_str(json, &settings);
+        let result: Result<_, _> = Schema::new_from_str(json, &settings);
         assert!(result.is_ok());
     }
 
@@ -4206,10 +4447,15 @@ mod tests {
     fn parse_schema_from_serde_value_lenient_success() {
         let value: serde_json::Value =
             serde_json::json!({"type": "object", "properties": {"a": {"type": "string"}}});
-        let actual: JsonSchema = JsonSchema::try_from(&value).expect("parse");
+        let actual: JsonSchema = Schema::try_from(&value)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema =
-            JsonSchema::try_from(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
-                .expect("reference parse");
+            Schema::try_from(r#"{"type":"object","properties":{"a":{"type":"string"}}}"#)
+                .expect("reference parse")
+                .into_object()
+                .expect("schema object");
         assert_eq!(expected, actual);
     }
 
@@ -4220,13 +4466,17 @@ mod tests {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
             .build();
-        let actual: JsonSchema =
-            JsonSchema::new_from_serde_value(&value, &settings).expect("parse");
-        let expected: JsonSchema = JsonSchema::new_from_str(
+        let actual: JsonSchema = Schema::new_from_serde_value(&value, &settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
+        let expected: JsonSchema = Schema::new_from_str(
             r#"{"type":"object","properties":{},"title":"Root"}"#,
             &settings,
         )
-        .expect("reference parse");
+        .expect("reference parse")
+        .into_object()
+        .expect("schema object");
         assert_eq!(expected, actual);
     }
 
@@ -4238,15 +4488,14 @@ mod tests {
             .disallow_unknown_fields(true)
             .build();
         let expected: StrictOutcome = unknown("unknown", "");
-        let actual: StrictOutcome =
-            strict_outcome(JsonSchema::new_from_serde_value(&value, &settings));
+        let actual: StrictOutcome = strict_outcome(Schema::new_from_serde_value(&value, &settings));
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn parse_schema_from_serde_value_invalid_type() {
         let value: serde_json::Value = serde_json::json!("not an object");
-        let result: Result<JsonSchema, JsonSchemaParseErrors> = JsonSchema::try_from(&value);
+        let result: Result<Schema, JsonSchemaParseErrors> = Schema::try_from(&value);
         let actual_is_err: bool = result.is_err();
         assert!(actual_is_err, "string value should fail to parse as schema");
     }
@@ -4254,10 +4503,16 @@ mod tests {
     #[test]
     fn parse_schema_from_serde_value_round_trip_with_new_from_str() {
         let json = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}"#;
-        let from_str: JsonSchema = JsonSchema::try_from(json).expect("parse from str");
+        let from_str: JsonSchema = Schema::try_from(json)
+            .expect("parse from str")
+            .into_object()
+            .expect("schema object");
         let serialized: String = (&from_str).try_into().expect("serialize");
         let value: serde_json::Value = serde_json::from_str(&serialized).expect("str to value");
-        let from_value: JsonSchema = JsonSchema::try_from(&value).expect("parse from value");
+        let from_value: JsonSchema = Schema::try_from(&value)
+            .expect("parse from value")
+            .into_object()
+            .expect("schema object");
         assert_eq!(from_str, from_value);
     }
 
@@ -4266,7 +4521,10 @@ mod tests {
         let bytes: &[u8] = r#"{"type":"object","properties":{}}"#.as_bytes();
         let reader: std::io::Cursor<&[u8]> = std::io::Cursor::new(bytes);
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        let actual: JsonSchema = JsonSchema::new_from_reader(reader, &settings).expect("parse");
+        let actual: JsonSchema = Schema::new_from_reader(reader, &settings)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Object.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -4275,8 +4533,8 @@ mod tests {
     fn parse_schema_from_reader_invalid_json() {
         let reader: std::io::Cursor<&[u8]> = std::io::Cursor::new(b"not json");
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        let result: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::new_from_reader(reader, &settings);
+        let result: Result<Schema, JsonSchemaParseErrors> =
+            Schema::new_from_reader(reader, &settings);
         assert!(matches!(
             result.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Serde(_)])
@@ -4295,8 +4553,8 @@ mod tests {
     fn parse_schema_from_reader_io_error() {
         let reader: FailingReader = FailingReader;
         let settings: JsonSchemaSettings = JsonSchemaSettings::default();
-        let result: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::new_from_reader(reader, &settings);
+        let result: Result<Schema, JsonSchemaParseErrors> =
+            Schema::new_from_reader(reader, &settings);
         assert!(matches!(
             result.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Io(_)])
@@ -4309,7 +4567,10 @@ mod tests {
         let schema_path = temp_dir.path().join("schema.json");
         let schema_json = r#"{"type":"array","items":{"type":"string"}}"#;
         std::fs::write(&schema_path, schema_json).expect("write temp file");
-        let actual: JsonSchema = JsonSchema::try_from(schema_path.as_path()).expect("parse");
+        let actual: JsonSchema = Schema::try_from(schema_path.as_path())
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected_type: Option<TypeSet> = Some(JsonType::Array.into());
         assert_eq!(expected_type, actual.type_);
     }
@@ -4318,8 +4579,8 @@ mod tests {
     fn parse_schema_from_path_file_not_found() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let missing_path = temp_dir.path().join("nonexistent.json");
-        let result: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::try_from(missing_path.as_path());
+        let result: Result<Schema, JsonSchemaParseErrors> =
+            Schema::try_from(missing_path.as_path());
         assert!(matches!(
             result.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Io(_)])
@@ -4331,8 +4592,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let schema_path = temp_dir.path().join("bad.json");
         std::fs::write(&schema_path, "not json").expect("write temp file");
-        let result: Result<JsonSchema, JsonSchemaParseErrors> =
-            JsonSchema::try_from(schema_path.as_path());
+        let result: Result<Schema, JsonSchemaParseErrors> = Schema::try_from(schema_path.as_path());
         assert!(matches!(
             result.as_ref().map_err(|errors| &errors[..]),
             Err([JsonSchemaParseError::Serde(_)])
@@ -4342,7 +4602,10 @@ mod tests {
     #[test]
     fn parse_defs_present() {
         let json = r#"{"$defs":{"Foo":{"type":"string"}}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let mut expected_defs: BTreeMap<String, Schema> = BTreeMap::new();
         expected_defs.insert(
             "Foo".to_string(),
@@ -4361,7 +4624,10 @@ mod tests {
     #[test]
     fn parse_defs_empty_object() {
         let json = r#"{"$defs":{}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             defs: Some(BTreeMap::new()),
             ..Default::default()
@@ -4372,7 +4638,10 @@ mod tests {
     #[test]
     fn parse_defs_absent_is_none() {
         let json = r#"{"type":"object","properties":{}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
@@ -4384,7 +4653,10 @@ mod tests {
     #[test]
     fn parse_definitions_present() {
         let json = r#"{"definitions":{"Bar":{"type":"integer"}}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let mut expected_definitions: BTreeMap<String, Schema> = BTreeMap::new();
         expected_definitions.insert(
             "Bar".to_string(),
@@ -4403,7 +4675,10 @@ mod tests {
     #[test]
     fn parse_definitions_empty_object() {
         let json = r#"{"definitions":{}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             definitions: Some(BTreeMap::new()),
             ..Default::default()
@@ -4414,7 +4689,10 @@ mod tests {
     #[test]
     fn parse_definitions_absent_is_none() {
         let json = r#"{"type":"object","properties":{}}"#;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             type_: Some(JsonType::Object.into()),
             properties: BTreeMap::new(),
@@ -4447,7 +4725,10 @@ mod tests {
             ..Default::default()
         };
         let json: String = (&schema).try_into().expect("serialize");
-        let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+        let reparsed: JsonSchema = Schema::try_from(json.as_str())
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = schema;
         let actual: JsonSchema = reparsed;
         assert_eq!(expected, actual);
@@ -4456,7 +4737,10 @@ mod tests {
     #[test]
     fn parse_ref_only_schema_stores_ref_string() {
         let json = r##"{"$ref":"#/$defs/Foo"}"##;
-        let actual: JsonSchema = JsonSchema::try_from(json).expect("parse");
+        let actual: JsonSchema = Schema::try_from(json)
+            .expect("parse")
+            .into_object()
+            .expect("schema object");
         let expected: JsonSchema = JsonSchema {
             ref_: Some("#/$defs/Foo".to_string()),
             ..Default::default()

@@ -14,8 +14,8 @@
 //! Official-suite failures are tracked separately in `suite_xfail.json`.
 
 use json_schema_rs::{
-    CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchema, JsonSchemaSettings,
-    ValidationError, ValidationErrorKind, ValidationResult, generate_rust, validate,
+    CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchemaSettings, Schema, ValidateError,
+    ValidationError, ValidationErrorKind, generate_rust, validate,
 };
 use serde_json::json;
 use std::io::Read;
@@ -136,8 +136,8 @@ fn known_failure_harness_reports_child_not_run() {
     assert_eq!(expected, actual);
 }
 
-fn parse(schema_json: &str) -> JsonSchema {
-    JsonSchema::new_from_str(schema_json, &JsonSchemaSettings::default()).expect("schema parses")
+fn parse(schema_json: &str) -> Schema {
+    Schema::new_from_str(schema_json, &JsonSchemaSettings::default()).expect("schema parses")
 }
 
 /// Validator verdict for `instance_json` against `schema_json` (default settings, 2020-12).
@@ -189,7 +189,7 @@ fn unknown_type_name_fails_to_parse() {
                             \"object\", \"string\" at line 1 column 15"
         .to_string();
     let actual: String =
-        JsonSchema::new_from_str(r#"{"type":"strng"}"#, &JsonSchemaSettings::default())
+        Schema::new_from_str(r#"{"type":"strng"}"#, &JsonSchemaSettings::default())
             .expect_err("unknown type name is a parse error")
             .to_string();
     assert_eq!(expected, actual);
@@ -422,34 +422,36 @@ fn validator_terminates_on_in_place_ref_loop() {
             pointer(keyword_location),
         )
     };
-    let expected: ValidationResult = Err(vec![ValidationError::new(
-        ValidationErrorKind::NoSubschemaMatched {
-            subschema_count: 2,
-            causes: vec![
-                expected_string("/anyOf/0/type"),
-                ValidationError::new(
-                    ValidationErrorKind::NoSubschemaMatched {
-                        subschema_count: 2,
-                        causes: vec![
-                            expected_string("/anyOf/1/$ref/anyOf/0/type"),
-                            ValidationError::new(
-                                ValidationErrorKind::RefCycle {
-                                    ref_str: "#".to_string(),
-                                },
-                                JsonPointer::root(),
-                                pointer("/anyOf/1/$ref/anyOf/1/$ref"),
-                            ),
-                        ],
-                    },
-                    JsonPointer::root(),
-                    pointer("/anyOf/1/$ref/anyOf"),
-                ),
-            ],
-        },
-        JsonPointer::root(),
-        pointer("/anyOf"),
-    )]);
-    let actual: ValidationResult = validate(&parse(IN_PLACE_LOOP_SCHEMA), &json!({"x": 1}));
+    let expected: Result<(), ValidateError> =
+        Err(ValidateError::Instance(vec![ValidationError::new(
+            ValidationErrorKind::NoSubschemaMatched {
+                subschema_count: 2,
+                causes: vec![
+                    expected_string("/anyOf/0/type"),
+                    ValidationError::new(
+                        ValidationErrorKind::NoSubschemaMatched {
+                            subschema_count: 2,
+                            causes: vec![
+                                expected_string("/anyOf/1/$ref/anyOf/0/type"),
+                                ValidationError::new(
+                                    ValidationErrorKind::RefCycle {
+                                        ref_str: "#".to_string(),
+                                    },
+                                    JsonPointer::root(),
+                                    pointer("/anyOf/1/$ref/anyOf/1/$ref"),
+                                ),
+                            ],
+                        },
+                        JsonPointer::root(),
+                        pointer("/anyOf/1/$ref/anyOf"),
+                    ),
+                ],
+            },
+            JsonPointer::root(),
+            pointer("/anyOf"),
+        )]));
+    let actual: Result<(), ValidateError> =
+        validate(&parse(IN_PLACE_LOOP_SCHEMA), &json!({"x": 1}));
     assert_eq!(expected, actual);
 }
 

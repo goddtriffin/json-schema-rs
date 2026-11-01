@@ -11,7 +11,7 @@ per-category winner. This crate is a workspace member and is **not published**
 ## Run it
 
 ```sh
-make benchmark          # from the repo root (research_benchmark is a backwards-compat alias)
+make benchmark          # from the repo root
 ```
 
 The external tools must be installed first, or the run aborts up front with install hints (a

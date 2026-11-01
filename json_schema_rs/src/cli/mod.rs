@@ -11,6 +11,23 @@ use json_schema_rs::{
 };
 use std::path::PathBuf;
 
+/// Why a subcommand failed: the message for the final `error:` line and the process exit code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CliFailure {
+    message: String,
+    exit_code: i32,
+}
+
+/// Any failure reported as a message alone exits with `1`.
+impl From<String> for CliFailure {
+    fn from(message: String) -> Self {
+        CliFailure {
+            message,
+            exit_code: 1,
+        }
+    }
+}
+
 /// `--jss-forced-spec-version` / `--jss-default-spec-version` values, paired with the spec version each selects.
 const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
     ("draft-00", SpecVersion::Draft00),
@@ -208,7 +225,7 @@ pub fn run() {
         );
     let matches = cmd.get_matches();
 
-    let result = match matches.subcommand() {
+    let result: Result<(), CliFailure> = match matches.subcommand() {
         Some(("generate", gen_m)) => {
             let lang: &str = gen_m
                 .get_one::<String>("lang")
@@ -246,6 +263,7 @@ pub fn run() {
                 cgs_unknown_properties,
                 &retrieval,
             )
+            .map_err(CliFailure::from)
         }
         Some(("validate", val_m)) => {
             let schema: PathBuf = val_m
@@ -263,8 +281,8 @@ pub fn run() {
             std::process::exit(1);
         }
     };
-    if let Err(e) = result {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+    if let Err(failure) = result {
+        eprintln!("error: {}", failure.message);
+        std::process::exit(failure.exit_code);
     }
 }

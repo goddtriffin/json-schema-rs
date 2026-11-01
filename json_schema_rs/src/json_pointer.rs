@@ -235,12 +235,6 @@ impl JsonPointer {
         self.truncate(self.len().saturating_sub(1))
     }
 
-    /// Returns the parent pointer (same as popping the last segment).
-    #[must_use]
-    pub fn parent(&self) -> Self {
-        self.pop()
-    }
-
     /// Returns a new pointer with only the first `len` segments.
     #[must_use]
     pub fn truncate(&self, len: usize) -> Self {
@@ -260,12 +254,6 @@ impl JsonPointer {
     /// Returns true if this pointer has no segments (root).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.ends.is_empty()
-    }
-
-    /// Returns true if this is the root pointer.
-    #[must_use]
-    pub fn is_root(&self) -> bool {
         self.ends.is_empty()
     }
 
@@ -411,7 +399,6 @@ mod tests {
         let actual = p.as_str();
         assert_eq!(expected, actual);
         assert_eq!(p.to_string(), "");
-        assert!(p.is_root());
         assert_eq!(p.len(), 0);
     }
 
@@ -489,14 +476,6 @@ mod tests {
         let root: JsonPointer = JsonPointer::root();
         let actual = root.pop();
         assert_eq!(root.as_str(), actual.as_str());
-    }
-
-    #[test]
-    fn parent_matches_pop() {
-        let p: JsonPointer = JsonPointer::root().push("x").push("y");
-        let expected = p.pop();
-        let actual = p.parent();
-        assert_eq!(expected.as_str(), actual.as_str());
     }
 
     #[test]

@@ -5027,7 +5027,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
+              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -5071,7 +5071,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/prettierrc.json\": invalid file url: https://www.schemastore.org/prettierrc.json"
+              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -5115,7 +5115,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -5159,7 +5159,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/eslintrc.json\": invalid file url: https://json.schemastore.org/eslintrc.json"
+              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -8252,40 +8252,6 @@
           "messages": [
             "jsonschema validation failed with mem://differential/schema.json#",
             "- at '': additionalProperties 'bar' not allowed"
-          ]
-        }
-      ]
-    },
-    {
-      "source": "suite draft2020-12/refRemote.json",
-      "title": "remote ref / remote ref invalid",
-      "schema_path": null,
-      "schema": {
-        "$ref": "http://localhost:1234/draft2020-12/integer.json",
-        "$schema": "https://json-schema.org/draft/2020-12/schema"
-      },
-      "instance_path": null,
-      "instance": "a",
-      "outputs": [
-        {
-          "tool": "json-schema-rs",
-          "outcome": "invalid",
-          "messages": [
-            "root: could not resolve $ref \"http://localhost:1234/draft2020-12/integer.json\": $ref \"http://localhost:1234/draft2020-12/integer.json\" at root (\"http://localhost:1234/draft2020-12/integer.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2020-12/integer.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2020-12/integer.json\""
-          ]
-        },
-        {
-          "tool": "jsonschema",
-          "outcome": "error",
-          "messages": [
-            "schema rejected: references an external resource that is not available offline (remote retrieval disabled)"
-          ]
-        },
-        {
-          "tool": "boon",
-          "outcome": "error",
-          "messages": [
-            "schema rejected: error loading http://localhost:1234/draft2020-12/integer.json"
           ]
         }
       ]
