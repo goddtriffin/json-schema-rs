@@ -58,9 +58,6 @@ benchmark: ## run the full benchmark harness (our lib + competitors) and refresh
 differential: ## run the Bowtie differential-testing harness (our validator vs competitors on the official suite) and refresh committed results; needs bowtie + Docker + make vendor_test_suite
 	@./json_schema_rs_differential/scripts/run_differential.sh
 
-.PHONY: research_benchmark
-research_benchmark: benchmark ## alias for `benchmark` (kept for backwards compatibility)
-
 .PHONY: research_harvest_tests
 research_harvest_tests: ## (stub) harvest test schemas from competitor repos; not yet implemented
 	@echo "Not implemented. See research/test-harvest/README.md for the plan."

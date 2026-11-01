@@ -484,7 +484,7 @@ pub(crate) fn maps_are_sorted() -> bool {
 /// # Example
 ///
 /// ```
-/// use json_schema_rs::{CompiledSchema, FormatMode, JsonSchema, JsonSchemaSettings, Registry};
+/// use json_schema_rs::{CompiledSchema, FormatMode, JsonSchemaSettings, Registry, Schema};
 /// use serde_json::json;
 ///
 /// // Formats are asserted only when the schema is parsed with assertion on (2020-12 records
@@ -492,8 +492,7 @@ pub(crate) fn maps_are_sorted() -> bool {
 /// let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
 ///     .format_mode(FormatMode::Assertion)
 ///     .build();
-/// let schema: JsonSchema = JsonSchema::new_from_str(r#"{"format":"even-length"}"#, &settings)
-///     .unwrap();
+/// let schema: Schema = Schema::new_from_str(r#"{"format":"even-length"}"#, &settings).unwrap();
 /// let registry: Registry<'_> = Registry::new(&schema).unwrap();
 /// let compiled: CompiledSchema = CompiledSchema::builder()
 ///     .format("even-length", |s: &str| s.chars().count().is_multiple_of(2))

@@ -6,7 +6,9 @@
 //! error tree) so they can be read side by side.
 
 use crate::suite::{SuiteFile, SuiteFileCase, SuiteFileTest, is_optional_path};
-use json_schema_rs::{JsonSchemaSettings, Schema, ValidationError, validate};
+use json_schema_rs::{
+    JsonSchemaSettings, Schema, SchemaError, ValidateError, ValidationError, validate,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -112,11 +114,29 @@ pub fn run_ours(schema: &Value, instance: &Value) -> ToolOutput {
         };
         match validate(&parsed, instance) {
             Ok(()) => output(OURS_TOOL, ToolOutcome::Valid, Vec::new()),
-            Err(errors) => output(
+            Err(ValidateError::Instance(errors)) => output(
                 OURS_TOOL,
                 ToolOutcome::Invalid,
                 errors.iter().map(ValidationError::to_string).collect(),
             ),
+            Err(ValidateError::Schema(error)) => {
+                let problems: Vec<String> = match &error {
+                    SchemaError::Registry(errors) => {
+                        errors.iter().map(ToString::to_string).collect()
+                    }
+                    SchemaError::Compile(errors) => {
+                        errors.iter().map(ToString::to_string).collect()
+                    }
+                };
+                output(
+                    OURS_TOOL,
+                    ToolOutcome::Error,
+                    problems
+                        .iter()
+                        .map(|problem: &String| format!("schema cannot be used: {problem}"))
+                        .collect(),
+                )
+            }
         }
     })
 }
@@ -227,8 +247,10 @@ pub fn select_suite_case(draft: &str, file: &SuiteFile) -> Option<MessageCase> {
         };
         let selected: Option<&SuiteFileTest> = case.tests.iter().find(|t: &&SuiteFileTest| {
             !t.valid
-                && catch_unwind(AssertUnwindSafe(|| validate(&parsed, &t.data).is_err()))
-                    .unwrap_or(false)
+                && catch_unwind(AssertUnwindSafe(|| {
+                    matches!(validate(&parsed, &t.data), Err(ValidateError::Instance(_)))
+                }))
+                .unwrap_or(false)
         });
         if let Some(test) = selected {
             return Some(suite_message_case(draft, file, case, test));
@@ -308,20 +330,22 @@ mod tests {
         let expected: ToolOutput = ToolOutput {
             tool: "json-schema-rs".to_string(),
             outcome: ToolOutcome::Invalid,
-            messages: json_schema_rs::validate(
-                &json_schema_rs::Schema::new_from_serde_value(
-                    &json!({"type": "string"}),
-                    &super::strict_settings(),
-                )
-                .expect("parses"),
-                &instance,
-            )
-            .expect_err("invalid")
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+            messages: vec!["root: expected string, got number".to_string()],
         };
         let actual: ToolOutput = run_ours(&json!({"type": "string"}), &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ours_unusable_schema_is_an_error_per_problem() {
+        let expected: ToolOutput = out(
+            "json-schema-rs",
+            ToolOutcome::Error,
+            &[
+                "schema cannot be used: $ref \"#/$defs/a\" at root (\"json-schema:///#/$defs/a\") does not resolve: no such location",
+            ],
+        );
+        let actual: ToolOutput = run_ours(&json!({"$ref": "#/$defs/a"}), &json!(1));
         assert_eq!(expected, actual);
     }
 

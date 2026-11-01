@@ -1,6 +1,5 @@
 //! JSON Schema specification version.
 
-use super::settings::JsonSchemaSettings;
 use std::fmt;
 
 /// JSON Schema specification version. One variant per vendored spec.
@@ -70,20 +69,6 @@ impl SpecVersion {
             _ => None,
         }
     }
-
-    /// Returns [`JsonSchemaSettings`] that pin this spec version: `$schema` is not used to choose
-    /// the draft, and every per-draft behaviour follows this version's
-    /// [`Dialect`](super::dialect::Dialect). Callers can use the builder to override individual
-    /// options.
-    ///
-    /// [`JsonSchemaSettings::default()`] pins nothing: it follows each document's `$schema` and
-    /// uses **Draft 2020-12** (the latest supported spec) when `$schema` is absent.
-    #[must_use]
-    pub fn default_schema_settings(self) -> JsonSchemaSettings {
-        JsonSchemaSettings::builder()
-            .forced_spec_version(self)
-            .build()
-    }
 }
 
 impl fmt::Display for SpecVersion {
@@ -122,23 +107,17 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[test]
-    fn default_schema_settings_forces_spec_version() {
-        let expected: JsonSchemaSettings = JsonSchemaSettings {
-            forced_spec_version: Some(SpecVersion::Draft07),
-            ..JsonSchemaSettings::default()
-        };
-        let actual: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
-        assert_eq!(expected, actual);
-    }
-
     /// Without `$schema`, default settings resolve to the same dialect as pinning Draft 2020-12.
     #[test]
     fn default_settings_resolve_to_draft202012() {
         let schema: JsonSchema = JsonSchema::default();
-        let expected: ResolvedDialect =
-            resolve_dialect(&schema, &SpecVersion::Draft202012.default_schema_settings())
-                .expect("resolve");
+        let expected: ResolvedDialect = resolve_dialect(
+            &schema,
+            &JsonSchemaSettings::builder()
+                .forced_spec_version(SpecVersion::Draft202012)
+                .build(),
+        )
+        .expect("resolve");
         let actual: ResolvedDialect =
             resolve_dialect(&schema, &JsonSchemaSettings::default()).expect("resolve");
         assert_eq!(expected, actual);

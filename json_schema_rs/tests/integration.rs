@@ -1,8 +1,9 @@
 //! Integration test: public API for schema parsing and code generation, and CLI binary.
 
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, DedupeMode, JsonSchema, JsonType, ModelNameSource, Schema,
-    SpecVersion, UnknownProperties, generate_rust, validate,
+    CodeGenInput, CodeGenSettings, CompileError, CompileErrors, DedupeMode, JsonSchema, JsonType,
+    ModelNameSource, RegistryError, RegistryErrors, Schema, SchemaError, SpecVersion,
+    UnknownProperties, ValidateError, generate_rust, validate,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -40,7 +41,7 @@ fn jsonschemars_bin() -> std::path::PathBuf {
 fn integration_schema_with_deprecated_property_parses_and_generates() {
     let schema_json =
         r#"{"type":"object","properties":{"legacy":{"type":"string","deprecated":true}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse schema");
+    let schema: Schema = Schema::try_from(schema_json).expect("parse schema");
     let settings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -66,7 +67,7 @@ pub struct Root {
 fn integration_schema_with_default_parses_and_generates() {
     let schema_json =
         r#"{"type":"object","properties":{"name":{"type":"string","default":"foo"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse schema");
+    let schema: Schema = Schema::try_from(schema_json).expect("parse schema");
     let settings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -96,7 +97,10 @@ impl Root {
 #[test]
 fn integration_schema_keyword_parse_round_trip_and_dialect() {
     let schema_json = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"name":{"type":"string"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse");
+    let schema: JsonSchema = Schema::try_from(schema_json)
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
     let expected_uri: Option<String> =
         Some("https://json-schema.org/draft/2020-12/schema".to_string());
     assert_eq!(expected_uri, schema.schema);
@@ -115,7 +119,10 @@ fn integration_schema_keyword_parse_round_trip_and_dialect() {
         "serialized schema must contain 2020-12 URI"
     );
 
-    let reparsed: JsonSchema = JsonSchema::try_from(serialized.as_str()).expect("parse again");
+    let reparsed: JsonSchema = Schema::try_from(serialized.as_str())
+        .expect("parse again")
+        .into_object()
+        .expect("schema object");
     assert_eq!(schema.schema, reparsed.schema);
 }
 
@@ -2072,57 +2079,41 @@ pub struct Root {
 
 #[test]
 fn cli_validate_valid_payload_exit_zero() {
-    let schema_json = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
-    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
-    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
-    schema_file.flush().expect("flush schema");
-    let payload_json = r#"{"x":"ok"}"#;
-    let mut child = Command::new(jsonschemars_bin())
-        .args(["validate", "-s", schema_file.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn jsonschemars");
-    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload_json.as_bytes())
-        .expect("write payload");
-    let output = child.wait_with_output().expect("wait jsonschemars");
-    assert!(
-        output.status.success(),
-        "validate should succeed: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"type":"object","properties":{"x":{"type":"string"}}}"#,
+        r#"{"x":"ok"}"#,
+        &[],
     );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
 }
 
 #[test]
-fn cli_validate_invalid_payload_exit_nonzero_and_stderr() {
-    let schema_json = r#"{"type":"object","required":["id"]}"#;
-    let payload_json = r"{}";
-    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
-    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
-    schema_file.flush().expect("flush schema");
-    let mut child = Command::new(jsonschemars_bin())
-        .args(["validate", "-s", schema_file.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn jsonschemars");
-    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload_json.as_bytes())
-        .expect("write payload");
-    let output = child.wait_with_output().expect("wait jsonschemars");
-    assert!(!output.status.success(), "validate should fail");
-    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
-    assert!(
-        stderr.contains("missing required"),
-        "stderr should mention missing required: {stderr}"
+fn cli_validate_invalid_payload_exits_one_with_every_error() {
+    let (_, actual): (String, (i32, String)) =
+        run_cli_validate(r#"{"type":"object","required":["id"]}"#, "{}", &[]);
+    let expected: (i32, String) = (
+        1,
+        "root: missing required property \"id\"\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
     );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_unparseable_payload_exits_two() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(r#"{"type":"object"}"#, "{", &[]);
+    let expected: (i32, String) = (
+        2,
+        "error: invalid JSON payload: EOF while parsing an object at line 1 column 1\n".to_string(),
+    );
+    assert_eq!(expected, actual);
 }
 
 #[test]
 fn integration_parse_and_generate() {
     let json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2156,7 +2147,7 @@ fn integration_parse_and_generate_defs_ref() {
   "properties": { "address": { "$ref": "#/$defs/Address" } },
   "required": ["address"]
 }"##;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2186,7 +2177,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_optional_string() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2210,7 +2201,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_enum_required() {
     let json = r#"{"type":"object","properties":{"status":{"enum":["open","closed"]}},"required":["status"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2241,7 +2232,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_description_struct_and_field() {
     let json = r#"{"type":"object","description":"Root type","properties":{"name":{"type":"string","description":"User name"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2267,7 +2258,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_enum_optional() {
     let json = r#"{"type":"object","properties":{"level":{"enum":["low","medium","high"]}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2301,7 +2292,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_enum_non_rust_compliant() {
     let json = r#"{"type":"object","properties":{"id":{"enum":["/8633","todd.griffin"]}},"required":["id"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2332,7 +2323,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_enum_duplicate_values() {
     let json = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2375,7 +2366,7 @@ fn integration_parse_and_generate_nested_object() {
             }
           }
         }"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2412,7 +2403,7 @@ pub struct Root {
 fn integration_parse_and_generate_required_integer() {
     let json =
         r#"{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2435,7 +2426,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_optional_integer() {
     let json = r#"{"type":"object","properties":{"count":{"type":"integer"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2459,7 +2450,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_required_float() {
     let json = r#"{"type":"object","properties":{"value":{"type":"number"}},"required":["value"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2482,7 +2473,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_optional_float() {
     let json = r#"{"type":"object","properties":{"value":{"type":"number"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2507,7 +2498,7 @@ pub struct Root {
 fn integration_parse_and_generate_required_boolean() {
     let json =
         r#"{"type":"object","properties":{"enabled":{"type":"boolean"}},"required":["enabled"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2530,7 +2521,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_optional_boolean() {
     let json = r#"{"type":"object","properties":{"flag":{"type":"boolean"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2554,7 +2545,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_type_array_with_null() {
     let json = r#"{"type":"object","properties":{"name":{"type":["string","null"]}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2584,9 +2575,43 @@ pub struct Root {
 }
 
 #[test]
+fn integration_parse_and_generate_boolean_roots() {
+    let schemas: Vec<Schema> = vec![
+        Schema::try_from("true").expect("parse schema"),
+        Schema::try_from("false").expect("parse schema"),
+    ];
+    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let output = generate_rust(&schemas, &code_gen_settings).expect("generate");
+    let actual: Vec<String> = output
+        .per_schema
+        .into_iter()
+        .map(|buffer| String::from_utf8(buffer).expect("utf8"))
+        .collect();
+    let expected: Vec<String> = vec![
+        "//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = serde_json::Value;
+
+"
+        .to_string(),
+        "//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Root {
+}
+
+"
+        .to_string(),
+    ];
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn integration_parse_and_generate_boolean_subschemas() {
     let json = r#"{"type":"object","properties":{"anything":true,"never":false,"tags":{"type":"array","items":true}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2620,7 +2645,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_integer_with_minimum_maximum_emits_u8() {
     let json = r#"{"type":"object","properties":{"byte":{"type":"integer","minimum":0,"maximum":255}},"required":["byte"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2643,7 +2668,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_number_with_min_max_emits_f32() {
     let json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2666,7 +2691,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_array_required() {
     let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2689,7 +2714,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_array_unique_items_true() {
     let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2714,7 +2739,7 @@ pub struct Root {
 fn integration_parse_and_generate_array_optional() {
     let json =
         r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2738,7 +2763,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_array_min_items_max_items() {
     let json = r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5}},"required":["tags"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2762,7 +2787,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_string_min_length() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2}},"required":["name"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2786,7 +2811,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_string_max_length() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string","maxLength":50}},"required":["name"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2810,7 +2835,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_string_min_length_max_length() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}},"required":["name"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2835,7 +2860,7 @@ pub struct Root {
 fn integration_parse_and_generate_string_min_length_max_length_optional() {
     let json =
         r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2860,7 +2885,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_string_pattern() {
     let json = r#"{"type":"object","properties":{"name":{"type":"string","pattern":"^[a-z]+$"}},"required":["name"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2881,8 +2906,8 @@ fn integration_parse_and_generate_string_pattern() {
 
 #[test]
 fn integration_validator_pattern_match_passes() {
-    let schema: JsonSchema =
-        JsonSchema::try_from(r#"{"type":"string","pattern":"^[0-9]+$"}"#).expect("parse");
+    let schema: Schema =
+        Schema::try_from(r#"{"type":"string","pattern":"^[0-9]+$"}"#).expect("parse");
     let instance = serde_json::json!("123");
     let expected: Result<(), _> = Ok(());
     let actual: Result<(), _> = json_schema_rs::validate(&schema, &instance);
@@ -2891,27 +2916,60 @@ fn integration_validator_pattern_match_passes() {
 
 #[test]
 fn integration_validator_pattern_mismatch_fails() {
-    let schema: JsonSchema =
-        JsonSchema::try_from(r#"{"type":"string","pattern":"^[0-9]+$"}"#).expect("parse");
+    let schema: Schema =
+        Schema::try_from(r#"{"type":"string","pattern":"^[0-9]+$"}"#).expect("parse");
     let instance = serde_json::json!("12a3");
-    let actual: Result<(), _> = json_schema_rs::validate(&schema, &instance);
-    let errs = actual.unwrap_err();
-    let expected: Vec<json_schema_rs::ValidationError> =
-        vec![json_schema_rs::ValidationError::new(
+    let actual: Result<(), ValidateError> = json_schema_rs::validate(&schema, &instance);
+    let expected: Result<(), ValidateError> = Err(ValidateError::Instance(vec![
+        json_schema_rs::ValidationError::new(
             json_schema_rs::ValidationErrorKind::PatternMismatch {
                 pattern: "^[0-9]+$".to_string(),
                 value: "12a3".to_string(),
             },
             json_schema_rs::JsonPointer::root(),
             json_schema_rs::JsonPointer::try_from("/pattern").expect("pointer"),
-        )];
-    assert_eq!(expected, errs);
+        ),
+    ]));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn integration_validator_unresolvable_ref_is_a_schema_error() {
+    let schema: Schema = Schema::try_from(r##"{"$ref":"#/$defs/missing"}"##).expect("parse");
+    let actual: Result<(), ValidateError> =
+        json_schema_rs::validate(&schema, &serde_json::json!(1));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Registry(
+        RegistryErrors::new(RegistryError::UnresolvableRef {
+            ref_str: "#/$defs/missing".to_string(),
+            location: String::new(),
+            target: "json-schema:///#/$defs/missing".to_string(),
+            reason: "no such location".to_string(),
+        }),
+    )));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn integration_validator_invalid_pattern_is_a_schema_error() {
+    let schema: Schema = Schema::try_from(r#"{"pattern":"("}"#).expect("parse");
+    let actual: Result<(), ValidateError> =
+        json_schema_rs::validate(&schema, &serde_json::json!("x"));
+    let expected: Result<(), ValidateError> = Err(ValidateError::Schema(SchemaError::Compile(
+        CompileErrors::new(CompileError::InvalidPattern {
+            location: "/pattern".to_string(),
+            pattern: "(".to_string(),
+            reason: regress::Regex::with_flags("(", "u")
+                .expect_err("invalid pattern")
+                .to_string(),
+        }),
+    )));
+    assert_eq!(expected, actual);
 }
 
 #[test]
 fn integration_parse_and_generate_array_of_objects() {
     let json = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}}}},"required":["items"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2942,7 +3000,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_hyphenated_property() {
     let json = r#"{"type":"object","properties":{"foo-bar":{"type":"string"}}}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -2966,7 +3024,7 @@ pub struct Root {
 #[test]
 fn integration_parse_and_generate_string_root_emits_type_alias() {
     let json = r#"{"type":"string"}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -3142,7 +3200,7 @@ type ScenarioFiles = (Vec<u8>, Vec<(PathBuf, Vec<u8>)>, &'static str);
 
 /// Generates code for one schema and returns its per-schema buffer.
 fn generate_single(schema_json: &str, settings: &CodeGenSettings) -> Vec<u8> {
-    let schema: JsonSchema = JsonSchema::try_from(schema_json).expect("parse schema");
+    let schema: Schema = Schema::try_from(schema_json).expect("parse schema");
     let output = generate_rust(&[schema], settings).expect("generate");
     output.per_schema[0].clone()
 }
@@ -3458,8 +3516,8 @@ fn write_workspace_scenario_member(
         "nested_modules" => {
             let schema_root = r#"{"type":"object","properties":{"x":{"type":"string"}}}"#;
             let schema_child = r#"{"type":"object","properties":{"y":{"type":"string"}}}"#;
-            let parsed_root: JsonSchema = JsonSchema::try_from(schema_root).expect("parse root");
-            let parsed_child: JsonSchema = JsonSchema::try_from(schema_child).expect("parse child");
+            let parsed_root: Schema = Schema::try_from(schema_root).expect("parse root");
+            let parsed_child: Schema = Schema::try_from(schema_child).expect("parse child");
             let output =
                 generate_rust(&[parsed_root, parsed_child], default_code_gen).expect("generate");
             let output_relatives: Vec<PathBuf> =
@@ -3500,8 +3558,8 @@ fn write_workspace_scenario_member(
         "multi_schema" => {
             let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
             let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
-            let parsed_a: JsonSchema = JsonSchema::try_from(schema_a).expect("parse a");
-            let parsed_b: JsonSchema = JsonSchema::try_from(schema_b).expect("parse b");
+            let parsed_a: Schema = Schema::try_from(schema_a).expect("parse a");
+            let parsed_b: Schema = Schema::try_from(schema_b).expect("parse b");
             let output = generate_rust(&[parsed_a, parsed_b], default_code_gen).expect("generate");
             let main_rs = r##"fn main() {
     let _: compile_test::a::Root = serde_json::from_str(r#"{"a":"x"}"#).unwrap();
@@ -3518,8 +3576,8 @@ fn write_workspace_scenario_member(
         "hyphenated_paths" => {
             let schema_a = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#;
             let schema_b = r#"{"type":"object","properties":{"b":{"type":"string"}}}"#;
-            let parsed_a: JsonSchema = JsonSchema::try_from(schema_a).expect("parse a");
-            let parsed_b: JsonSchema = JsonSchema::try_from(schema_b).expect("parse b");
+            let parsed_a: Schema = Schema::try_from(schema_a).expect("parse a");
+            let parsed_b: Schema = Schema::try_from(schema_b).expect("parse b");
             let output = generate_rust(&[parsed_a, parsed_b], default_code_gen).expect("generate");
             let main_rs = r##"fn main() {
     let _: compile_test::schema_1::Root = serde_json::from_str(r#"{"a":"x"}"#).unwrap();
@@ -3542,8 +3600,8 @@ fn write_workspace_scenario_member(
         }
         "dedupe_two_identical" => {
             let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
-            let parsed_a: JsonSchema = JsonSchema::try_from(schema_json).expect("parse a");
-            let parsed_b: JsonSchema = JsonSchema::try_from(schema_json).expect("parse b");
+            let parsed_a: Schema = Schema::try_from(schema_json).expect("parse a");
+            let parsed_b: Schema = Schema::try_from(schema_json).expect("parse b");
             let code_gen: CodeGenSettings = CodeGenSettings::builder()
                 .dedupe_mode(DedupeMode::Full)
                 .build();
@@ -3569,8 +3627,8 @@ fn write_workspace_scenario_member(
             // The CLI layout for schemas in a subdirectory: `shared.rs` at the top, the
             // per-schema files in `sub/`, and `sub/mod.rs` re-exporting the parent's `shared`.
             let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
-            let parsed_a: JsonSchema = JsonSchema::try_from(schema_json).expect("parse a");
-            let parsed_b: JsonSchema = JsonSchema::try_from(schema_json).expect("parse b");
+            let parsed_a: Schema = Schema::try_from(schema_json).expect("parse a");
+            let parsed_b: Schema = Schema::try_from(schema_json).expect("parse b");
             let code_gen: CodeGenSettings = CodeGenSettings::builder()
                 .dedupe_mode(DedupeMode::Full)
                 .build();
@@ -3638,7 +3696,7 @@ fn write_workspace_scenario_member(
                     .insert("child".to_string(), Schema::from(inner));
                 inner = wrap;
             }
-            let output = generate_rust(&[inner], default_code_gen).expect("generate");
+            let output = generate_rust(&[Schema::from(inner)], default_code_gen).expect("generate");
             let main_rs = r##"fn main() {
     let _: compile_test::Level0 = serde_json::from_str(r#"{"child":{"child":{"child":{}}}}"#).unwrap();
 }
@@ -3829,6 +3887,29 @@ fn write_workspace_scenario_member(
                 main_rs,
             )
         }
+        "boolean_roots" => {
+            let schemas: Vec<Schema> = vec![
+                Schema::try_from("true").expect("parse true"),
+                Schema::try_from("false").expect("parse false"),
+            ];
+            let output = generate_rust(&schemas, default_code_gen).expect("generate");
+            let main_rs = r##"fn main() {
+    let anything: compile_test::anything::Root =
+        serde_json::from_str(r#"{"a":[1,null]}"#).unwrap();
+    let nothing: Result<compile_test::nothing::Root, serde_json::Error> =
+        serde_json::from_str("1");
+    let expected: (serde_json::Value, bool) = (serde_json::json!({"a": [1, null]}), false);
+    let actual: (serde_json::Value, bool) = (anything, nothing.is_ok());
+    assert_eq!(expected, actual);
+}
+"##;
+            let lib_rs: Vec<u8> = "pub mod anything;\npub mod nothing;\n".into();
+            let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                (PathBuf::from("anything.rs"), output.per_schema[0].clone()),
+                (PathBuf::from("nothing.rs"), output.per_schema[1].clone()),
+            ];
+            (lib_rs, extra, main_rs)
+        }
         "boolean_subschemas" => {
             let schema_json = r#"{"type":"object","properties":{"anything":true,"never":false,"tags":{"type":"array","items":true}}}"#;
             let main_rs = r##"fn main() {
@@ -3858,7 +3939,7 @@ fn write_workspace_scenario_member(
             let schema_number_min_max = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"],"title":"Root"}"#;
             let schema_string_min_max = r#"{"type":"object","properties":{"name":{"type":"string","minLength":2,"maxLength":50}},"required":["name"]}"#;
             let schema_description = r#"{"type":"object","description":"Root type\nSecond line","properties":{"name":{"type":"string","description":"User name"}},"required":["name"]}"#;
-            let schemas: Vec<JsonSchema> = [
+            let schemas: Vec<Schema> = [
                 schema_basic,
                 schema_integer,
                 schema_number,
@@ -3868,7 +3949,7 @@ fn write_workspace_scenario_member(
                 schema_description,
             ]
             .iter()
-            .map(|s| JsonSchema::try_from(*s).expect("parse"))
+            .map(|s| Schema::try_from(*s).expect("parse"))
             .collect();
             let output = generate_rust(&schemas, default_code_gen).expect("generate");
             let lib_rs: Vec<u8> = "pub mod basic;\npub mod integer;\npub mod number;\npub mod integer_min_max;\npub mod number_min_max;\npub mod string_min_max;\npub mod description;\n".into();
@@ -3895,7 +3976,7 @@ fn write_workspace_scenario_member(
             ];
             let main_rs = r#"
 fn main() {
-    use json_schema_rs::{JsonSchema, ToJsonSchema};
+    use json_schema_rs::{JsonSchema, Schema, ToJsonSchema};
     let schemas: Vec<JsonSchema> = vec![
         compile_test::basic::Root::json_schema().expect("json schema"),
         compile_test::integer::Root::json_schema().expect("json schema"),
@@ -3910,7 +3991,10 @@ fn main() {
         .iter()
         .map(|schema| {
             let json: String = schema.try_into().expect("serialize");
-            JsonSchema::try_from(json.as_str()).expect("parse")
+            Schema::try_from(json.as_str())
+                .expect("parse")
+                .into_object()
+                .expect("schema object")
         })
         .collect();
     // description -> `///` docs -> derive -> description
@@ -3962,9 +4046,9 @@ fn main() {
                 r#"{"type":"object","properties":{"t":{"enum":["a","A"]}},"required":["t"]}"#;
             let schema_dedupe = r#"{"type":"object","properties":{"a":{"enum":["x","y"]},"b":{"enum":["x","y"]}},"required":["a"]}"#;
             let schema_duplicate = r#"{"type":"object","properties":{"t":{"enum":["A","A","A","a","a","a","a","a","a","a"]}},"required":["t"]}"#;
-            let schemas: Vec<JsonSchema> = [schema_collision, schema_dedupe, schema_duplicate]
+            let schemas: Vec<Schema> = [schema_collision, schema_dedupe, schema_duplicate]
                 .iter()
-                .map(|s| JsonSchema::try_from(*s).expect("parse"))
+                .map(|s| Schema::try_from(*s).expect("parse"))
                 .collect();
             let output = generate_rust(&schemas, &code_gen).expect("generate");
             let lib_rs: Vec<u8> =
@@ -4061,9 +4145,9 @@ fn main() {
                     r#"{"title":"Parent","type":"object","properties":{"label":{"type":"string"},"tree":{"$ref":"tree.json"}},"required":["label"]}"#,
                 ),
             ];
-            let schemas: Vec<(&str, JsonSchema)> = documents
+            let schemas: Vec<(&str, Schema)> = documents
                 .iter()
-                .map(|(name, json)| (*name, JsonSchema::try_from(*json).expect("parse")))
+                .map(|(name, json)| (*name, Schema::try_from(*json).expect("parse")))
                 .collect();
             let mut input: CodeGenInput<'_> = CodeGenInput::new();
             for (name, schema) in &schemas {
@@ -4143,7 +4227,7 @@ fn main() {
 #[test]
 fn integration_parse_and_generate_uuid_property() {
     let json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#;
-    let schema: JsonSchema = JsonSchema::try_from(json).expect("parse schema");
+    let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let output = generate_rust(&[schema], &code_gen_settings).expect("generate");
     let actual: String = String::from_utf8(output.per_schema[0].clone()).expect("utf8");
@@ -4292,6 +4376,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "boolean_basic",
         "type_array_with_null",
         "boolean_subschemas",
+        "boolean_roots",
         "round_trip",
         "enum_non_rust_compliant",
         "enum_variants",
@@ -4355,12 +4440,12 @@ members = [{members}]
 // --- CLI: dialect settings (`--jss-forced-spec-version`, `--jss-default-spec-version`, `--jss-format-mode`, `--jss-unknown-schema-uri`) ---
 
 /// Runs `jsonschemars validate` on `schema_json` with `payload_json` on stdin and `extra_args`;
-/// returns the schema file's path, whether it exited successfully, and its stderr.
+/// returns the schema file's path, its exit code, and its stderr.
 fn run_cli_validate(
     schema_json: &str,
     payload_json: &str,
     extra_args: &[&str],
-) -> (String, (bool, String)) {
+) -> (String, (i32, String)) {
     let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
     std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
     schema_file.flush().expect("flush schema");
@@ -4378,18 +4463,21 @@ fn run_cli_validate(
         .expect("write payload");
     let output = child.wait_with_output().expect("wait jsonschemars");
     let stderr: String = String::from_utf8(output.stderr).expect("utf8 stderr");
-    (schema_path, (output.status.success(), stderr))
+    (
+        schema_path,
+        (output.status.code().expect("exit code"), stderr),
+    )
 }
 
 #[test]
 fn cli_validate_unknown_schema_uri_warns_and_falls_back() {
-    let (path, actual): (String, (bool, String)) = run_cli_validate(
+    let (path, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#,
         r#""ok""#,
         &[],
     );
-    let expected: (bool, String) = (
-        true,
+    let expected: (i32, String) = (
+        0,
         format!(
             "warning: {path}: unknown $schema \"https://example.com/custom-meta\"; using JSON Schema Draft 2020-12 rules\n"
         ),
@@ -4399,13 +4487,13 @@ fn cli_validate_unknown_schema_uri_warns_and_falls_back() {
 
 #[test]
 fn cli_validate_unknown_schema_uri_rejected_with_flag() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#,
         r#""ok""#,
         &["--jss-unknown-schema-uri", "reject"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        2,
         "error: unknown $schema \"https://example.com/custom-meta\"\n".to_string(),
     );
     assert_eq!(expected, actual);
@@ -4413,13 +4501,13 @@ fn cli_validate_unknown_schema_uri_rejected_with_flag() {
 
 #[test]
 fn cli_validate_pre_draft4_schema_warns() {
-    let (path, actual): (String, (bool, String)) = run_cli_validate(
+    let (path, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"http://json-schema.org/draft-03/schema#","type":"string"}"#,
         r#""ok""#,
         &[],
     );
-    let expected: (bool, String) = (
-        true,
+    let expected: (i32, String) = (
+        0,
         format!(
             "warning: {path}: Draft03 has no rule set of its own; using JSON Schema Draft 4 rules\n"
         ),
@@ -4467,24 +4555,24 @@ fn cli_generate_unknown_schema_uri_warns() {
 #[cfg(feature = "uuid")]
 #[test]
 fn cli_validate_uuid_format_is_annotation_by_default_in_2020_12() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"string","format":"uuid"}"#,
         r#""not-a-uuid""#,
         &[],
     );
-    let expected: (bool, String) = (true, String::new());
+    let expected: (i32, String) = (0, String::new());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn cli_validate_format_mode_assertion_flag_checks_uuid() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"string","format":"uuid"}"#,
         r#""not-a-uuid""#,
         &["--jss-format-mode", "assertion"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: string \"not-a-uuid\" is not a valid uuid\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4493,13 +4581,13 @@ fn cli_validate_format_mode_assertion_flag_checks_uuid() {
 
 #[test]
 fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,
         r#""not-valid""#,
         &["--jss-forced-spec-version", "draft-07"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: string \"not-valid\" is not a valid ipv4\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4508,13 +4596,13 @@ fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
 
 #[test]
 fn cli_validate_default_spec_version_flag_applies_without_schema_keyword() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"integer"}"#,
         "1.0",
         &["--jss-default-spec-version", "draft-04"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: expected integer, got number\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4523,24 +4611,24 @@ fn cli_validate_default_spec_version_flag_applies_without_schema_keyword() {
 
 #[test]
 fn cli_validate_default_spec_version_flag_yields_to_schema_keyword() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"integer"}"#,
         "1.0",
         &["--jss-default-spec-version", "draft-04"],
     );
-    let expected: (bool, String) = (true, String::new());
+    let expected: (i32, String) = (0, String::new());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn cli_validate_integer_semantics_flag_overrides_draft() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"type":"integer"}"#,
         "1.0",
         &["--jss-integer-semantics", "lexical"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: expected integer, got number\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4549,13 +4637,13 @@ fn cli_validate_integer_semantics_flag_overrides_draft() {
 
 #[test]
 fn cli_validate_exclusive_bounds_flag_reads_boolean_modifier() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"maximum":3,"exclusiveMaximum":true}"#,
         "3",
         &["--jss-exclusive-bounds", "boolean-modifier"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "root: value 3 is not below exclusiveMaximum 3\nerror: validation failed with 1 error(s)\n"
             .to_string(),
     );
@@ -4564,13 +4652,13 @@ fn cli_validate_exclusive_bounds_flag_reads_boolean_modifier() {
 
 #[test]
 fn cli_validate_ref_siblings_flag_ignores_id_next_to_ref() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$id":"http://example.com/root.json","$defs":{"int":{"$id":"http://example.com/int.json","type":"integer"},"str":{"$id":"http://example.com/nested/int.json","type":"string"}},"properties":{"x":{"$id":"http://example.com/nested/","$ref":"int.json"}}}"#,
         r#"{"x":"a"}"#,
         &["--jss-ref-siblings", "ignored"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "/x: expected integer, got string\nerror: validation failed with 1 error(s)\n".to_string(),
     );
     assert_eq!(expected, actual);
@@ -4578,13 +4666,13 @@ fn cli_validate_ref_siblings_flag_ignores_id_next_to_ref() {
 
 #[test]
 fn cli_validate_ref_siblings_flag_evaluates_id_next_to_ref() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate(
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"http://json-schema.org/draft-07/schema#","$id":"http://example.com/root.json","definitions":{"int":{"$id":"http://example.com/int.json","type":"integer"},"str":{"$id":"http://example.com/nested/int.json","type":"string"}},"properties":{"x":{"$id":"http://example.com/nested/","$ref":"int.json"}}}"#,
         r#"{"x":1}"#,
         &["--jss-ref-siblings", "evaluated"],
     );
-    let expected: (bool, String) = (
-        false,
+    let expected: (i32, String) = (
+        1,
         "/x: expected string, got number\nerror: validation failed with 1 error(s)\n".to_string(),
     );
     assert_eq!(expected, actual);
@@ -4592,27 +4680,28 @@ fn cli_validate_ref_siblings_flag_evaluates_id_next_to_ref() {
 
 #[test]
 fn cli_validate_true_schema_accepts_payload() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate("true", r#"{"a":[1]}"#, &[]);
-    let expected: (bool, String) = (true, String::new());
+    let (_, actual): (String, (i32, String)) = run_cli_validate("true", r#"{"a":[1]}"#, &[]);
+    let expected: (i32, String) = (0, String::new());
     assert_eq!(expected, actual);
 }
 
 #[test]
 fn cli_validate_false_schema_rejects_payload() {
-    let (_, actual): (String, (bool, String)) = run_cli_validate("false", "1", &[]);
-    let expected: (bool, String) = (
-        false,
+    let (_, actual): (String, (i32, String)) = run_cli_validate("false", "1", &[]);
+    let expected: (i32, String) = (
+        1,
         "root: no value is allowed here (schema is false)\nerror: validation failed with 1 error(s)\n".to_string(),
     );
     assert_eq!(expected, actual);
 }
 
 #[test]
-fn cli_generate_rust_boolean_schema_reports_boolean_root() {
+fn cli_generate_rust_boolean_roots() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
-    let schema_path: PathBuf = temp_dir.path().join("schema.json");
-    std::fs::write(&schema_path, "true").expect("write schema");
-    let canonical: PathBuf = schema_path.canonicalize().expect("canonical schema path");
+    let anything_path: PathBuf = temp_dir.path().join("anything.json");
+    let nothing_path: PathBuf = temp_dir.path().join("nothing.json");
+    std::fs::write(&anything_path, "true").expect("write schema");
+    std::fs::write(&nothing_path, "false").expect("write schema");
     let out_dir = tempfile::tempdir().expect("temp out dir");
     let output = Command::new(jsonschemars_bin())
         .args([
@@ -4620,21 +4709,34 @@ fn cli_generate_rust_boolean_schema_reports_boolean_root() {
             "rust",
             "-o",
             out_dir.path().to_str().unwrap(),
-            schema_path.to_str().unwrap(),
+            anything_path.to_str().unwrap(),
+            nothing_path.to_str().unwrap(),
         ])
         .output()
         .expect("run jsonschemars");
-    let expected: (bool, String) = (
-        false,
-        format!(
-            "error: {}: the document is the boolean schema `true`, not a schema object\n\
-             error: schema ingestion failed with 1 error(s); no output written\n",
-            canonical.display()
-        ),
+    let expected: (bool, String, String) = (
+        true,
+        "//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = serde_json::Value;
+
+"
+        .to_string(),
+        "//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Root {
+}
+
+"
+        .to_string(),
     );
-    let actual: (bool, String) = (
+    let actual: (bool, String, String) = (
         output.status.success(),
-        String::from_utf8(output.stderr).expect("utf8 stderr"),
+        std::fs::read_to_string(out_dir.path().join("anything.rs")).unwrap_or_default(),
+        std::fs::read_to_string(out_dir.path().join("nothing.rs")).unwrap_or_default(),
     );
     assert_eq!(expected, actual);
 }
@@ -4646,7 +4748,7 @@ fn parse_serialize_round_trip_keeps_unknown_keywords() {
         "x-foo": {"a": 1},
         "not": {"type": "null"}
     });
-    let schema: JsonSchema = JsonSchema::try_from(input.to_string().as_str()).expect("parse");
+    let schema: Schema = Schema::try_from(input.to_string().as_str()).expect("parse");
     let expected: serde_json::Value = input;
     let actual: serde_json::Value = serde_json::to_value(&schema).expect("serialize");
     assert_eq!(expected, actual);
@@ -4669,12 +4771,9 @@ fn schema_false_document_round_trips() {
 }
 
 #[test]
-fn json_schema_rejects_boolean_document_as_boolean_root() {
-    let expected: String =
-        "the document is the boolean schema `true`, not a schema object".to_string();
-    let actual: String = JsonSchema::try_from("true")
-        .expect_err("a boolean document is not a schema object")
-        .to_string();
+fn schema_boolean_document_has_no_schema_object() {
+    let expected: Option<JsonSchema> = None;
+    let actual: Option<JsonSchema> = Schema::try_from("true").expect("parse").into_object();
     assert_eq!(expected, actual);
 }
 
@@ -4739,23 +4838,30 @@ fn cli_generate_strict_lists_every_unknown_key() {
 }
 
 #[test]
-fn cli_validate_lists_every_registry_problem() {
-    let schema_json =
-        r##"{"properties":{"a":{"$ref":"#/$defs/missing"},"b":{"$ref":"#/$defs/gone"}}}"##;
-    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
-    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
-    schema_file.flush().expect("flush schema");
-    let mut child = Command::new(jsonschemars_bin())
-        .args(["validate", "-s", schema_file.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn jsonschemars");
-    std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"{}").expect("write payload");
-    let output = child.wait_with_output().expect("wait jsonschemars");
-    let expected: &str = "root: could not resolve $ref \"#/$defs/missing\": $ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nroot: could not resolve $ref \"#/$defs/gone\": $ref \"#/$defs/gone\" at /properties/b (\"json-schema:///#/$defs/gone\") does not resolve: no such location\nerror: validation failed with 2 error(s)\n";
-    let actual: String = String::from_utf8(output.stderr).expect("utf8 stderr");
+fn cli_validate_lists_every_registry_problem_as_schema_error() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r##"{"properties":{"a":{"$ref":"#/$defs/missing"},"b":{"$ref":"#/$defs/gone"}}}"##,
+        "{}",
+        &[],
+    );
+    let expected: (i32, String) = (
+        2,
+        "schema error: $ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nschema error: $ref \"#/$defs/gone\" at /properties/b (\"json-schema:///#/$defs/gone\") does not resolve: no such location\nerror: the schema cannot be used: 2 problem(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_lists_every_compile_problem_as_schema_error() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"minProperties":"x","properties":{"a":{"maxContains":-1}}}"#,
+        "{}",
+        &[],
+    );
+    let expected: (i32, String) = (
+        2,
+        "schema error: root: the value of \"minProperties\" must be a non-negative integer\nschema error: /properties/a: the value of \"maxContains\" must be a non-negative integer\nerror: the schema cannot be used: 2 problem(s)\n".to_string(),
+    );
     assert_eq!(expected, actual);
 }
 

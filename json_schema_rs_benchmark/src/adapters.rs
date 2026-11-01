@@ -32,8 +32,8 @@
 
 use crate::fixtures::{Fixture, Resource};
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, CompiledSchema, GenerateRustOutput, JsonSchema, Registry,
-    RegistryBuilder, Schema, generate_rust,
+    CodeGenInput, CodeGenSettings, CompiledSchema, GenerateRustOutput, Registry, RegistryBuilder,
+    Schema, generate_rust,
 };
 use serde_json::Value;
 use std::any::Any;
@@ -390,7 +390,7 @@ pub fn codegen(
 /// an in-memory retriever: the resources are documents the schema reaches, not inputs of their
 /// own, as in every validating tool's registry.
 fn codegen_jsonschemars(schema_text: &str, resources: &[Resource]) -> Result<String, AdapterError> {
-    let schema: JsonSchema = serde_json::from_str(schema_text)
+    let schema: Schema = serde_json::from_str(schema_text)
         .map_err(|e: serde_json::Error| AdapterError::SchemaParse(e.to_string()))?;
     let settings: CodeGenSettings = CodeGenSettings::builder().build();
     let mut input: CodeGenInput<'_> = CodeGenInput::new().schema(&schema);

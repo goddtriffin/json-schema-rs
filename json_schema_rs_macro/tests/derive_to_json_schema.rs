@@ -1405,7 +1405,10 @@ fn derive_single_variant_enum_emits_const() {
 fn derive_serialize_round_trip() {
     let schema: JsonSchema = Root::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
-    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let parsed: JsonSchema = Schema::try_from(json.as_str())
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
     assert_eq!(schema, parsed);
 }
 
@@ -1475,7 +1478,10 @@ fn derive_enum_description_attribute() {
 fn derive_round_trip_with_description() {
     let schema: JsonSchema = AttrDescription::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
-    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let parsed: JsonSchema = Schema::try_from(json.as_str())
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
     assert_eq!(schema, parsed);
 }
 
@@ -1539,7 +1545,10 @@ fn derive_field_minimum_maximum_float() {
 fn derive_minimum_maximum_round_trip() {
     let schema: JsonSchema = WithIntegerMinMax::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
-    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let parsed: JsonSchema = Schema::try_from(json.as_str())
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
     assert_eq!(schema, parsed);
 }
 
@@ -1547,7 +1556,10 @@ fn derive_minimum_maximum_round_trip() {
 fn derive_minimum_maximum_float_round_trip() {
     let schema: JsonSchema = WithFloatMinMax::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
-    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let parsed: JsonSchema = Schema::try_from(json.as_str())
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
     assert_eq!(schema, parsed);
 }
 
@@ -1886,7 +1898,10 @@ fn derive_field_default_name_emits_default_in_schema() {
 fn derive_field_default_round_trip_serializes_and_parses() {
     let schema: JsonSchema = WithDefaultField::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
-    let reparsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let reparsed: JsonSchema = Schema::try_from(json.as_str())
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
     let expected: JsonSchema = schema.clone();
     let actual: JsonSchema = reparsed;
     assert_eq!(expected, actual);
@@ -1992,7 +2007,10 @@ fn derive_field_deprecated_emits_deprecated_in_schema() {
 fn derive_deprecated_round_trip() {
     let schema: JsonSchema = WithDeprecatedField::json_schema().expect("schema");
     let json: String = (&schema).try_into().expect("serialize");
-    let parsed: JsonSchema = JsonSchema::try_from(json.as_str()).expect("parse");
+    let parsed: JsonSchema = Schema::try_from(json.as_str())
+        .expect("parse")
+        .into_object()
+        .expect("schema object");
     let expected: JsonSchema = schema;
     let actual: JsonSchema = parsed;
     assert_eq!(expected, actual);

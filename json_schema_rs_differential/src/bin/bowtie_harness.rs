@@ -14,7 +14,6 @@
 //! - Any other parse failure, a registry error other than one `$ref`, or a compile error (e.g. a
 //!   pattern our regex engine cannot compile) → whole-case skip `unsupported schema: <error>`.
 //! - The registry reports an unresolvable `$ref` → whole-case skip `unsupported $ref: <detail>`.
-//! - Validation reports another capability gap → test skip `unsupported: <detail>`.
 //! - Anything else is a real verdict `{"valid": bool}`.
 //! - A panic anywhere in a case is caught and reported as `errored`, so one bad case never takes
 //!   the harness down.
@@ -28,7 +27,7 @@ use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 
 use json_schema_rs::{
     CompileError, CompiledSchema, JsonSchemaParseError, JsonSchemaSettings, Registry,
-    RegistryError, Schema, SpecVersion, ValidationError, ValidationErrorKind, ValidationResult,
+    RegistryError, Schema, SpecVersion,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -205,34 +204,9 @@ fn parse_skip_message(error: &JsonSchemaParseError) -> String {
         JsonSchemaParseError::Serde(_)
         | JsonSchemaParseError::InvalidKeywordValue { .. }
         | JsonSchemaParseError::Io(_)
-        | JsonSchemaParseError::BooleanRoot { .. }
         | JsonSchemaParseError::UnknownSchemaUri { .. } => {
             format!("unsupported schema: {error}")
         }
-    }
-}
-
-/// Skip message when a validation error reflects a library capability gap rather than an
-/// invalid instance.
-fn capability_gap_message(error: &ValidationError) -> Option<String> {
-    match &error.kind {
-        ValidationErrorKind::InvalidRef { ref_str, reason } => {
-            Some(format!("unsupported $ref: \"{ref_str}\": {reason}"))
-        }
-        ValidationErrorKind::InvalidPatternInSchema { .. }
-        | ValidationErrorKind::InvalidSchema { .. } => Some(format!("unsupported: {error}")),
-        _ => None,
-    }
-}
-
-/// Classifies one validation result as a verdict or a capability-gap skip.
-fn classify(result: &ValidationResult) -> TestOutcome {
-    match result {
-        Ok(()) => TestOutcome::Verdict(true),
-        Err(errors) => errors
-            .iter()
-            .find_map(capability_gap_message)
-            .map_or(TestOutcome::Verdict(false), TestOutcome::Skipped),
     }
 }
 
@@ -284,7 +258,7 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
         .iter()
         .map(
             |test: &Test| match catch_panic(|| compiled.validate(&test.instance)) {
-                Ok(result) => classify(&result),
+                Ok(result) => TestOutcome::Verdict(result.is_ok()),
                 Err(panic_message) => TestOutcome::Errored(panic_message),
             },
         )
@@ -406,11 +380,9 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Case, CaseOutcome, Command, Harness, OutputFormat, SpecVersion, TestOutcome,
-        ValidationError, ValidationErrorKind, ValidationResult, catch_panic, classify,
+        Case, CaseOutcome, Command, Harness, OutputFormat, SpecVersion, TestOutcome, catch_panic,
         dialect_spec_version, run_case, run_response,
     };
-    use json_schema_rs::JsonPointer;
     use serde::Deserialize;
     use serde_json::{Value, json};
 
@@ -651,17 +623,15 @@ mod tests {
     }
 
     #[test]
-    fn invalid_pattern_in_schema_is_a_capability_gap() {
-        let result: ValidationResult = Err(vec![ValidationError::new(
-            ValidationErrorKind::InvalidPatternInSchema {
-                pattern: "(".to_string(),
-            },
-            JsonPointer::root(),
-            JsonPointer::try_from("/pattern").expect("pointer"),
-        )]);
-        let expected: TestOutcome =
-            TestOutcome::Skipped("unsupported: root: schema has invalid pattern \"(\"".to_string());
-        let actual: TestOutcome = classify(&result);
+    fn compile_error_skips_case() {
+        let expected: CaseOutcome = CaseOutcome::Skipped(
+            "unsupported schema: /not: the value of \"minContains\" must be a non-negative integer"
+                .to_string(),
+        );
+        let actual: CaseOutcome = run_flag(&json!({
+            "schema": {"not": {"minContains": "x"}},
+            "tests": [{"instance": 1}]
+        }));
         assert_eq!(expected, actual);
     }
 
