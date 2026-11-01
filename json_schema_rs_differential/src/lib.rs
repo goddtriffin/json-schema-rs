@@ -54,9 +54,9 @@ pub struct SuiteInput {
 pub struct FixtureInput {
     /// Fixture id, e.g. `small/config`.
     pub id: String,
-    /// The `bowtie validate --expect valid` report and the manifest's valid instance paths.
+    /// The `bowtie run` report for the valid instances and the manifest's valid instance paths.
     pub valid: (BowtieReport, Vec<String>),
-    /// The `bowtie validate --expect invalid` report and the manifest's invalid instance paths.
+    /// The `bowtie run` report for the invalid instances and the manifest's invalid instance paths.
     pub invalid: (BowtieReport, Vec<String>),
 }
 

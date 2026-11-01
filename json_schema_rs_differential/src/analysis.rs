@@ -76,10 +76,10 @@ pub fn suite_records(
     records
 }
 
-/// Flatten a `bowtie validate` fixture report into per-instance records.
+/// Flatten a `bowtie run` fixture report into per-instance records.
 ///
 /// The manifest is authoritative for the expectation (`expected_valid`) and for naming each
-/// instance (`instance_paths`, in the order they were passed to `bowtie validate`).
+/// instance (`instance_paths`, in the order of the case's tests).
 ///
 /// # Errors
 ///

@@ -11,8 +11,8 @@
 #      draft's optional/ tests (run from a flattened temporary copy)
 #      -> reports/suite/<draft>__optional.jsonl.
 #   4. Run every benchmark fixture in the manifest (real-world / massive schemas) through
-#      `bowtie validate`,
-#      once for its valid instances and once for its invalid instances
+#      `bowtie run`, with the fixture's resource documents in each case's registry, once for its
+#      valid instances and once for its invalid instances
 #      -> reports/fixtures/<size>__<name>__{valid,invalid}.jsonl.
 #   5. Build the summarized, committed results.{json,md} (per-draft compliance, coverage vs
 #      correctness, disagreements with the majority, and the in-process error-message
@@ -202,32 +202,49 @@ else
 
   # --- 4. Benchmark fixtures (real-world / massive schemas) --------------------------------
   # Fixtures and their instances come from the benchmark manifest, in manifest order (the
-  # report builder names test i after manifest instance i). Each line is
-  # `<id>\t<schema>\t<expectation>\t<instance>...` with paths relative to FIXTURES_DIR.
-  # shellcheck disable=SC2046
-  while IFS=$'\t' read -r -a row; do
-    id="${row[0]}"
-    schema="${FIXTURES_DIR}/${row[1]}"
-    expectation="${row[2]}"
-    instances=()
-    for instance in "${row[@]:3}"; do
-      instances+=("${FIXTURES_DIR}/${instance}")
-    done
-    dialect="$(schema_dialect "${schema}")"
+  # report builder names test i after manifest instance i). Each (fixture, expectation) becomes
+  # one `bowtie run` case whose registry holds the fixture's resource documents (resources/*.json)
+  # under their root $id, so every implementation gets the documents the schema references, the
+  # way the benchmark registers them. Each line is `<id>\t<schema>\t<expectation>\t<case file>`.
+  cases_dir="$(mktemp -d)"
+  while IFS=$'\t' read -r id schema_path expectation case_file; do
+    dialect="$(schema_dialect "${FIXTURES_DIR}/${schema_path}")"
     select_implementations "${dialect}"
     drop_required_suite_only_competitors
-    echo "==> bowtie validate ${id} (${expectation}, dialect ${dialect})"
+    echo "==> bowtie run ${id} (${expectation}, dialect ${dialect})"
+    # shellcheck disable=SC2046
     run_bowtie "${REPORTS_DIR}/fixtures/${id//\//__}__${expectation}.jsonl" \
-      validate $(implementation_args) -D "${dialect}" --expect "${expectation}" \
-      "${schema}" "${instances[@]}"
+      run $(implementation_args) -D "${dialect}" "${case_file}"
   done < <(python3 -c '
-import json, sys
-for fixture in json.load(open(sys.argv[1])):
+import json, os, sys
+fixtures_dir, cases_dir = sys.argv[1], sys.argv[2]
+def load(path):
+    with open(os.path.join(fixtures_dir, path)) as f:
+        return json.load(f)
+with open(os.path.join(fixtures_dir, "manifest.json")) as f:
+    manifest = json.load(f)
+for fixture in manifest:
+    registry = {resource["id"]: load(resource["path"]) for resource in fixture.get("resources", [])}
     for expectation in ("valid", "invalid"):
         instances = fixture[expectation + "_instances"]
-        if instances:
-            print("\t".join([fixture["id"], fixture["schema"], expectation, *instances]))
-' "${FIXTURES_DIR}/manifest.json")
+        if not instances:
+            continue
+        case = {
+            "description": fixture["id"],
+            "schema": load(fixture["schema"]),
+            "tests": [
+                {"description": path, "instance": load(path), "valid": expectation == "valid"}
+                for path in instances
+            ],
+        }
+        if registry:
+            case["registry"] = registry
+        case_file = os.path.join(cases_dir, fixture["id"].replace("/", "__") + "__" + expectation + ".json")
+        with open(case_file, "w") as f:
+            json.dump(case, f)
+        print("\t".join([fixture["id"], fixture["schema"], expectation, case_file]))
+' "${FIXTURES_DIR}" "${cases_dir}")
+  rm -rf "${cases_dir}"
 fi
 
 # --- 5. Summarize into committed results -------------------------------------------------

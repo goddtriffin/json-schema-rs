@@ -426,23 +426,37 @@ jsonschemars generate rust -o out/ -   # one schema from stdin → out/stdin.rs
 
 A `$ref` to another file resolves against the referring file's path (or its
 `$id`). Files passed as INPUTs reach each other by path or `$id`; any other file
-is read only from inside `--cgs-file-root DIR` (default: the current directory).
-`http:` / `https:` documents are fetched only with `--cgs-allow-remote-refs`,
+is read only from inside `--file-root DIR` (default: the current directory).
+`http:` / `https:` documents are fetched only with `--allow-remote-refs`,
 which needs the binary built with the `http` feature
 (`cargo install json-schema-rs --features http`).
 
-**Validate a JSON payload against a schema** (one schema, one payload; schema
-via `-s`, payload from stdin or `-p`):
+**Validate a JSON payload against a schema** (schema via `-s`, payload from
+stdin or `-p`):
 
 ```bash
 jsonschemars validate -s schema.json < payload.json
 ```
 
 Both from files: `jsonschemars validate -s schema.json -p payload.json`. Use
-`-s -` to read the schema from stdin (payload then from `-p` or stdin). Exit
+`-s -` to read the schema from stdin (payload then from `-p` or stdin).
+
+`$ref`s to other documents resolve like `generate`'s: against the schema file's
+path (or its `$id`), reading other files only from inside `--file-root DIR`
+(default: the current directory) and `http:` / `https:` documents only with
+`--allow-remote-refs`. Pass documents the schema references with
+`-r/--resource FILE` (repeatable); each is reached by its path or its root `$id`,
+so a schema that refers to `https://` URLs validates offline with those documents
+vendored:
+
+```bash
+jsonschemars validate -s package.json -r ava.json -r eslintrc.json -p my-package.json
+```
+
+Exit
 codes: `0` the payload conforms; `1` it does not (one line per error on stderr);
-`2` no verdict, because the schema or payload could not be read or parsed, or the
-schema cannot be used (one `schema error:` line per problem).
+`2` no verdict, because a schema document or the payload could not be read or
+parsed, or the schema cannot be used (one `schema error:` line per problem).
 
 To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of
 using the macro, use the library API from a `build.rs` script:
