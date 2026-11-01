@@ -11,7 +11,7 @@ use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::input::{CachingRetriever, CodeGenInput};
-use super::settings::{CodeGenSettings, DedupeMode};
+use super::settings::{CodeGenSettings, DedupeMode, UniqueItemsType};
 use super::type_graph::passes;
 use super::type_graph::{
     self, Annotations, EnumNode, Field, FloatWidth, IntWidth, NameProposal, NameTier, ObjectNode,
@@ -103,11 +103,14 @@ enum Home {
 
 /// Names the Rust prelude, std collections or the generated code's imports already use: an
 /// item with one of these names would shadow it.
-const RESERVED_NAMES: [&str; 13] = [
+const RESERVED_NAMES: [&str; 16] = [
     "BTreeMap",
+    "BTreeSet",
     "Box",
     "Deserialize",
     "Err",
+    "HashSet",
+    "IndexSet",
     "None",
     "Ok",
     "Option",
@@ -133,6 +136,8 @@ struct Plan {
     items: HashMap<TypeId, (Home, String)>,
     /// Per schema, the name of the type alias for a root that is not a named item.
     root_aliases: Vec<Option<String>>,
+    /// The Rust collection for `uniqueItems` arrays.
+    unique_items: UniqueItemsType,
 }
 
 impl Plan {
@@ -225,6 +230,7 @@ impl Plan {
         Plan {
             items,
             root_aliases,
+            unique_items: settings.unique_items,
         }
     }
 
@@ -404,6 +410,52 @@ struct Imports {
     shared: BTreeSet<String>,
     /// The `deserialize_some` helper is needed.
     deserialize_some: bool,
+    /// The set types `uniqueItems` fields use (each gets a `UniqueSet` impl).
+    unique_sets: BTreeSet<SetKind>,
+    /// The `unique_items` deserialize functions fields use.
+    unique_shapes: BTreeSet<FieldShape>,
+}
+
+/// A set type a `uniqueItems` field can be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SetKind {
+    BTree,
+    Hash,
+    #[cfg(feature = "indexmap")]
+    Index,
+}
+
+impl SetKind {
+    /// The set type for `setting`, `None` for `Vec`.
+    fn from_setting(setting: UniqueItemsType) -> Option<SetKind> {
+        match setting {
+            UniqueItemsType::Vec => None,
+            UniqueItemsType::HashSet => Some(SetKind::Hash),
+            UniqueItemsType::BTreeSet => Some(SetKind::BTree),
+            #[cfg(feature = "indexmap")]
+            UniqueItemsType::IndexSet => Some(SetKind::Index),
+        }
+    }
+
+    /// The type name and the `use` path that brings it into scope.
+    fn name_and_path(self) -> (&'static str, &'static str) {
+        match self {
+            SetKind::BTree => ("BTreeSet", "std::collections::BTreeSet"),
+            SetKind::Hash => ("HashSet", "std::collections::HashSet"),
+            #[cfg(feature = "indexmap")]
+            SetKind::Index => ("IndexSet", "indexmap::IndexSet"),
+        }
+    }
+
+    /// The `UniqueSet` impl for this set type in the `unique_items` helper module.
+    fn helper_impl(self) -> &'static str {
+        match self {
+            SetKind::BTree => UNIQUE_SET_BTREE_SET,
+            SetKind::Hash => UNIQUE_SET_HASH_SET,
+            #[cfg(feature = "indexmap")]
+            SetKind::Index => UNIQUE_SET_INDEX_SET,
+        }
+    }
 }
 
 /// Renders the Rust type of `id` as seen from `home`, recording imports. Iterative: a type is
@@ -502,6 +554,15 @@ fn string_type(format: StringFormat, imports: &mut Imports) -> &'static str {
         }
         StringFormat::Plain => "String",
     }
+}
+
+/// Whether a `uniqueItems` array of `id` can be a set: the item's Rust type implements `Hash`,
+/// `Eq` and `Ord`, and Rust equality is JSON equality for it (strings, integers, booleans).
+fn is_set_item(graph: &TypeGraph, id: TypeId) -> bool {
+    matches!(
+        graph.node(id),
+        TypeNode::String { .. } | TypeNode::Integer(_) | TypeNode::Boolean
+    )
 }
 
 /// Whether the Rust type for `id` can hold JSON `null` itself: any value, `()`, or a union
@@ -739,7 +800,7 @@ fn int_bounds(width: IntWidth) -> (i128, i128) {
 }
 
 /// How a field holds its value: presence and nullability (absent and `null` are different).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum FieldShape {
     /// Required, not nullable: `T`.
     Plain,
@@ -795,6 +856,77 @@ fn render_fields(
     out
 }
 
+/// The Rust type of a field's value (without the field's own `Option`s), and the set type when
+/// it is a `uniqueItems` array held in a set (`UniqueItemsType`). A set applies only where the
+/// field's own value is the array, since a duplicate is rejected through the field's
+/// `deserialize_with`.
+fn field_value_type(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    value_id: TypeId,
+    shape: FieldShape,
+    imports: &mut Imports,
+) -> (String, Option<SetKind>) {
+    if let TypeNode::Array {
+        items,
+        unique: true,
+        ..
+    } = graph.node(value_id)
+        && is_set_item(graph, *items)
+        && let Some(kind) = SetKind::from_setting(plan.unique_items)
+    {
+        let (set_name, path): (&str, &str) = kind.name_and_path();
+        imports.uses.insert(path);
+        imports.unique_sets.insert(kind);
+        imports.unique_shapes.insert(shape);
+        let item_ty: String = rust_type(graph, plan, home, *items, imports);
+        return (format!("{set_name}<{item_ty}>"), Some(kind));
+    }
+    (rust_type(graph, plan, home, value_id, imports), None)
+}
+
+/// The serde arguments for a field's presence and nullability (`shape`), reading a set field
+/// through the `unique_items` helper that rejects a duplicate item.
+fn shape_serde_args(
+    shape: FieldShape,
+    set: Option<SetKind>,
+    imports: &mut Imports,
+    serde_args: &mut Vec<String>,
+) {
+    match (shape, set) {
+        (FieldShape::Plain, Some(_)) => {
+            serde_args.push("deserialize_with = \"unique_items::required\"".to_string());
+        }
+        (FieldShape::Optional, Some(_)) => {
+            serde_args.push("default".to_string());
+            serde_args.push("deserialize_with = \"unique_items::optional\"".to_string());
+            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
+        }
+        (FieldShape::RequiredNullable, Some(_)) => {
+            serde_args.push("deserialize_with = \"unique_items::nullable\"".to_string());
+        }
+        (FieldShape::OptionalNullable, Some(_)) => {
+            serde_args.push("default".to_string());
+            serde_args.push("deserialize_with = \"unique_items::optional_nullable\"".to_string());
+            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
+        }
+        (FieldShape::Plain, None) => {}
+        (FieldShape::Optional, None) => {
+            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
+        }
+        (FieldShape::RequiredNullable, None) => {
+            serde_args.push("deserialize_with = \"Option::deserialize\"".to_string());
+        }
+        (FieldShape::OptionalNullable, None) => {
+            imports.deserialize_some = true;
+            serde_args.push("default".to_string());
+            serde_args.push("deserialize_with = \"deserialize_some\"".to_string());
+            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
+        }
+    }
+}
+
 fn render_field(
     graph: &TypeGraph,
     plan: &Plan,
@@ -817,7 +949,8 @@ fn render_field(
         (true, true, _) => FieldShape::RequiredNullable,
         (false, true, _) | (false, false, true) => FieldShape::OptionalNullable,
     };
-    let value_ty: String = rust_type(graph, plan, home, value_id, imports);
+    let (value_ty, set): (String, Option<SetKind>) =
+        field_value_type(graph, plan, home, value_id, shape, imports);
     let ty: String = match shape {
         FieldShape::Plain => value_ty.clone(),
         FieldShape::Optional | FieldShape::RequiredNullable => format!("Option<{value_ty}>"),
@@ -836,21 +969,7 @@ fn render_field(
         let literal: String = default_literal(value, node)?;
         render_default_accessor(name, shape, node, &value_ty, &literal)
     });
-    match shape {
-        FieldShape::Plain => {}
-        FieldShape::Optional => {
-            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
-        }
-        FieldShape::RequiredNullable => {
-            serde_args.push("deserialize_with = \"Option::deserialize\"".to_string());
-        }
-        FieldShape::OptionalNullable => {
-            imports.deserialize_some = true;
-            serde_args.push("default".to_string());
-            serde_args.push("deserialize_with = \"deserialize_some\"".to_string());
-            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
-        }
-    }
+    shape_serde_args(shape, set, imports, &mut serde_args);
     let mut attrs: String = String::new();
     for line in doc_lines(field.description.as_deref()) {
         let _ = writeln!(attrs, "    /// {line}");
@@ -1206,6 +1325,9 @@ fn render_buffer(graph: &TypeGraph, plan: &Plan, home: Home) -> CodeGenResult<Ve
     if imports.deserialize_some {
         out.write_all(DESERIALIZE_SOME.as_bytes())?;
     }
+    if !imports.unique_shapes.is_empty() {
+        out.write_all(unique_items_module(&imports).as_bytes())?;
+    }
     out.write_all(body.as_bytes())?;
     Ok(out)
 }
@@ -1223,12 +1345,176 @@ where
 
 ";
 
+/// The `unique_items` helper module for a buffer: the `UniqueSet` impls and the deserialize
+/// functions its `uniqueItems` set fields use. A duplicate item is a deserialize error, so an
+/// invalid instance is never silently turned into a different, valid one.
+fn unique_items_module(imports: &Imports) -> String {
+    let mut out: String = String::from(UNIQUE_ITEMS_HEAD);
+    for kind in &imports.unique_sets {
+        out.push_str(kind.helper_impl());
+    }
+    out.push_str(UNIQUE_ITEMS_VISITOR);
+    for shape in &imports.unique_shapes {
+        out.push_str(match shape {
+            FieldShape::Plain => UNIQUE_ITEMS_REQUIRED,
+            FieldShape::Optional => UNIQUE_ITEMS_OPTIONAL,
+            FieldShape::RequiredNullable => UNIQUE_ITEMS_NULLABLE,
+            FieldShape::OptionalNullable => UNIQUE_ITEMS_OPTIONAL_NULLABLE,
+        });
+    }
+    out.push_str("}\n\n");
+    out
+}
+
+const UNIQUE_ITEMS_HEAD: &str =
+    "/// Deserializes `uniqueItems` arrays into sets: a duplicate item is an error, never dropped.
+mod unique_items {
+    use serde::Deserialize;
+
+    /// A set that reports whether an inserted item was new.
+    pub(super) trait UniqueSet: Default {
+        type Item;
+        fn with_capacity(capacity: usize) -> Self;
+        fn insert_new(&mut self, item: Self::Item) -> bool;
+    }
+";
+
+const UNIQUE_SET_BTREE_SET: &str = "
+    impl<T: Ord> UniqueSet for std::collections::BTreeSet<T> {
+        type Item = T;
+        fn with_capacity(_capacity: usize) -> Self {
+            Self::new()
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+";
+
+const UNIQUE_SET_HASH_SET: &str = "
+    impl<T: std::hash::Hash + Eq> UniqueSet for std::collections::HashSet<T> {
+        type Item = T;
+        fn with_capacity(capacity: usize) -> Self {
+            Self::with_capacity(capacity)
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+";
+
+#[cfg(feature = "indexmap")]
+const UNIQUE_SET_INDEX_SET: &str = "
+    impl<T: std::hash::Hash + Eq> UniqueSet for indexmap::IndexSet<T> {
+        type Item = T;
+        fn with_capacity(capacity: usize) -> Self {
+            Self::with_capacity(capacity)
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+";
+
+const UNIQUE_ITEMS_VISITOR: &str = "
+    struct Visitor<S>(std::marker::PhantomData<S>);
+
+    impl<'de, S> serde::de::Visitor<'de> for Visitor<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        type Value = S;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(\"an array with unique items\")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<S, A::Error> {
+            let mut set: S = S::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+            let mut index: usize = 0;
+            while let Some(item) = seq.next_element()? {
+                if !set.insert_new(item) {
+                    return Err(serde::de::Error::custom(format_args!(
+                        \"duplicate item at index {index} of an array with uniqueItems\"
+                    )));
+                }
+                index += 1;
+            }
+            Ok(set)
+        }
+    }
+
+    /// An array read into the set `S`.
+    struct Unique<S>(S);
+
+    impl<'de, S> Deserialize<'de> for Unique<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer
+                .deserialize_seq(Visitor(std::marker::PhantomData))
+                .map(Unique)
+        }
+    }
+";
+
+const UNIQUE_ITEMS_REQUIRED: &str = "
+    pub(super) fn required<'de, D, S>(deserializer: D) -> Result<S, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Unique::deserialize(deserializer).map(|unique: Unique<S>| unique.0)
+    }
+";
+
+const UNIQUE_ITEMS_OPTIONAL: &str = "
+    pub(super) fn optional<'de, D, S>(deserializer: D) -> Result<Option<S>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Unique::deserialize(deserializer).map(|unique: Unique<S>| Some(unique.0))
+    }
+";
+
+const UNIQUE_ITEMS_NULLABLE: &str = "
+    pub(super) fn nullable<'de, D, S>(deserializer: D) -> Result<Option<S>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Option::<Unique<S>>::deserialize(deserializer)
+            .map(|value: Option<Unique<S>>| value.map(|unique: Unique<S>| unique.0))
+    }
+";
+
+const UNIQUE_ITEMS_OPTIONAL_NULLABLE: &str = "
+    pub(super) fn optional_nullable<'de, D, S>(
+        deserializer: D,
+    ) -> Result<Option<Option<S>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Option::<Unique<S>>::deserialize(deserializer)
+            .map(|value: Option<Unique<S>>| Some(value.map(|unique: Unique<S>| unique.0)))
+    }
+";
+
 #[cfg(test)]
 mod tests {
     use super::CodeGenError;
     use super::{CodeGenBackend, CodeGenInput, RustBackend, generate_rust};
     use crate::code_gen::settings::{
-        CodeGenSettings, DedupeMode, ModelNameSource, UnknownProperties,
+        CodeGenSettings, DedupeMode, ModelNameSource, UniqueItemsType, UnknownProperties,
     };
     use crate::json_schema::{JsonSchema, JsonType, RegistryError, Schema};
 
@@ -3340,6 +3626,359 @@ pub struct Root {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one full golden of the generated helper module"
+    )]
+    fn unique_items_hash_set_covers_every_field_shape_and_falls_back_to_vec() {
+        let schema: Schema = Schema::try_from(r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"ids":{"type":"array","items":{"type":"integer"},"uniqueItems":true},"maybe":{"type":["array","null"],"items":{"type":"boolean"},"uniqueItems":true},"must":{"type":["array","null"],"items":{"type":"string"},"uniqueItems":true},"floats":{"type":"array","items":{"type":"number"},"uniqueItems":true},"nested":{"type":"array","items":{"type":"array","items":{"type":"string"},"uniqueItems":true}}},"required":["tags","must"]}"#).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unique_items(UniqueItemsType::HashSet)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+
+/// Deserializes `uniqueItems` arrays into sets: a duplicate item is an error, never dropped.
+mod unique_items {
+    use serde::Deserialize;
+
+    /// A set that reports whether an inserted item was new.
+    pub(super) trait UniqueSet: Default {
+        type Item;
+        fn with_capacity(capacity: usize) -> Self;
+        fn insert_new(&mut self, item: Self::Item) -> bool;
+    }
+
+    impl<T: std::hash::Hash + Eq> UniqueSet for std::collections::HashSet<T> {
+        type Item = T;
+        fn with_capacity(capacity: usize) -> Self {
+            Self::with_capacity(capacity)
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+
+    struct Visitor<S>(std::marker::PhantomData<S>);
+
+    impl<'de, S> serde::de::Visitor<'de> for Visitor<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        type Value = S;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array with unique items")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<S, A::Error> {
+            let mut set: S = S::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+            let mut index: usize = 0;
+            while let Some(item) = seq.next_element()? {
+                if !set.insert_new(item) {
+                    return Err(serde::de::Error::custom(format_args!(
+                        "duplicate item at index {index} of an array with uniqueItems"
+                    )));
+                }
+                index += 1;
+            }
+            Ok(set)
+        }
+    }
+
+    /// An array read into the set `S`.
+    struct Unique<S>(S);
+
+    impl<'de, S> Deserialize<'de> for Unique<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer
+                .deserialize_seq(Visitor(std::marker::PhantomData))
+                .map(Unique)
+        }
+    }
+
+    pub(super) fn required<'de, D, S>(deserializer: D) -> Result<S, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Unique::deserialize(deserializer).map(|unique: Unique<S>| unique.0)
+    }
+
+    pub(super) fn optional<'de, D, S>(deserializer: D) -> Result<Option<S>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Unique::deserialize(deserializer).map(|unique: Unique<S>| Some(unique.0))
+    }
+
+    pub(super) fn nullable<'de, D, S>(deserializer: D) -> Result<Option<S>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Option::<Unique<S>>::deserialize(deserializer)
+            .map(|value: Option<Unique<S>>| value.map(|unique: Unique<S>| unique.0))
+    }
+
+    pub(super) fn optional_nullable<'de, D, S>(
+        deserializer: D,
+    ) -> Result<Option<Option<S>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Option::<Unique<S>>::deserialize(deserializer)
+            .map(|value: Option<Unique<S>>| Some(value.map(|unique: Unique<S>| unique.0)))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(unique_items)]
+    pub floats: Option<Vec<f64>>,
+    #[serde(default, deserialize_with = "unique_items::optional", skip_serializing_if = "Option::is_none")]
+    #[json_schema(unique_items)]
+    pub ids: Option<HashSet<i64>>,
+    #[serde(default, deserialize_with = "unique_items::optional_nullable", skip_serializing_if = "Option::is_none")]
+    #[json_schema(unique_items)]
+    pub maybe: Option<Option<HashSet<bool>>>,
+    #[serde(deserialize_with = "unique_items::nullable")]
+    #[json_schema(required, unique_items)]
+    pub must: Option<HashSet<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested: Option<Vec<Vec<String>>>,
+    #[serde(deserialize_with = "unique_items::required")]
+    #[json_schema(unique_items)]
+    pub tags: HashSet<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unique_items_btree_set_emits_btree_set() {
+        let schema: Schema = Schema::try_from(r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unique_items(UniqueItemsType::BTreeSet)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
+/// Deserializes `uniqueItems` arrays into sets: a duplicate item is an error, never dropped.
+mod unique_items {
+    use serde::Deserialize;
+
+    /// A set that reports whether an inserted item was new.
+    pub(super) trait UniqueSet: Default {
+        type Item;
+        fn with_capacity(capacity: usize) -> Self;
+        fn insert_new(&mut self, item: Self::Item) -> bool;
+    }
+
+    impl<T: Ord> UniqueSet for std::collections::BTreeSet<T> {
+        type Item = T;
+        fn with_capacity(_capacity: usize) -> Self {
+            Self::new()
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+
+    struct Visitor<S>(std::marker::PhantomData<S>);
+
+    impl<'de, S> serde::de::Visitor<'de> for Visitor<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        type Value = S;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array with unique items")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<S, A::Error> {
+            let mut set: S = S::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+            let mut index: usize = 0;
+            while let Some(item) = seq.next_element()? {
+                if !set.insert_new(item) {
+                    return Err(serde::de::Error::custom(format_args!(
+                        "duplicate item at index {index} of an array with uniqueItems"
+                    )));
+                }
+                index += 1;
+            }
+            Ok(set)
+        }
+    }
+
+    /// An array read into the set `S`.
+    struct Unique<S>(S);
+
+    impl<'de, S> Deserialize<'de> for Unique<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer
+                .deserialize_seq(Visitor(std::marker::PhantomData))
+                .map(Unique)
+        }
+    }
+
+    pub(super) fn required<'de, D, S>(deserializer: D) -> Result<S, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Unique::deserialize(deserializer).map(|unique: Unique<S>| unique.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(deserialize_with = "unique_items::required")]
+    #[json_schema(unique_items)]
+    pub tags: BTreeSet<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "indexmap")]
+    #[test]
+    fn unique_items_index_set_emits_index_set() {
+        let schema: Schema = Schema::try_from(r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unique_items(UniqueItemsType::IndexSet)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use indexmap::IndexSet;
+use std::collections::BTreeMap;
+
+/// Deserializes `uniqueItems` arrays into sets: a duplicate item is an error, never dropped.
+mod unique_items {
+    use serde::Deserialize;
+
+    /// A set that reports whether an inserted item was new.
+    pub(super) trait UniqueSet: Default {
+        type Item;
+        fn with_capacity(capacity: usize) -> Self;
+        fn insert_new(&mut self, item: Self::Item) -> bool;
+    }
+
+    impl<T: std::hash::Hash + Eq> UniqueSet for indexmap::IndexSet<T> {
+        type Item = T;
+        fn with_capacity(capacity: usize) -> Self {
+            Self::with_capacity(capacity)
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+
+    struct Visitor<S>(std::marker::PhantomData<S>);
+
+    impl<'de, S> serde::de::Visitor<'de> for Visitor<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        type Value = S;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array with unique items")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<S, A::Error> {
+            let mut set: S = S::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+            let mut index: usize = 0;
+            while let Some(item) = seq.next_element()? {
+                if !set.insert_new(item) {
+                    return Err(serde::de::Error::custom(format_args!(
+                        "duplicate item at index {index} of an array with uniqueItems"
+                    )));
+                }
+                index += 1;
+            }
+            Ok(set)
+        }
+    }
+
+    /// An array read into the set `S`.
+    struct Unique<S>(S);
+
+    impl<'de, S> Deserialize<'de> for Unique<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer
+                .deserialize_seq(Visitor(std::marker::PhantomData))
+                .map(Unique)
+        }
+    }
+
+    pub(super) fn required<'de, D, S>(deserializer: D) -> Result<S, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Unique::deserialize(deserializer).map(|unique: Unique<S>| unique.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(deserialize_with = "unique_items::required")]
+    #[json_schema(unique_items)]
+    pub tags: IndexSet<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn array_with_unique_items_true_object_items_emits_vec() {
         let json = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}},"uniqueItems":true}},"required":["items"]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
@@ -4852,6 +5491,24 @@ pub use super::shared::Root;
             generate_rust(&[s1, s2], &settings_func).unwrap();
         let expected: super::GenerateRustOutput = output_full;
         let actual: super::GenerateRustOutput = output_func;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn default_settings_use_vec_for_unique_items() {
+        let settings: CodeGenSettings = CodeGenSettings::builder().build();
+        let expected: UniqueItemsType = UniqueItemsType::Vec;
+        let actual: UniqueItemsType = settings.unique_items;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn builder_sets_unique_items() {
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .unique_items(UniqueItemsType::BTreeSet)
+            .build();
+        let expected: UniqueItemsType = UniqueItemsType::BTreeSet;
+        let actual: UniqueItemsType = settings.unique_items;
         assert_eq!(expected, actual);
     }
 

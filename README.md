@@ -19,7 +19,8 @@ codegen turns into `serde_json::Value` for `true` and an enum with no variants f
 validator: instance must equal const, numbers by value so `1` equals `1.0`; codegen: single-value enum (string or any other JSON value); reverse: single-variant unit enum → const), **enum**
 (validator compares numbers by value; codegen emits Rust enums for string enums and value enums with exact serde impls for numbers, booleans, null and mixed values), **items** (array with single-schema
 items; codegen emits `Vec<T>` or `Option<Vec<T>>`; **uniqueItems**: when true,
-codegen emits `Vec<T>` (element order survives a round trip) with `#[json_schema(unique_items)]`, and the validator enforces
+codegen emits `Vec<T>` by default (element order survives a round trip) with `#[json_schema(unique_items)]`, or a
+`HashSet`, `BTreeSet` or `IndexSet` (`indexmap` feature) with `--cgs-unique-items` / `UniqueItemsType`, which rejects a duplicate item when deserializing; the validator enforces
 uniqueness, with `1` and `1.0` equal and object key order ignored), **minItems** and **maxItems** (array/set length constraints;
 validator enforces; codegen emits
 `#[json_schema(min_items = ..., max_items = ...)]` on generated array/set
@@ -221,7 +222,14 @@ to prefer property keys over `title` for struct names. CLI:
 `CodeGenSettings::builder().unknown_properties(UnknownProperties::Drop).build()`
 (`--cgs-unknown-properties drop`) to ignore unknown object keys instead of keeping
 them (faster deserialization), or `Capture` to keep them even where
-`additionalProperties` is `false`.
+`additionalProperties` is `false`. `uniqueItems` arrays are `Vec<T>` by default, the
+spec's ordered array, kept exactly; `.unique_items(UniqueItemsType::HashSet)`
+(`--cgs-unique-items hash-set`), `BTreeSet` (`btree-set`, sorted output) or `IndexSet`
+(`index-set`, order kept; needs the `indexmap` feature here, and `indexmap` with `serde`
+plus `json-schema-rs` with `indexmap` in the crate that compiles the generated code)
+make uniqueness part of the type: a duplicate item is a deserialize error, never dropped.
+A set applies to a property whose value is the array, with string, integer or boolean
+items; anything else stays `Vec`.
 
 **Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
 `CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a

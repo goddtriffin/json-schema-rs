@@ -1909,6 +1909,55 @@ fn derive_field_default_round_trip_serializes_and_parses() {
 
 #[derive(ToJsonSchema)]
 #[expect(dead_code)]
+struct WithSetFields {
+    hashed: HashSet<String>,
+    sorted: std::collections::BTreeSet<i64>,
+    listed: Vec<String>,
+}
+
+#[test]
+fn derive_set_fields_emit_unique_items_true() {
+    let schema: JsonSchema = WithSetFields::json_schema().expect("schema");
+    let expected: Vec<(String, Option<bool>)> = vec![
+        ("hashed".to_string(), Some(true)),
+        ("listed".to_string(), None),
+        ("sorted".to_string(), Some(true)),
+    ];
+    let actual: Vec<(String, Option<bool>)> = schema
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            (
+                key.clone(),
+                property.as_object().and_then(|p| p.unique_items),
+            )
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "indexmap")]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithIndexSetField {
+    tags: indexmap::IndexSet<String>,
+}
+
+#[cfg(feature = "indexmap")]
+#[test]
+fn derive_index_set_field_emits_unique_items_true() {
+    let schema: JsonSchema = WithIndexSetField::json_schema().expect("schema");
+    let expected: Option<bool> = Some(true);
+    let actual: Option<bool> = schema
+        .properties
+        .get("tags")
+        .and_then(Schema::as_object)
+        .and_then(|p| p.unique_items);
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
 struct WithExactDefaults {
     #[json_schema(default = 18446744073709551615)]
     big: Option<u64>,

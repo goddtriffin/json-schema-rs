@@ -37,6 +37,32 @@ pub enum UnknownProperties {
     Drop,
 }
 
+/// The Rust collection for an array with `uniqueItems: true`.
+///
+/// The default, [`Vec`](UniqueItemsType::Vec), is what the spec describes: a JSON array is an
+/// ordered list (2020-12 core §4.2.1) and `uniqueItems` only asserts that its items are unique
+/// (validation §6.4.3), so a `Vec` keeps the instance exactly, for every item type. The set
+/// types make uniqueness part of the Rust type: a duplicate item is a deserialize error (never
+/// silently dropped). A set applies to a property whose value is the array (`T`, `Option<T>`)
+/// with string, integer or boolean items; other positions (array items, map values, union
+/// variants, a root alias) and other item types (`f64`, objects, any value: no `Hash` / `Ord`)
+/// stay `Vec`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UniqueItemsType {
+    /// `Vec<T>`: keeps item order and the instance exactly; the validator checks uniqueness.
+    #[default]
+    Vec,
+    /// `std::collections::HashSet<T>`: fast lookup; serializes in an unspecified order that can
+    /// differ between runs.
+    HashSet,
+    /// `std::collections::BTreeSet<T>`: serializes in sorted order (not the instance's order).
+    BTreeSet,
+    /// `indexmap::IndexSet<T>`: keeps item order and makes uniqueness part of the type. The
+    /// generated code needs the `indexmap` crate with its `serde` feature.
+    #[cfg(feature = "indexmap")]
+    IndexSet,
+}
+
 /// Language-agnostic code generation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeGenSettings {
@@ -46,6 +72,8 @@ pub struct CodeGenSettings {
     pub dedupe_mode: DedupeMode,
     /// Override for unknown object keys; `None` follows each schema's `additionalProperties`.
     pub unknown_properties: Option<UnknownProperties>,
+    /// The Rust collection for `uniqueItems` arrays (default `Vec`).
+    pub unique_items: UniqueItemsType,
 }
 
 impl Default for CodeGenSettings {
@@ -54,6 +82,7 @@ impl Default for CodeGenSettings {
             model_name_source: ModelNameSource::TitleFirst,
             dedupe_mode: DedupeMode::Full,
             unknown_properties: None,
+            unique_items: UniqueItemsType::Vec,
         }
     }
 }
@@ -64,6 +93,7 @@ pub struct CodeGenSettingsBuilder {
     model_name_source: Option<ModelNameSource>,
     dedupe_mode: Option<DedupeMode>,
     unknown_properties: Option<UnknownProperties>,
+    unique_items: Option<UniqueItemsType>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -88,6 +118,13 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Set the Rust collection for `uniqueItems` arrays (see [`UniqueItemsType`]).
+    #[must_use]
+    pub fn unique_items(mut self, value: UniqueItemsType) -> Self {
+        self.unique_items = Some(value);
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -95,6 +132,7 @@ impl CodeGenSettingsBuilder {
             model_name_source: self.model_name_source.unwrap_or_default(),
             dedupe_mode: self.dedupe_mode.unwrap_or_default(),
             unknown_properties: self.unknown_properties,
+            unique_items: self.unique_items.unwrap_or_default(),
         }
     }
 }
