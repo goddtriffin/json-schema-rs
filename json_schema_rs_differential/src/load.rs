@@ -8,8 +8,8 @@
 //! - `suite/<draft>__optional.jsonl` (required) for every draft's optional suite
 //!   (`tests/<draft>/optional/`); every case in it is reported as optional;
 //! - `fixtures/<fixture id with / replaced by __>__valid.jsonl` and `...__invalid.jsonl`
-//!   (required) for every manifest fixture, from `bowtie validate --expect valid|invalid
-//!   <schema> <instances in manifest order>`.
+//!   (required) for every manifest fixture, from `bowtie run` on one case per expectation: the
+//!   schema, its instances in manifest order, and the fixture's resources as the registry.
 
 use crate::error::DifferentialError;
 use crate::messages::{MessageCase, fixture_cases, select_suite_case};

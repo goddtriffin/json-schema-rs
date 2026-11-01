@@ -1,95 +1,16 @@
 //! `jsonschemars generate` subcommand: generate Rust from JSON Schema files.
 
+use super::retrieval::{CliRetriever, RefRetrieval};
 use super::utils::{
     collect_schema_entries, display_schema_path, read_schema_from_path, write_mod_rs_files,
 };
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, DedupeMode, FileRetriever, JsonSchemaSettings, ModelNameSource,
-    Retrieve, RetrieveError, Schema, UniqueItemsType, UnknownProperties, file_uri, generate_rust,
+    CodeGenInput, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, Schema,
+    UniqueItemsType, UnknownProperties, file_uri, generate_rust,
 };
-use serde_json::Value;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-
-/// Where `$ref`s to documents that are not inputs may be read from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RefRetrieval {
-    /// `--cgs-file-root`: files are read only from inside it (default: the current directory).
-    pub(crate) file_root: Option<PathBuf>,
-    /// `--cgs-allow-remote-refs`: retrieve `http:` / `https:` documents.
-    pub(crate) allow_remote: bool,
-}
-
-/// The CLI's retriever: `file:` URIs inside the file root, and `http:` / `https:` URLs when
-/// remote retrieval is enabled.
-struct CliRetriever {
-    file: FileRetriever,
-    #[cfg(feature = "http")]
-    http: Option<json_schema_rs::HttpRetriever>,
-}
-
-impl CliRetriever {
-    fn new(retrieval: &RefRetrieval) -> Result<Self, String> {
-        let file_root: PathBuf = match &retrieval.file_root {
-            Some(root) => root.clone(),
-            None => std::env::current_dir()
-                .map_err(|e| format!("cannot read the current directory: {e}"))?,
-        };
-        #[cfg(feature = "http")]
-        let http: Option<json_schema_rs::HttpRetriever> = if retrieval.allow_remote {
-            Some(json_schema_rs::HttpRetriever::new().map_err(|e| e.reason)?)
-        } else {
-            None
-        };
-        #[cfg(not(feature = "http"))]
-        if retrieval.allow_remote {
-            return Err(
-                "--cgs-allow-remote-refs needs jsonschemars built with the `http` feature"
-                    .to_string(),
-            );
-        }
-        Ok(CliRetriever {
-            file: FileRetriever::new(file_root),
-            #[cfg(feature = "http")]
-            http,
-        })
-    }
-}
-
-impl Retrieve for CliRetriever {
-    fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError> {
-        let scheme: String = uri
-            .split_once(':')
-            .map(|(scheme, _)| scheme.to_ascii_lowercase())
-            .unwrap_or_default();
-        match scheme.as_str() {
-            "file" => self.file.retrieve(uri).map_err(|e| {
-                // Point at the flag only when the root is what refused the file.
-                if e.reason.contains(" is outside the file root ") {
-                    RetrieveError {
-                        reason: format!("{} (set it with --cgs-file-root)", e.reason),
-                    }
-                } else {
-                    e
-                }
-            }),
-            "http" | "https" => {
-                #[cfg(feature = "http")]
-                if let Some(http) = &self.http {
-                    return http.retrieve(uri);
-                }
-                Err(RetrieveError {
-                    reason: "remote retrieval is off (enable it with --cgs-allow-remote-refs)"
-                        .to_string(),
-                })
-            }
-            _ => Err(RetrieveError {
-                reason: format!("no retriever for the URI scheme \"{scheme}\""),
-            }),
-        }
-    }
-}
 
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn run_generate(

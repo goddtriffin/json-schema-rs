@@ -1,6 +1,6 @@
 //! Parsing of Bowtie's line-delimited JSON report format.
 //!
-//! A report produced by `bowtie suite` or `bowtie validate` is a sequence of JSON lines
+//! A report produced by `bowtie suite`, `bowtie run` or `bowtie validate` is a sequence of JSON lines
 //! (see Bowtie's `bowtie/schemas/report.json` and `bowtie/_commands.py`):
 //!
 //! - exactly one **header** first: `{"implementations": {...}, "dialect": ..., "bowtie_version": ..., "started": ...}`;

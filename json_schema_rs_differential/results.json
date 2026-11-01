@@ -558,16 +558,16 @@
       "js-hyperjump": {
         "tally": {
           "total": 39,
-          "passed": 30,
+          "passed": 34,
           "failed": 0,
           "skipped": 0,
-          "errored": 9,
+          "errored": 5,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 30,
+          "numerator": 34,
           "denominator": 39,
-          "percent": "76.92%"
+          "percent": "87.18%"
         }
       },
       "localhost/json-schema-rs": {
@@ -603,31 +603,31 @@
       "rust-boon": {
         "tally": {
           "total": 39,
-          "passed": 35,
+          "passed": 39,
           "failed": 0,
           "skipped": 0,
-          "errored": 4,
+          "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 35,
+          "numerator": 39,
           "denominator": 39,
-          "percent": "89.74%"
+          "percent": "100.00%"
         }
       },
       "rust-jsonschema": {
         "tally": {
           "total": 39,
-          "passed": 35,
+          "passed": 39,
           "failed": 0,
           "skipped": 0,
-          "errored": 4,
+          "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 35,
+          "numerator": 39,
           "denominator": 39,
-          "percent": "89.74%"
+          "percent": "100.00%"
         }
       }
     }
@@ -4911,16 +4911,16 @@
           "js-hyperjump": {
             "tally": {
               "total": 4,
-              "passed": 0,
+              "passed": 4,
               "failed": 0,
               "skipped": 0,
-              "errored": 4,
+              "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 0,
+              "numerator": 4,
               "denominator": 4,
-              "percent": "0.00%"
+              "percent": "100.00%"
             }
           },
           "localhost/json-schema-rs": {
@@ -4956,31 +4956,31 @@
           "rust-boon": {
             "tally": {
               "total": 4,
-              "passed": 0,
+              "passed": 4,
               "failed": 0,
               "skipped": 0,
-              "errored": 4,
+              "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 0,
+              "numerator": 4,
               "denominator": 4,
-              "percent": "0.00%"
+              "percent": "100.00%"
             }
           },
           "rust-jsonschema": {
             "tally": {
               "total": 4,
-              "passed": 0,
+              "passed": 4,
               "failed": 0,
               "skipped": 0,
-              "errored": 4,
+              "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 0,
+              "numerator": 4,
               "denominator": 4,
-              "percent": "0.00%"
+              "percent": "100.00%"
             }
           }
         },
@@ -5027,7 +5027,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
+              "message": "uncaught: uncaught error"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -5037,8 +5037,7 @@
               "message": "unknown format \"uri\" ignored in schema at path \"#/properties/bugs/properties/url\""
             },
             "js-hyperjump": {
-              "verdict": "errored",
-              "message": "Unable to load resource 'https://json.schemastore.org/eslintrc.json'. Referenced from 'https://example.com/bowtie-sent-schema-1'."
+              "verdict": "valid"
             },
             "localhost/json-schema-rs": {
               "verdict": "skipped",
@@ -5048,12 +5047,10 @@
               "verdict": "valid"
             },
             "rust-boon": {
-              "verdict": "errored",
-              "message": "error loading https://json.schemastore.org/ava.json: unsupported scheme in https://json.schemastore.org/ava.json"
+              "verdict": "valid"
             },
             "rust-jsonschema": {
-              "verdict": "errored",
-              "message": "ValidationError { repr: ValidationErrorRepr { instance: Null, kind: Type { kind: Multiple((boolean, object)) }, instance_path: Location(\"\"), schema_path: Location(\"\"), absolute_keyword_location: None, .. } }"
+              "verdict": "valid"
             }
           }
         },
@@ -5071,7 +5068,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://www.schemastore.org/quikrun.json\": invalid file url: https://www.schemastore.org/quikrun.json"
+              "message": "uncaught: uncaught error"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "valid"
@@ -5081,8 +5078,7 @@
               "message": "unknown format \"uri\" ignored in schema at path \"#/properties/bugs/properties/url\""
             },
             "js-hyperjump": {
-              "verdict": "errored",
-              "message": "Unable to load resource 'https://json.schemastore.org/eslintrc.json'. Referenced from 'https://example.com/bowtie-sent-schema-1'."
+              "verdict": "valid"
             },
             "localhost/json-schema-rs": {
               "verdict": "skipped",
@@ -5092,12 +5088,10 @@
               "verdict": "valid"
             },
             "rust-boon": {
-              "verdict": "errored",
-              "message": "error loading https://json.schemastore.org/ava.json: unsupported scheme in https://json.schemastore.org/ava.json"
+              "verdict": "valid"
             },
             "rust-jsonschema": {
-              "verdict": "errored",
-              "message": "ValidationError { repr: ValidationErrorRepr { instance: Null, kind: Type { kind: Multiple((boolean, object)) }, instance_path: Location(\"\"), schema_path: Location(\"\"), absolute_keyword_location: None, .. } }"
+              "verdict": "valid"
             }
           }
         },
@@ -5115,7 +5109,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "uncaught: uncaught error"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -5125,8 +5119,7 @@
               "message": "unknown format \"uri\" ignored in schema at path \"#/properties/bugs/properties/url\""
             },
             "js-hyperjump": {
-              "verdict": "errored",
-              "message": "Unable to load resource 'https://json.schemastore.org/eslintrc.json'. Referenced from 'https://example.com/bowtie-sent-schema-1'."
+              "verdict": "invalid"
             },
             "localhost/json-schema-rs": {
               "verdict": "skipped",
@@ -5136,12 +5129,10 @@
               "verdict": "invalid"
             },
             "rust-boon": {
-              "verdict": "errored",
-              "message": "error loading https://json.schemastore.org/ava.json: unsupported scheme in https://json.schemastore.org/ava.json"
+              "verdict": "invalid"
             },
             "rust-jsonschema": {
-              "verdict": "errored",
-              "message": "ValidationError { repr: ValidationErrorRepr { instance: Null, kind: Type { kind: Multiple((boolean, object)) }, instance_path: Location(\"\"), schema_path: Location(\"\"), absolute_keyword_location: None, .. } }"
+              "verdict": "invalid"
             }
           }
         },
@@ -5159,7 +5150,7 @@
             },
             "go-jsonschema": {
               "verdict": "errored",
-              "message": "failing loading \"https://json.schemastore.org/stylelintrc.json\": invalid file url: https://json.schemastore.org/stylelintrc.json"
+              "message": "uncaught: uncaught error"
             },
             "java-networknt-json-schema-validator": {
               "verdict": "invalid"
@@ -5169,8 +5160,7 @@
               "message": "unknown format \"uri\" ignored in schema at path \"#/properties/bugs/properties/url\""
             },
             "js-hyperjump": {
-              "verdict": "errored",
-              "message": "Unable to load resource 'https://json.schemastore.org/eslintrc.json'. Referenced from 'https://example.com/bowtie-sent-schema-1'."
+              "verdict": "invalid"
             },
             "localhost/json-schema-rs": {
               "verdict": "skipped",
@@ -5180,12 +5170,10 @@
               "verdict": "invalid"
             },
             "rust-boon": {
-              "verdict": "errored",
-              "message": "error loading https://json.schemastore.org/ava.json: unsupported scheme in https://json.schemastore.org/ava.json"
+              "verdict": "invalid"
             },
             "rust-jsonschema": {
-              "verdict": "errored",
-              "message": "ValidationError { repr: ValidationErrorRepr { instance: Null, kind: Type { kind: Multiple((boolean, object)) }, instance_path: Location(\"\"), schema_path: Location(\"\"), absolute_keyword_location: None, .. } }"
+              "verdict": "invalid"
             }
           }
         }

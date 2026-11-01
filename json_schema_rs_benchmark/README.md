@@ -59,8 +59,8 @@ Operations: `codegen` (schema → Rust source), `schema_compile` (in-process onl
   `resources/` (each with an absolute root `$id`); every tool gets them registered under that
   `$id` the way it accepts extra documents (in-process: our `$ref` registry / an in-memory
   retriever for codegen, a `jsonschema` registry, boon's `add_resource`; CLI: extra
-  `jsonschemars generate` inputs, `boon_validate -r`). A tool that cannot take extra documents
-  (typify, `jsonschema-cli`, `jsonschemars validate`) fails that cell with "cannot load the
+  `jsonschemars generate` inputs, `jsonschemars validate -r`, `boon_validate -r`). A tool that
+  cannot take extra documents (typify, `jsonschema-cli`) fails that cell with "cannot load the
   fixture's resource documents". A fixture with a `$ref` to any document it does not vendor
   (checked across the schema and its resources) is not measured at all. In-process, our codegen
   reaches the resources through a retriever, so only the schema gets root types (as in every

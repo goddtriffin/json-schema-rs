@@ -69,10 +69,10 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 | `go-jsonschema` | 51.28% | 20 | 0 | 0 | 19 | 39 |
 | `java-networknt-json-schema-validator` | 87.18% | 34 | 0 | 0 | 5 | 39 |
 | `js-ajv` | 38.46% | 15 | 0 | 0 | 24 | 39 |
-| `js-hyperjump` | 76.92% | 30 | 0 | 0 | 9 | 39 |
+| `js-hyperjump` | 87.18% | 34 | 0 | 0 | 5 | 39 |
 | `python-jsonschema` | 100.00% | 39 | 0 | 0 | 0 | 39 |
-| `rust-boon` | 89.74% | 35 | 0 | 0 | 4 | 39 |
-| `rust-jsonschema` | 89.74% | 35 | 0 | 0 | 4 | 39 |
+| `rust-boon` | 100.00% | 39 | 0 | 0 | 0 | 39 |
+| `rust-jsonschema` | 100.00% | 39 | 0 | 0 | 0 | 39 |
 
 ## Unsupported features (suite)
 
@@ -399,7 +399,7 @@ Optional suite:
 
 ## Fixtures
 
-Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run through Bowtie (`bowtie validate`). Expected verdicts come from the manifest's valid/invalid instance lists.
+Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run through Bowtie (`bowtie run`, with each fixture's vendored resource documents in the case registry). Expected verdicts come from the manifest's valid/invalid instance lists.
 
 ### small/config
 
@@ -512,19 +512,19 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 | `go-jsonschema` | 0.00% | 0 | 0 | 0 | 4 | 4 |
 | `java-networknt-json-schema-validator` | 100.00% | 4 | 0 | 0 | 0 | 4 |
 | `js-ajv` | 0.00% | 0 | 0 | 0 | 4 | 4 |
-| `js-hyperjump` | 0.00% | 0 | 0 | 0 | 4 | 4 |
+| `js-hyperjump` | 100.00% | 4 | 0 | 0 | 0 | 4 |
 | `python-jsonschema` | 100.00% | 4 | 0 | 0 | 0 | 4 |
-| `rust-boon` | 0.00% | 0 | 0 | 0 | 4 | 4 |
-| `rust-jsonschema` | 0.00% | 0 | 0 | 0 | 4 | 4 |
+| `rust-boon` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `rust-jsonschema` | 100.00% | 4 | 0 | 0 | 0 | 4 |
 
 <details><summary>Verdict per instance</summary>
 
 | Instance | Expected | `localhost/json-schema-rs` (ours) | `dotnet-jsonschema-net` | `go-jsonschema` | `java-networknt-json-schema-validator` | `js-ajv` | `js-hyperjump` | `python-jsonschema` | `rust-boon` | `rust-jsonschema` |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `medium/package-json/instances/valid/library.json` | valid | skipped | valid | errored | valid | errored | errored | valid | errored | errored |
-| `medium/package-json/instances/valid/minimal.json` | valid | skipped | valid | errored | valid | errored | errored | valid | errored | errored |
-| `medium/package-json/instances/invalid/name-wrong-type.json` | invalid | skipped | invalid | errored | invalid | errored | errored | invalid | errored | errored |
-| `medium/package-json/instances/invalid/scripts-wrong-type.json` | invalid | skipped | invalid | errored | invalid | errored | errored | invalid | errored | errored |
+| `medium/package-json/instances/valid/library.json` | valid | skipped | valid | errored | valid | errored | valid | valid | valid | valid |
+| `medium/package-json/instances/valid/minimal.json` | valid | skipped | valid | errored | valid | errored | valid | valid | valid | valid |
+| `medium/package-json/instances/invalid/name-wrong-type.json` | invalid | skipped | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
+| `medium/package-json/instances/invalid/scripts-wrong-type.json` | invalid | skipped | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
 
 </details>
 

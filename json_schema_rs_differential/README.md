@@ -48,7 +48,7 @@ Settings (environment variables):
 |---|---|
 | `src/bin/bowtie_harness.rs` | Our Bowtie harness. It reads Bowtie's protocol on stdin and validates with `json-schema-rs`, parsing strictly. When it can't handle a schema it returns a skip with the reason, not a verdict. |
 | `Dockerfile` (+ `Dockerfile.dockerignore`) | Builds the harness into `localhost/json-schema-rs:latest` from the repo root. Bowtie runs it as `-i image:localhost/json-schema-rs`. |
-| `scripts/run_differential.sh` | The driver: prerequisite checks, image build, `bowtie suite` per draft (main and optional tests), and `bowtie validate` per fixture. The competitor list is `COMPETITORS` here. |
+| `scripts/run_differential.sh` | The driver: prerequisite checks, image build, `bowtie suite` per draft (main and optional tests), and `bowtie run` per fixture (its resource documents in the case registry). The competitor list is `COMPETITORS` here. |
 | `src/bin/differential_report.rs` + `src/*.rs` | Parse the Bowtie reports and work out compliance, coverage and correctness, and the majority vote. Also compare error messages in-process against the `jsonschema` and `boon` crates (Bowtie only reports valid/invalid, not messages). Writes `results.{json,md}`. |
 
 The design and its reasoning are in [design.md](../design.md) under

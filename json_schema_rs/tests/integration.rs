@@ -4768,14 +4768,16 @@ fn cli_validate_unknown_schema_uri_warns_and_falls_back() {
 
 #[test]
 fn cli_validate_unknown_schema_uri_rejected_with_flag() {
-    let (_, actual): (String, (i32, String)) = run_cli_validate(
+    let (path, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://example.com/custom-meta","type":"string"}"#,
         r#""ok""#,
         &["--jss-unknown-schema-uri", "reject"],
     );
     let expected: (i32, String) = (
         2,
-        "error: unknown $schema \"https://example.com/custom-meta\"\n".to_string(),
+        format!(
+            "error: {path}: unknown $schema \"https://example.com/custom-meta\"\nerror: schema ingestion failed with 1 error(s)\n"
+        ),
     );
     assert_eq!(expected, actual);
 }
@@ -5120,14 +5122,27 @@ fn cli_generate_strict_lists_every_unknown_key() {
 
 #[test]
 fn cli_validate_lists_every_registry_problem_as_schema_error() {
-    let (_, actual): (String, (i32, String)) = run_cli_validate(
+    let (path, actual): (String, (i32, String)) = run_cli_validate(
         r##"{"properties":{"a":{"$ref":"#/$defs/missing"},"b":{"$ref":"#/$defs/gone"}}}"##,
         "{}",
         &[],
     );
+    // The schema is read from its file: URI, which is the base of its references. The temporary
+    // file is gone by now, so canonicalize its directory.
+    let schema_path: &Path = Path::new(&path);
+    let file: String = schema_path
+        .parent()
+        .expect("temp dir")
+        .canonicalize()
+        .expect("canonical temp dir")
+        .join(schema_path.file_name().expect("file name"))
+        .display()
+        .to_string();
     let expected: (i32, String) = (
         2,
-        "schema error: $ref \"#/$defs/missing\" at /properties/a (\"json-schema:///#/$defs/missing\") does not resolve: no such location\nschema error: $ref \"#/$defs/gone\" at /properties/b (\"json-schema:///#/$defs/gone\") does not resolve: no such location\nerror: the schema cannot be used: 2 problem(s)\n".to_string(),
+        format!(
+            "schema error: $ref \"#/$defs/missing\" at /properties/a (\"file://{file}#/$defs/missing\") does not resolve: no such location\nschema error: $ref \"#/$defs/gone\" at /properties/b (\"file://{file}#/$defs/gone\") does not resolve: no such location\nerror: the schema cannot be used: 2 problem(s)\n"
+        ),
     );
     assert_eq!(expected, actual);
 }
@@ -5465,14 +5480,14 @@ fn cli_generate_rust_sibling_file_outside_the_file_root_errors_naming_the_uri() 
     let actual: (bool, BTreeMap<String, String>, String) = cli_generate_from(
         &path,
         &["order.json"],
-        &["--cgs-file-root", root.to_str().unwrap()],
+        &["--file-root", root.to_str().unwrap()],
     );
     let dir: String = path.display().to_string();
     let expected: (bool, BTreeMap<String, String>, String) = (
         false,
         BTreeMap::new(),
         format!(
-            "error: schema at index 0: $ref \"customer.json\" at /properties/customer (\"file://{dir}/customer.json\") does not resolve: could not retrieve \"file://{dir}/customer.json\": {dir}/customer.json is outside the file root {dir}/elsewhere (set it with --cgs-file-root)\n"
+            "error: schema at index 0: $ref \"customer.json\" at /properties/customer (\"file://{dir}/customer.json\") does not resolve: could not retrieve \"file://{dir}/customer.json\": {dir}/customer.json is outside the file root {dir}/elsewhere (set it with --file-root)\n"
         ),
     );
     assert_eq!(expected, actual);
@@ -5505,7 +5520,7 @@ fn cli_generate_rust_remote_ref_without_allow_remote_refs_errors_naming_the_uri(
     let expected: (bool, BTreeMap<String, String>, String) = (
         false,
         BTreeMap::new(),
-        "error: schema at index 0: $ref \"https://example.com/customer.json\" at /properties/customer (\"https://example.com/customer.json\") does not resolve: could not retrieve \"https://example.com/customer.json\": remote retrieval is off (enable it with --cgs-allow-remote-refs)\n".to_string(),
+        "error: schema at index 0: $ref \"https://example.com/customer.json\" at /properties/customer (\"https://example.com/customer.json\") does not resolve: could not retrieve \"https://example.com/customer.json\": remote retrieval is off (enable it with --allow-remote-refs)\n".to_string(),
     );
     assert_eq!(expected, actual);
 }
@@ -5515,12 +5530,11 @@ fn cli_generate_rust_remote_ref_without_allow_remote_refs_errors_naming_the_uri(
 fn cli_generate_rust_allow_remote_refs_without_http_feature_errors() {
     let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("customer.json", CUSTOMER)]);
     let actual: (bool, BTreeMap<String, String>, String) =
-        cli_generate_from(&path, &["customer.json"], &["--cgs-allow-remote-refs"]);
+        cli_generate_from(&path, &["customer.json"], &["--allow-remote-refs"]);
     let expected: (bool, BTreeMap<String, String>, String) = (
         false,
         BTreeMap::new(),
-        "error: --cgs-allow-remote-refs needs jsonschemars built with the `http` feature\n"
-            .to_string(),
+        "error: --allow-remote-refs needs jsonschemars built with the `http` feature\n".to_string(),
     );
     assert_eq!(expected, actual);
 }
@@ -5557,7 +5571,7 @@ fn cli_generate_rust_allow_remote_refs_retrieves_http_document() {
     );
     let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("order.json", &order)]);
     let actual: (bool, BTreeMap<String, String>, String) =
-        cli_generate_from(&path, &["order.json"], &["--cgs-allow-remote-refs"]);
+        cli_generate_from(&path, &["order.json"], &["--allow-remote-refs"]);
     let expected: (bool, BTreeMap<String, String>, String) = (
         true,
         BTreeMap::from([
@@ -5590,6 +5604,235 @@ pub struct Order {
             ),
         ]),
         String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+// --- CLI validate: documents a `$ref` names (sibling files, resources, file root) ---
+
+/// Runs `jsonschemars validate -s <schema> <extra_args>` from `cwd` with `payload` on stdin;
+/// returns its exit code and stderr.
+fn cli_validate_from(
+    cwd: &Path,
+    schema: &str,
+    payload: &str,
+    extra_args: &[&str],
+) -> (i32, String) {
+    let mut child = Command::new(jsonschemars_bin())
+        .current_dir(cwd)
+        .args(["validate", "-s", schema])
+        .args(extra_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn jsonschemars");
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload.as_bytes())
+        .expect("write payload");
+    let output = child.wait_with_output().expect("wait jsonschemars");
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8(output.stderr).expect("utf8 stderr"),
+    )
+}
+
+/// A schema whose root `$id` is a URL; resources reach it by that `$id`.
+const CUSTOMER_WITH_ID: &str = r#"{"$id":"https://example.com/schemas/customer.json","type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#;
+/// A schema whose `$id` makes `customer.json` resolve to [`CUSTOMER_WITH_ID`]'s `$id`.
+const ORDER_WITH_ID: &str = r#"{"$id":"https://example.com/schemas/order.json","type":"object","properties":{"customer":{"$ref":"customer.json"}},"required":["customer"]}"#;
+
+#[test]
+fn cli_validate_sibling_file_ref_accepts_conforming_payload() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let actual: (i32, String) =
+        cli_validate_from(&path, "order.json", r#"{"customer":{"name":"Ada"}}"#, &[]);
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_sibling_file_ref_rejects_payload_the_sibling_rejects() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let actual: (i32, String) =
+        cli_validate_from(&path, "order.json", r#"{"customer":{"name":7}}"#, &[]);
+    let expected: (i32, String) = (
+        1,
+        "/customer/name: expected string, got number\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_sibling_file_ref_from_another_directory_reads_the_schema_from_its_path() {
+    // The schema's relative `$ref` resolves against the schema file, not the current directory,
+    // which is the file root and holds both files beneath it.
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[]);
+    let sub: PathBuf = path.join("schemas");
+    fs::create_dir(&sub).expect("create schemas dir");
+    fs::write(sub.join("order.json"), ORDER_REFS_CUSTOMER).expect("write order");
+    fs::write(sub.join("customer.json"), CUSTOMER).expect("write customer");
+    let actual: (i32, String) = cli_validate_from(
+        &path,
+        "schemas/order.json",
+        r#"{"customer":{"name":"Ada"}}"#,
+        &[],
+    );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_resource_is_reached_by_its_root_id() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_WITH_ID),
+        ("vendored-customer.json", CUSTOMER_WITH_ID),
+    ]);
+    let actual: (i32, String) = cli_validate_from(
+        &path,
+        "order.json",
+        r#"{"customer":{"name":7}}"#,
+        &["-r", "vendored-customer.json"],
+    );
+    let expected: (i32, String) = (
+        1,
+        "/customer/name: expected string, got number\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_resource_is_reached_by_its_file_uri() {
+    // `customer.json` lives outside the file root, so only `--resource` makes it reachable.
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let root: PathBuf = path.join("elsewhere");
+    fs::create_dir(&root).expect("create file root");
+    let actual: (i32, String) = cli_validate_from(
+        &path,
+        "order.json",
+        r#"{"customer":{"name":"Ada"}}"#,
+        &[
+            "--resource",
+            "customer.json",
+            "--file-root",
+            root.to_str().unwrap(),
+        ],
+    );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_without_resource_reports_the_unresolved_id() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("order.json", ORDER_WITH_ID)]);
+    let actual: (i32, String) =
+        cli_validate_from(&path, "order.json", r#"{"customer":{"name":"Ada"}}"#, &[]);
+    let expected: (i32, String) = (
+        2,
+        "schema error: $ref \"customer.json\" at /properties/customer (\"https://example.com/schemas/customer.json\") does not resolve: could not retrieve \"https://example.com/schemas/customer.json\": remote retrieval is off (enable it with --allow-remote-refs)\nerror: the schema cannot be used: 1 problem(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_sibling_file_outside_the_file_root_errors_naming_the_uri() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let root: PathBuf = path.join("elsewhere");
+    fs::create_dir(&root).expect("create file root");
+    let actual: (i32, String) = cli_validate_from(
+        &path,
+        "order.json",
+        r#"{"customer":{"name":"Ada"}}"#,
+        &["--file-root", root.to_str().unwrap()],
+    );
+    let dir: String = path.display().to_string();
+    let expected: (i32, String) = (
+        2,
+        format!(
+            "schema error: $ref \"customer.json\" at /properties/customer (\"file://{dir}/customer.json\") does not resolve: could not retrieve \"file://{dir}/customer.json\": {dir}/customer.json is outside the file root {dir}/elsewhere (set it with --file-root)\nerror: the schema cannot be used: 1 problem(s)\n"
+        ),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(not(windows))]
+fn cli_validate_missing_ref_file_errors_naming_the_uri() {
+    let order = r#"{"type":"object","properties":{"customer":{"$ref":"missing.json"}}}"#;
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("order.json", order)]);
+    let actual: (i32, String) = cli_validate_from(&path, "order.json", "{}", &[]);
+    let dir: String = path.display().to_string();
+    let expected: (i32, String) = (
+        2,
+        format!(
+            "schema error: $ref \"missing.json\" at /properties/customer (\"file://{dir}/missing.json\") does not resolve: could not retrieve \"file://{dir}/missing.json\": {dir}/missing.json cannot be read: No such file or directory (os error 2)\nerror: the schema cannot be used: 1 problem(s)\n"
+        ),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_lists_every_unreadable_document() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("order.json", "{"), ("customer.json", CUSTOMER)]);
+    let actual: (i32, String) = cli_validate_from(
+        &path,
+        "order.json",
+        "{}",
+        &["-r", "customer.json", "-r", "absent.json", "-r", "-"],
+    );
+    let expected: (i32, String) = (
+        2,
+        "error: order.json: invalid JSON Schema: EOF while parsing an object at line 1 column 1\nerror: absent.json: failed to open schema file: No such file or directory (os error 2)\nerror: stdin: a resource must be a file; stdin (\"-\") is not accepted\nerror: schema ingestion failed with 3 error(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(not(feature = "http"))]
+#[test]
+fn cli_validate_allow_remote_refs_without_http_feature_errors() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("customer.json", CUSTOMER)]);
+    let actual: (i32, String) =
+        cli_validate_from(&path, "customer.json", "{}", &["--allow-remote-refs"]);
+    let expected: (i32, String) = (
+        2,
+        "error: --allow-remote-refs needs jsonschemars built with the `http` feature\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn cli_validate_allow_remote_refs_retrieves_http_document() {
+    let base: String = serve_json_on_loopback(CUSTOMER);
+    let order: String = format!(
+        r#"{{"type":"object","properties":{{"customer":{{"$ref":"{base}/customer.json"}}}},"required":["customer"]}}"#
+    );
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("order.json", &order)]);
+    let actual: (i32, String) = cli_validate_from(
+        &path,
+        "order.json",
+        r#"{"customer":{"name":7}}"#,
+        &["--allow-remote-refs"],
+    );
+    let expected: (i32, String) = (
+        1,
+        "/customer/name: expected string, got number\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
     );
     assert_eq!(expected, actual);
 }

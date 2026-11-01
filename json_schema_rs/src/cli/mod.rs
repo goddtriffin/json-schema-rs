@@ -1,6 +1,7 @@
 //! CLI entry and subcommand dispatch for jsonschemars.
 
 mod generate;
+mod retrieval;
 mod utils;
 mod validate;
 
@@ -9,6 +10,7 @@ use json_schema_rs::{
     ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings, RefSiblings, SpecVersion,
     UnknownSchemaUri,
 };
+use retrieval::RefRetrieval;
 use std::path::PathBuf;
 
 /// Why a subcommand failed: the message for the final `error:` line and the process exit code.
@@ -197,22 +199,11 @@ pub fn run() {
                         .value_parser(["vec", "hash-set", "btree-set", "index-set"])
                         .help("Codegen Settings: Rust collection for uniqueItems arrays; a set rejects a duplicate item when deserializing (default: vec; index-set needs the `indexmap` feature)"),
                 )
-                .arg(
-                    Arg::new("cgs-file-root")
-                        .long("cgs-file-root")
-                        .value_name("DIR")
-                        .help("Codegen Settings: a $ref to a file that is not an INPUT is read only from inside DIR (default: the current directory)"),
-                )
-                .arg(
-                    Arg::new("cgs-allow-remote-refs")
-                        .long("cgs-allow-remote-refs")
-                        .action(clap::ArgAction::SetTrue)
-                        .help("Codegen Settings: retrieve http: and https: documents a $ref names (needs the `http` feature; default: off)"),
-                ),
+                .args(retrieval::retrieval_args()),
         )
         .subcommand(
             Command::new("validate")
-                .about("Validate a JSON instance against a JSON Schema (one schema, one payload)")
+                .about("Validate a JSON instance against a JSON Schema and the documents it references")
                 .arg(
                     Arg::new("schema")
                         .short('s')
@@ -228,7 +219,16 @@ pub fn run() {
                         .value_name("FILE")
                         .help("Path to the JSON payload to validate. If omitted, read from stdin."),
                 )
-                .args(jss_args()),
+                .arg(
+                    Arg::new("resource")
+                        .short('r')
+                        .long("resource")
+                        .value_name("FILE")
+                        .action(clap::ArgAction::Append)
+                        .help("A JSON Schema document the schema may reference, reached by its file: URI or its root $id. Repeatable."),
+                )
+                .args(jss_args())
+                .args(retrieval::retrieval_args()),
         );
     let matches = cmd.get_matches();
 
@@ -259,10 +259,7 @@ pub fn run() {
             let cgs_unique_items: Option<&str> = gen_m
                 .get_one::<String>("cgs-unique-items")
                 .map(String::as_str);
-            let retrieval: generate::RefRetrieval = generate::RefRetrieval {
-                file_root: gen_m.get_one::<String>("cgs-file-root").map(PathBuf::from),
-                allow_remote: gen_m.get_flag("cgs-allow-remote-refs"),
-            };
+            let retrieval: RefRetrieval = RefRetrieval::from_matches(gen_m);
             generate::run_generate(
                 lang,
                 &inputs,
@@ -284,8 +281,13 @@ pub fn run() {
             let payload: Option<PathBuf> = val_m
                 .get_one::<String>("payload")
                 .map(|s| PathBuf::from(s.as_str()));
+            let resources: Vec<PathBuf> = val_m
+                .get_many::<String>("resource")
+                .map(|it| it.map(PathBuf::from).collect())
+                .unwrap_or_default();
             let schema_settings: JsonSchemaSettings = jss_settings(val_m);
-            validate::run_validate(&schema, payload, &schema_settings)
+            let retrieval: RefRetrieval = RefRetrieval::from_matches(val_m);
+            validate::run_validate(&schema, payload, &resources, &schema_settings, &retrieval)
         }
         _ => {
             eprintln!("expected subcommand: generate or validate");
