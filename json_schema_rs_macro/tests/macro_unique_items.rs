@@ -1,21 +1,18 @@
-//! Integration test: `json_schema_to_rust!` with a schema that has uniqueItems: true (`HashSet`).
+//! Integration test: `json_schema_to_rust!` with a schema that has uniqueItems: true (`Vec`, so
+//! element order survives a round trip).
 
 use json_schema_rs_macro::json_schema_to_rust;
-use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 json_schema_to_rust!(
     r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["tags"]}"#
 );
 
 #[test]
-fn unique_items_compiles_and_deserializes() {
-    let root = schema_0::Root {
-        tags: ["a".to_string(), "b".to_string()].into_iter().collect(),
-        additional: BTreeMap::new(),
-    };
-    let expected: HashSet<String> = ["a".to_string(), "b".to_string()].into_iter().collect();
-    assert_eq!(root.tags, expected);
+fn unique_items_round_trip_keeps_element_order() {
+    let expected: serde_json::Value = serde_json::json!({"tags": ["core", "generated", "alpha"]});
+    let root: schema_0::Root = serde_json::from_value(expected.clone()).expect("deserialize");
+    let actual: serde_json::Value = serde_json::to_value(&root).expect("serialize");
+    assert_eq!(expected, actual);
 }
 
 #[test]

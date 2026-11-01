@@ -12,6 +12,13 @@ see [design.md](design.md).
 2. **Performance: speed, then memory.** Fast and lean, measured with `make benchmark`.
    When speed and memory conflict, choose speed: a much faster design is worth somewhat
    more memory.
+3. **The user-facing API.** Sane defaults and the behaviour users would most expect (library,
+   CLI, generated code). Keep the spec-faithful default; offer a setting where users
+   reasonably differ.
+
+**Tests adapt to the library, never the reverse.** Never shape the API, defaults or output to
+make testing easier, deterministic or idempotent. When the best behaviour is hard to test, the
+tests do the work (pin a setting, sort, compare as sets).
 
 Backwards compatibility is **not** a priority and **never** a justification (requirement 4).
 

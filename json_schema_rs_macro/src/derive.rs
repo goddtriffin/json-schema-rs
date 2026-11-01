@@ -209,9 +209,18 @@ fn numeric_literal(expr: &Expr, key: &str) -> SynResult<NumericLiteral> {
         },
         _ => return Err(error()),
     };
+    // syn reads `-5` in an attribute value as one negative literal (digits `-5`), and `-(5)`
+    // style input as a negation of a literal: both are negative.
     match lit {
         Lit::Int(lit_int) => {
-            let magnitude: u64 = lit_int.base10_parse()?;
+            let digits: &str = lit_int.base10_digits();
+            let (negative, magnitude): (bool, &str) = match digits.strip_prefix('-') {
+                Some(rest) => (!negative, rest),
+                None => (negative, digits),
+            };
+            let magnitude: u64 = magnitude
+                .parse()
+                .map_err(|e| Error::new_spanned(expr, format!("json_schema({key} = ...): {e}")))?;
             if !negative {
                 return Ok(NumericLiteral::Unsigned(magnitude));
             }
@@ -221,12 +230,8 @@ fn numeric_literal(expr: &Expr, key: &str) -> SynResult<NumericLiteral> {
             Ok(NumericLiteral::Signed(value))
         }
         Lit::Float(lit_float) => {
-            let magnitude: f64 = lit_float.base10_parse()?;
-            Ok(NumericLiteral::Float(if negative {
-                -magnitude
-            } else {
-                magnitude
-            }))
+            let value: f64 = lit_float.base10_parse()?;
+            Ok(NumericLiteral::Float(if negative { -value } else { value }))
         }
         _ => Err(error()),
     }
@@ -396,10 +401,10 @@ fn field_deprecated(field: &Field) -> SynResult<Option<bool>> {
     Ok(None)
 }
 
-/// Extracts `default = <literal>` from a field's `#[json_schema(...)]` attribute.
-/// Supports string, integer, float, and bool literals (maps to JSON default value).
-/// Returns the expression to use for `default_value` (e.g. `Some(serde_json::json!(42))`).
-fn field_default(field: &Field) -> SynResult<Option<Expr>> {
+/// Extracts `default = <literal>` from a field's `#[json_schema(...)]` attribute as an
+/// expression of type `Option<serde_json::Value>`: a string, a boolean, or an integer or float
+/// literal (optionally negated), kept exact (`18446744073709551615`, `-5`, `2.5`).
+fn field_default(field: &Field) -> SynResult<Option<TokenStream2>> {
     for attr in &field.attrs {
         if !attr.path().is_ident("json_schema") {
             continue;
@@ -413,21 +418,29 @@ fn field_default(field: &Field) -> SynResult<Option<Expr>> {
             if !nv.path.is_ident("default") {
                 continue;
             }
-            let expr = &nv.value;
-            let valid = matches!(
-                expr,
-                Expr::Lit(expr_lit) if matches!(
-                    &expr_lit.lit,
-                    Lit::Str(_) | Lit::Int(_) | Lit::Float(_) | Lit::Bool(_)
-                )
-            );
-            if valid {
-                return Ok(Some(expr.clone()));
+            let expr: &Expr = &nv.value;
+            if let Expr::Lit(expr_lit) = expr {
+                match &expr_lit.lit {
+                    Lit::Str(lit) => {
+                        return Ok(Some(
+                            quote! { Some(::serde_json::Value::String(#lit.to_string())) },
+                        ));
+                    }
+                    Lit::Bool(lit) => {
+                        return Ok(Some(quote! { Some(::serde_json::Value::Bool(#lit)) }));
+                    }
+                    _ => {}
+                }
             }
-            return Err(Error::new_spanned(
-                expr,
-                "json_schema(default = ...) requires a string, integer, float, or bool literal",
-            ));
+            let number: TokenStream2 = numeric_literal(expr, "default")
+                .map_err(|_| {
+                    Error::new_spanned(
+                        expr,
+                        "json_schema(default = ...) requires a string, integer, float, or bool literal",
+                    )
+                })?
+                .to_number_expr();
+            return Ok(Some(quote! { (#number).map(::serde_json::Value::Number) }));
         }
     }
     Ok(None)
@@ -765,11 +778,12 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         let field_max_length: Option<u64> = field_max_length(field)?;
         let field_pattern_val: Option<String> = field_pattern(field)?;
         let field_deprecated_val: Option<bool> = field_deprecated(field)?;
-        let field_default_expr: Option<Expr> = field_default(field)?;
-        let default_value_override: Option<TokenStream2> =
-            field_default_expr.as_ref().map(|expr| {
-                quote! { Some(::serde_json::json!(#expr)) }
-            });
+        let unique_items_expr: TokenStream2 = if json_schema_flag(&field.attrs, "unique_items")? {
+            quote! { Some(true) }
+        } else {
+            quote! { None }
+        };
+        let default_value_override: Option<TokenStream2> = field_default(field)?;
         let set_default_value: TokenStream2 = if let Some(ref ov) = default_value_override {
             quote! { schema.default_value = #ov; }
         } else {
@@ -823,6 +837,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 schema.multiple_of = #multiple_of_expr.or(schema.multiple_of);
                 schema.min_items = #min_items_expr.or(schema.min_items);
                 schema.max_items = #max_items_expr.or(schema.max_items);
+                schema.unique_items = #unique_items_expr.or(schema.unique_items);
                 schema.min_length = #min_length_expr.or(schema.min_length);
                 schema.max_length = #max_length_expr.or(schema.max_length);
                 schema.pattern = #pattern_expr.or(schema.pattern);

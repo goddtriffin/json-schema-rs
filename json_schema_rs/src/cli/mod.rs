@@ -191,6 +191,13 @@ pub fn run() {
                         .help("Codegen Settings: keep (capture) or ignore (drop) object keys the schema does not name, overriding additionalProperties (default: follow the schema)"),
                 )
                 .arg(
+                    Arg::new("cgs-unique-items")
+                        .long("cgs-unique-items")
+                        .value_name("TYPE")
+                        .value_parser(["vec", "hash-set", "btree-set", "index-set"])
+                        .help("Codegen Settings: Rust collection for uniqueItems arrays; a set rejects a duplicate item when deserializing (default: vec; index-set needs the `indexmap` feature)"),
+                )
+                .arg(
                     Arg::new("cgs-file-root")
                         .long("cgs-file-root")
                         .value_name("DIR")
@@ -249,6 +256,9 @@ pub fn run() {
             let cgs_unknown_properties: Option<&str> = gen_m
                 .get_one::<String>("cgs-unknown-properties")
                 .map(String::as_str);
+            let cgs_unique_items: Option<&str> = gen_m
+                .get_one::<String>("cgs-unique-items")
+                .map(String::as_str);
             let retrieval: generate::RefRetrieval = generate::RefRetrieval {
                 file_root: gen_m.get_one::<String>("cgs-file-root").map(PathBuf::from),
                 allow_remote: gen_m.get_flag("cgs-allow-remote-refs"),
@@ -261,6 +271,7 @@ pub fn run() {
                 cgs_model_name_source,
                 cgs_dedupe_mode,
                 cgs_unknown_properties,
+                cgs_unique_items,
                 &retrieval,
             )
             .map_err(CliFailure::from)
