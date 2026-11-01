@@ -4848,7 +4848,7 @@ mod tests {
         let expected: ValidationResult = invalid_format_errors("ipv4");
         let actual: ValidationResult = validate_not_valid(
             r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,
-            &crate::SpecVersion::Draft07.default_schema_settings(),
+            &crate::JsonSchemaSettings::builder().forced_spec_version(crate::SpecVersion::Draft07).build(),
         );
         assert_eq!(expected, actual);
     }

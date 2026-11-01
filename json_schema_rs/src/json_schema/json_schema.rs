@@ -2821,7 +2821,7 @@ mod tests {
 
     #[test]
     fn schema_document_records_forced_spec_version() {
-        let settings: JsonSchemaSettings = SpecVersion::Draft07.default_schema_settings();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder().forced_spec_version(SpecVersion::Draft07).build();
         let expected: Option<DialectSettings> = Some(DialectSettings {
             forced_spec_version: Some(SpecVersion::Draft07),
             ..DialectSettings::default()
@@ -3700,7 +3700,7 @@ mod tests {
     fn pinned_draft4_normalizes_id_without_schema_uri() {
         let json = r#"{"id":"http://example.com/p.json"}"#;
         let schema: JsonSchema =
-            JsonSchema::new_from_str(json, &SpecVersion::Draft04.default_schema_settings())
+            JsonSchema::new_from_str(json, &JsonSchemaSettings::builder().forced_spec_version(SpecVersion::Draft04).build())
                 .expect("parse");
         let expected: Option<String> = Some("http://example.com/p.json".to_string());
         let actual: Option<String> = schema.id;
