@@ -2227,42 +2227,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': additionalProperties 'bar' not allowed
 ```
 
-### 38. suite draft2020-12/refRemote.json — remote ref / remote ref invalid
-
-Schema:
-
-```json
-{
-  "$ref": "http://localhost:1234/draft2020-12/integer.json",
-  "$schema": "https://json-schema.org/draft/2020-12/schema"
-}
-```
-
-Instance:
-
-```json
-"a"
-```
-
-**json-schema-rs**: invalid (1 message line(s))
-
-```text
-root: could not resolve $ref "http://localhost:1234/draft2020-12/integer.json": $ref "http://localhost:1234/draft2020-12/integer.json" at root ("http://localhost:1234/draft2020-12/integer.json") does not resolve: could not retrieve "http://localhost:1234/draft2020-12/integer.json": retrieval is disabled; no document was given for "http://localhost:1234/draft2020-12/integer.json"
-```
-
-**jsonschema**: error (1 message line(s))
-
-```text
-schema rejected: references an external resource that is not available offline (remote retrieval disabled)
-```
-
-**boon**: error (1 message line(s))
-
-```text
-schema rejected: error loading http://localhost:1234/draft2020-12/integer.json
-```
-
-### 39. suite draft2020-12/required.json — required validation / non-present required property is invalid
+### 38. suite draft2020-12/required.json — required validation / non-present required property is invalid
 
 Schema:
 
@@ -2306,7 +2271,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'foo'
 ```
 
-### 40. suite draft2020-12/type.json — integer type matches integers / a float is not an integer
+### 39. suite draft2020-12/type.json — integer type matches integers / a float is not an integer
 
 Schema:
 
@@ -2342,7 +2307,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': want integer, but got number
 ```
 
-### 41. suite draft2020-12/unevaluatedItems.json — unevaluatedItems false / with unevaluated items
+### 40. suite draft2020-12/unevaluatedItems.json — unevaluatedItems false / with unevaluated items
 
 Schema:
 
@@ -2380,7 +2345,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/0': false schema
 ```
 
-### 42. suite draft2020-12/unevaluatedProperties.json — unevaluatedProperties schema / with invalid unevaluated properties
+### 41. suite draft2020-12/unevaluatedProperties.json — unevaluatedProperties schema / with invalid unevaluated properties
 
 Schema:
 
@@ -2421,7 +2386,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/foo': length must be >=3, but got 2
 ```
 
-### 43. suite draft2020-12/uniqueItems.json — uniqueItems validation / non-unique array of integers is invalid
+### 42. suite draft2020-12/uniqueItems.json — uniqueItems validation / non-unique array of integers is invalid
 
 Schema:
 
@@ -2460,7 +2425,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': items at 0 and 1 are equal
 ```
 
-### 44. suite draft2020-12/vocabulary.json — schema that uses custom metaschema with with no validation vocabulary / applicator vocabulary still works
+### 43. suite draft2020-12/vocabulary.json — schema that uses custom metaschema with with no validation vocabulary / applicator vocabulary still works
 
 Schema:
 
@@ -2503,7 +2468,7 @@ schema rejected: Unknown meta-schema: 'http://localhost:1234/draft2020-12/metasc
 schema rejected: error loading http://localhost:1234/draft2020-12/metaschema-no-validation.json
 ```
 
-### 45. fixture small/config — small/config/instances/invalid/bad-port-and-enum.json
+### 44. fixture small/config — small/config/instances/invalid/bad-port-and-enum.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2540,7 +2505,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/port': must be <=65535, but got 99999
 ```
 
-### 46. fixture small/config — small/config/instances/invalid/missing-required.json
+### 45. fixture small/config — small/config/instances/invalid/missing-required.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2572,7 +2537,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'version'
 ```
 
-### 47. fixture small/config — small/config/instances/invalid/wrong-type.json
+### 46. fixture small/config — small/config/instances/invalid/wrong-type.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2605,7 +2570,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/debug': want boolean, but got string
 ```
 
-### 48. fixture small/prettierrc — small/prettierrc/instances/invalid/bad-enum.json
+### 47. fixture small/prettierrc — small/prettierrc/instances/invalid/bad-enum.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2640,7 +2605,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 49. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-semi.json
+### 48. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-semi.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2673,7 +2638,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 50. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-tabwidth.json
+### 49. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-tabwidth.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2706,7 +2671,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 51. fixture medium/user-profile — medium/user-profile/instances/invalid/duplicate-roles-and-bad-username.json
+### 50. fixture medium/user-profile — medium/user-profile/instances/invalid/duplicate-roles-and-bad-username.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2746,7 +2711,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/username': 'no spaces!' does not match pattern '^[a-zA-Z0-9_]+$'
 ```
 
-### 52. fixture medium/user-profile — medium/user-profile/instances/invalid/empty-roles-and-bad-enum.json
+### 51. fixture medium/user-profile — medium/user-profile/instances/invalid/empty-roles-and-bad-enum.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2786,7 +2751,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/roles': minimum 1 items required, but got 0 items
 ```
 
-### 53. fixture medium/user-profile — medium/user-profile/instances/invalid/missing-nested-required.json
+### 52. fixture medium/user-profile — medium/user-profile/instances/invalid/missing-nested-required.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2830,7 +2795,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/addresses/0': missing properties 'city', 'country'
 ```
 
-### 54. fixture medium/package-json — medium/package-json/instances/invalid/name-wrong-type.json
+### 53. fixture medium/package-json — medium/package-json/instances/invalid/name-wrong-type.json
 
 Schema: `medium/package-json/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2871,7 +2836,7 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading https://json.schemastore.org/ava.json
 ```
 
-### 55. fixture medium/package-json — medium/package-json/instances/invalid/scripts-wrong-type.json
+### 54. fixture medium/package-json — medium/package-json/instances/invalid/scripts-wrong-type.json
 
 Schema: `medium/package-json/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2913,7 +2878,7 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading https://json.schemastore.org/ava.json
 ```
 
-### 56. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
+### 55. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2957,7 +2922,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '/services/0/language': value must be one of 'rust', 'go', 'python', 'typescript', 'java', 'csharp'
 ```
 
-### 57. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
+### 56. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3005,7 +2970,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0': additionalProperties 'unexpectedField' not allowed
 ```
 
-### 58. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
+### 57. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3054,7 +3019,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0/resources/cpuMillicores': must be >=10, but got 5
 ```
 
-### 59. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
+### 58. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3284,7 +3249,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/version': value must be one of '2.1', 2.1
 ```
 
-### 60. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
+### 59. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3514,7 +3479,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'version'
 ```
 
-### 61. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
+### 60. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3745,7 +3710,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/workflows': want object, but got string
 ```
 
-### 62. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
+### 61. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3828,7 +3793,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 63. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
+### 62. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3913,7 +3878,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(183 more lines in results.json)_
 
-### 64. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
+### 63. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3990,7 +3955,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 65. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
+### 64. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -4085,7 +4050,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': additionalProperties 'bogusTopLevel' not allowed
 ```
 
-### 66. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
+### 65. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -4197,7 +4162,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/spec/replicas': want null or integer, but got string
 ```
 
-### 67. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
+### 66. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
