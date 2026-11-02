@@ -541,6 +541,10 @@ impl CompiledSchemaBuilder {
     }
 }
 
+/// A schema compiled for several entry points (see [`CompiledSchema::with_entries`]): the
+/// compiled schema and, per entry, the nodes of its URIs, in order.
+pub(crate) type CompiledEntries = (CompiledSchema, Vec<Box<[NodeId]>>);
+
 impl CompiledSchema {
     /// Compiles the root schema of `registry` (and everything it references) with the default
     /// options.
@@ -551,6 +555,24 @@ impl CompiledSchema {
     /// keeps raw with a value of the wrong shape, or a `$ref` the registry does not know.
     pub fn new(registry: &Registry<'_>) -> Result<CompiledSchema, CompileErrors> {
         Compiler::new(registry).compile()
+    }
+
+    /// Compiles, from one registry, the schemas each entry names, sharing the nodes they have in
+    /// common. An entry is a conjunction of absolute URIs, each resolved as a `$ref` written in
+    /// the registry's root resource ([`Registry::resolve`] in [`Registry::root_scope`]; build the
+    /// registry with [`RegistryBuilder::entry`](crate::json_schema::RegistryBuilder::entry) for
+    /// each). Validate at an entry with [`CompiledSchema::validate_at`]; the compiled root is the
+    /// first entry's first schema (`true` when there is none).
+    ///
+    /// # Errors
+    ///
+    /// Every [`CompileError`] found; a URI the registry does not know is a
+    /// [`CompileError::UnknownRef`] with an empty location.
+    pub(crate) fn with_entries(
+        registry: &Registry<'_>,
+        entries: &[&[&str]],
+    ) -> Result<CompiledEntries, CompileErrors> {
+        Compiler::new(registry).compile_entries(entries)
     }
 
     /// Options for compiling a schema (user-defined formats).
@@ -886,6 +908,43 @@ impl<'r, 'a> Compiler<'r, 'a> {
     fn compile(mut self) -> Result<CompiledSchema, CompileErrors> {
         let root_source: Source<'r> = Source::from_schema_ref(self.registry.root());
         let root: NodeId = self.node_for(root_source, self.registry.root_scope(), 0);
+        self.finish(root)
+    }
+
+    /// See [`CompiledSchema::with_entries`].
+    fn compile_entries(mut self, entries: &[&[&str]]) -> Result<CompiledEntries, CompileErrors> {
+        let scope: Scope = self.registry.root_scope();
+        let mut nodes: Vec<Box<[NodeId]>> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let mut ids: Vec<NodeId> = Vec::with_capacity(entry.len());
+            for uri in *entry {
+                match self.registry.resolve(scope, uri) {
+                    Ok(resolved) => {
+                        let location: usize = self.target_location(resolved.pointer);
+                        let source: Source<'r> = Source::from_schema_ref(resolved.schema);
+                        let id: NodeId = self.node_for(source, resolved.scope, location);
+                        self.record_target_uri(id, source, resolved.scope, resolved.pointer);
+                        ids.push(id);
+                    }
+                    Err(_) => self.errors.push(CompileError::UnknownRef {
+                        location: String::new(),
+                        ref_str: (*uri).to_string(),
+                    }),
+                }
+            }
+            nodes.push(ids.into_boxed_slice());
+        }
+        let root: NodeId = match nodes.iter().find_map(|ids| ids.first()) {
+            Some(id) => *id,
+            None => self.node_for(Source::Bool(true), scope, 0),
+        };
+        let compiled: CompiledSchema = self.finish(root)?;
+        Ok((compiled, nodes))
+    }
+
+    /// Compiles every queued node (and the dynamic targets they need) into the schema rooted at
+    /// `root`.
+    fn finish(mut self, root: NodeId) -> Result<CompiledSchema, CompileErrors> {
         let mut dynamic_anchors: HashMap<Scope, Vec<(Box<str>, NodeId)>> = HashMap::new();
         let mut recursive_anchors: HashMap<Scope, NodeId> = HashMap::new();
         loop {
@@ -1895,7 +1954,7 @@ fn dependent_required(value: &Value) -> Option<Vec<(&str, Vec<&str>)>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompiledSchema, Compiler, EnumId, Keyword, Node};
+    use super::{CompileError, CompiledSchema, Compiler, EnumId, Keyword, Node};
     use crate::json_schema::{Registry, Schema};
     use serde_json::{Value, json};
 
@@ -2009,6 +2068,67 @@ mod tests {
             .iter()
             .map(|list| list.iter().map(|(name, _)| name.to_string()).collect())
             .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// The node count and per-entry nodes of `schema` compiled for `entries`.
+    fn compile_entries(schema: &Value, entries: &[&[&str]]) -> (usize, Vec<Vec<u32>>) {
+        let schema: Schema = serde_json::from_value(schema.clone()).expect("test schema parses");
+        let builder = entries
+            .iter()
+            .flat_map(|uris| uris.iter())
+            .fold(Registry::builder(), |builder, uri| builder.entry(*uri));
+        let registry: Registry<'static> = builder.build_owned(schema).expect("registry builds");
+        let (compiled, nodes) =
+            CompiledSchema::with_entries(&registry, entries).expect("test schema compiles");
+        let nodes: Vec<Vec<u32>> = nodes
+            .iter()
+            .map(|ids| ids.iter().map(|id| id.0).collect())
+            .collect();
+        (compiled.nodes.len(), nodes)
+    }
+
+    #[test]
+    fn entries_share_nodes_with_reference_targets() {
+        let schema: Value = json!({
+            "$defs": {"A": {"type": "string"}},
+            "properties": {"a": {"$ref": "#/$defs/A"}}
+        });
+        // The root, `$defs/A` and the root's `properties/a` (whose `$ref` reaches the entry's
+        // node), compiled once each.
+        let expected: (usize, Vec<Vec<u32>>) = (3, vec![vec![0], vec![1], vec![0, 1]]);
+        let actual: (usize, Vec<Vec<u32>>) = compile_entries(
+            &schema,
+            &[
+                &["json-schema:///#"],
+                &["json-schema:///#/$defs/A"],
+                &["json-schema:///#", "json-schema:///#/$defs/A"],
+            ],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn no_entries_compile_to_a_true_root() {
+        let expected: (usize, Vec<Vec<u32>>) = (1, Vec::new());
+        let actual: (usize, Vec<Vec<u32>>) = compile_entries(&json!({"pattern": "("}), &[]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn entry_the_registry_does_not_know_is_a_compile_error() {
+        let registry: Registry<'static> = Registry::builder()
+            .build_owned(Schema::Bool(true))
+            .expect("registry builds");
+        let expected: Vec<CompileError> = vec![CompileError::UnknownRef {
+            location: String::new(),
+            ref_str: "json-schema:///#/$defs/A".to_string(),
+        }];
+        let actual: Vec<CompileError> =
+            CompiledSchema::with_entries(&registry, &[&["json-schema:///#/$defs/A"]])
+                .map(|_| ())
+                .expect_err("unknown entry")
+                .into_vec();
         assert_eq!(expected, actual);
     }
 }

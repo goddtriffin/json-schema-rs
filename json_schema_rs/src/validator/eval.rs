@@ -333,6 +333,30 @@ impl CompiledSchema {
             && cx.depth_exceeded.is_none()
     }
 
+    /// Whether `instance` is valid against every node of `nodes` (entry points from
+    /// [`CompiledSchema::with_entries`]): [`CompiledSchema::is_valid`] at each, stopping at the
+    /// first that fails.
+    pub(crate) fn is_valid_at(&self, nodes: &[NodeId], instance: &Value) -> bool {
+        let mut cx: Context = Context::default();
+        nodes.iter().all(|id| {
+            self.eval::<false>(*id, instance, &Location::ROOT, &mut cx, None)
+                && cx.depth_exceeded.is_none()
+        })
+    }
+
+    /// The result of an evaluation in collect mode: the depth guard's error alone when it fired.
+    #[inline]
+    fn collected(valid: bool, cx: Context) -> ValidationResult {
+        if let Some(error) = cx.depth_exceeded {
+            return Err(vec![error]);
+        }
+        if valid && cx.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(cx.errors)
+        }
+    }
+
     /// Validates `instance`, collecting every error (one per problem, see [`ValidationError`]).
     /// When the instance nests deeper than the depth guard allows, the result is that one
     /// [`ValidationErrorKind::DepthLimitExceeded`].
@@ -351,6 +375,19 @@ impl CompiledSchema {
         } else {
             Err(cx.errors)
         }
+    }
+
+    /// Validates `instance` against every node of `nodes` (entry points from
+    /// [`CompiledSchema::with_entries`]): the errors of each node in order, each with keyword
+    /// locations relative to its node, exactly as when it is the root. When the depth guard fires, the result is that
+    /// one error.
+    pub(crate) fn validate_at(&self, nodes: &[NodeId], instance: &Value) -> ValidationResult {
+        let mut cx: Context = Context::default();
+        let mut valid: bool = true;
+        for id in nodes {
+            valid &= self.eval::<true>(*id, instance, &Location::ROOT, &mut cx, None);
+        }
+        Self::collected(valid, cx)
     }
 
     /// Records the error `make` builds, of `keyword` (`None`: of the subschema itself) evaluated

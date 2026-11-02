@@ -16,6 +16,7 @@ pub use dialect::{
 };
 pub use error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
 pub use json_schema::{JsonSchema, Schema, SchemaRef};
+pub(crate) use registry::RegistryDocumentKind;
 pub use registry::{
     DEFAULT_BASE_URI, OfflineRetriever, Registry, RegistryBuilder, RegistryError, RegistryErrors,
     Resolved, Retrieve, RetrieveError, Scope, UnknownRef,

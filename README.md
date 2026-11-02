@@ -238,6 +238,23 @@ one entry as that entry's type instead of a one-variant enum (off by default, so
 derive gives the combinator back); `#[json_schema(flatten_single_entry)]` on a
 one-variant untagged enum derives its payload's schema instead of a one-entry `anyOf`.
 
+**Self-validating types.** `.self_validating(true)` (`--cgs-self-validating`) makes the
+generated types enforce their whole schema through this library's validator, with the
+same errors (`ValidationError`s) it gives: every generated struct, enum and union gets
+`validate(&self)` and `TryFrom<serde_json::Value>` (validate, then deserialize), and an
+`anyOf` / `oneOf` union deserializes into a variant whose branch the value satisfies
+(`oneOf`: exactly one branch, so a value two branches accept is an error), not the first
+variant serde can fill. Constraints the Rust type cannot express (`minLength`, `pattern`,
+`maximum`, `multipleOf`, `not`, `if` / `then` / `else`, ...) are all checked. The generated
+code embeds the schema documents and compiles them once, on first use; codegen compiles
+them first, so a schema the validator cannot use (an invalid `pattern`) is a generation
+error. Off by default (the plain types deserialize without the validator).
+
+```rust
+let person: Person = Person::try_from(serde_json::json!({"name": "A"}))?; // Err: name too short
+person.validate()?;
+```
+
 **Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
 `CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a
 document shares with another input go in the shared buffer:

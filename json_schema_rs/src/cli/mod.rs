@@ -205,6 +205,12 @@ pub fn run() {
                         .action(clap::ArgAction::SetTrue)
                         .help("Codegen Settings: generate an anyOf / oneOf with exactly one entry as that entry's type instead of a one-variant enum (default: off)"),
                 )
+                .arg(
+                    Arg::new("cgs-self-validating")
+                        .long("cgs-self-validating")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Codegen Settings: generated types validate themselves against their schema (validate(), TryFrom<serde_json::Value>, anyOf / oneOf variants chosen by validation); the generated code embeds the schema (default: off)"),
+                )
                 .args(retrieval::retrieval_args()),
         )
         .subcommand(

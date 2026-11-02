@@ -458,6 +458,31 @@ struct Document<'a> {
     root: DocumentRoot<'a>,
     /// The scope of the document's retrieval URI: the parent scope of its root.
     scope: Scope,
+    /// How the document entered the registry; `None` for an embedded standard metaschema.
+    kind: Option<RegistryDocumentKind>,
+}
+
+/// How a document entered a [`Registry`] (see [`Registry::embeddable_documents`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RegistryDocumentKind {
+    /// The root document.
+    Root,
+    /// A document given with [`RegistryBuilder::parsed_document`].
+    Parsed,
+    /// A document given with [`RegistryBuilder::document`] or retrieved.
+    Loaded,
+}
+
+/// A document of a [`Registry`] other than an embedded standard metaschema (see
+/// [`Registry::embeddable_documents`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RegistryDocument<'r> {
+    /// The document's retrieval URI, normalised (`json-schema:///` for a root without a base).
+    pub(crate) uri: &'r str,
+    /// The document's root schema.
+    pub(crate) schema: SchemaRef<'r>,
+    /// How it entered the registry.
+    pub(crate) kind: RegistryDocumentKind,
 }
 
 /// Where a `$ref` target's schema lives.
@@ -696,6 +721,8 @@ pub struct RegistryBuilder<'b> {
     parsed_documents: Vec<(String, SchemaRef<'b>)>,
     retriever: Box<dyn Retrieve + 'b>,
     settings: JsonSchemaSettings,
+    /// Absolute URIs resolved as if written as `$ref` in the root resource.
+    entries: Vec<String>,
 }
 
 impl fmt::Debug for RegistryBuilder<'_> {
@@ -712,6 +739,7 @@ impl fmt::Debug for RegistryBuilder<'_> {
                     .collect::<Vec<_>>(),
             )
             .field("settings", &self.settings)
+            .field("entries", &self.entries)
             .finish_non_exhaustive()
     }
 }
@@ -724,6 +752,7 @@ impl Default for RegistryBuilder<'_> {
             parsed_documents: Vec::new(),
             retriever: Box::new(OfflineRetriever),
             settings: JsonSchemaSettings::default(),
+            entries: Vec::new(),
         }
     }
 }
@@ -777,6 +806,18 @@ impl<'b> RegistryBuilder<'b> {
     #[must_use]
     pub fn settings(mut self, settings: JsonSchemaSettings) -> Self {
         self.settings = settings;
+        self
+    }
+
+    /// Adds an entry: an absolute URI (its fragment a JSON Pointer, empty, or an anchor) resolved
+    /// while building exactly like a `$ref` written in the root resource, so it may load a
+    /// document given to the builder and reach a schema the typed model keeps raw. After
+    /// building, [`Registry::resolve`] in [`Registry::root_scope`] returns its target. One that
+    /// does not resolve is a [`RegistryError::UnresolvableRef`] (or
+    /// [`RegistryError::RefTargetNotSchema`]) with an empty location.
+    #[must_use]
+    pub(crate) fn entry(mut self, uri: impl Into<String>) -> Self {
+        self.entries.push(uri.into());
         self
     }
 
@@ -868,6 +909,8 @@ struct Builder<'a, 'b> {
     errors: Vec<RegistryError>,
     /// Document walks, for [`Builder::replay`].
     walks: Vec<Walk>,
+    /// See [`RegistryBuilder::entry`].
+    entries: Vec<String>,
 }
 
 impl<'a, 'b: 'a> Builder<'a, 'b> {
@@ -945,6 +988,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
             fetch_failed: HashMap::new(),
             errors: Vec::new(),
             walks: Vec::new(),
+            entries: options.entries,
         })
     }
 
@@ -953,7 +997,15 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
     /// registry is returned only when there was none.
     fn build(mut self, root: DocumentRoot<'a>) -> Result<Registry<'a>, RegistryErrors> {
         let base: Uri = self.root_base.clone();
-        self.add_document(base, root, None);
+        self.add_document(base, root, None, Some(RegistryDocumentKind::Root));
+        let root_scope: Scope = self.registry.documents[0].scope;
+        for ref_str in std::mem::take(&mut self.entries) {
+            self.pending.push_back(PendingRef {
+                scope: root_scope,
+                ref_str,
+                origin: RefOrigin::Located(String::new()),
+            });
+        }
         // Failed `$ref`s whose location is still to be found: (error index, walk, visit).
         let mut unlocated: Vec<(usize, usize, usize)> = Vec::new();
         while let Some(pending) = self.pending.pop_front() {
@@ -986,7 +1038,13 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
     }
 
     /// Adds a document under its retrieval `uri` and discovers it.
-    fn add_document(&mut self, uri: Uri, root: DocumentRoot<'a>, inherited: Option<Dialect>) {
+    fn add_document(
+        &mut self,
+        uri: Uri,
+        root: DocumentRoot<'a>,
+        inherited: Option<Dialect>,
+        kind: Option<RegistryDocumentKind>,
+    ) {
         let document: usize = self.registry.documents.len();
         let dialect: Dialect = match root.schema_ref() {
             SchemaRef::Object(schema) => self.document_dialect(schema, inherited),
@@ -994,7 +1052,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
         };
         let scope: Scope = self.add_resource(uri, document, Vec::new(), dialect);
         let walked: DocumentRoot<'a> = root.clone();
-        self.registry.documents.push(Document { root, scope });
+        self.registry.documents.push(Document { root, scope, kind });
         let node: Option<Node<'_>> = walked.schema_ref().as_object().map(Node::Typed);
         if let Some(node) = node {
             let walk: usize = self.walks.len();
@@ -1458,7 +1516,12 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
                     self.parsed_added[index] = true;
                     let (uri, document): (Uri, SchemaRef<'a>) =
                         self.parsed_documents[index].clone();
-                    self.add_document(uri, DocumentRoot::Borrowed(document), Some(referrer));
+                    self.add_document(
+                        uri,
+                        DocumentRoot::Borrowed(document),
+                        Some(referrer),
+                        Some(RegistryDocumentKind::Parsed),
+                    );
                 }
                 // Added already, yet not under this URI: its `$id` was a duplicate.
                 Some(_) => {}
@@ -1466,10 +1529,16 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
                     let schema: Arc<Schema> = self
                         .fetch(&resource_uri, Some(referrer.spec_version))
                         .map_err(|e| unresolvable(e.to_string()))?;
+                    let metaschema: bool = METASCHEMAS
+                        .iter()
+                        .any(|(known, _)| *known == resource_uri.as_str());
+                    let kind: Option<RegistryDocumentKind> =
+                        (!metaschema).then_some(RegistryDocumentKind::Loaded);
                     self.add_document(
                         resource_uri.clone(),
                         DocumentRoot::Owned(schema),
                         Some(referrer),
+                        kind,
                     );
                 }
             }
@@ -1848,12 +1917,24 @@ impl<'a> Registry<'a> {
     /// placeholder [`DEFAULT_BASE_URI`] (the schema declares no absolute URI) or the schema does
     /// not sit under the resource's root.
     pub(crate) fn canonical_uri(&self, scope: Scope, pointer: &[String]) -> Option<String> {
+        if self.resources[scope.0]
+            .uri
+            .as_str()
+            .starts_with("json-schema:")
+        {
+            return None;
+        }
+        self.location_uri(scope, pointer)
+    }
+
+    /// [`Registry::canonical_uri`], also under the placeholder [`DEFAULT_BASE_URI`]
+    /// (`json-schema:///#/$defs/a`): an absolute URI that [`RegistryBuilder::entry`] and
+    /// [`Registry::resolve`] in [`Registry::root_scope`] take back to the schema. `None` only when
+    /// the schema does not sit under the resource's root.
+    pub(crate) fn location_uri(&self, scope: Scope, pointer: &[String]) -> Option<String> {
         let resource: &Resource = &self.resources[scope.0];
         let base: &str = resource.uri.as_str();
         let base: &str = base.split_once('#').map_or(base, |(base, _)| base);
-        if base.starts_with("json-schema:") {
-            return None;
-        }
         let rest: &[String] = pointer.strip_prefix(resource.pointer.as_slice())?;
         let mut uri: String = String::with_capacity(base.len() + 1 + rest.len() * 8);
         uri.push_str(base);
@@ -1887,6 +1968,22 @@ impl<'a> Registry<'a> {
             .iter()
             .flat_map(|resource| resource.refs.values())
             .map(|target| self.resolved(target))
+    }
+
+    /// Every document but the embedded standard metaschemas, in the order they were added: the
+    /// root first, then each document a `$ref` (or an entry) reached.
+    #[must_use]
+    pub(crate) fn embeddable_documents(&self) -> Vec<RegistryDocument<'_>> {
+        self.documents
+            .iter()
+            .filter_map(|document| {
+                Some(RegistryDocument {
+                    uri: self.resources[document.scope.0].uri.as_str(),
+                    schema: document.root.schema_ref(),
+                    kind: document.kind?,
+                })
+            })
+            .collect()
     }
 
     /// Whether the resource `scope` is in declares the `$dynamicAnchor` `name` (resolvable in
@@ -1936,7 +2033,9 @@ mod tests {
     fn kl(pointer: &str) -> crate::json_pointer::JsonPointer {
         crate::json_pointer::JsonPointer::try_from(pointer).expect("valid JSON Pointer")
     }
-    use super::{Registry, RegistryError, RegistryErrors, Resolved, Scope, UnknownRef};
+    use super::{
+        Registry, RegistryDocumentKind, RegistryError, RegistryErrors, Resolved, Scope, UnknownRef,
+    };
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::dialect::{Dialect, FormatMode, VocabularyKind, VocabularySet};
     use crate::json_schema::json_schema::{JsonSchema, Schema, SchemaRef};
@@ -3586,6 +3685,228 @@ mod tests {
             .map(|_| ())
             .map_err(RegistryErrors::into_vec);
         let expected: Result<(), Vec<RegistryError>> = Ok(());
+        assert_eq!(expected, actual);
+    }
+
+    /// The pointer `uri` (an entry of a registry built for `root`) resolves to.
+    fn entry_pointer(root: &JsonSchema, uri: &str) -> Result<Vec<String>, Vec<RegistryError>> {
+        let registry: Registry<'_> = Registry::builder()
+            .entry(uri)
+            .build(root)
+            .map_err(RegistryErrors::into_vec)?;
+        let resolved: Resolved<'_> = registry
+            .resolve(registry.root_scope(), uri)
+            .expect("entry resolves");
+        Ok(resolved.pointer.to_vec())
+    }
+
+    #[test]
+    fn entry_resolves_to_defs_schema() {
+        let root: JsonSchema = parse(&json!({"$defs": {"A": {"type": "string"}}}));
+        let expected: Result<Vec<String>, Vec<RegistryError>> =
+            Ok(vec!["$defs".to_string(), "A".to_string()]);
+        let actual: Result<Vec<String>, Vec<RegistryError>> =
+            entry_pointer(&root, "json-schema:///#/$defs/A");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn entry_resolves_to_schema_inside_raw_keyword() {
+        let root: JsonSchema = parse(&json!({"if": true, "then": {"properties": {"x": {}}}}));
+        let expected: Result<Vec<String>, Vec<RegistryError>> = Ok(vec![
+            "then".to_string(),
+            "properties".to_string(),
+            "x".to_string(),
+        ]);
+        let actual: Result<Vec<String>, Vec<RegistryError>> =
+            entry_pointer(&root, "json-schema:///#/then/properties/x");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn entry_resolves_to_anchor() {
+        let root: JsonSchema = parse(&json!({"$defs": {"A": {"$anchor": "name"}}}));
+        let expected: Result<Vec<String>, Vec<RegistryError>> =
+            Ok(vec!["$defs".to_string(), "A".to_string()]);
+        let actual: Result<Vec<String>, Vec<RegistryError>> =
+            entry_pointer(&root, "json-schema:///#name");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn entry_that_does_not_resolve_is_a_build_error_without_location() {
+        let root: JsonSchema = parse(&json!({}));
+        let expected: Result<Vec<String>, Vec<RegistryError>> =
+            Err(vec![RegistryError::UnresolvableRef {
+                ref_str: "json-schema:///#/$defs/A".to_string(),
+                location: String::new(),
+                target: "json-schema:///#/$defs/A".to_string(),
+                reason: "no such location".to_string(),
+            }]);
+        let actual: Result<Vec<String>, Vec<RegistryError>> =
+            entry_pointer(&root, "json-schema:///#/$defs/A");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn entry_loads_document_given_to_builder() {
+        let root: JsonSchema = parse(&json!({}));
+        let registry: Registry<'_> = Registry::builder()
+            .document(
+                "https://example.com/b.json",
+                json!({"$defs": {"X": {"type": "integer"}}}),
+            )
+            .entry("https://example.com/b.json#/$defs/X")
+            .build(&root)
+            .expect("build registry");
+        let expected: Result<Vec<String>, UnknownRef> =
+            Ok(vec!["$defs".to_string(), "X".to_string()]);
+        let actual: Result<Vec<String>, UnknownRef> = registry
+            .resolve(registry.root_scope(), "https://example.com/b.json#/$defs/X")
+            .map(|resolved| resolved.pointer.to_vec());
+        assert_eq!(expected, actual);
+    }
+
+    /// `location_uri` of the schema at `pointer` in `root` (whose scope is entered along the
+    /// way), and the pointer that URI resolves back to as an entry.
+    fn location_uri_round_trip(root: &JsonSchema, pointer: &[&str]) -> (String, Vec<String>) {
+        let registry: Registry<'_> = Registry::new(root).expect("build registry");
+        let mut scope: Scope = registry.enter(registry.root_scope(), root);
+        let mut current: &JsonSchema = root;
+        let mut index: usize = 0;
+        while index + 1 < pointer.len() && pointer[index] == "$defs" {
+            let next: &JsonSchema = current.defs.as_ref().expect("$defs")[pointer[index + 1]]
+                .as_object()
+                .expect("schema object");
+            scope = registry.enter(scope, next);
+            current = next;
+            index += 2;
+        }
+        let segments: Vec<String> = pointer.iter().map(|s| (*s).to_string()).collect();
+        let uri: String = registry
+            .location_uri(scope, &segments)
+            .expect("under the resource root");
+        let resolved: Vec<String> = entry_pointer(root, &uri).expect("entry resolves");
+        (uri, resolved)
+    }
+
+    #[test]
+    fn location_uri_of_defs_entry_round_trips() {
+        let root: JsonSchema = parse(&json!({"$defs": {"A~b/c": {"type": "string"}}}));
+        let expected: (String, Vec<String>) = (
+            "json-schema:///#/$defs/A~0b~1c".to_string(),
+            vec!["$defs".to_string(), "A~b/c".to_string()],
+        );
+        let actual: (String, Vec<String>) = location_uri_round_trip(&root, &["$defs", "A~b/c"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_inside_nested_resource_round_trips() {
+        let root: JsonSchema = parse(&json!({
+            "$defs": {"B": {"$id": "b.json", "properties": {"x": {"type": "integer"}}}}
+        }));
+        let expected: (String, Vec<String>) = (
+            "json-schema:///b.json#/properties/x".to_string(),
+            vec![
+                "$defs".to_string(),
+                "B".to_string(),
+                "properties".to_string(),
+                "x".to_string(),
+            ],
+        );
+        let actual: (String, Vec<String>) =
+            location_uri_round_trip(&root, &["$defs", "B", "properties", "x"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_of_raw_location_round_trips() {
+        let root: JsonSchema = parse(&json!({"if": true, "then": {"properties": {"x": {}}}}));
+        let expected: (String, Vec<String>) = (
+            "json-schema:///#/then/properties/x".to_string(),
+            vec![
+                "then".to_string(),
+                "properties".to_string(),
+                "x".to_string(),
+            ],
+        );
+        let actual: (String, Vec<String>) =
+            location_uri_round_trip(&root, &["then", "properties", "x"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_outside_the_resource_root_is_none() {
+        let root: JsonSchema = parse(&json!({"$defs": {"B": {"$id": "b.json"}}}));
+        let registry: Registry<'_> = Registry::new(&root).expect("build registry");
+        let b: &JsonSchema = root.defs.as_ref().expect("$defs")["B"]
+            .as_object()
+            .expect("schema object");
+        let scope: Scope = registry.enter(registry.root_scope(), b);
+        let expected: Option<String> = None;
+        let actual: Option<String> = registry.location_uri(scope, &["$defs".to_string()]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn embeddable_documents_lists_root_parsed_and_loaded_but_not_metaschemas() {
+        let root: JsonSchema = parse(&json!({
+            "properties": {
+                "a": {"$ref": "https://example.com/parsed.json"},
+                "b": {"$ref": "https://example.com/loaded.json"},
+                "c": {"$ref": "https://json-schema.org/draft/2020-12/schema"}
+            }
+        }));
+        let parsed: JsonSchema = parse(&json!({"type": "string"}));
+        let unreached: JsonSchema = parse(&json!({"type": "null"}));
+        let registry: Registry<'_> = Registry::builder()
+            .base_uri("https://example.com/root.json")
+            .parsed_document("https://example.com/parsed.json", &parsed)
+            .parsed_document("https://example.com/unreached.json", &unreached)
+            .document(
+                "https://example.com/loaded.json",
+                json!({"type": "integer"}),
+            )
+            .build(&root)
+            .expect("build registry");
+        let expected: Vec<(String, RegistryDocumentKind)> = vec![
+            (
+                "https://example.com/root.json".to_string(),
+                RegistryDocumentKind::Root,
+            ),
+            (
+                "https://example.com/parsed.json".to_string(),
+                RegistryDocumentKind::Parsed,
+            ),
+            (
+                "https://example.com/loaded.json".to_string(),
+                RegistryDocumentKind::Loaded,
+            ),
+        ];
+        let actual: Vec<(String, RegistryDocumentKind)> = registry
+            .embeddable_documents()
+            .into_iter()
+            .map(|document| (document.uri.to_string(), document.kind))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn embeddable_document_holds_the_parsed_schema() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/parsed.json"}));
+        let parsed: JsonSchema = parse(&json!({"type": "string"}));
+        let registry: Registry<'_> = Registry::builder()
+            .parsed_document("https://example.com/parsed.json", &parsed)
+            .build(&root)
+            .expect("build registry");
+        let expected: Vec<SchemaRef<'_>> =
+            vec![SchemaRef::Object(&root), SchemaRef::Object(&parsed)];
+        let actual: Vec<SchemaRef<'_>> = registry
+            .embeddable_documents()
+            .into_iter()
+            .map(|document| document.schema)
+            .collect();
         assert_eq!(expected, actual);
     }
 }

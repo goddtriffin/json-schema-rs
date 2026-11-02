@@ -98,6 +98,11 @@ impl<'a> CodeGenInput<'a> {
         self.schemas.iter().map(|(schema, _)| *schema)
     }
 
+    /// The settings retrieved documents are parsed with.
+    pub(crate) fn retrieval_settings(&self) -> &JsonSchemaSettings {
+        &self.settings
+    }
+
     /// A registry builder for input schema `index`: its retrieval URI as the base, every other
     /// input schema as a parsed document (under its URI and, through the registry, its root
     /// `$id`; one without a URI only under an absolute root `$id`), and `retriever`.

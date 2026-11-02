@@ -16,13 +16,14 @@
 use super::{
     Annotations, ArrayConstraints, Field, FloatWidth, IntWidth, NameProposal, NameTier, ObjectNode,
     SchemaRoots, StringConstraints, StringFormat, TypeGraph, TypeId, TypeNode, UnionKind,
-    UnionNode, Variant,
+    UnionNode, ValidationTarget, Variant,
 };
 use crate::code_gen::settings::{CodeGenSettings, ModelNameSource, UnknownProperties};
 use crate::code_gen::{CodeGenError, CodeGenResult};
+use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    JsonSchema, JsonSchemaSettings, JsonType, RefSiblings, Registry, Schema, SchemaRef, Scope,
-    TypeSet,
+    Dialect, JsonSchema, JsonSchemaSettings, JsonType, RefSiblings, Registry, Schema, SchemaRef,
+    Scope, TypeSet,
 };
 use crate::number;
 use serde_json::Value;
@@ -386,12 +387,65 @@ impl<'r> Builder<'_, 'r> {
         } else {
             let id: TypeId = self.graph.push(TypeNode::Pending);
             self.memo.insert((self.schema_index, key), id);
+            if self.settings.self_validating {
+                self.graph.targets[id.index()] = self.validation_target(&flat);
+            }
             self.add_intrinsic_proposals(id, &flat);
             self.queue.push((id, flat, request.mask, context.clone()));
             id
         };
         self.add_context_proposals(id, context);
         Ok(id)
+    }
+
+    /// The schema locations an instance of `flat`'s node must satisfy (see
+    /// [`ValidationTarget`]). A conjunct reached directly through `$ref`, `allOf` (or a one-entry
+    /// `anyOf` / `oneOf` flattened into the conjunction) from an earlier conjunct is left out:
+    /// validating the earlier one validates it. Conjuncts come in discovery order, so in a
+    /// cycle the first one stays. `None` for an empty conjunction (any value) or when a conjunct
+    /// has no location (the `anyOf` of a property both `then` and `else` define).
+    fn validation_target(&self, flat: &Flat<'r>) -> Option<ValidationTarget> {
+        if flat.conjuncts.is_empty() {
+            return None;
+        }
+        let address = |s: &JsonSchema| std::ptr::from_ref(s) as usize;
+        let mut reached: HashSet<usize> = HashSet::new();
+        let mut uris: Vec<String> = Vec::new();
+        let mut local: bool = false;
+        for c in &flat.conjuncts {
+            let s: &'r JsonSchema = c.schema;
+            if !reached.contains(&address(s)) {
+                let pointer: JsonPointer = JsonPointer::try_from(c.pointer.as_str()).ok()?;
+                let segments: Vec<String> = pointer.segments().map(str::to_string).collect();
+                let uri: String = self.registry.location_uri(c.scope, &segments)?;
+                local |= uri.starts_with("json-schema:");
+                uris.push(uri);
+            }
+            if let Some(ref_str) = s.ref_.as_deref()
+                && let Ok(resolved) = self.registry.resolve(c.scope, ref_str)
+                && let SchemaRef::Object(target) = resolved.schema
+            {
+                reached.insert(address(target));
+            }
+            let single_entries = [&s.any_of, &s.one_of]
+                .into_iter()
+                .filter(|_| self.settings.flatten_single_entry_combinators)
+                .filter_map(|list| match list.as_deref() {
+                    Some(entry @ [_]) => Some(entry),
+                    _ => None,
+                })
+                .flatten();
+            for branch in s.all_of.iter().flatten().chain(single_entries) {
+                if let Schema::Object(b) = branch {
+                    reached.insert(address(b));
+                }
+            }
+        }
+        Some(ValidationTarget {
+            schema: self.schema_index,
+            uris,
+            local,
+        })
     }
 
     /// Proposals from the conjunction itself: the `$defs` key of its first schema, its title.
@@ -516,7 +570,9 @@ impl<'r> Builder<'_, 'r> {
             }
             let keep: bool = !drop_self
                 && (contributes(s, c.skip)
-                    || (is_seed && !had_ref && !c.skips(skip::ANNOTATIONS) && has_annotations(s)));
+                    || (is_seed && !had_ref && !c.skips(skip::ANNOTATIONS) && has_annotations(s))
+                    || (self.settings.self_validating
+                        && asserts_beyond_shape(s, self.registry.dialect(c.scope))));
             if keep {
                 out.push(c);
             }
@@ -854,7 +910,9 @@ impl<'r> Builder<'_, 'r> {
         let mut variants: Vec<Variant> = Vec::new();
         let mut combined_done: bool = false;
         for ((i, branch), strings) in live.into_iter().zip(string_values) {
-            if string_branches >= 2 && strings.is_some() {
+            // Combined string branches have no single schema location to validate against, so
+            // self-validating unions keep one variant per branch.
+            if string_branches >= 2 && strings.is_some() && !self.settings.self_validating {
                 if combined_done {
                     continue;
                 }
@@ -1088,6 +1146,28 @@ fn contributes_besides_type(s: &JsonSchema, skip_bits: u8) -> bool {
         || s.extensions.contains_key("then")
         || s.extensions.contains_key("else")
 }
+
+/// Whether `s` has an assertion or applicator the type graph does not model (`multipleOf`,
+/// `not`, `if`, `patternProperties`, ...): with self-validating types such a schema stays in
+/// its conjunction, so it is part of the node's identity and of its validation target, and two
+/// schemas that validate differently never share a node.
+fn asserts_beyond_shape(s: &JsonSchema, dialect: Dialect) -> bool {
+    s.multiple_of.is_some()
+        || s.extensions.keys().any(|key| {
+            dialect.keyword(key).is_some() && !ANNOTATION_KEYWORDS.contains(&key.as_str())
+        })
+}
+
+/// Keywords kept in `extensions` that never decide whether an instance is valid.
+const ANNOTATION_KEYWORDS: [&str; 7] = [
+    "$anchor",
+    "$vocabulary",
+    "readOnly",
+    "writeOnly",
+    "contentEncoding",
+    "contentMediaType",
+    "contentSchema",
+];
 
 fn has_annotations(s: &JsonSchema) -> bool {
     s.title.is_some()
