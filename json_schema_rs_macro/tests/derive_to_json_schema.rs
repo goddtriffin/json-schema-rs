@@ -699,6 +699,7 @@ fn nested_id_resource_dependency_refers_back_to_the_resource_as_hash() {
 }
 
 // A hand-written resource with its own `$defs`, valid on its own.
+#[derive(serde::Serialize)]
 struct HandWrittenResource;
 
 impl ToJsonSchema for HandWrittenResource {
@@ -3082,5 +3083,219 @@ fn derive_enum_without_variants_emits_empty_enum() {
         ..Default::default()
     });
     let actual: ReverseCodeGenResult = NoVariants::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(flatten_single_entry)]
+enum FlatCat {
+    Cat(Cat),
+}
+
+/// A flattened one-variant union is its payload's schema, not a one-entry `anyOf`.
+#[test]
+fn flatten_single_entry_union_with_named_payload_is_the_payload_schema() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": "#/$defs/Cat",
+        "$defs": {
+            "Cat": {
+                "type": "object",
+                "properties": { "meows": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["meows"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = FlatCat::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+enum OnlyCat {
+    Cat(Cat),
+}
+
+/// Without the flag a one-variant union stays an `anyOf` with one entry.
+#[test]
+fn single_variant_union_without_flag_emits_one_entry_any_of() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [{ "$ref": "#/$defs/Cat" }],
+        "$defs": {
+            "Cat": {
+                "type": "object",
+                "properties": { "meows": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["meows"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = OnlyCat::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of, flatten_single_entry)]
+enum FlatOneOfCat {
+    Cat(Cat),
+}
+
+/// The flag flattens a `one_of` union too: no one-entry `oneOf` remains.
+#[test]
+fn flatten_single_entry_one_of_union_is_the_payload_schema() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": "#/$defs/Cat",
+        "$defs": {
+            "Cat": {
+                "type": "object",
+                "properties": { "meows": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["meows"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = FlatOneOfCat::json_schema();
+    assert_eq!(expected, actual);
+}
+
+/// A name.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(flatten_single_entry, title = "Name")]
+enum FlatName {
+    Text(String),
+}
+
+/// A flattened primitive payload carries the container's title and doc comment.
+#[test]
+fn flatten_single_entry_primitive_payload_carries_container_annotations() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Name",
+        "description": "A name.",
+        "type": "string"
+    })));
+    let actual: ReverseCodeGenResult = FlatName::json_schema();
+    assert_eq!(expected, actual);
+}
+
+// A hand-written payload with its own annotations and no `$id`.
+#[derive(serde::Serialize)]
+struct AnnotatedText;
+
+impl ToJsonSchema for AnnotatedText {
+    fn json_schema() -> ReverseCodeGenResult {
+        Ok(schema_from_json(serde_json::json!({
+            "type": "string",
+            "title": "Payload title",
+            "description": "Payload description.",
+            "$comment": "Payload comment."
+        })))
+    }
+}
+
+#[derive(serde::Serialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(flatten_single_entry, title = "Container title")]
+#[expect(dead_code)]
+enum FlatAnnotatedText {
+    Text(AnnotatedText),
+}
+
+/// A container annotation that is set replaces the payload's; unset ones keep the payload's.
+#[test]
+fn flatten_single_entry_container_annotations_replace_only_the_ones_set() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "string",
+        "title": "Container title",
+        "description": "Payload description.",
+        "$comment": "Payload comment."
+    })));
+    let actual: ReverseCodeGenResult = FlatAnnotatedText::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct HoldsFlatName {
+    pub name: FlatName,
+}
+
+/// As a field, the flattened union is a `$defs` entry holding the flattened schema.
+#[test]
+fn flatten_single_entry_union_as_field_has_flattened_defs_entry() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "name": { "$ref": "#/$defs/FlatName" } },
+        "additionalProperties": false,
+        "required": ["name"],
+        "$defs": {
+            "FlatName": {
+                "title": "Name",
+                "description": "A name.",
+                "type": "string"
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsFlatName::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(flatten_single_entry)]
+enum FlatTwoPets {
+    Cat(Cat),
+    Dog(Dog),
+}
+
+/// The flag has no effect on a union with more than one variant.
+#[test]
+fn flatten_single_entry_two_variant_union_keeps_any_of() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [{ "$ref": "#/$defs/Cat" }, { "$ref": "#/$defs/Dog" }],
+        "$defs": {
+            "Cat": {
+                "type": "object",
+                "properties": { "meows": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["meows"]
+            },
+            "Dog": {
+                "type": "object",
+                "properties": { "barks": { "type": "boolean" } },
+                "additionalProperties": false,
+                "required": ["barks"]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = FlatTwoPets::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(serde::Serialize, ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(flatten_single_entry, title = "Hand")]
+#[expect(dead_code)]
+enum FlatHandWrittenResource {
+    Hand(HandWrittenResource),
+}
+
+/// A payload that is a `$id` resource is not flattened: the union keeps its one-entry `anyOf`.
+#[test]
+fn flatten_single_entry_keeps_any_of_when_payload_is_an_id_resource() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Hand",
+        "anyOf": [HandWrittenResource::json_schema().expect("schema")]
+    })));
+    let actual: ReverseCodeGenResult = FlatHandWrittenResource::json_schema();
     assert_eq!(expected, actual);
 }

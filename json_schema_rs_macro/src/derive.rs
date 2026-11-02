@@ -1088,6 +1088,13 @@ fn value_enum_body(
 ///
 /// Each payload schema comes from `json_schema_with`, so a named payload type lands in `$defs`
 /// behind a `$ref` exactly as a struct field does (a recursive payload included).
+///
+/// With `#[json_schema(flatten_single_entry)]`, an enum of exactly one variant is its payload's
+/// schema with the container's `title`, `description`, `comment` and `id` on top (each one
+/// set replaces the payload's), instead of a one-entry `anyOf` / `oneOf`: the two are
+/// equivalent for validation. A payload that is itself a schema resource (`$id`, from a
+/// hand-written impl) keeps the combinator, since moving it to the enum's position would change
+/// what its `$id` and the `$ref`s inside it resolve against.
 fn union_enum_body(
     name: &Ident,
     attrs: &[Attribute],
@@ -1103,7 +1110,7 @@ fn union_enum_body(
     if !serde_flag(attrs, "untagged")? {
         return Err(shape_error(name));
     }
-    let mut branches: Vec<TokenStream2> = Vec::new();
+    let mut payload_types: Vec<&Type> = Vec::new();
     for variant in &data_enum.variants {
         let Fields::Unnamed(unnamed) = &variant.fields else {
             return Err(shape_error(variant));
@@ -1117,22 +1124,13 @@ fn union_enum_body(
                 "json_schema(value = ...) applies to unit variants only",
             ));
         }
-        let ty: &Type = &field.ty;
-        branches.push(quote! {
-            ::json_schema_rs::Schema::from(
-                <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator),
-            )
-        });
+        payload_types.push(&field.ty);
     }
-    let branches_expr: TokenStream2 = quote! {
-        Some(::std::vec::Vec::<::json_schema_rs::Schema>::from([#(#branches),*]))
+    let combinator_field: Ident = if json_schema_flag(attrs, "one_of")? {
+        Ident::new("one_of", proc_macro2::Span::call_site())
+    } else {
+        Ident::new("any_of", proc_macro2::Span::call_site())
     };
-    let (any_of_expr, one_of_expr): (TokenStream2, TokenStream2) =
-        if json_schema_flag(attrs, "one_of")? {
-            (quote! { None }, branches_expr)
-        } else {
-            (branches_expr, quote! { None })
-        };
     let ContainerExprs {
         title,
         description,
@@ -1140,14 +1138,45 @@ fn union_enum_body(
         id_expr,
         ..
     } = container;
+    if let [payload] = payload_types.as_slice()
+        && json_schema_flag(attrs, "flatten_single_entry")?
+    {
+        return Ok(quote! {
+            let payload: ::json_schema_rs::JsonSchema =
+                <#payload as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator);
+            if payload.id.is_some() {
+                ::json_schema_rs::JsonSchema {
+                    id: #id_expr,
+                    title: #title,
+                    description: #description,
+                    comment: #comment,
+                    #combinator_field: Some(::std::vec::Vec::from([
+                        ::json_schema_rs::Schema::from(payload),
+                    ])),
+                    ..::json_schema_rs::JsonSchema::default()
+                }
+            } else {
+                ::json_schema_rs::JsonSchema {
+                    id: #id_expr,
+                    title: #title.or(payload.title),
+                    description: #description.or(payload.description),
+                    comment: #comment.or(payload.comment),
+                    ..payload
+                }
+            }
+        });
+    }
     Ok(quote! {
         ::json_schema_rs::JsonSchema {
             id: #id_expr,
             title: #title,
             description: #description,
             comment: #comment,
-            any_of: #any_of_expr,
-            one_of: #one_of_expr,
+            #combinator_field: Some(::std::vec::Vec::<::json_schema_rs::Schema>::from([
+                #(::json_schema_rs::Schema::from(
+                    <#payload_types as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator),
+                )),*
+            ])),
             ..::json_schema_rs::JsonSchema::default()
         }
     })
