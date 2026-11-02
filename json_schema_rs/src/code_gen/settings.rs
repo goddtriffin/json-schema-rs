@@ -44,9 +44,12 @@ pub enum UnknownProperties {
 /// (validation §6.4.3), so a `Vec` keeps the instance exactly, for every item type. The set
 /// types make uniqueness part of the Rust type: a duplicate item is a deserialize error (never
 /// silently dropped). A set applies to a property whose value is the array (`T`, `Option<T>`)
-/// with string, integer or boolean items; other positions (array items, map values, union
-/// variants, a root alias) and other item types (`f64`, objects, any value: no `Hash` / `Ord`)
-/// stay `Vec`.
+/// when Rust equality is JSON equality for the item type: strings, integers, booleans, `null`,
+/// generated enums, and generated structs and unions built from these (which then derive
+/// `Hash`, `Eq` and `Ord`). Other positions (array items, map values, union variants, a root
+/// alias) and other item types stay `Vec`: floats, any value, `Uuid`, a struct that drops or
+/// keeps untyped unknown keys or has a set field, and a union where `1` and `1.0` could land
+/// in different variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UniqueItemsType {
     /// `Vec<T>`: keeps item order and the instance exactly; the validator checks uniqueness.
