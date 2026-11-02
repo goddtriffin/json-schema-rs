@@ -228,8 +228,11 @@ spec's ordered array, kept exactly; `.unique_items(UniqueItemsType::HashSet)`
 (`index-set`, order kept; needs the `indexmap` feature here, and `indexmap` with `serde`
 plus `json-schema-rs` with `indexmap` in the crate that compiles the generated code)
 make uniqueness part of the type: a duplicate item is a deserialize error, never dropped.
-A set applies to a property whose value is the array, with string, integer or boolean
-items; anything else stays `Vec`. `.flatten_single_entry_combinators(true)`
+A set applies to a property whose value is the array when Rust equality is JSON
+equality for the item type: strings, integers, booleans, generated enums, and generated
+structs and unions built from these (which then derive `Hash`, `Eq` and `Ord`; a struct
+needs `additionalProperties: false` or a typed `additionalProperties`). Anything else
+(floats, any value, `Uuid`, a struct with a set field) stays `Vec`. `.flatten_single_entry_combinators(true)`
 (`--cgs-flatten-single-entry-combinators`) generates an `anyOf` / `oneOf` with exactly
 one entry as that entry's type instead of a one-variant enum (off by default, so the
 derive gives the combinator back); `#[json_schema(flatten_single_entry)]` on a
