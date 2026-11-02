@@ -199,6 +199,12 @@ pub fn run() {
                         .value_parser(["vec", "hash-set", "btree-set", "index-set"])
                         .help("Codegen Settings: Rust collection for uniqueItems arrays; a set rejects a duplicate item when deserializing (default: vec; index-set needs the `indexmap` feature)"),
                 )
+                .arg(
+                    Arg::new("cgs-flatten-single-entry-combinators")
+                        .long("cgs-flatten-single-entry-combinators")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Codegen Settings: generate an anyOf / oneOf with exactly one entry as that entry's type instead of a one-variant enum (default: off)"),
+                )
                 .args(retrieval::retrieval_args()),
         )
         .subcommand(
@@ -247,31 +253,19 @@ pub fn run() {
                 .map(|it| it.map(String::from).collect())
                 .unwrap_or_default();
             let schema_settings: JsonSchemaSettings = jss_settings(gen_m);
-            let cgs_model_name_source: Option<&str> = gen_m
-                .get_one::<String>("cgs-model-name-source")
-                .map(String::as_str);
-            let cgs_dedupe_mode: Option<&str> = gen_m
-                .get_one::<String>("cgs-dedupe-mode")
-                .map(String::as_str);
-            let cgs_unknown_properties: Option<&str> = gen_m
-                .get_one::<String>("cgs-unknown-properties")
-                .map(String::as_str);
-            let cgs_unique_items: Option<&str> = gen_m
-                .get_one::<String>("cgs-unique-items")
-                .map(String::as_str);
             let retrieval: RefRetrieval = RefRetrieval::from_matches(gen_m);
-            generate::run_generate(
-                lang,
-                &inputs,
-                &output_dir,
-                &schema_settings,
-                cgs_model_name_source,
-                cgs_dedupe_mode,
-                cgs_unknown_properties,
-                cgs_unique_items,
-                &retrieval,
-            )
-            .map_err(CliFailure::from)
+            generate::code_gen_settings(gen_m)
+                .and_then(|code_gen_settings| {
+                    generate::run_generate(
+                        lang,
+                        &inputs,
+                        &output_dir,
+                        &schema_settings,
+                        &code_gen_settings,
+                        &retrieval,
+                    )
+                })
+                .map_err(CliFailure::from)
         }
         Some(("validate", val_m)) => {
             let schema: PathBuf = val_m

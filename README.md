@@ -47,7 +47,7 @@ rejected with `UnknownSchemaUri::Reject`), and
 $id` in the key, Functional does not; reverse codegen via `#[json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
 so round-trip preserves it), **allOf** (validator: instance must validate
 against every subschema; codegen: the branches, `$ref`s included, merge into one Rust
-type, and an unsatisfiable merge is an enum with no variants; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: `#[serde(untagged)]` enum with one variant per branch (a branch pair with `null` is `Option<T>`; all-string branches are one string enum), so instances deserialize from the bare value; reverse codegen: untagged enums derive `anyOf`), **oneOf** (validator: instance must validate against exactly one subschema; codegen: as anyOf, with `#[json_schema(one_of)]`; exclusivity is not checked on deserialize; reverse codegen: `oneOf` via `#[json_schema(one_of)]`), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: unknown keys are kept for a lossless round trip in a `#[serde(flatten)] additional` map (`serde_json::Value`, or the schema's type), false → `#[serde(deny_unknown_fields)]`, overridable with `--cgs-unknown-properties capture|drop`; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). Recursive schemas (through `#`, `$defs` or mutual
+type, and an unsatisfiable merge is an enum with no variants; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: `#[serde(untagged)]` enum with one variant per branch (a branch pair with `null` is `Option<T>`; all-string branches are one string enum), so instances deserialize from the bare value; reverse codegen: untagged enums derive `anyOf`), **oneOf** (validator: instance must validate against exactly one subschema; codegen: as anyOf, with `#[json_schema(one_of)]`; exclusivity is not checked on deserialize; reverse codegen: `oneOf` via `#[json_schema(one_of)]`; a one-entry `anyOf` / `oneOf` can be generated as its entry's type, see *Using the library*), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: unknown keys are kept for a lossless round trip in a `#[serde(flatten)] additional` map (`serde_json::Value`, or the schema's type), false → `#[serde(deny_unknown_fields)]`, overridable with `--cgs-unknown-properties capture|drop`; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). Recursive schemas (through `#`, `$defs` or mutual
 recursion) generate `Box` on by-value cycles only, `if`/`then`/`else` adds the
 conditional properties as optional fields, and colliding type names all get a
 numeric suffix (`Item0`, `Item1`). For implementation details and design
@@ -229,7 +229,11 @@ spec's ordered array, kept exactly; `.unique_items(UniqueItemsType::HashSet)`
 plus `json-schema-rs` with `indexmap` in the crate that compiles the generated code)
 make uniqueness part of the type: a duplicate item is a deserialize error, never dropped.
 A set applies to a property whose value is the array, with string, integer or boolean
-items; anything else stays `Vec`.
+items; anything else stays `Vec`. `.flatten_single_entry_combinators(true)`
+(`--cgs-flatten-single-entry-combinators`) generates an `anyOf` / `oneOf` with exactly
+one entry as that entry's type instead of a one-variant enum (off by default, so the
+derive gives the combinator back); `#[json_schema(flatten_single_entry)]` on a
+one-variant untagged enum derives its payload's schema instead of a one-entry `anyOf`.
 
 **Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
 `CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a
