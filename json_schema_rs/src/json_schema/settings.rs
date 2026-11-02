@@ -215,6 +215,21 @@ impl JsonSchemaSettings {
         }
     }
 
+    /// Lenient settings (unknown keys ignored, an unrecognised `$schema` falls back) with the
+    /// draft and per-flag overrides of `dialect`.
+    pub(crate) fn from_dialect_settings(dialect: DialectSettings) -> JsonSchemaSettings {
+        JsonSchemaSettings {
+            disallow_unknown_fields: false,
+            forced_spec_version: dialect.forced_spec_version,
+            default_spec_version: dialect.default_spec_version,
+            format_mode: dialect.format_mode,
+            integer_semantics: dialect.integer_semantics,
+            exclusive_bounds: dialect.exclusive_bounds,
+            ref_siblings: dialect.ref_siblings,
+            unknown_schema_uri: UnknownSchemaUri::Fallback,
+        }
+    }
+
     /// Start a builder with all options unset (per-option defaults will be used on [`build`](JsonSchemaSettingsBuilder::build)).
     #[must_use]
     pub fn builder() -> JsonSchemaSettingsBuilder {

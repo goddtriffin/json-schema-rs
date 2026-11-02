@@ -11,6 +11,7 @@ use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::input::{CachingRetriever, CodeGenInput};
+use super::rust_validators::{self, BufferValidators, EmbeddedSet, UnionEntries};
 use super::settings::{CodeGenSettings, DedupeMode, UniqueItemsType};
 use super::type_graph::passes;
 use super::type_graph::{
@@ -61,13 +62,21 @@ impl CodeGenBackend for RustBackend {
         passes::dedup(&mut graph, settings.dedupe_mode);
         passes::break_cycles(&mut graph);
         let plan: Plan = Plan::new(&graph, settings);
+        let sets: Option<Vec<EmbeddedSet>> = if settings.self_validating {
+            Some(rust_validators::embedded_sets(
+                &registries,
+                input.retrieval_settings(),
+            )?)
+        } else {
+            None
+        };
         let shared: Option<Vec<u8>> = if plan.has_shared() {
-            Some(render_buffer(&graph, &plan, Home::Shared)?)
+            Some(render_buffer(&graph, &plan, Home::Shared, sets.as_deref())?)
         } else {
             None
         };
         let per_schema: Vec<Vec<u8>> = (0..schemas.len())
-            .map(|index| render_buffer(&graph, &plan, Home::Schema(index)))
+            .map(|index| render_buffer(&graph, &plan, Home::Schema(index), sets.as_deref()))
             .collect::<CodeGenResult<Vec<Vec<u8>>>>()?;
         Ok(GenerateRustOutput { shared, per_schema })
     }
@@ -1336,6 +1345,9 @@ fn variant_base(graph: &TypeGraph, plan: &Plan, union: &UnionNode, index: usize)
     kind.map_or_else(|| format!("Variant{index}"), str::to_string)
 }
 
+/// Renders a union. With `validated` (a self-validating `anyOf` / `oneOf`), the enum derives
+/// only `Serialize` and gets a `Deserialize` that chooses its variant by validation.
+#[expect(clippy::too_many_arguments)]
 fn render_union(
     graph: &TypeGraph,
     plan: &Plan,
@@ -1343,6 +1355,7 @@ fn render_union(
     id: TypeId,
     name: &str,
     union: &UnionNode,
+    validated: Option<&UnionEntries>,
     imports: &mut Imports,
 ) -> String {
     let bases: Vec<String> = (0..union.variants.len())
@@ -1350,18 +1363,29 @@ fn render_union(
         .collect();
     let names: Vec<String> = unique_idents(&bases, "");
     let mut out: String = item_docs(&union.annotations);
-    out.push_str(struct_derive(plan, id));
+    if validated.is_some() {
+        out.push_str(&struct_derive(plan, id).replace(", Deserialize", ""));
+    } else {
+        out.push_str(struct_derive(plan, id));
+    }
     out.push('\n');
     out.push_str("#[serde(untagged)]\n");
     if union.kind == UnionKind::OneOf {
         out.push_str("#[json_schema(one_of)]\n");
     }
     let _ = writeln!(out, "pub enum {name} {{");
+    let mut variants: Vec<(String, String)> = Vec::with_capacity(union.variants.len());
     for (variant, variant_name) in union.variants.iter().zip(&names) {
         let ty: String = rust_type(graph, plan, home, variant.ty, imports);
         let _ = writeln!(out, "    {variant_name}({ty}),");
+        variants.push((variant_name.clone(), ty));
     }
     out.push_str("}\n\n");
+    if let Some(entries) = validated {
+        out.push_str(&rust_validators::render_union_deserialize(
+            name, union.kind, entries, &variants,
+        ));
+    }
     out
 }
 
@@ -1419,20 +1443,44 @@ fn ordered_items(graph: &TypeGraph, plan: &Plan, home: Home) -> Vec<TypeId> {
 }
 
 /// Renders one output buffer.
-fn render_buffer(graph: &TypeGraph, plan: &Plan, home: Home) -> CodeGenResult<Vec<u8>> {
+/// Renders one output buffer. `sets` (with self-validating types) holds each input's embedded
+/// documents.
+fn render_buffer(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    sets: Option<&[EmbeddedSet]>,
+) -> CodeGenResult<Vec<u8>> {
     let mut imports: Imports = Imports::default();
     let mut body: String = String::new();
     let items: Vec<TypeId> = ordered_items(graph, plan, home);
+    let validators: Option<BufferValidators> = sets.map(|_| BufferValidators::new(graph, &items));
     for &id in &items {
         let name: &str = plan.name(id);
         debug_assert_eq!(plan.home(id), home);
+        let union_entries: Option<UnionEntries> = validators.as_ref().and_then(|v| v.union(id));
         let item: String = match graph.node(id) {
             TypeNode::Object(o) => render_struct(graph, plan, home, id, name, o, &mut imports),
             TypeNode::Enum(e) => render_enum(name, e),
-            TypeNode::Union(u) => render_union(graph, plan, home, id, name, u, &mut imports),
+            TypeNode::Union(u) => render_union(
+                graph,
+                plan,
+                home,
+                id,
+                name,
+                u,
+                union_entries.as_ref(),
+                &mut imports,
+            ),
             _ => unreachable!("only named nodes are items"),
         };
         body.push_str(&item);
+        if let Some(entry) = validators.as_ref().and_then(|v| v.item(id)) {
+            body.push_str(&rust_validators::render_item_impls(name, &entry));
+        }
+    }
+    if let (Some(validators), Some(sets)) = (&validators, sets) {
+        body.push_str(&validators.render(sets)?);
     }
     if let Home::Schema(s) = home {
         let roots = &graph.schemas[s];
@@ -9436,6 +9484,521 @@ pub struct Root {{
 
 "
         );
+        assert_eq!(expected, actual);
+    }
+
+    // --- Self-validating types ---
+
+    /// The buffers of `schemas` generated with `self_validating` on.
+    fn self_validating_buffers(schemas: &[serde_json::Value]) -> (Option<String>, Vec<String>) {
+        let settings: CodeGenSettings = CodeGenSettings::builder().self_validating(true).build();
+        buffers(generate_rust(&schemas_of(schemas), &settings).expect("generate"))
+    }
+
+    #[test]
+    fn default_settings_do_not_generate_self_validating_types() {
+        let settings: CodeGenSettings = CodeGenSettings::builder().build();
+        let expected: bool = false;
+        let actual: bool = settings.self_validating;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_struct_gets_validate_and_try_from_golden() {
+        let actual: String = self_validating_buffers(&[serde_json::json!({
+            "type": "object",
+            "properties": {"name": {"type": "string", "minLength": 2}},
+            "required": ["name"],
+            "additionalProperties": false
+        })])
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    #[json_schema(min_length = 2)]
+    pub name: String,
+}
+
+impl Root {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(0, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for Root {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(0, value)
+    }
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"type":"object","properties":{"name":{"type":"string","minLength":2}},"additionalProperties":false,"required":["name"]}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_any_of_union_deserializes_by_validation_golden() {
+        let actual: String = self_validating_buffers(&[serde_json::json!({
+            "anyOf": [
+                {"type": "integer", "maximum": 10, "title": "Small"},
+                {"type": "integer", "title": "Large"}
+            ]
+        })])
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum RootAnyOf {
+    Small(i64),
+    Large(i64),
+}
+
+impl<'de> Deserialize<'de> for RootAnyOf {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        let candidates: Vec<usize> = TYPE_VALIDATORS
+            .union_candidates(json_schema_rs::UnionMatch::AnyOf, Some(0), &[1, 2], &value)
+            .map_err(serde::de::Error::custom)?;
+        for candidate in candidates {
+            let variant: Result<Self, serde_json::Error> = match candidate {
+                0 => <i64 as Deserialize>::deserialize(&value).map(Self::Small),
+                1 => <i64 as Deserialize>::deserialize(&value).map(Self::Large),
+                _ => continue,
+            };
+            if let Ok(variant) = variant {
+                return Ok(variant);
+            }
+        }
+        Err(serde::de::Error::custom(format!("{value} does not deserialize into a RootAnyOf variant whose schema it satisfies")))
+    }
+}
+
+impl RootAnyOf {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(0, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for RootAnyOf {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(0, value)
+    }
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"anyOf":[{"type":"integer","title":"Small","maximum":10},{"type":"integer","title":"Large"}]}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#"],
+        &["json-schema:///#/anyOf/0"],
+        &["json-schema:///#/anyOf/1"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    #[expect(clippy::too_many_lines)]
+    fn self_validating_one_of_string_branches_stay_separate_variants_golden() {
+        let actual: String = self_validating_buffers(&[serde_json::json!({
+            "type": "object",
+            "properties": {"x": {"oneOf": [{"enum": ["a", "b"]}, {"const": "b"}, {"type": "integer"}]}}
+        })])
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum XVariant0 {
+    #[serde(rename = "a")]
+    A,
+    #[serde(rename = "b")]
+    B,
+}
+
+impl XVariant0 {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(0, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for XVariant0 {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(0, value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum XVariant1 {
+    #[serde(rename = "b")]
+    B,
+}
+
+impl XVariant1 {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(1, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for XVariant1 {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(1, value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
+pub enum XOneOf {
+    Variant0(XVariant0),
+    Variant1(XVariant1),
+    Integer(i64),
+}
+
+impl<'de> Deserialize<'de> for XOneOf {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        let candidates: Vec<usize> = TYPE_VALIDATORS
+            .union_candidates(json_schema_rs::UnionMatch::OneOf, Some(2), &[0, 1, 3], &value)
+            .map_err(serde::de::Error::custom)?;
+        for candidate in candidates {
+            let variant: Result<Self, serde_json::Error> = match candidate {
+                0 => <XVariant0 as Deserialize>::deserialize(&value).map(Self::Variant0),
+                1 => <XVariant1 as Deserialize>::deserialize(&value).map(Self::Variant1),
+                2 => <i64 as Deserialize>::deserialize(&value).map(Self::Integer),
+                _ => continue,
+            };
+            if let Ok(variant) = variant {
+                return Ok(variant);
+            }
+        }
+        Err(serde::de::Error::custom(format!("{value} does not deserialize into a XOneOf variant whose schema it satisfies")))
+    }
+}
+
+impl XOneOf {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(2, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for XOneOf {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(2, value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<XOneOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Root {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(4, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for Root {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(4, value)
+    }
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"type":"object","properties":{"x":{"oneOf":[{"enum":["a","b"]},{"const":"b"},{"type":"integer"}]}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/x/oneOf/0"],
+        &["json-schema:///#/properties/x/oneOf/1"],
+        &["json-schema:///#/properties/x"],
+        &["json-schema:///#/properties/x/oneOf/2"],
+        &["json-schema:///#"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_ref_with_not_is_its_own_type_golden() {
+        let actual: String = self_validating_buffers(&[serde_json::json!({
+            "type": "object",
+            "properties": {
+                "a": {"$ref": "#/$defs/Item"},
+                "b": {"$ref": "#/$defs/Item", "not": {"required": ["z"]}}
+            },
+            "$defs": {"Item": {"type": "object", "properties": {"z": {"type": "string"}}, "additionalProperties": false}}
+        })])
+        .1
+        .remove(0);
+        let expected: &str = r###"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Item {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<String>,
+}
+
+impl Item {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(0, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for Item {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(0, value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct B {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<String>,
+}
+
+impl B {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(1, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for B {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(1, value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<Item>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<B>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Root {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(2, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for Root {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(2, value)
+    }
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r##"{"type":"object","$defs":{"Item":{"type":"object","properties":{"z":{"type":"string"}},"additionalProperties":false}},"properties":{"a":{"$ref":"#/$defs/Item"},"b":{"$ref":"#/$defs/Item","not":{"required":["z"]}}}}"##,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/$defs/Item"],
+        &["json-schema:///#/properties/b"],
+        &["json-schema:///#"],
+    ],
+);
+
+"###;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_identical_inputs_without_uri_are_not_shared() {
+        let schema: serde_json::Value = serde_json::json!({
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "additionalProperties": false
+        });
+        let actual: Option<String> = self_validating_buffers(&[schema.clone(), schema]).0;
+        let expected: Option<String> = None;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_type_shared_by_two_inputs_golden() {
+        let a: Schema = Schema::try_from(&serde_json::json!({
+            "type": "object",
+            "properties": {"thing": {"$ref": "b.json#/$defs/Thing"}}
+        }))
+        .expect("parse a");
+        let b: Schema = Schema::try_from(&serde_json::json!({
+            "type": "object",
+            "properties": {"thing": {"$ref": "#/$defs/Thing"}},
+            "$defs": {"Thing": {"type": "object", "properties": {"n": {"type": "integer", "minimum": 1}}, "additionalProperties": false}}
+        }))
+        .expect("parse b");
+        let input: CodeGenInput<'_> = CodeGenInput::new()
+            .schema_at("https://example.com/a.json", &a)
+            .schema_at("https://example.com/b.json", &b);
+        let settings: CodeGenSettings = CodeGenSettings::builder().self_validating(true).build();
+        let (shared, _) = buffers(generate_rust(input, &settings).expect("generate"));
+        let actual: Option<String> = shared;
+        let expected: Option<String> = Some(r###"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Thing {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<i64>,
+}
+
+impl Thing {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(0, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for Thing {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(0, value)
+    }
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "https://example.com/a.json",
+            json: r#"{"type":"object","properties":{"thing":{"$ref":"b.json#/$defs/Thing"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+        json_schema_rs::EmbeddedDocument {
+            uri: "https://example.com/b.json",
+            json: r##"{"type":"object","$defs":{"Thing":{"type":"object","properties":{"n":{"type":"integer","minimum":1}},"additionalProperties":false}},"properties":{"thing":{"$ref":"#/$defs/Thing"}}}"##,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["https://example.com/b.json#/$defs/Thing"],
+    ],
+);
+
+"###.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_schema_the_validator_cannot_compile_is_an_error() {
+        let schema: Vec<Schema> = schemas_of(&[serde_json::json!({
+            "type": "object",
+            "properties": {"a": {"type": "string", "pattern": "("}}
+        })]);
+        let settings: CodeGenSettings = CodeGenSettings::builder().self_validating(true).build();
+        let actual: String = generate_rust(&schema, &settings)
+            .expect_err("invalid pattern")
+            .to_string();
+        let expected: &str = r#"schema at index 0: the schema cannot be embedded for self-validating types: /properties/a/pattern: invalid regular expression "(": Unbalanced parenthesis"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schema_the_validator_cannot_compile_generates_without_self_validating() {
+        let schema: Vec<Schema> = schemas_of(&[serde_json::json!({
+            "type": "object",
+            "properties": {"a": {"type": "string", "pattern": "("}}
+        })]);
+        let actual: bool = generate_rust(&schema, &default_settings()).is_ok();
+        let expected: bool = true;
         assert_eq!(expected, actual);
     }
 }

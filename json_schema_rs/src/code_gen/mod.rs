@@ -7,6 +7,7 @@
 mod error;
 mod input;
 mod rust_backend;
+mod rust_validators;
 mod settings;
 mod type_graph;
 
