@@ -4,6 +4,7 @@ use super::retrieval::{CliRetriever, RefRetrieval};
 use super::utils::{
     collect_schema_entries, display_schema_path, read_schema_from_path, write_mod_rs_files,
 };
+use clap::ArgMatches;
 use json_schema_rs::{
     CodeGenInput, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, Schema,
     UniqueItemsType, UnknownProperties, file_uri, generate_rust,
@@ -12,16 +13,12 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[expect(clippy::too_many_arguments)]
 pub(crate) fn run_generate(
     lang: &str,
     inputs: &[String],
     output_dir: &Path,
     schema_settings: &JsonSchemaSettings,
-    cgs_model_name_source: Option<&str>,
-    cgs_dedupe_mode: Option<&str>,
-    cgs_unknown_properties: Option<&str>,
-    cgs_unique_items: Option<&str>,
+    code_gen_settings: &CodeGenSettings,
     retrieval: &RefRetrieval,
 ) -> Result<(), String> {
     if !lang.eq_ignore_ascii_case("rust") {
@@ -36,13 +33,6 @@ pub(crate) fn run_generate(
     if entries.is_empty() {
         return Err("no JSON Schema files found (look for .json in directories)".to_string());
     }
-
-    let code_gen_settings: CodeGenSettings = code_gen_settings(
-        cgs_model_name_source,
-        cgs_dedupe_mode,
-        cgs_unknown_properties,
-        cgs_unique_items,
-    )?;
 
     // Standalone ingestion step: try every file, log each failure to stderr, do not short-circuit.
     let retriever: CliRetriever = CliRetriever::new(retrieval)?;
@@ -79,7 +69,7 @@ pub(crate) fn run_generate(
             None => input.schema(schema),
         };
     }
-    let output = generate_rust(input, &code_gen_settings).map_err(|e| e.to_string())?;
+    let output = generate_rust(input, code_gen_settings).map_err(|e| e.to_string())?;
     assert_eq!(
         output.per_schema.len(),
         output_relatives.len(),
@@ -127,33 +117,30 @@ pub(crate) fn run_generate(
         reason = "fails only without the `indexmap` feature"
     )
 )]
-fn code_gen_settings(
-    cgs_model_name_source: Option<&str>,
-    cgs_dedupe_mode: Option<&str>,
-    cgs_unknown_properties: Option<&str>,
-    cgs_unique_items: Option<&str>,
-) -> Result<CodeGenSettings, String> {
-    let mut b = CodeGenSettings::builder();
-    if let Some(src) = cgs_model_name_source {
+pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings, String> {
+    let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
+    let mut b = CodeGenSettings::builder()
+        .flatten_single_entry_combinators(matches.get_flag("cgs-flatten-single-entry-combinators"));
+    if let Some(src) = flag("cgs-model-name-source") {
         b = b.model_name_source(match src {
             "property-key" => ModelNameSource::PropertyKeyFirst,
             _ => ModelNameSource::TitleFirst,
         });
     }
-    if let Some(mode) = cgs_dedupe_mode {
+    if let Some(mode) = flag("cgs-dedupe-mode") {
         b = b.dedupe_mode(match mode {
             "disabled" => DedupeMode::Disabled,
             "functional" => DedupeMode::Functional,
             _ => DedupeMode::Full,
         });
     }
-    if let Some(mode) = cgs_unknown_properties {
+    if let Some(mode) = flag("cgs-unknown-properties") {
         b = b.unknown_properties(match mode {
             "capture" => UnknownProperties::Capture,
             _ => UnknownProperties::Drop,
         });
     }
-    if let Some(kind) = cgs_unique_items {
+    if let Some(kind) = flag("cgs-unique-items") {
         b = b.unique_items(match kind {
             "hash-set" => UniqueItemsType::HashSet,
             "btree-set" => UniqueItemsType::BTreeSet,

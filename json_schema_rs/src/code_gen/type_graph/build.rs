@@ -511,6 +511,9 @@ impl<'r> Builder<'_, 'r> {
                 }
                 c.skip |= skip::ALL_OF;
             }
+            if self.settings.flatten_single_entry_combinators && !drop_self {
+                never |= self.expand_single_entry_unions(&mut c, &mut children);
+            }
             let keep: bool = !drop_self
                 && (contributes(s, c.skip)
                     || (is_seed && !had_ref && !c.skips(skip::ANNOTATIONS) && has_annotations(s)));
@@ -526,6 +529,43 @@ impl<'r> Builder<'_, 'r> {
             conjuncts: out,
             never,
         })
+    }
+
+    /// Pushes the entry of each one-entry `anyOf` / `oneOf` of `c` onto `children` and marks the
+    /// keyword consumed: `{"anyOf": [X]}` accepts exactly what `X` does, so with
+    /// `flatten_single_entry_combinators` the entry joins the conjunction like an `allOf`
+    /// branch, before unions are recognised and names proposed. Returns whether an entry is
+    /// `false` (nothing is valid).
+    fn expand_single_entry_unions(
+        &self,
+        c: &mut Conjunct<'r>,
+        children: &mut Vec<Conjunct<'r>>,
+    ) -> bool {
+        let s: &'r JsonSchema = c.schema;
+        let mut never: bool = false;
+        for (keyword, list, bit) in [
+            ("anyOf", &s.any_of, skip::ANY_OF),
+            ("oneOf", &s.one_of, skip::ONE_OF),
+        ] {
+            let Some([branch]) = list.as_deref() else {
+                continue;
+            };
+            if c.skips(bit) {
+                continue;
+            }
+            match branch {
+                Schema::Bool(true) => {}
+                Schema::Bool(false) => never = true,
+                Schema::Object(b) => children.push(Conjunct {
+                    schema: b,
+                    scope: self.registry.enter(c.scope, b),
+                    pointer: pointer_push(&pointer_push(&c.pointer, keyword), "0"),
+                    skip: c.skip & skip::ANNOTATIONS,
+                }),
+            }
+            c.skip |= bit;
+        }
+        never
     }
 
     /// Builds the node for a reserved id.

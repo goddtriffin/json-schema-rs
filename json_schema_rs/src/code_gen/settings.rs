@@ -74,6 +74,12 @@ pub struct CodeGenSettings {
     pub unknown_properties: Option<UnknownProperties>,
     /// The Rust collection for `uniqueItems` arrays (default `Vec`).
     pub unique_items: UniqueItemsType,
+    /// Generate an `anyOf` / `oneOf` with exactly one entry as that entry's type instead of a
+    /// one-variant union (default `false`). The two are equivalent for validation, so the type
+    /// accepts the same instances either way; a one-variant union keeps the combinator on a
+    /// round trip through the derive, the flattened type does not. A one-entry `allOf` is
+    /// always merged into its schema.
+    pub flatten_single_entry_combinators: bool,
 }
 
 impl Default for CodeGenSettings {
@@ -83,6 +89,7 @@ impl Default for CodeGenSettings {
             dedupe_mode: DedupeMode::Full,
             unknown_properties: None,
             unique_items: UniqueItemsType::Vec,
+            flatten_single_entry_combinators: false,
         }
     }
 }
@@ -94,6 +101,7 @@ pub struct CodeGenSettingsBuilder {
     dedupe_mode: Option<DedupeMode>,
     unknown_properties: Option<UnknownProperties>,
     unique_items: Option<UniqueItemsType>,
+    flatten_single_entry_combinators: Option<bool>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -125,6 +133,14 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Generate a one-entry `anyOf` / `oneOf` as its entry's type (see
+    /// [`CodeGenSettings::flatten_single_entry_combinators`]).
+    #[must_use]
+    pub fn flatten_single_entry_combinators(mut self, value: bool) -> Self {
+        self.flatten_single_entry_combinators = Some(value);
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -133,6 +149,9 @@ impl CodeGenSettingsBuilder {
             dedupe_mode: self.dedupe_mode.unwrap_or_default(),
             unknown_properties: self.unknown_properties,
             unique_items: self.unique_items.unwrap_or_default(),
+            flatten_single_entry_combinators: self
+                .flatten_single_entry_combinators
+                .unwrap_or_default(),
         }
     }
 }
