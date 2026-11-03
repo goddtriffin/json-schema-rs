@@ -268,7 +268,8 @@ float, `multipleOf`, `not`, ...): `pub struct Name(String);` with a private fiel
 only ever holds a valid value. `TryFrom` (and `FromStr` / `TryFrom<&str>` for strings)
 and `Deserialize` validate through the same embedded validator, with its errors, so an
 invalid value is rejected at the field while deserializing; `Deref`, `AsRef`,
-`into_inner`, `From<Name>` and `Display` read it, and `Serialize` is the scalar's own. A
+`into_inner`, `From<Name>` and `Display` read it, and `Serialize` is the scalar's own (the
+impls come from one `json_schema_rs::constrained_newtype!` line per type). A
 `$defs` entry is named after its key, and the derive gives the constraints back. Errors
 while deserializing stop at the first invalid field (serde's behaviour); `TryFrom<serde_json::Value>`
 on a self-validating type reports every error. `.constrained_newtypes(false)`
