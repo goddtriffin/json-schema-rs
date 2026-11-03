@@ -148,6 +148,9 @@ pub enum TypeValidationError {
         /// How many variants matched: none, or (for `oneOf`) 2 when two or more did.
         matched: usize,
     },
+    /// A constrained newtype was given a float that is not a JSON number (`NaN` or an
+    /// infinity).
+    NonFinite(f64),
 }
 
 /// Prints every problem, one per line.
@@ -171,6 +174,7 @@ impl fmt::Display for TypeValidationError {
             TypeValidationError::UnionMismatch { kind, .. } => {
                 write!(f, "more than one variant of the {kind} union matched")
             }
+            TypeValidationError::NonFinite(value) => write!(f, "{value} is not a JSON number"),
         }
     }
 }
@@ -180,7 +184,9 @@ impl std::error::Error for TypeValidationError {
         match self {
             TypeValidationError::Json(error) => Some(error),
             TypeValidationError::Schema(error) => Some(&**error),
-            TypeValidationError::Invalid(_) | TypeValidationError::UnionMismatch { .. } => None,
+            TypeValidationError::Invalid(_)
+            | TypeValidationError::UnionMismatch { .. }
+            | TypeValidationError::NonFinite(_) => None,
         }
     }
 }
@@ -196,6 +202,84 @@ impl From<Arc<EmbeddedSchemaError>> for TypeValidationError {
         TypeValidationError::Schema(error)
     }
 }
+
+/// A value a generated constrained newtype wraps (see
+/// [`TypeValidators::validate_newtype`]): a string, boolean, integer or float, seen by
+/// validation as the JSON value it serializes to.
+pub trait NewtypeValue: Sized + sealed::Sealed {
+    /// The JSON instance validation sees.
+    ///
+    /// # Errors
+    ///
+    /// [`TypeValidationError::NonFinite`] for a float that is not a JSON number.
+    fn into_instance(self) -> Result<Value, TypeValidationError>;
+
+    /// The value back from the instance [`NewtypeValue::into_instance`] gave.
+    ///
+    /// # Errors
+    ///
+    /// [`TypeValidationError::Json`] when `instance` is not of this type.
+    fn from_instance(instance: Value) -> Result<Self, TypeValidationError>;
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+impl sealed::Sealed for String {}
+
+impl NewtypeValue for String {
+    fn into_instance(self) -> Result<Value, TypeValidationError> {
+        Ok(Value::String(self))
+    }
+
+    fn from_instance(instance: Value) -> Result<Self, TypeValidationError> {
+        match instance {
+            Value::String(value) => Ok(value),
+            other => Ok(serde_json::from_value(other)?),
+        }
+    }
+}
+
+/// [`NewtypeValue`] for types that convert into a [`Value`] without loss.
+macro_rules! newtype_value {
+    ($($ty:ty),*) => {$(
+        impl sealed::Sealed for $ty {}
+
+        impl NewtypeValue for $ty {
+            fn into_instance(self) -> Result<Value, TypeValidationError> {
+                Ok(Value::from(self))
+            }
+
+            fn from_instance(instance: Value) -> Result<Self, TypeValidationError> {
+                Ok(serde_json::from_value(instance)?)
+            }
+        }
+    )*};
+}
+
+newtype_value!(bool, u8, u16, u32, u64, i8, i16, i32, i64);
+
+/// [`NewtypeValue`] for floats: a non-finite value is not a JSON number.
+macro_rules! newtype_float {
+    ($($ty:ty),*) => {$(
+        impl sealed::Sealed for $ty {}
+
+        impl NewtypeValue for $ty {
+            fn into_instance(self) -> Result<Value, TypeValidationError> {
+                serde_json::Number::from_f64(f64::from(self))
+                    .map(Value::Number)
+                    .ok_or(TypeValidationError::NonFinite(f64::from(self)))
+            }
+
+            fn from_instance(instance: Value) -> Result<Self, TypeValidationError> {
+                Ok(serde_json::from_value(instance)?)
+            }
+        }
+    )*};
+}
+
+newtype_float!(f32, f64);
 
 /// The compiled schemas of every type, or why they cannot be used.
 type Compiled = Result<CompiledEntries, Arc<EmbeddedSchemaError>>;
@@ -332,6 +416,64 @@ impl<'a> TypeValidators<'a> {
     ) -> Result<T, TypeValidationError> {
         self.validate(index, &instance)?;
         Ok(serde_json::from_value(instance)?)
+    }
+
+    /// For a generated constrained newtype: validates `value` as type `index` and gives it back
+    /// when it conforms. The value is moved into the instance and out again, never copied.
+    ///
+    /// ```
+    /// use json_schema_rs::{EmbeddedDocument, EmbeddedDocumentKind, TypeValidators};
+    ///
+    /// static VALIDATORS: TypeValidators<'static> = TypeValidators::new(
+    ///     None,
+    ///     &[EmbeddedDocument {
+    ///         uri: "json-schema:///",
+    ///         json: r#"{"type":"integer","multipleOf":5}"#,
+    ///         kind: EmbeddedDocumentKind::Parsed(None),
+    ///     }],
+    ///     &[&["json-schema:///#"]],
+    /// );
+    ///
+    /// assert_eq!(VALIDATORS.validate_newtype(0, 10_u8).ok(), Some(10));
+    /// assert!(VALIDATORS.validate_newtype(0, 12_u8).is_err());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// See [`TypeValidators::validate`]; [`TypeValidationError::NonFinite`] for a float that is
+    /// not a JSON number.
+    ///
+    /// # Panics
+    ///
+    /// When `index` is not a type of these validators.
+    pub fn validate_newtype<T: NewtypeValue>(
+        &self,
+        index: usize,
+        value: T,
+    ) -> Result<T, TypeValidationError> {
+        self.validate_newtype_as(index, value)
+    }
+
+    /// [`TypeValidators::validate_newtype`] for a value read as another type: validates `value`
+    /// as type `index`, then converts the instance to `T` (an `f32` newtype validates the `f64`
+    /// it read, so a number just outside a bound cannot round into it).
+    ///
+    /// # Errors
+    ///
+    /// See [`TypeValidators::validate_newtype`]; [`TypeValidationError::Json`] when the instance
+    /// is not a `T`.
+    ///
+    /// # Panics
+    ///
+    /// When `index` is not a type of these validators.
+    pub fn validate_newtype_as<T: NewtypeValue, U: NewtypeValue>(
+        &self,
+        index: usize,
+        value: U,
+    ) -> Result<T, TypeValidationError> {
+        let instance: Value = value.into_instance()?;
+        self.validate(index, &instance)?;
+        T::from_instance(instance)
     }
 
     /// For a generated `anyOf` / `oneOf` union: the positions in `variants` (type indexes) of
@@ -494,6 +636,7 @@ mod tests {
         Json(String),
         Schema(String),
         UnionMismatch { kind: UnionMatch, matched: usize },
+        NonFinite(f64),
     }
 
     fn outcome<T>(result: Result<T, TypeValidationError>) -> Result<T, Outcome> {
@@ -504,6 +647,7 @@ mod tests {
             TypeValidationError::UnionMismatch { kind, matched } => {
                 Outcome::UnionMismatch { kind, matched }
             }
+            TypeValidationError::NonFinite(value) => Outcome::NonFinite(value),
         })
     }
 
@@ -1160,6 +1304,108 @@ mod tests {
             VALIDATORS.is_valid(0, &json!("s")),
             VALIDATORS.is_valid(0, &json!(1)),
         );
+        assert_eq!(expected, actual);
+    }
+
+    const NEWTYPES: &str = r#"{"$defs":{"name":{"type":"string","minLength":2},"even":{"type":"integer","multipleOf":2},"ratio":{"type":"number","maximum":1}}}"#;
+
+    /// Validators over [`NEWTYPES`]: `name` (0), `even` (1), `ratio` (2).
+    fn newtype_validators<'a>(documents: &'a [EmbeddedDocument<'static>]) -> TypeValidators<'a> {
+        static TYPES: [&[&str]; 3] = [
+            &["json-schema:///#/$defs/name"],
+            &["json-schema:///#/$defs/even"],
+            &["json-schema:///#/$defs/ratio"],
+        ];
+        TypeValidators::new(None, documents, &TYPES)
+    }
+
+    #[test]
+    fn validate_newtype_gives_back_a_conforming_string() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let actual: Result<String, Outcome> =
+            outcome(newtype_validators(&documents).validate_newtype(0, "Ada".to_string()));
+        let expected: Result<String, Outcome> = Ok("Ada".to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_newtype_gives_the_library_validator_errors_for_a_string() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let actual: Result<String, Outcome> =
+            outcome(newtype_validators(&documents).validate_newtype(0, "A".to_string()));
+        let expected: Result<String, Outcome> = Err(Outcome::Invalid(
+            library_errors(r#"{"type":"string","minLength":2}"#, &json!("A")).expect_err("invalid"),
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_newtype_gives_back_a_conforming_integer() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let actual: Result<u64, Outcome> =
+            outcome(newtype_validators(&documents).validate_newtype(1, u64::MAX - 1));
+        let expected: Result<u64, Outcome> = Ok(u64::MAX - 1);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_newtype_rejects_a_non_conforming_integer() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let actual: Result<i8, Outcome> =
+            outcome(newtype_validators(&documents).validate_newtype(1, -3_i8));
+        let expected: Result<i8, Outcome> = Err(Outcome::Invalid(
+            library_errors(r#"{"type":"integer","multipleOf":2}"#, &json!(-3))
+                .expect_err("invalid"),
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_newtype_gives_back_a_conforming_f32() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let actual: Result<f32, Outcome> =
+            outcome(newtype_validators(&documents).validate_newtype(2, 0.1_f32));
+        let expected: Result<f32, Outcome> = Ok(0.1_f32);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_newtype_rejects_a_non_conforming_float() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let actual: Result<f64, Outcome> =
+            outcome(newtype_validators(&documents).validate_newtype(2, 1.5_f64));
+        let expected: Result<f64, Outcome> = Err(Outcome::Invalid(
+            library_errors(r#"{"type":"number","maximum":1}"#, &json!(1.5)).expect_err("invalid"),
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_newtype_rejects_a_non_finite_float() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let actual: Result<f64, Outcome> =
+            outcome(newtype_validators(&documents).validate_newtype(2, f64::NEG_INFINITY));
+        let expected: Result<f64, Outcome> = Err(Outcome::NonFinite(f64::NEG_INFINITY));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_finite_error_names_the_value() {
+        let actual: String = TypeValidationError::NonFinite(f64::NAN).to_string();
+        let expected: &str = "NaN is not a JSON number";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_newtype_as_validates_the_value_read_before_converting() {
+        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
+        let validators: TypeValidators<'_> = newtype_validators(&documents);
+        let actual: Result<f32, Outcome> =
+            outcome(validators.validate_newtype_as(2, 1.000_000_000_1_f64));
+        let expected: Result<f32, Outcome> = Err(Outcome::Invalid(
+            library_errors(r#"{"type":"number","maximum":1}"#, &json!(1.000_000_000_1))
+                .expect_err("invalid"),
+        ));
         assert_eq!(expected, actual);
     }
 }
