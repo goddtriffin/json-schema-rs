@@ -10,11 +10,11 @@ json_schema_to_rust!(
 #[test]
 fn expanded_code_compiles_and_root_exists() {
     let root = schema_0::Root {
-        value: 50.5,
+        value: schema_0::Value::try_from(50.5_f32).expect("in range"),
         additional: BTreeMap::new(),
     };
     let expected: f32 = 50.5;
-    let actual: f32 = root.value;
+    let actual: f32 = root.value.into_inner();
     assert_eq!(expected, actual);
 }
 
@@ -23,6 +23,13 @@ fn f32_property_deserializes() {
     let json = r#"{"value":50.5}"#;
     let root: schema_0::Root = serde_json::from_str(json).unwrap();
     let expected: f32 = 50.5;
-    let actual: f32 = root.value;
+    let actual: f32 = *root.value;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn f32_property_out_of_range_is_rejected() {
+    let expected: bool = true;
+    let actual: bool = serde_json::from_str::<schema_0::Root>(r#"{"value":100.6}"#).is_err();
     assert_eq!(expected, actual);
 }

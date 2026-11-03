@@ -94,16 +94,17 @@ pub struct CodeGenSettings {
     /// checked, and a union deserializes to the first variant whose shape fits.
     pub self_validating: bool,
     /// Generate a constrained newtype for each string, integer, number or boolean whose schema
-    /// asserts more than its Rust type holds (default `false`): `minLength`, `maxLength`,
+    /// asserts more than its Rust type holds (default `true`): `minLength`, `maxLength`,
     /// `pattern`, a checked `format`, bounds the integer type does not already hold, any bound on
-    /// a float, `multipleOf`, `not`, and the other assertions the Rust type cannot show. The newtype
-    /// (`pub struct Name(String);`) can only hold a value its schema accepts: its `TryFrom` and
-    /// `Deserialize` validate the value through the library's validator (exactly
+    /// a float, `multipleOf`, `not`, and the other assertions the Rust type cannot show. The
+    /// newtype (`pub struct Name(String);`) can only hold a value its schema accepts: its
+    /// `TryFrom` and `Deserialize` validate the value through the library's validator (exactly
     /// [`CompiledSchema::validate`](crate::CompiledSchema::validate)'s semantics and errors), so
     /// an invalid value is rejected at the field during deserialization. The generated code
     /// embeds the schema parts the newtypes' validation reaches (as with
     /// [`self_validating`](CodeGenSettings::self_validating), which this does not need), and
-    /// depends on `json-schema-rs` and `serde_json`.
+    /// depends on `json-schema-rs` and `serde_json`. Off, such scalars are the plain Rust scalar
+    /// (`String`, `u8`, `f64`), checked only by a self-validating parent's `validate` / `TryFrom`.
     pub constrained_newtypes: bool,
 }
 
@@ -124,7 +125,7 @@ impl Default for CodeGenSettings {
             unique_items: UniqueItemsType::Vec,
             flatten_single_entry_combinators: false,
             self_validating: true,
-            constrained_newtypes: false,
+            constrained_newtypes: true,
         }
     }
 }
@@ -206,7 +207,7 @@ impl CodeGenSettingsBuilder {
                 .flatten_single_entry_combinators
                 .unwrap_or_default(),
             self_validating: self.self_validating.unwrap_or(true),
-            constrained_newtypes: self.constrained_newtypes.unwrap_or_default(),
+            constrained_newtypes: self.constrained_newtypes.unwrap_or(true),
         }
     }
 }

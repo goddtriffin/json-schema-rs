@@ -1,18 +1,21 @@
 //! Integration test: `json_schema_to_rust!` generates self-validating types by default:
-//! `validate`, `TryFrom<serde_json::Value>`, and `oneOf` / `anyOf` variants chosen by validation.
+//! `validate`, `TryFrom<serde_json::Value>`, `oneOf` / `anyOf` variants chosen by validation, and
+//! constrained newtypes.
 
 use json_schema_rs_macro::json_schema_to_rust;
-use schema_0::{Root, SizeOneOf};
+use schema_0::{Name, Root, SizeOneOf, SizeVariant0};
 
 json_schema_to_rust!(
-    r#"{"type":"object","properties":{"name":{"type":"string","minLength":2},"size":{"oneOf":[{"type":"integer","maximum":10},{"type":"integer","minimum":5}]}},"required":["name"],"additionalProperties":false}"#
+    r#"{"type":"object","properties":{"name":{"type":"string","minLength":2},"size":{"oneOf":[{"type":"integer","maximum":10},{"type":"integer","minimum":5}]}},"required":["name"],"additionalProperties":false,"maxProperties":1}"#
 );
 
 #[test]
 fn validate_reports_a_constraint_the_rust_type_does_not_hold() {
     let root: Root = Root {
-        name: "A".to_string(),
-        size: None,
+        name: Name::try_from("Ada").expect("valid name"),
+        size: Some(SizeOneOf::Integer0(
+            SizeVariant0::try_from(3).expect("valid size"),
+        )),
     };
     let expected: bool = true;
     let actual: bool = root.validate().is_err();
@@ -22,7 +25,7 @@ fn validate_reports_a_constraint_the_rust_type_does_not_hold() {
 #[test]
 fn validate_accepts_a_conforming_value() {
     let root: Root = Root {
-        name: "Ada".to_string(),
+        name: Name::try_from("Ada").expect("valid name"),
         size: None,
     };
     let expected: bool = true;
@@ -49,5 +52,12 @@ fn one_of_picks_the_only_matching_branch_and_rejects_two_matches() {
     };
     let expected: [Option<&str>; 3] = [Some("first"), Some("second"), None];
     let actual: [Option<&str>; 3] = [parse(3), parse(12), parse(7)];
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn newtype_rejects_a_value_violating_its_schema() {
+    let expected: bool = true;
+    let actual: bool = Name::try_from("A").is_err();
     assert_eq!(expected, actual);
 }

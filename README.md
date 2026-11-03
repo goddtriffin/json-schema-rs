@@ -261,8 +261,7 @@ let person: Person = Person::try_from(serde_json::json!({"name": "A"}))?; // Err
 person.validate()?;
 ```
 
-**Constrained newtypes (opt-in).** `.constrained_newtypes(true)`
-(`--cgs-constrained-newtypes`) generates a newtype for each string, integer, number or
+**Constrained newtypes (on by default).** Codegen generates a newtype for each string, integer, number or
 boolean whose schema asserts more than its Rust type holds (`minLength`, `maxLength`,
 `pattern`, a checked `format`, bounds narrower than the integer type, any bound on a
 float, `multipleOf`, `not`, ...): `pub struct Name(String);` with a private field, so it
@@ -270,9 +269,11 @@ only ever holds a valid value. `TryFrom` (and `FromStr` / `TryFrom<&str>` for st
 and `Deserialize` validate through the same embedded validator, with its errors, so an
 invalid value is rejected at the field while deserializing; `Deref`, `AsRef`,
 `into_inner`, `From<Name>` and `Display` read it, and `Serialize` is the scalar's own. A
-`$defs` entry is named after its key, and the derive gives the constraints back. Works
-with or without self-validating types (with them, a struct's `TryFrom` checks each
-newtype field twice: once in the struct's schema, once in the newtype).
+`$defs` entry is named after its key, and the derive gives the constraints back. Errors
+while deserializing stop at the first invalid field (serde's behaviour); `TryFrom<serde_json::Value>`
+on a self-validating type reports every error. `.constrained_newtypes(false)`
+(`--cgs-constrained-newtypes false`) keeps such scalars as plain `String` / `u8` / `f64`;
+the setting is independent of self-validating types.
 
 ```rust
 let name: Name = "Ada".parse()?; // Err for "" (minLength 1)
