@@ -100,7 +100,7 @@ blocks (the Performance tables), and nothing the PR did not cause appears at all
 
 - **JSON Schema spec parity:** official-suite tests that failed on `main` and pass now (and
   any that regressed). Sources: entries removed from (or added to)
-  `json_schema_rs/tests/suite_xfail.json`, and the compliance/coverage change per draft in
+  `json_schema_rs/tests/suite_xfail.json` (and `suite_xfail_arbitrary_precision.json` for the `arbitrary-precision` build), and the compliance/coverage change per draft in
   `json_schema_rs_differential/results.md`. Name the most relevant groups (keyword and
   draft) with counts. If nothing changed, write `n/a`.
 - **Performance:** our library's time and memory (peak heap / peak RSS) versus `main`'s

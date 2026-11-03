@@ -152,7 +152,25 @@ by default in drafts 4/6/7 and annotation-only in 2019-09/2020-12 (override with
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with strict parsing; the cases it still fails
 (schemas using a key their draft does not define, numbers beyond 64 bits, draft-7
-content assertion) are listed in `json_schema_rs/tests/suite_xfail.json`.
+content assertion) are listed in `json_schema_rs/tests/suite_xfail.json`
+(`suite_xfail_arbitrary_precision.json` with the `arbitrary-precision` feature).
+
+**Numbers** are compared exactly, never with an epsilon. By default every integer
+within 64 bits (`u64` / `i64`) is exact; beyond that `serde_json` reads a number as the
+nearest `f64`, so `18446744073709551616` and `18446744073709551617` compare equal, and a
+number beyond `f64` range (`1e400`) does not parse. The opt-in `arbitrary-precision`
+feature makes every number exact as written (bounds, `multipleOf`, `const`, `enum`,
+`uniqueItems`, draft 4's lexical `integer`):
+
+```toml
+json-schema-rs = { version = "0.0.4", features = ["arbitrary-precision"] }
+```
+
+It enables `serde_json/arbitrary_precision`, which Cargo turns on for every crate in
+your build; with it, serde's derived `#[serde(flatten)]` and `#[serde(untagged)]`
+cannot deserialize numbers in your own types (generated code avoids both, so it works
+in either build). A generated type embeds its schema text, so a schema holding a
+number beyond `f64` needs the feature where the generated code runs too.
 
 ## Using the library
 
