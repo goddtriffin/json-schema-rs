@@ -1347,141 +1347,14 @@ fn render_newtype(
         let _ = writeln!(out, "#[json_schema({})]", schema_args.join(", "));
     }
     let _ = writeln!(out, "pub struct {name}({inner});\n");
-    out.push_str(&render_newtype_conversions(name, inner, entry));
-    out.push_str(&render_newtype_deserialize(name, inner, entry));
-    out
-}
-
-/// A newtype's constructors and readers: `into_inner`, `TryFrom` the scalar (and `&str` and
-/// `FromStr` for a string), `From` into the scalar, `Deref`, `AsRef` and `Display`.
-fn render_newtype_conversions(name: &str, inner: &str, entry: &Entry) -> String {
     let Entry { validators, index } = entry;
-    let string: bool = inner == "String";
-    let mut out: String = String::new();
-    let _ = writeln!(
-        out,
-        "impl {name} {{
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> {inner} {{
-        self.0
-    }}
-}}
-"
-    );
-    // A UUID is validated as the string it serializes to; deserializing validates the string
-    // as read, before parsing it.
-    let check: String = if inner == "Uuid" {
-        format!(
-            "{validators}.validate_newtype({index}, value.to_string())?;\n        Ok(Self(value))"
-        )
-    } else {
-        format!("{validators}.validate_newtype({index}, value).map(Self)")
+    let call: String = match inner {
+        "String" => format!("string, {name}, {validators}, {index}"),
+        "f32" => format!("f32, {name}, {validators}, {index}"),
+        "Uuid" => format!("uuid, {name}, {validators}, {index}"),
+        _ => format!("scalar, {name}, {inner}, {validators}, {index}"),
     };
-    let _ = writeln!(
-        out,
-        "impl TryFrom<{inner}> for {name} {{
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: {inner}) -> Result<Self, Self::Error> {{
-        {check}
-    }}
-}}
-"
-    );
-    if string {
-        let _ = writeln!(
-            out,
-            "impl TryFrom<&str> for {name} {{
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {{
-        Self::try_from(value.to_string())
-    }}
-}}
-
-impl std::str::FromStr for {name} {{
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {{
-        Self::try_from(value.to_string())
-    }}
-}}
-"
-        );
-    }
-    let as_ref: &str = if string { "str" } else { inner };
-    let _ = writeln!(
-        out,
-        "impl From<{name}> for {inner} {{
-    fn from(value: {name}) -> Self {{
-        value.0
-    }}
-}}
-
-impl std::ops::Deref for {name} {{
-    type Target = {inner};
-
-    fn deref(&self) -> &{inner} {{
-        &self.0
-    }}
-}}
-
-impl AsRef<{as_ref}> for {name} {{
-    fn as_ref(&self) -> &{as_ref} {{
-        &self.0
-    }}
-}}
-
-impl std::fmt::Display for {name} {{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
-        std::fmt::Display::fmt(&self.0, f)
-    }}
-}}
-"
-    );
-    out
-}
-
-/// A newtype's `Deserialize`: the scalar, validated (a UUID as the string read, an `f32` as the
-/// `f64` read).
-fn render_newtype_deserialize(name: &str, inner: &str, entry: &Entry) -> String {
-    let Entry { validators, index } = entry;
-    let mut out: String = String::new();
-    let f32_inner: bool = inner == "f32";
-    let body: String = if f32_inner {
-        // The number as read, before it is narrowed: an instance just outside a bound must not
-        // round into it.
-        format!(
-            "{validators}
-            .validate_newtype_as({index}, f64::deserialize(deserializer)?)
-            .map(Self)
-            .map_err(serde::de::Error::custom)"
-        )
-    } else if inner == "Uuid" {
-        format!(
-            "let text: String = {validators}
-            .validate_newtype({index}, String::deserialize(deserializer)?)
-            .map_err(serde::de::Error::custom)?;
-        Uuid::parse_str(&text).map(Self).map_err(serde::de::Error::custom)"
-        )
-    } else {
-        format!(
-            "Self::try_from({inner}::deserialize(deserializer)?).map_err(serde::de::Error::custom)"
-        )
-    };
-    let _ = writeln!(
-        out,
-        "impl<'de> Deserialize<'de> for {name} {{
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {{
-        {body}
-    }}
-}}
-"
-    );
+    let _ = writeln!(out, "json_schema_rs::constrained_newtype!({call});\n");
     out
 }
 
@@ -10417,72 +10290,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(min_length = 1, max_length = 10, pattern = "^[A-Z]")]
 pub struct Name(String);
 
-impl Name {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Name {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for Name {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for Name {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<Name> for String {
-    fn from(value: Name) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Name {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for Name {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Name {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Name {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -10527,54 +10335,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(minimum = 0, maximum = 100, multiple_of = 5)]
 pub struct Percent(u8);
 
-impl Percent {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> u8 {
-        self.0
-    }
-}
-
-impl TryFrom<u8> for Percent {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl From<Percent> for u8 {
-    fn from(value: Percent) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Percent {
-    type Target = u8;
-
-    fn deref(&self) -> &u8 {
-        &self.0
-    }
-}
-
-impl AsRef<u8> for Percent {
-    fn as_ref(&self) -> &u8 {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Percent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Percent {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(u8::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(scalar, Percent, u8, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -10622,57 +10383,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(maximum = 1, exclusive_minimum = 0)]
 pub struct Ratio(f32);
 
-impl Ratio {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> f32 {
-        self.0
-    }
-}
-
-impl TryFrom<f32> for Ratio {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: f32) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl From<Ratio> for f32 {
-    fn from(value: Ratio) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Ratio {
-    type Target = f32;
-
-    fn deref(&self) -> &f32 {
-        &self.0
-    }
-}
-
-impl AsRef<f32> for Ratio {
-    fn as_ref(&self) -> &f32 {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Ratio {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Ratio {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        TYPE_VALIDATORS
-            .validate_newtype_as(0, f64::deserialize(deserializer)?)
-            .map(Self)
-            .map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(f32, Ratio, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -10753,72 +10464,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(pattern = "^[0-9]{5}$")]
 pub struct PostalCode(String);
 
-impl PostalCode {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for PostalCode {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for PostalCode {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for PostalCode {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<PostalCode> for String {
-    fn from(value: PostalCode) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for PostalCode {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for PostalCode {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for PostalCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for PostalCode {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, PostalCode, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -10869,54 +10515,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(title = "Port", minimum = 1, maximum = 65535)]
 pub struct Port(u16);
 
-impl Port {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> u16 {
-        self.0
-    }
-}
-
-impl TryFrom<u16> for Port {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl From<Port> for u16 {
-    fn from(value: Port) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Port {
-    type Target = u16;
-
-    fn deref(&self) -> &u16 {
-        &self.0
-    }
-}
-
-impl AsRef<u16> for Port {
-    fn as_ref(&self) -> &u16 {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Port {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Port {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(u16::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(scalar, Port, u16, TYPE_VALIDATORS, 0);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
@@ -10937,7 +10536,6 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
     }
 
     #[test]
-    #[expect(clippy::too_many_lines)]
     fn constrained_newtype_optional_fields_default_accessors_golden() {
         let actual: String = newtype_buffers(
             &[serde_json::json!({
@@ -10961,126 +10559,14 @@ use serde::{Deserialize, Serialize};
 #[json_schema(min_length = 1)]
 pub struct Label(String);
 
-impl Label {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Label {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for Label {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for Label {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<Label> for String {
-    fn from(value: Label) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Label {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for Label {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Label {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Label {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, Label, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(transparent)]
 #[json_schema(minimum = 1, maximum = 5)]
 pub struct Level(u8);
 
-impl Level {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> u8 {
-        self.0
-    }
-}
-
-impl TryFrom<u8> for Level {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(1, value).map(Self)
-    }
-}
-
-impl From<Level> for u8 {
-    fn from(value: Level) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Level {
-    type Target = u8;
-
-    fn deref(&self) -> &u8 {
-        &self.0
-    }
-}
-
-impl AsRef<u8> for Level {
-    fn as_ref(&self) -> &u8 {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Level {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Level {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(u8::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(scalar, Level, u8, TYPE_VALIDATORS, 1);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -11147,72 +10633,7 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct Word(String);
 
-impl Word {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Word {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for Word {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for Word {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<Word> for String {
-    fn from(value: Word) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Word {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for Word {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Word {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Word {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, Word, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -11263,72 +10684,7 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct Email(String);
 
-impl Email {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Email {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for Email {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for Email {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<Email> for String {
-    fn from(value: Email) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Email {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for Email {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Email {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Email {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, Email, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -11377,72 +10733,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(min_length = 2)]
 pub struct Name(String);
 
-impl Name {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Name {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for Name {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for Name {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<Name> for String {
-    fn from(value: Name) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Name {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for Name {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Name {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Name {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -11506,58 +10797,7 @@ use uuid::Uuid;
 #[json_schema(pattern = "^[0-9a-f-]+$")]
 pub struct Id(Uuid);
 
-impl Id {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> Uuid {
-        self.0
-    }
-}
-
-impl TryFrom<Uuid> for Id {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: Uuid) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value.to_string())?;
-        Ok(Self(value))
-    }
-}
-
-impl From<Id> for Uuid {
-    fn from(value: Id) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Id {
-    type Target = Uuid;
-
-    fn deref(&self) -> &Uuid {
-        &self.0
-    }
-}
-
-impl AsRef<Uuid> for Id {
-    fn as_ref(&self) -> &Uuid {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Id {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text: String = TYPE_VALIDATORS
-            .validate_newtype(0, String::deserialize(deserializer)?)
-            .map_err(serde::de::Error::custom)?;
-        Uuid::parse_str(&text).map(Self).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(uuid, Id, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]

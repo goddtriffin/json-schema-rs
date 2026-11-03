@@ -616,6 +616,197 @@ impl<'a> TypeValidators<'a> {
     }
 }
 
+/// The constructors and readers of a constrained newtype that generated code defines
+/// (`pub struct Name(String);`), validated through a [`TypeValidators`] static: `into_inner`,
+/// `TryFrom` the scalar (validates), `From<Name>` for the scalar, `Deref`, `AsRef`, `Display`
+/// and a validating `Deserialize`. Strings also get `TryFrom<&str>`, `FromStr` and
+/// `AsRef<str>`. One implementation for every generated newtype, so the generated code holds
+/// only the type and one line.
+///
+/// Forms (`VALIDATORS` is the static, `0` the newtype's entry):
+/// - `constrained_newtype!(string, Name, VALIDATORS, 0)`: wraps `String`.
+/// - `constrained_newtype!(scalar, Age, u8, VALIDATORS, 0)`: wraps a `Copy` scalar (`bool`, an
+///   integer, `f64`).
+/// - `constrained_newtype!(f32, Ratio, VALIDATORS, 0)`: wraps `f32`, deserialized as the `f64`
+///   read and validated before it is narrowed.
+/// - `constrained_newtype!(uuid, Id, VALIDATORS, 0)`: wraps `uuid::Uuid`, validated as the
+///   string read (and, for `TryFrom<Uuid>`, the string it serializes to).
+///
+/// ```
+/// use json_schema_rs::{EmbeddedDocument, EmbeddedDocumentKind, TypeValidators};
+///
+/// static VALIDATORS: TypeValidators<'static> = TypeValidators::new(
+///     None,
+///     &[EmbeddedDocument {
+///         uri: "json-schema:///",
+///         json: r#"{"type":"string","minLength":2}"#,
+///         kind: EmbeddedDocumentKind::Parsed(None),
+///     }],
+///     &[&["json-schema:///#"]],
+/// );
+///
+/// #[derive(Debug, serde::Serialize)]
+/// #[serde(transparent)]
+/// pub struct Name(String);
+///
+/// json_schema_rs::constrained_newtype!(string, Name, VALIDATORS, 0);
+///
+/// assert_eq!(Name::try_from("Ada").map(Name::into_inner).ok(), Some("Ada".to_string()));
+/// assert!("A".parse::<Name>().is_err());
+/// assert!(serde_json::from_str::<Name>(r#""A""#).is_err());
+/// ```
+#[macro_export]
+macro_rules! constrained_newtype {
+    (string, $name:ident, $validators:ident, $index:expr) => {
+        impl TryFrom<String> for $name {
+            type Error = $crate::TypeValidationError;
+
+            /// Validates `value` against the schema: every error the schema's validator reports.
+            fn try_from(value: String) -> Result<Self, Self::Error> {
+                $validators.validate_newtype($index, value).map(Self)
+            }
+        }
+
+        impl TryFrom<&str> for $name {
+            type Error = $crate::TypeValidationError;
+
+            /// Validates `value` against the schema: every error the schema's validator reports.
+            fn try_from(value: &str) -> Result<Self, Self::Error> {
+                Self::try_from(value.to_string())
+            }
+        }
+
+        impl ::std::str::FromStr for $name {
+            type Err = $crate::TypeValidationError;
+
+            /// Validates `value` against the schema: every error the schema's validator reports.
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Self::try_from(value.to_string())
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Self::try_from(<String as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .map_err(::serde::de::Error::custom)
+            }
+        }
+
+        $crate::constrained_newtype!(@readers, $name, String);
+    };
+    (scalar, $name:ident, $inner:ty, $validators:ident, $index:expr) => {
+        impl TryFrom<$inner> for $name {
+            type Error = $crate::TypeValidationError;
+
+            /// Validates `value` against the schema: every error the schema's validator reports.
+            fn try_from(value: $inner) -> Result<Self, Self::Error> {
+                $validators.validate_newtype($index, value).map(Self)
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Self::try_from(<$inner as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .map_err(::serde::de::Error::custom)
+            }
+        }
+
+        $crate::constrained_newtype!(@as_ref, $name, $inner);
+        $crate::constrained_newtype!(@readers, $name, $inner);
+    };
+    (f32, $name:ident, $validators:ident, $index:expr) => {
+        impl TryFrom<f32> for $name {
+            type Error = $crate::TypeValidationError;
+
+            /// Validates `value` against the schema: every error the schema's validator reports.
+            fn try_from(value: f32) -> Result<Self, Self::Error> {
+                $validators.validate_newtype($index, value).map(Self)
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                // The number as read, before it is narrowed: a value just outside a bound must
+                // not round into it.
+                $validators
+                    .validate_newtype_as($index, <f64 as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .map(Self)
+                    .map_err(::serde::de::Error::custom)
+            }
+        }
+
+        $crate::constrained_newtype!(@as_ref, $name, f32);
+        $crate::constrained_newtype!(@readers, $name, f32);
+    };
+    (uuid, $name:ident, $validators:ident, $index:expr) => {
+        impl TryFrom<::uuid::Uuid> for $name {
+            type Error = $crate::TypeValidationError;
+
+            /// Validates `value` (as the string it serializes to) against the schema: every error
+            /// the schema's validator reports.
+            fn try_from(value: ::uuid::Uuid) -> Result<Self, Self::Error> {
+                $validators.validate_newtype($index, value.to_string())?;
+                Ok(Self(value))
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                // The string as read, before it is parsed.
+                let text: String = $validators
+                    .validate_newtype($index, <String as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .map_err(::serde::de::Error::custom)?;
+                ::uuid::Uuid::parse_str(&text).map(Self).map_err(::serde::de::Error::custom)
+            }
+        }
+
+        $crate::constrained_newtype!(@as_ref, $name, ::uuid::Uuid);
+        $crate::constrained_newtype!(@readers, $name, ::uuid::Uuid);
+    };
+    (@as_ref, $name:ident, $inner:ty) => {
+        impl AsRef<$inner> for $name {
+            fn as_ref(&self) -> &$inner {
+                &self.0
+            }
+        }
+    };
+    (@readers, $name:ident, $inner:ty) => {
+        impl $name {
+            /// The validated value.
+            #[must_use]
+            pub fn into_inner(self) -> $inner {
+                self.0
+            }
+        }
+
+        impl From<$name> for $inner {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+
+        impl ::std::ops::Deref for $name {
+            type Target = $inner;
+
+            fn deref(&self) -> &$inner {
+                &self.0
+            }
+        }
+
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                ::std::fmt::Display::fmt(&self.0, f)
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

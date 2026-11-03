@@ -994,72 +994,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(max_length = 3)]
 pub struct Code(String);
 
-impl Code {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Code {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for Code {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for Code {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<Code> for String {
-    fn from(value: Code) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Code {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for Code {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Code {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Code {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, Code, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1091,7 +1026,6 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
 /// a newtype, and the schema file is embedded pruned to what validation reads, under a URI that
 /// does not depend on where the file is (its path relative to the input files' common directory).
 #[test]
-#[expect(clippy::too_many_lines)]
 fn cli_generate_rust_validating_types_by_default_with_machine_independent_uri() {
     let schema_json = r#"{"title":"Person","description":"A person","type":"object","properties":{"name":{"type":"string","minLength":2,"examples":["Ada"]}},"required":["name"],"additionalProperties":false,"$defs":{"Unused":{"type":"integer"}}}"#;
     let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -1123,72 +1057,7 @@ use serde::{Deserialize, Serialize};
 #[json_schema(min_length = 2)]
 pub struct Name(String);
 
-impl Name {
-    /// The validated value.
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Name {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        TYPE_VALIDATORS.validate_newtype(0, value).map(Self)
-    }
-}
-
-impl TryFrom<&str> for Name {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl std::str::FromStr for Name {
-    type Err = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema: every error the schema's validator reports.
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_from(value.to_string())
-    }
-}
-
-impl From<Name> for String {
-    fn from(value: Name) -> Self {
-        value.0
-    }
-}
-
-impl std::ops::Deref for Name {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        &self.0
-    }
-}
-
-impl AsRef<str> for Name {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for Name {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl<'de> Deserialize<'de> for Name {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
 
 /// A person
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
