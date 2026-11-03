@@ -31,6 +31,11 @@ http = ["dep:reqwest"]
 # `UniqueItemsType::IndexSet` (codegen emits `indexmap::IndexSet` for `uniqueItems` arrays) and
 # `ToJsonSchema for IndexSet`. Off by default: generated code then needs no extra crate.
 indexmap = ["dep:indexmap"]
+# Exact numbers beyond 64 bits: `serde_json/arbitrary_precision` keeps every number as written,
+# and comparison, `multipleOf`, `const` / `enum` / `uniqueItems` and the integer rule work on the
+# exact decimal. Off by default: Cargo feature unification turns `serde_json`'s feature on for
+# every crate in the build (see design.md, *Numbers*).
+arbitrary-precision = ["serde_json/arbitrary_precision", "dep:num-bigint"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -41,6 +46,8 @@ indexmap = { workspace = true, optional = true }
 log.workspace = true
 # SIMD substring search for the draft-4 parse prefilter (already in the tree via serde_json).
 memchr = "2.7"
+# Big-integer mantissas for exact decimal arithmetic under `arbitrary-precision`.
+num-bigint = { version = "0.4", optional = true }
 regress = "0.10"
 reqwest = { version = "0.13", optional = true, features = ["blocking"] }
 serde.workspace = true
