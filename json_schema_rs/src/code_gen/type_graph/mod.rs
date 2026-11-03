@@ -277,11 +277,47 @@ pub(crate) struct SchemaRoots {
     pub(crate) definitions: Vec<(String, TypeId)>,
 }
 
+/// What a node's instances must satisfy, for self-validating types
+/// ([`CodeGenSettings::self_validating`](crate::CodeGenSettings::self_validating)): the schema
+/// locations of its conjunction, each as an absolute URI that input `schema`'s registry resolves.
+/// A location another one reaches through `$ref` or `allOf` is left out (validating the first
+/// validates it); the type mask is not part of it, since the Rust type already holds only the
+/// masked JSON types.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct ValidationTarget {
+    /// The input schema whose registry resolves `uris`.
+    pub(crate) schema: usize,
+    /// The schema locations, in conjunction order.
+    pub(crate) uris: Vec<String>,
+    /// Whether the locations are in documents with no URI of their own (the placeholder base),
+    /// which only `schema`'s registry knows: such targets are equal only between inputs whose
+    /// registries hold the same documents (equal `class`).
+    pub(crate) local: bool,
+    /// The first input whose registry holds the same documents as `schema`'s (same URIs, kinds,
+    /// dialect settings and content).
+    pub(crate) class: usize,
+}
+
+impl ValidationTarget {
+    /// Identity for deduplication: two nodes with equal keys validate the same instances.
+    pub(crate) fn key(&self) -> String {
+        let scope: String = if self.local {
+            format!("{}", self.class)
+        } else {
+            String::new()
+        };
+        format!("{scope}|{}", self.uris.join("|"))
+    }
+}
+
 /// The arena of type nodes plus, per node, the names proposed for it.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TypeGraph {
     pub(crate) nodes: Vec<TypeNode>,
     pub(crate) proposals: Vec<Vec<NameProposal>>,
+    /// Per node, its validation target (only with `self_validating`; `None` for a node that
+    /// accepts any value, or whose conjunction includes a schema with no location).
+    pub(crate) targets: Vec<Option<ValidationTarget>>,
     /// Per input schema, the root and its definitions.
     pub(crate) schemas: Vec<SchemaRoots>,
 }
@@ -296,6 +332,7 @@ impl TypeGraph {
         let id: TypeId = TypeId(u32::try_from(self.nodes.len()).expect("fewer than 2^32 nodes"));
         self.nodes.push(node);
         self.proposals.push(Vec::new());
+        self.targets.push(None);
         id
     }
 

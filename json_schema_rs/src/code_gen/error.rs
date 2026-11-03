@@ -1,7 +1,9 @@
 //! Errors that can occur during code generation.
 
 use crate::json_schema::RegistryErrors;
+use crate::validator::EmbeddedSchemaError;
 use std::fmt;
+use std::sync::Arc;
 
 /// Result type for code generation operations.
 pub type CodeGenResult<T> = Result<T, CodeGenError>;
@@ -28,6 +30,9 @@ pub enum CodeGenError {
     /// not resolve, a duplicate `$id` or anchor, an unsupported vocabulary, ...), one per line
     /// when displayed.
     Registry(RegistryErrors),
+    /// With self-validating types, the schema the generated code embeds cannot be compiled by
+    /// the validator (an invalid `pattern`, a raw keyword with a value of the wrong shape, ...).
+    SelfValidation(Arc<EmbeddedSchemaError>),
 }
 
 impl fmt::Display for CodeGenError {
@@ -44,6 +49,12 @@ impl fmt::Display for CodeGenError {
                 write!(f, "invalid then / else subschema: {reason}")
             }
             CodeGenError::Registry(e) => write!(f, "{e}"),
+            CodeGenError::SelfValidation(e) => {
+                write!(
+                    f,
+                    "the schema cannot be embedded for self-validating types: {e}"
+                )
+            }
         }
     }
 }
@@ -55,6 +66,7 @@ impl std::error::Error for CodeGenError {
             CodeGenError::RefResolution { .. } | CodeGenError::InvalidSubschema { .. } => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
             CodeGenError::Registry(e) => Some(e),
+            CodeGenError::SelfValidation(e) => Some(e.as_ref()),
         }
     }
 }

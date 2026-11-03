@@ -9,6 +9,7 @@ mod ecma_regex;
 mod error;
 mod eval;
 mod format;
+mod generated;
 mod output;
 mod simple_pattern;
 #[cfg(test)]
@@ -19,6 +20,10 @@ pub use compiled::{
 };
 pub use error::{
     SchemaError, ValidateError, ValidationError, ValidationErrorKind, ValidationResult,
+};
+pub use generated::{
+    EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError,
+    TypeValidationError, TypeValidators, UnionMatch,
 };
 pub use output::{BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
 

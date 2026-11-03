@@ -266,6 +266,14 @@ pub(crate) struct Pattern {
     pub(crate) simple: Option<SimplePattern>,
 }
 
+impl PartialEq for Pattern {
+    /// Two patterns compiled from the same source (under the same dialect, which a
+    /// [`CompiledSchema::same_validation`] comparison holds equal) match the same strings.
+    fn eq(&self, other: &Pattern) -> bool {
+        self.source == other.source
+    }
+}
+
 impl Pattern {
     /// Whether the pattern matches somewhere in `text` (ECMA-262 search semantics).
     pub(crate) fn is_match(&self, text: &str) -> bool {
@@ -293,7 +301,7 @@ pub(crate) struct Node {
 
 /// How a property or item applicator sees an object's members: the names `properties` lists
 /// and the patterns `patternProperties` lists, which `additionalProperties` skips.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct KnownProperties {
     /// The node's `properties` list (sorted by name), when it has one.
     pub(crate) names: Option<PropertiesId>,
@@ -307,7 +315,7 @@ pub(crate) type PropertyList = Box<[(Box<str>, NodeId)]>;
 pub(crate) type Dependency = (Box<str>, Box<[Box<str>]>);
 
 /// The names `required` lists.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct Required {
     /// In schema order, duplicates kept: one error per name, in that order.
     pub(crate) names: Box<[Box<str>]>,
@@ -316,7 +324,7 @@ pub(crate) struct Required {
 }
 
 /// A `$dynamicRef` whose initial target declares the matching `$dynamicAnchor`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct DynamicRef {
     pub(crate) fallback: NodeId,
     pub(crate) anchor: Box<str>,
@@ -324,7 +332,7 @@ pub(crate) struct DynamicRef {
 }
 
 /// Item schemas by position, then one for every later item.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct PrefixItems {
     pub(crate) prefix: Box<[NodeId]>,
     pub(crate) rest: Option<NodeId>,
@@ -335,7 +343,7 @@ pub(crate) struct PrefixItems {
 }
 
 /// `contains` with its bounds.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct Contains {
     pub(crate) node: NodeId,
     pub(crate) min: u64,
@@ -348,7 +356,7 @@ pub(crate) struct Contains {
 
 /// One keyword, compiled. Rare or large payloads are boxed (or kept in a side table of the
 /// [`CompiledSchema`]), so the common keywords stay small.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Keyword {
     /// The boolean schema `false`.
     False,
@@ -541,6 +549,18 @@ impl CompiledSchemaBuilder {
     }
 }
 
+/// A schema compiled for several entry points (see [`CompiledSchema::with_entries`]): the
+/// compiled schema and, per entry, the nodes of its URIs, in order.
+pub(crate) type CompiledEntries = (CompiledSchema, Vec<Box<[NodeId]>>);
+
+/// Where compiled schemas sit: each as its document's retrieval URI and JSON Pointer segments,
+/// sorted and deduplicated.
+pub(crate) type Positions = Vec<(String, Vec<String>)>;
+
+/// A schema compiled for several entry points and the positions its nodes were built from (see
+/// [`CompiledSchema::with_entries_located`]).
+pub(crate) type LocatedEntries = (CompiledEntries, Positions);
+
 impl CompiledSchema {
     /// Compiles the root schema of `registry` (and everything it references) with the default
     /// options.
@@ -551,6 +571,112 @@ impl CompiledSchema {
     /// keeps raw with a value of the wrong shape, or a `$ref` the registry does not know.
     pub fn new(registry: &Registry<'_>) -> Result<CompiledSchema, CompileErrors> {
         Compiler::new(registry).compile()
+    }
+
+    /// Compiles, from one registry, the schemas each entry names, sharing the nodes they have in
+    /// common. An entry is a conjunction of absolute URIs, each resolved as a `$ref` written in
+    /// the registry's root resource ([`Registry::resolve`] in [`Registry::root_scope`]; build the
+    /// registry with [`RegistryBuilder::entry`](crate::json_schema::RegistryBuilder::entry) for
+    /// each). Validate at an entry with [`CompiledSchema::validate_at`]; the compiled root is the
+    /// first entry's first schema (`true` when there is none).
+    ///
+    /// # Errors
+    ///
+    /// Every [`CompileError`] found; a URI the registry does not know is a
+    /// [`CompileError::UnknownRef`] with an empty location.
+    pub(crate) fn with_entries(
+        registry: &Registry<'_>,
+        entries: &[&[&str]],
+    ) -> Result<CompiledEntries, CompileErrors> {
+        Compiler::new(registry).compile_entries(entries)
+    }
+
+    /// [`CompiledSchema::with_entries`], also returning where every compiled schema sits: each
+    /// schema position the compiled nodes were built from (a subschema, a `$ref` target, an
+    /// entry), as its document's retrieval URI and JSON Pointer segments, deduplicated and
+    /// sorted. Positions in the embedded standard metaschemas are left out.
+    ///
+    /// # Errors
+    ///
+    /// See [`CompiledSchema::with_entries`].
+    pub(crate) fn with_entries_located(
+        registry: &Registry<'_>,
+        entries: &[&[&str]],
+    ) -> Result<LocatedEntries, CompileErrors> {
+        let mut compiler: Compiler<'_, '_> = Compiler::new(registry);
+        compiler.located = Some(Vec::new());
+        let mut positions: Positions = Vec::new();
+        let entries: CompiledEntries = compiler.compile_entries_with(entries, |done| {
+            let mut located: Vec<(Scope, usize)> = done.located.clone().unwrap_or_default();
+            located.sort_unstable();
+            located.dedup();
+            for (scope, entry) in located {
+                if let Some(uri) = done.registry.document_uri(scope) {
+                    positions.push((uri.to_string(), done.location_segments(entry)));
+                }
+            }
+        })?;
+        positions.sort_unstable();
+        positions.dedup();
+        Ok((entries, positions))
+    }
+
+    /// Whether `self` and `other` validate every instance identically, with the same errors,
+    /// judged by their compiled form: the same nodes in the same order (resources matched one
+    /// to one), keywords, patterns, `enum` and `properties` lists, dynamic targets and user
+    /// formats, and target URIs equal after `map_uri` maps each of `self`'s. Two compilations of
+    /// one schema whose documents differ only in what no compiled node reads (and in URIs
+    /// `map_uri` accounts for) compare equal.
+    pub(crate) fn same_validation(
+        &self,
+        other: &CompiledSchema,
+        map_uri: impl Fn(&str) -> String,
+    ) -> bool {
+        if self.nodes.len() != other.nodes.len()
+            || self.root != other.root
+            || self.patterns != other.patterns
+            || self.enums != other.enums
+            || self.properties != other.properties
+            || self.uses_dynamic_scope != other.uses_dynamic_scope
+            || self.sorted_maps != other.sorted_maps
+            || self.user_formats.len() != other.user_formats.len()
+            || self
+                .user_formats
+                .iter()
+                .zip(other.user_formats.iter())
+                .any(|(a, b)| a.name != b.name)
+            || self.target_uris.len() != other.target_uris.len()
+            || self
+                .target_uris
+                .iter()
+                .any(|(id, uri)| other.target_uris.get(id).map(|u| &**u) != Some(&*map_uri(uri)))
+        {
+            return false;
+        }
+        // Scopes are registry indexes, which differ between registries: match them one to one.
+        let mut forward: HashMap<Scope, Scope> = HashMap::new();
+        let mut backward: HashMap<Scope, Scope> = HashMap::new();
+        let mut matches = |a: Scope, b: Scope| -> bool {
+            *forward.entry(a).or_insert(b) == b && *backward.entry(b).or_insert(a) == a
+        };
+        for (a, b) in self.nodes.iter().zip(other.nodes.iter()) {
+            if a.keywords != b.keywords
+                || a.has_unevaluated != b.has_unevaluated
+                || !matches(a.scope, b.scope)
+            {
+                return false;
+            }
+        }
+        self.dynamic_anchors.len() == other.dynamic_anchors.len()
+            && self.dynamic_anchors.iter().all(|(scope, anchors)| {
+                let mapped: Option<Scope> = forward.get(scope).copied();
+                mapped.and_then(|b| other.dynamic_anchors.get(&b)) == Some(anchors)
+            })
+            && self.recursive_anchors.len() == other.recursive_anchors.len()
+            && self.recursive_anchors.iter().all(|(scope, node)| {
+                let mapped: Option<Scope> = forward.get(scope).copied();
+                mapped.and_then(|b| other.recursive_anchors.get(&b)) == Some(node)
+            })
     }
 
     /// Options for compiling a schema (user-defined formats).
@@ -757,6 +883,9 @@ struct Compiler<'r, 'a> {
     /// The user-defined formats (see [`CompiledSchemaBuilder::format`]).
     user_formats: Vec<UserFormat>,
     errors: Vec<CompileError>,
+    /// When recording (see [`CompiledSchema::with_entries_located`]): every (scope, location
+    /// entry) a node was requested for.
+    located: Option<Vec<(Scope, usize)>>,
 }
 
 /// The schema object's keywords, read from the typed model and its `extensions` (or from a raw
@@ -880,12 +1009,69 @@ impl<'r, 'a> Compiler<'r, 'a> {
             target_uris: IntMap::default(),
             user_formats: Vec::new(),
             errors: Vec::new(),
+            located: None,
         }
     }
 
     fn compile(mut self) -> Result<CompiledSchema, CompileErrors> {
         let root_source: Source<'r> = Source::from_schema_ref(self.registry.root());
         let root: NodeId = self.node_for(root_source, self.registry.root_scope(), 0);
+        self.finish(root)
+    }
+
+    /// See [`CompiledSchema::with_entries`].
+    fn compile_entries(self, entries: &[&[&str]]) -> Result<CompiledEntries, CompileErrors> {
+        self.compile_entries_with(entries, |_| {})
+    }
+
+    /// [`Compiler::compile_entries`], handing the compiler to `inspect` once every node is
+    /// compiled.
+    fn compile_entries_with(
+        mut self,
+        entries: &[&[&str]],
+        inspect: impl FnOnce(&Compiler<'r, 'a>),
+    ) -> Result<CompiledEntries, CompileErrors> {
+        let scope: Scope = self.registry.root_scope();
+        let mut nodes: Vec<Box<[NodeId]>> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let mut ids: Vec<NodeId> = Vec::with_capacity(entry.len());
+            for uri in *entry {
+                match self.registry.resolve(scope, uri) {
+                    Ok(resolved) => {
+                        let location: usize = self.target_location(resolved.pointer);
+                        let source: Source<'r> = Source::from_schema_ref(resolved.schema);
+                        let id: NodeId = self.node_for(source, resolved.scope, location);
+                        self.record_target_uri(id, source, resolved.scope, resolved.pointer);
+                        ids.push(id);
+                    }
+                    Err(_) => self.errors.push(CompileError::UnknownRef {
+                        location: String::new(),
+                        ref_str: (*uri).to_string(),
+                    }),
+                }
+            }
+            nodes.push(ids.into_boxed_slice());
+        }
+        let root: NodeId = match nodes.iter().find_map(|ids| ids.first()) {
+            Some(id) => *id,
+            None => self.node_for(Source::Bool(true), scope, 0),
+        };
+        let compiled: CompiledSchema = self.finish_with(root, inspect)?;
+        Ok((compiled, nodes))
+    }
+
+    /// Compiles every queued node (and the dynamic targets they need) into the schema rooted at
+    /// `root`.
+    fn finish(self, root: NodeId) -> Result<CompiledSchema, CompileErrors> {
+        self.finish_with(root, |_| {})
+    }
+
+    /// [`Compiler::finish`], handing the compiler to `inspect` once every node is compiled.
+    fn finish_with(
+        mut self,
+        root: NodeId,
+        inspect: impl FnOnce(&Compiler<'r, 'a>),
+    ) -> Result<CompiledSchema, CompileErrors> {
         let mut dynamic_anchors: HashMap<Scope, Vec<(Box<str>, NodeId)>> = HashMap::new();
         let mut recursive_anchors: HashMap<Scope, NodeId> = HashMap::new();
         loop {
@@ -904,6 +1090,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if let Some(errors) = ErrorList::from_vec(std::mem::take(&mut self.errors)) {
             return Err(errors);
         }
+        inspect(&self);
         let nodes: Box<[Node]> = self.nodes.into_iter().flatten().collect();
         Ok(CompiledSchema {
             nodes,
@@ -984,7 +1171,12 @@ impl<'r, 'a> Compiler<'r, 'a> {
     }
 
     /// The JSON Pointer of a location entry.
-    fn location_string(&self, mut entry: usize) -> String {
+    fn location_string(&self, entry: usize) -> String {
+        JsonPointer::from(self.location_segments(entry)).to_string()
+    }
+
+    /// The JSON Pointer segments of a location entry, from its document's root.
+    fn location_segments(&self, mut entry: usize) -> Vec<String> {
         let mut steps: Vec<String> = Vec::new();
         let mut base: &[String] = &[];
         while entry != usize::MAX {
@@ -1002,11 +1194,14 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
         let mut segments: Vec<String> = base.to_vec();
         segments.extend(steps.into_iter().rev());
-        JsonPointer::from(segments).to_string()
+        segments
     }
 
     /// The node for `source` in `scope`, queueing it when it is new.
     fn node_for(&mut self, source: Source<'r>, scope: Scope, location: usize) -> NodeId {
+        if let Some(located) = &mut self.located {
+            located.push((scope, location));
+        }
         let key: (usize, Scope) = (source.key(), scope);
         if let Some(id) = self.by_source.get(&key) {
             return *id;
@@ -1018,6 +1213,9 @@ impl<'r, 'a> Compiler<'r, 'a> {
 
     /// Queues `source` in `scope` as a new node.
     fn new_node(&mut self, source: Source<'r>, scope: Scope, location: usize) -> NodeId {
+        if let Some(located) = &mut self.located {
+            located.push((scope, location));
+        }
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a schema with more than u32::MAX nodes cannot be held in memory"
@@ -1895,7 +2093,7 @@ fn dependent_required(value: &Value) -> Option<Vec<(&str, Vec<&str>)>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompiledSchema, Compiler, EnumId, Keyword, Node};
+    use super::{CompileError, CompiledSchema, Compiler, EnumId, Keyword, Node};
     use crate::json_schema::{Registry, Schema};
     use serde_json::{Value, json};
 
@@ -1905,6 +2103,98 @@ mod tests {
             .build_owned(schema)
             .expect("test registry builds");
         CompiledSchema::new(&registry).expect("test schema compiles")
+    }
+
+    /// Compiles `schema` with the entries `entries`, recording where its nodes sit.
+    fn located(schema: &Value, entries: &[&[&str]]) -> Vec<(String, Vec<String>)> {
+        let schema: Schema = serde_json::from_value(schema.clone()).expect("test schema parses");
+        let mut builder = Registry::builder();
+        for uri in entries.iter().flat_map(|uris| uris.iter()) {
+            builder = builder.entry(*uri);
+        }
+        let registry: Registry<'static> =
+            builder.build_owned(schema).expect("test registry builds");
+        CompiledSchema::with_entries_located(&registry, entries)
+            .expect("test schema compiles")
+            .1
+    }
+
+    fn position(pointer: &[&str]) -> (String, Vec<String>) {
+        (
+            "json-schema:///".to_string(),
+            pointer.iter().map(|s| (*s).to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn located_entry_lists_its_subschemas_and_ref_targets() {
+        let actual: Vec<(String, Vec<String>)> = located(
+            &json!({
+                "$defs": {
+                    "A": {"properties": {"b": {"$ref": "#/$defs/B"}}},
+                    "B": {"type": "string"},
+                    "Unused": {"type": "integer"}
+                }
+            }),
+            &[&["json-schema:///#/$defs/A"]],
+        );
+        let expected: Vec<(String, Vec<String>)> = vec![
+            position(&["$defs", "A"]),
+            position(&["$defs", "A", "properties", "b"]),
+            position(&["$defs", "B"]),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn same_validation_ignores_annotations() {
+        let a: CompiledSchema = compile(&json!({"title": "A", "type": "string", "minLength": 1}));
+        let b: CompiledSchema = compile(&json!({"type": "string", "minLength": 1}));
+        let expected: bool = true;
+        let actual: bool = a.same_validation(&b, str::to_string);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn same_validation_sees_a_different_keyword_value() {
+        let a: CompiledSchema = compile(&json!({"type": "string", "minLength": 1}));
+        let b: CompiledSchema = compile(&json!({"type": "string", "minLength": 2}));
+        let expected: bool = false;
+        let actual: bool = a.same_validation(&b, str::to_string);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn same_validation_sees_a_different_pattern() {
+        let a: CompiledSchema = compile(&json!({"pattern": "^a"}));
+        let b: CompiledSchema = compile(&json!({"pattern": "^b"}));
+        let expected: bool = false;
+        let actual: bool = a.same_validation(&b, str::to_string);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn same_validation_sees_a_different_target_uri() {
+        let schema = |id: &str| -> Value {
+            json!({"$id": id, "$ref": "#/$defs/a", "$defs": {"a": {"type": "string"}}})
+        };
+        let a: CompiledSchema = compile(&schema("https://example.com/a.json"));
+        let b: CompiledSchema = compile(&schema("https://example.com/b.json"));
+        let expected: bool = false;
+        let actual: bool = a.same_validation(&b, str::to_string);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn same_validation_maps_target_uris() {
+        let schema = |id: &str| -> Value {
+            json!({"$id": id, "$ref": "#/$defs/a", "$defs": {"a": {"type": "string"}}})
+        };
+        let a: CompiledSchema = compile(&schema("https://example.com/a.json"));
+        let b: CompiledSchema = compile(&schema("https://example.com/b.json"));
+        let expected: bool = true;
+        let actual: bool = a.same_validation(&b, |uri| uri.replace("/a.json", "/b.json"));
+        assert_eq!(expected, actual);
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -2009,6 +2299,67 @@ mod tests {
             .iter()
             .map(|list| list.iter().map(|(name, _)| name.to_string()).collect())
             .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// The node count and per-entry nodes of `schema` compiled for `entries`.
+    fn compile_entries(schema: &Value, entries: &[&[&str]]) -> (usize, Vec<Vec<u32>>) {
+        let schema: Schema = serde_json::from_value(schema.clone()).expect("test schema parses");
+        let builder = entries
+            .iter()
+            .flat_map(|uris| uris.iter())
+            .fold(Registry::builder(), |builder, uri| builder.entry(*uri));
+        let registry: Registry<'static> = builder.build_owned(schema).expect("registry builds");
+        let (compiled, nodes) =
+            CompiledSchema::with_entries(&registry, entries).expect("test schema compiles");
+        let nodes: Vec<Vec<u32>> = nodes
+            .iter()
+            .map(|ids| ids.iter().map(|id| id.0).collect())
+            .collect();
+        (compiled.nodes.len(), nodes)
+    }
+
+    #[test]
+    fn entries_share_nodes_with_reference_targets() {
+        let schema: Value = json!({
+            "$defs": {"A": {"type": "string"}},
+            "properties": {"a": {"$ref": "#/$defs/A"}}
+        });
+        // The root, `$defs/A` and the root's `properties/a` (whose `$ref` reaches the entry's
+        // node), compiled once each.
+        let expected: (usize, Vec<Vec<u32>>) = (3, vec![vec![0], vec![1], vec![0, 1]]);
+        let actual: (usize, Vec<Vec<u32>>) = compile_entries(
+            &schema,
+            &[
+                &["json-schema:///#"],
+                &["json-schema:///#/$defs/A"],
+                &["json-schema:///#", "json-schema:///#/$defs/A"],
+            ],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn no_entries_compile_to_a_true_root() {
+        let expected: (usize, Vec<Vec<u32>>) = (1, Vec::new());
+        let actual: (usize, Vec<Vec<u32>>) = compile_entries(&json!({"pattern": "("}), &[]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn entry_the_registry_does_not_know_is_a_compile_error() {
+        let registry: Registry<'static> = Registry::builder()
+            .build_owned(Schema::Bool(true))
+            .expect("registry builds");
+        let expected: Vec<CompileError> = vec![CompileError::UnknownRef {
+            location: String::new(),
+            ref_str: "json-schema:///#/$defs/A".to_string(),
+        }];
+        let actual: Vec<CompileError> =
+            CompiledSchema::with_entries(&registry, &[&["json-schema:///#/$defs/A"]])
+                .map(|_| ())
+                .expect_err("unknown entry")
+                .into_vec();
         assert_eq!(expected, actual);
     }
 }

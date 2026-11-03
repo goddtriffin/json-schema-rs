@@ -181,9 +181,17 @@ pub(crate) fn dedup(graph: &mut TypeGraph, mode: DedupeMode) {
         graph
             .nodes
             .iter()
-            .map(|node| {
+            .zip(&graph.targets)
+            .map(|(node, target)| {
                 let next: u32 = u32::try_from(ids.len()).expect("fewer than 2^32 classes");
-                *ids.entry(local_signature(node, mode)).or_insert(next)
+                // A self-validating type validates against its schema locations, so two nodes
+                // merge only when those are the same (see `ValidationTarget`).
+                let mut signature: String = local_signature(node, mode);
+                if let Some(target) = target {
+                    signature.push_str("|target:");
+                    signature.push_str(&target.key());
+                }
+                *ids.entry(signature).or_insert(next)
             })
             .collect()
     };

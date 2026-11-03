@@ -146,11 +146,14 @@ fn is_valid(schema_json: &str, instance_json: &str) -> bool {
     validate(&parse(schema_json), &instance).is_ok()
 }
 
-/// The generated Rust for `schema_json` alone (default settings).
+/// The generated Rust for `schema_json` alone (default settings, self-validation off: these show
+/// the shape of the types).
 fn generated(schema_json: &str) -> String {
-    let output: GenerateRustOutput =
-        generate_rust(&[parse(schema_json)], &CodeGenSettings::builder().build())
-            .expect("codegen succeeds");
+    let output: GenerateRustOutput = generate_rust(
+        &[parse(schema_json)],
+        &CodeGenSettings::builder().self_validating(false).build(),
+    )
+    .expect("codegen succeeds");
     String::from_utf8(output.per_schema[0].clone()).expect("generated Rust is UTF-8")
 }
 
