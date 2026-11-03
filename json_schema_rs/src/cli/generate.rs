@@ -120,8 +120,10 @@ pub(crate) fn run_generate(
 pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings, String> {
     let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
     let mut b = CodeGenSettings::builder()
-        .flatten_single_entry_combinators(matches.get_flag("cgs-flatten-single-entry-combinators"))
-        .self_validating(matches.get_flag("cgs-self-validating"));
+        .flatten_single_entry_combinators(matches.get_flag("cgs-flatten-single-entry-combinators"));
+    if let Some(&on) = matches.get_one::<bool>("cgs-self-validating") {
+        b = b.self_validating(on);
+    }
     if let Some(src) = flag("cgs-model-name-source") {
         b = b.model_name_source(match src {
             "property-key" => ModelNameSource::PropertyKeyFirst,

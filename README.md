@@ -47,7 +47,7 @@ rejected with `UnknownSchemaUri::Reject`), and
 $id` in the key, Functional does not; reverse codegen via `#[json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
 so round-trip preserves it), **allOf** (validator: instance must validate
 against every subschema; codegen: the branches, `$ref`s included, merge into one Rust
-type, and an unsatisfiable merge is an enum with no variants; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: `#[serde(untagged)]` enum with one variant per branch (a branch pair with `null` is `Option<T>`; all-string branches are one string enum), so instances deserialize from the bare value; reverse codegen: untagged enums derive `anyOf`), **oneOf** (validator: instance must validate against exactly one subschema; codegen: as anyOf, with `#[json_schema(one_of)]`; exclusivity is not checked on deserialize; reverse codegen: `oneOf` via `#[json_schema(one_of)]`; a one-entry `anyOf` / `oneOf` can be generated as its entry's type, see *Using the library*), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: unknown keys are kept for a lossless round trip in a `#[serde(flatten)] additional` map (`serde_json::Value`, or the schema's type), false → `#[serde(deny_unknown_fields)]`, overridable with `--cgs-unknown-properties capture|drop`; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). Recursive schemas (through `#`, `$defs` or mutual
+type, and an unsatisfiable merge is an enum with no variants; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: `#[serde(untagged)]` enum with one variant per branch (a branch pair with `null` is `Option<T>`), so instances deserialize from the bare value, into a variant whose branch the value satisfies (self-validating types, the default; off, the first variant that fits); reverse codegen: untagged enums derive `anyOf`), **oneOf** (validator: instance must validate against exactly one subschema; codegen: as anyOf, with `#[json_schema(one_of)]`; deserializing checks exclusivity with self-validating types, the default; reverse codegen: `oneOf` via `#[json_schema(one_of)]`; a one-entry `anyOf` / `oneOf` can be generated as its entry's type, see *Using the library*), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: unknown keys are kept for a lossless round trip in a `#[serde(flatten)] additional` map (`serde_json::Value`, or the schema's type), false → `#[serde(deny_unknown_fields)]`, overridable with `--cgs-unknown-properties capture|drop`; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). Recursive schemas (through `#`, `$defs` or mutual
 recursion) generate `Box` on by-value cycles only, `if`/`then`/`else` adds the
 conditional properties as optional fields, and colliding type names all get a
 numeric suffix (`Item0`, `Item1`). For implementation details and design
@@ -238,17 +238,23 @@ one entry as that entry's type instead of a one-variant enum (off by default, so
 derive gives the combinator back); `#[json_schema(flatten_single_entry)]` on a
 one-variant untagged enum derives its payload's schema instead of a one-entry `anyOf`.
 
-**Self-validating types.** `.self_validating(true)` (`--cgs-self-validating`) makes the
-generated types enforce their whole schema through this library's validator, with the
-same errors (`ValidationError`s) it gives: every generated struct, enum and union gets
-`validate(&self)` and `TryFrom<serde_json::Value>` (validate, then deserialize), and an
-`anyOf` / `oneOf` union deserializes into a variant whose branch the value satisfies
-(`oneOf`: exactly one branch, so a value two branches accept is an error), not the first
-variant serde can fill. Constraints the Rust type cannot express (`minLength`, `pattern`,
-`maximum`, `multipleOf`, `not`, `if` / `then` / `else`, ...) are all checked. The generated
-code embeds the schema documents and compiles them once, on first use; codegen compiles
-them first, so a schema the validator cannot use (an invalid `pattern`) is a generation
-error. Off by default (the plain types deserialize without the validator).
+**Self-validating types (on by default).** Generated types enforce their whole schema
+through this library's validator, with the same errors (`ValidationError`s) it gives:
+every generated struct, enum and union gets `validate(&self)` and
+`TryFrom<serde_json::Value>` (validate, then deserialize), and an `anyOf` / `oneOf` union
+deserializes into a variant whose branch the value satisfies (`oneOf`: exactly one branch,
+so a value two branches accept is an error), not the first variant serde can fill.
+Constraints the Rust type cannot express (`minLength`, `pattern`, `maximum`,
+`multipleOf`, `not`, `if` / `then` / `else`, ...) are all checked. The generated code
+embeds only the parts of the schema documents its types' validation reads (annotations
+and unused `$defs` are pruned, and the pruned copy is proven to validate identically)
+and compiles them once, on first use; it then depends on `json-schema-rs` and
+`serde_json` at run time. The output is the same on every machine: files are identified
+by their path relative to the inputs' common directory, never by an absolute path.
+Codegen compiles the schema first, so one the validator cannot use (an invalid `pattern`)
+is a generation error. `.self_validating(false)` (`--cgs-self-validating false`) generates
+plain data types: only the Rust shape is checked, and a union takes the first variant
+that fits.
 
 ```rust
 let person: Person = Person::try_from(serde_json::json!({"name": "A"}))?; // Err: name too short

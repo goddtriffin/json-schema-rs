@@ -29,6 +29,7 @@ use crate::number;
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 
 /// Keywords of a schema object a conjunct no longer contributes (already expanded, or not
 /// carried into a union's variants).
@@ -277,6 +278,11 @@ pub(crate) fn build(
 ) -> CodeGenResult<TypeGraph> {
     let mut graph: TypeGraph = TypeGraph::default();
     let mut memo: HashMap<(usize, NodeKey), TypeId> = HashMap::new();
+    let classes: Vec<usize> = if settings.self_validating && registries.len() > 1 {
+        registry_classes(registries)
+    } else {
+        (0..registries.len()).collect()
+    };
     for (index, (schema, registry)) in schemas.iter().zip(registries).enumerate() {
         let mut builder: Builder<'_, '_> = Builder {
             graph: &mut graph,
@@ -285,6 +291,7 @@ pub(crate) fn build(
             conditionals,
             settings,
             schema_index: index,
+            class: classes[index],
             queue: Vec::new(),
         };
         let roots: SchemaRoots = builder
@@ -298,6 +305,35 @@ pub(crate) fn build(
     Ok(graph)
 }
 
+/// Per input, the first input whose registry holds the same documents (see
+/// [`ValidationTarget::class`]): what lets identical inputs without a URI share their types.
+fn registry_classes(registries: &[Registry<'_>]) -> Vec<usize> {
+    let mut first: HashMap<String, usize> = HashMap::new();
+    registries
+        .iter()
+        .enumerate()
+        .map(|(index, registry)| {
+            let mut content: String = String::new();
+            for document in registry.embeddable_documents() {
+                let json: String = match document.schema {
+                    SchemaRef::Bool(b) => b.to_string(),
+                    SchemaRef::Object(o) => serde_json::to_string(o).unwrap_or_default(),
+                };
+                let settings = document.schema.as_object().map(|o| o.dialect_settings);
+                let _ = write!(
+                    content,
+                    "{:?} {settings:?} {}:{} {}:{json}",
+                    document.kind,
+                    document.uri.len(),
+                    document.uri,
+                    json.len(),
+                );
+            }
+            *first.entry(content).or_insert(index)
+        })
+        .collect()
+}
+
 struct Builder<'g, 'r> {
     graph: &'g mut TypeGraph,
     memo: &'g mut HashMap<(usize, NodeKey), TypeId>,
@@ -305,6 +341,8 @@ struct Builder<'g, 'r> {
     conditionals: &'r Conditionals,
     settings: &'g CodeGenSettings,
     schema_index: usize,
+    /// See [`ValidationTarget::class`].
+    class: usize,
     /// Reserved ids still to build.
     queue: Vec<(TypeId, Flat<'r>, TypeSet, Context)>,
 }
@@ -445,6 +483,7 @@ impl<'r> Builder<'_, 'r> {
             schema: self.schema_index,
             uris,
             local,
+            class: self.class,
         })
     }
 

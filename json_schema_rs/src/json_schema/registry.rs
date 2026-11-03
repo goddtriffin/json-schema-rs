@@ -1986,6 +1986,14 @@ impl<'a> Registry<'a> {
             .collect()
     }
 
+    /// The retrieval URI of the document the resource `scope` is in, as
+    /// [`Registry::embeddable_documents`] gives it; `None` for an embedded standard metaschema.
+    pub(crate) fn document_uri(&self, scope: Scope) -> Option<&str> {
+        let document: &Document<'a> = &self.documents[self.resources[scope.0].document];
+        document.kind?;
+        Some(self.resources[document.scope.0].uri.as_str())
+    }
+
     /// Whether the resource `scope` is in declares the `$dynamicAnchor` `name` (resolvable in
     /// that scope as `#name`).
     pub(crate) fn has_dynamic_anchor(&self, scope: Scope, name: &str) -> bool {
