@@ -290,15 +290,19 @@ pub(crate) struct ValidationTarget {
     /// The schema locations, in conjunction order.
     pub(crate) uris: Vec<String>,
     /// Whether the locations are in documents with no URI of their own (the placeholder base),
-    /// which only `schema`'s registry knows: such targets are equal only within one input.
+    /// which only `schema`'s registry knows: such targets are equal only between inputs whose
+    /// registries hold the same documents (equal `class`).
     pub(crate) local: bool,
+    /// The first input whose registry holds the same documents as `schema`'s (same URIs, kinds,
+    /// dialect settings and content).
+    pub(crate) class: usize,
 }
 
 impl ValidationTarget {
     /// Identity for deduplication: two nodes with equal keys validate the same instances.
     pub(crate) fn key(&self) -> String {
         let scope: String = if self.local {
-            format!("{}", self.schema)
+            format!("{}", self.class)
         } else {
             String::new()
         };

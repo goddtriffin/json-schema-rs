@@ -9,8 +9,8 @@
 //! type validates at its own nodes, with the errors [`CompiledSchema::validate`] gives for that
 //! schema.
 
-use super::compiled::CompiledEntries;
-use super::{CompiledSchema, SchemaError, ValidationError};
+use super::compiled::{CompiledEntries, LocatedEntries};
+use super::{CompileErrors, CompiledSchema, SchemaError, ValidationError};
 use crate::error_list::ErrorList;
 use crate::json_schema::{
     DialectSettings, JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaSettings, Registry,
@@ -400,7 +400,22 @@ impl<'a> TypeValidators<'a> {
 
     /// Parses the documents, builds the registry with every type's URIs as entries, and
     /// compiles them.
-    fn compile(&self) -> Result<CompiledEntries, EmbeddedSchemaError> {
+    pub(crate) fn compile(&self) -> Result<CompiledEntries, EmbeddedSchemaError> {
+        self.compile_with(CompiledSchema::with_entries)
+    }
+
+    /// [`TypeValidators::compile`], also returning where every compiled schema sits (see
+    /// [`CompiledSchema::with_entries_located`]): what codegen prunes the documents to.
+    pub(crate) fn compile_located(&self) -> Result<LocatedEntries, EmbeddedSchemaError> {
+        self.compile_with(CompiledSchema::with_entries_located)
+    }
+
+    /// Parses the documents, builds the registry with every type's URIs as entries, and
+    /// compiles it with `compile`.
+    fn compile_with<T>(
+        &self,
+        compile: impl FnOnce(&Registry<'_>, &[&[&str]]) -> Result<T, CompileErrors>,
+    ) -> Result<T, EmbeddedSchemaError> {
         let registry_settings: JsonSchemaSettings =
             JsonSchemaSettings::from_dialect_settings(self.settings.unwrap_or_default());
         let mut errors: Vec<EmbeddedDocumentError> = Vec::new();
@@ -455,9 +470,7 @@ impl<'a> TypeValidators<'a> {
             builder = builder.entry(*uri);
         }
         let registry: Registry<'_> = builder.build(&root).map_err(SchemaError::Registry)?;
-        let compiled: CompiledEntries =
-            CompiledSchema::with_entries(&registry, self.types).map_err(SchemaError::Compile)?;
-        Ok(compiled)
+        Ok(compile(&registry, self.types).map_err(SchemaError::Compile)?)
     }
 }
 

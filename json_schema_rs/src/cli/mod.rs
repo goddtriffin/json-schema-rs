@@ -208,8 +208,9 @@ pub fn run() {
                 .arg(
                     Arg::new("cgs-self-validating")
                         .long("cgs-self-validating")
-                        .action(clap::ArgAction::SetTrue)
-                        .help("Codegen Settings: generated types validate themselves against their schema (validate(), TryFrom<serde_json::Value>, anyOf / oneOf variants chosen by validation); the generated code embeds the schema (default: off)"),
+                        .value_name("BOOL")
+                        .value_parser(clap::value_parser!(bool))
+                        .help("Codegen Settings: generated types validate themselves against their schema (validate(), TryFrom<serde_json::Value>, anyOf / oneOf variants chosen by validation); the generated code embeds the schema parts their validation reaches (default: true)"),
                 )
                 .args(retrieval::retrieval_args()),
         )

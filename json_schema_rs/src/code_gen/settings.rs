@@ -84,12 +84,14 @@ pub struct CodeGenSettings {
     /// always merged into its schema.
     pub flatten_single_entry_combinators: bool,
     /// Generate types that enforce their schema through the library's validator (default
-    /// `false`). Each generated struct, enum and union gets `validate(&self)` and
+    /// `true`). Each generated struct, enum and union gets `validate(&self)` and
     /// `TryFrom<serde_json::Value>` (validate, then deserialize), with the errors
     /// [`CompiledSchema::validate`](crate::CompiledSchema::validate) gives; an `anyOf` / `oneOf`
     /// union deserializes to a variant whose branch the instance satisfies (`oneOf`: exactly
-    /// one). The generated code embeds the schema documents and compiles them once, on first
-    /// use.
+    /// one). The generated code embeds the parts of the schema documents its types' validation
+    /// reaches and compiles them once, on first use; it then depends on `json-schema-rs` and
+    /// `serde_json`. Off, the types are plain data: no constraint beyond the Rust shape is
+    /// checked, and a union deserializes to the first variant whose shape fits.
     pub self_validating: bool,
 }
 
@@ -101,7 +103,7 @@ impl Default for CodeGenSettings {
             unknown_properties: None,
             unique_items: UniqueItemsType::Vec,
             flatten_single_entry_combinators: false,
-            self_validating: false,
+            self_validating: true,
         }
     }
 }
@@ -173,7 +175,7 @@ impl CodeGenSettingsBuilder {
             flatten_single_entry_combinators: self
                 .flatten_single_entry_combinators
                 .unwrap_or_default(),
-            self_validating: self.self_validating.unwrap_or_default(),
+            self_validating: self.self_validating.unwrap_or(true),
         }
     }
 }
