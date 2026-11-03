@@ -10,10 +10,19 @@ json_schema_to_rust!(
 #[test]
 fn min_length_max_length_compiles_and_deserializes() {
     let root = schema_0::Root {
-        name: "Alice".to_string(),
+        name: schema_0::Name::try_from("Alice").expect("valid name"),
         additional: BTreeMap::new(),
     };
-    assert_eq!(root.name, "Alice");
+    let expected: &str = "Alice";
+    let actual: &str = root.name.as_str();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn min_length_violation_is_rejected_when_deserializing() {
+    let expected: bool = true;
+    let actual: bool = serde_json::from_str::<schema_0::Root>(r#"{"name":"A"}"#).is_err();
+    assert_eq!(expected, actual);
 }
 
 #[test]

@@ -38,6 +38,22 @@ pub(crate) enum IntWidth {
     I64,
 }
 
+impl IntWidth {
+    /// The values the integer type holds: (lowest, highest).
+    pub(crate) fn range(self) -> (i128, i128) {
+        match self {
+            IntWidth::U8 => (0, i128::from(u8::MAX)),
+            IntWidth::U16 => (0, i128::from(u16::MAX)),
+            IntWidth::U32 => (0, i128::from(u32::MAX)),
+            IntWidth::U64 => (0, i128::from(u64::MAX)),
+            IntWidth::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
+            IntWidth::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
+            IntWidth::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+            IntWidth::I64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
+        }
+    }
+}
+
 /// The width of a floating-point type: `F32` when both bounds lie within `f32`'s range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum FloatWidth {
@@ -67,6 +83,27 @@ pub(crate) struct StringConstraints {
 pub(crate) struct ArrayConstraints {
     pub(crate) min_items: Option<u64>,
     pub(crate) max_items: Option<u64>,
+}
+
+/// Number keywords of a constrained newtype, carried to its `#[json_schema(...)]` attributes:
+/// the tightest bound of each kind, and `multipleOf` when the conjunction has one value for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub(crate) struct NumberConstraints {
+    pub(crate) minimum: Option<serde_json::Number>,
+    pub(crate) maximum: Option<serde_json::Number>,
+    pub(crate) exclusive_minimum: Option<serde_json::Number>,
+    pub(crate) exclusive_maximum: Option<serde_json::Number>,
+    pub(crate) multiple_of: Option<serde_json::Number>,
+}
+
+/// A scalar node generated as a constrained newtype
+/// ([`CodeGenSettings::constrained_newtypes`](crate::CodeGenSettings::constrained_newtypes)):
+/// its schema asserts more than the Rust scalar holds.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Newtype {
+    /// The number keywords (empty for strings and booleans, whose keywords are on the node).
+    pub(crate) numbers: NumberConstraints,
+    pub(crate) annotations: Annotations,
 }
 
 /// Annotations that document a named type. With [`DedupeMode::Full`](crate::DedupeMode::Full)
@@ -318,6 +355,10 @@ pub(crate) struct TypeGraph {
     /// Per node, its validation target (only with `self_validating`; `None` for a node that
     /// accepts any value, or whose conjunction includes a schema with no location).
     pub(crate) targets: Vec<Option<ValidationTarget>>,
+    /// Per node, whether it is a constrained newtype (only with `constrained_newtypes`; every
+    /// newtype has a target).
+    /// Boxed, so a node that is not a newtype costs one pointer.
+    pub(crate) newtypes: Vec<Option<Box<Newtype>>>,
     /// Per input schema, the root and its definitions.
     pub(crate) schemas: Vec<SchemaRoots>,
 }
@@ -333,7 +374,13 @@ impl TypeGraph {
         self.nodes.push(node);
         self.proposals.push(Vec::new());
         self.targets.push(None);
+        self.newtypes.push(None);
         id
+    }
+
+    /// Whether `id` becomes a named item (struct, enum, newtype) in the generated code.
+    pub(crate) fn is_named(&self, id: TypeId) -> bool {
+        self.node(id).is_named() || self.newtypes[id.index()].is_some()
     }
 
     /// `id` with every [`TypeNode::Option`] and [`TypeNode::Box`] around it removed.

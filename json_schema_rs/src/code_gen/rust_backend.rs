@@ -11,12 +11,12 @@ use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
 use super::input::{CachingRetriever, CodeGenInput};
-use super::rust_validators::{self, BufferValidators, EmbeddedSet, UnionEntries};
+use super::rust_validators::{self, BufferValidators, EmbeddedSet, Entry, UnionEntries};
 use super::settings::{CodeGenSettings, DedupeMode, UniqueItemsType};
 use super::type_graph::passes;
 use super::type_graph::{
-    self, Annotations, EnumNode, Field, FloatWidth, IntWidth, NameProposal, NameTier, ObjectNode,
-    StringFormat, TypeGraph, TypeId, TypeNode, UnionKind, UnionNode,
+    self, Annotations, EnumNode, Field, FloatWidth, IntWidth, NameProposal, NameTier, Newtype,
+    NumberConstraints, ObjectNode, StringFormat, TypeGraph, TypeId, TypeNode, UnionKind, UnionNode,
 };
 use crate::json_schema::{Registry, Schema};
 use crate::number;
@@ -62,7 +62,7 @@ impl CodeGenBackend for RustBackend {
         passes::dedup(&mut graph, settings.dedupe_mode);
         passes::break_cycles(&mut graph);
         let plan: Plan = Plan::new(&graph, settings);
-        let sets: Option<Vec<EmbeddedSet>> = if settings.self_validating {
+        let sets: Option<Vec<EmbeddedSet>> = if settings.validates() {
             Some(rust_validators::embedded_sets(
                 &registries,
                 input.retrieval_settings(),
@@ -151,6 +151,8 @@ struct Plan {
     set_item: Vec<bool>,
     /// The structs and unions that derive `Hash`, `Eq` and `Ord`.
     ord_items: BTreeSet<TypeId>,
+    /// Whether structs, enums and unions validate themselves (`self_validating`).
+    self_validating: bool,
 }
 
 impl Plan {
@@ -160,7 +162,7 @@ impl Plan {
         let mut users: BTreeMap<TypeId, BTreeSet<usize>> = BTreeMap::new();
         for (schema, ids) in reach.iter().enumerate() {
             for &id in ids {
-                if graph.node(id).is_named() {
+                if graph.is_named(id) {
                     users.entry(id).or_default().insert(schema);
                 }
             }
@@ -178,7 +180,7 @@ impl Plan {
                 if !seen.insert(id) {
                     continue;
                 }
-                if graph.node(id).is_named() {
+                if graph.is_named(id) {
                     shared.insert(id);
                 }
                 stack.extend(graph.node(id).children());
@@ -201,7 +203,7 @@ impl Plan {
             candidates.push((best_proposal(graph, id), ItemKey::Node(id), home_of(id)));
         }
         for (schema, roots) in graph.schemas.iter().enumerate() {
-            if !graph.node(graph.peel(roots.root)).is_named() {
+            if !graph.is_named(graph.peel(roots.root)) {
                 candidates.push((
                     root_alias_proposal(graph, schema, roots.root),
                     ItemKey::RootAlias(schema),
@@ -253,6 +255,7 @@ impl Plan {
             set_kind,
             set_item,
             ord_items,
+            self_validating: settings.self_validating,
         }
     }
 
@@ -513,11 +516,10 @@ fn rust_type(
         match graph.node(id) {
             TypeNode::Pending | TypeNode::Any => out.push_str("serde_json::Value"),
             TypeNode::Null => out.push_str("()"),
-            TypeNode::Boolean => out.push_str("bool"),
-            TypeNode::Integer(w) => out.push_str(int_name(*w)),
-            TypeNode::Number(FloatWidth::F32) => out.push_str("f32"),
-            TypeNode::Number(FloatWidth::F64) => out.push_str("f64"),
-            TypeNode::String { format, .. } => out.push_str(string_type(*format, imports)),
+            node @ (TypeNode::Boolean
+            | TypeNode::Integer(_)
+            | TypeNode::Number(_)
+            | TypeNode::String { .. }) => out.push_str(scalar_type(node, imports)),
             TypeNode::Array { items, .. } => {
                 out.push_str("Vec<");
                 stack.push(Part::Text(">"));
@@ -545,6 +547,17 @@ fn rust_type(
         }
     }
     out
+}
+
+/// The Rust type of a scalar node (boolean, integer, number, string).
+fn scalar_type(node: &TypeNode, imports: &mut Imports) -> &'static str {
+    match node {
+        TypeNode::Integer(w) => int_name(*w),
+        TypeNode::Number(FloatWidth::F32) => "f32",
+        TypeNode::Number(FloatWidth::F64) => "f64",
+        TypeNode::String { format, .. } => string_type(*format, imports),
+        _ => "bool",
+    }
 }
 
 fn int_name(width: IntWidth) -> &'static str {
@@ -867,7 +880,7 @@ fn default_literal(value: &Value, node: &TypeNode) -> Option<String> {
             if number::integer_upper_bound(n, false)? != exact {
                 return None;
             }
-            let (lo, hi): (i128, i128) = int_bounds(*width);
+            let (lo, hi): (i128, i128) = width.range();
             (lo..=hi).contains(&exact).then(|| exact.to_string())
         }
         (TypeNode::Number(width), Value::Number(n)) => {
@@ -930,18 +943,44 @@ fn render_default_accessor(
     ))
 }
 
-/// The values an integer width holds.
-fn int_bounds(width: IntWidth) -> (i128, i128) {
-    match width {
-        IntWidth::U8 => (0, i128::from(u8::MAX)),
-        IntWidth::U16 => (0, i128::from(u16::MAX)),
-        IntWidth::U32 => (0, i128::from(u32::MAX)),
-        IntWidth::U64 => (0, i128::from(u64::MAX)),
-        IntWidth::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
-        IntWidth::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
-        IntWidth::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
-        IntWidth::I64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
-    }
+/// The default accessor for an optional newtype field: the newtype's inner value (`&str` for a
+/// string), or the default when the key is absent. The default is the schema's annotation and
+/// need not satisfy the newtype's constraints, so it is never turned into a newtype value.
+fn render_newtype_default_accessor(
+    name: &str,
+    shape: FieldShape,
+    node: &TypeNode,
+    newtype: &str,
+    literal: &str,
+) -> Option<String> {
+    let string: bool = matches!(node, TypeNode::String { .. });
+    let inner: &str = scalar_type(node, &mut Imports::default());
+    let (ret, body): (String, String) = match (shape, string) {
+        (FieldShape::Optional, false) => (
+            inner.to_string(),
+            format!("self.{name}.map_or({literal}, {newtype}::into_inner)"),
+        ),
+        (FieldShape::Optional, true) => (
+            "&str".to_string(),
+            format!("self.{name}.as_deref().map_or({literal}, String::as_str)"),
+        ),
+        (FieldShape::OptionalNullable, false) => (
+            format!("Option<{inner}>"),
+            format!(
+                "self.{name}.map_or(Some({literal}), |value| value.map({newtype}::into_inner))"
+            ),
+        ),
+        (FieldShape::OptionalNullable, true) => (
+            "Option<&str>".to_string(),
+            format!(
+                "match &self.{name} {{\n            Some(value) => value.as_deref().map(String::as_str),\n            None => Some({literal}),\n        }}"
+            ),
+        ),
+        (FieldShape::Plain | FieldShape::RequiredNullable, _) => return None,
+    };
+    Some(format!(
+        "    /// The field's value, or its schema `default` when the key is absent.\n    #[must_use]\n    pub fn {name}_or_default(&self) -> {ret} {{\n        {body}\n    }}\n"
+    ))
 }
 
 /// How a field holds its value: presence and nullability (absent and `null` are different).
@@ -1112,6 +1151,9 @@ fn render_field(
     let default_accessor: Option<String> = field.default.as_ref().and_then(|value: &Value| {
         let node: &TypeNode = graph.node(value_id);
         let literal: String = default_literal(value, node)?;
+        if graph.newtypes[value_id.index()].is_some() {
+            return render_newtype_default_accessor(name, shape, node, &value_ty, &literal);
+        }
         render_default_accessor(name, shape, node, &value_ty, &literal)
     });
     shape_serde_args(shape, set, imports, &mut serde_args);
@@ -1132,6 +1174,8 @@ fn render_field(
         schema_args.push("required".to_string());
     }
     match graph.node(value_id) {
+        // A newtype carries its own constraints.
+        _ if graph.newtypes[value_id.index()].is_some() => {}
         TypeNode::String { constraints, .. } => {
             if let Some(n) = constraints.min_length {
                 schema_args.push(format!("min_length = {n}"));
@@ -1232,6 +1276,85 @@ fn render_struct(
         out.push_str(&default_accessors.join("\n"));
         out.push_str("}\n\n");
     }
+    out
+}
+
+/// A constrained newtype: the scalar behind a private field, so every value it holds was
+/// validated against its schema (by `TryFrom` or `Deserialize`, through the embedded validator).
+/// Reading goes through `Deref`, `AsRef`, `into_inner` and `From<Name>` for the scalar;
+/// `Serialize` is the scalar's own.
+fn render_newtype(
+    node: &TypeNode,
+    name: &str,
+    newtype: &Newtype,
+    entry: &Entry,
+    imports: &mut Imports,
+) -> String {
+    let inner: &str = scalar_type(node, imports);
+    let string: bool = inner == "String";
+    let a: &Annotations = &newtype.annotations;
+    let mut out: String = item_docs(a);
+    out.push_str(&deprecated_attr(a.deprecated, a.description.as_deref(), ""));
+    out.push_str(match node {
+        TypeNode::String { .. } if string => {
+            "#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]"
+        }
+        TypeNode::Number(_) => {
+            "#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, json_schema_rs_macro::ToJsonSchema)]"
+        }
+        _ => {
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]"
+        }
+    });
+    out.push_str("\n#[serde(transparent)]\n");
+    let mut schema_args: Vec<String> = Vec::new();
+    if let Some(ref title) = a.title {
+        schema_args.push(format!("title = \"{}\"", escape(title)));
+    }
+    if let Some(ref id) = a.id {
+        schema_args.push(format!("id = \"{}\"", escape(id)));
+    }
+    if let TypeNode::String { constraints, .. } = node {
+        if let Some(n) = constraints.min_length {
+            schema_args.push(format!("min_length = {n}"));
+        }
+        if let Some(n) = constraints.max_length {
+            schema_args.push(format!("max_length = {n}"));
+        }
+        if let Some(ref p) = constraints.pattern {
+            schema_args.push(format!("pattern = \"{}\"", escape(p)));
+        }
+    }
+    let NumberConstraints {
+        minimum,
+        maximum,
+        exclusive_minimum,
+        exclusive_maximum,
+        multiple_of,
+    } = &newtype.numbers;
+    for (key, value) in [
+        ("minimum", minimum),
+        ("maximum", maximum),
+        ("exclusive_minimum", exclusive_minimum),
+        ("exclusive_maximum", exclusive_maximum),
+        ("multiple_of", multiple_of),
+    ] {
+        if let Some(n) = value {
+            schema_args.push(format!("{key} = {n}"));
+        }
+    }
+    if !schema_args.is_empty() {
+        let _ = writeln!(out, "#[json_schema({})]", schema_args.join(", "));
+    }
+    let _ = writeln!(out, "pub struct {name}({inner});\n");
+    let Entry { validators, index } = entry;
+    let call: String = match inner {
+        "String" => format!("string, {name}, {validators}, {index}"),
+        "f32" => format!("f32, {name}, {validators}, {index}"),
+        "Uuid" => format!("uuid, {name}, {validators}, {index}"),
+        _ => format!("scalar, {name}, {inner}, {validators}, {index}"),
+    };
+    let _ = writeln!(out, "json_schema_rs::constrained_newtype!({call});\n");
     out
 }
 
@@ -1454,11 +1577,24 @@ fn render_buffer(
     let mut imports: Imports = Imports::default();
     let mut body: String = String::new();
     let items: Vec<TypeId> = ordered_items(graph, plan, home);
-    let validators: Option<BufferValidators> = sets.map(|_| BufferValidators::new(graph, &items));
+    let validators: Option<BufferValidators> =
+        sets.map(|_| BufferValidators::new(graph, &items, plan.self_validating));
     for &id in &items {
         let name: &str = plan.name(id);
         debug_assert_eq!(plan.home(id), home);
         let union_entries: Option<UnionEntries> = validators.as_ref().and_then(|v| v.union(id));
+        let entry: Option<Entry> = validators.as_ref().and_then(|v| v.item(id));
+        if let Some(newtype) = &graph.newtypes[id.index()] {
+            let entry: &Entry = entry.as_ref().expect("a newtype has a validation target");
+            body.push_str(&render_newtype(
+                graph.node(id),
+                name,
+                newtype,
+                entry,
+                &mut imports,
+            ));
+            continue;
+        }
         let item: String = match graph.node(id) {
             TypeNode::Object(o) => render_struct(graph, plan, home, id, name, o, &mut imports),
             TypeNode::Enum(e) => render_enum(name, e),
@@ -1475,7 +1611,7 @@ fn render_buffer(
             _ => unreachable!("only named nodes are items"),
         };
         body.push_str(&item);
-        if let Some(entry) = validators.as_ref().and_then(|v| v.item(id)) {
+        if let Some(entry) = entry {
             body.push_str(&rust_validators::render_item_impls(name, &entry));
         }
     }
@@ -1719,7 +1855,10 @@ mod tests {
     /// The defaults with self-validation off: these goldens show the shape of the generated
     /// types; the self-validating output has its own tests (see *Self-validating types*).
     fn default_settings() -> CodeGenSettings {
-        CodeGenSettings::builder().self_validating(false).build()
+        CodeGenSettings::builder()
+            .self_validating(false)
+            .constrained_newtypes(false)
+            .build()
     }
 
     /// Every output buffer as text: the shared buffer, then one per schema.
@@ -9537,7 +9676,10 @@ pub struct Root {{
 
     /// The buffers of `schemas` generated with `self_validating` on.
     fn self_validating_buffers(schemas: &[serde_json::Value]) -> (Option<String>, Vec<String>) {
-        let settings: CodeGenSettings = CodeGenSettings::builder().self_validating(true).build();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .self_validating(true)
+            .constrained_newtypes(false)
+            .build();
         buffers(generate_rust(&schemas_of(schemas), &settings).expect("generate"))
     }
 
@@ -9986,7 +10128,10 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         let input: CodeGenInput<'_> = CodeGenInput::new()
             .schema_at("https://example.com/a.json", &a)
             .schema_at("https://example.com/b.json", &b);
-        let settings: CodeGenSettings = CodeGenSettings::builder().self_validating(true).build();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .self_validating(true)
+            .constrained_newtypes(false)
+            .build();
         let (shared, _) = buffers(generate_rust(input, &settings).expect("generate"));
         let actual: Option<String> = shared;
         let expected: Option<String> = Some(r##"//! Generated by json-schema-rs. Do not edit manually.
@@ -10045,7 +10190,10 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
             "type": "object",
             "properties": {"a": {"type": "string", "pattern": "("}}
         })]);
-        let settings: CodeGenSettings = CodeGenSettings::builder().self_validating(true).build();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .self_validating(true)
+            .constrained_newtypes(false)
+            .build();
         let actual: String = generate_rust(&schema, &settings)
             .expect_err("invalid pattern")
             .to_string();
@@ -10061,6 +10209,617 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         })]);
         let actual: bool = generate_rust(&schema, &default_settings()).is_ok();
         let expected: bool = true;
+        assert_eq!(expected, actual);
+    }
+
+    /// The buffers of `schemas` generated with constrained newtypes, and `self_validating`.
+    fn newtype_buffers(
+        schemas: &[serde_json::Value],
+        self_validating: bool,
+    ) -> (Option<String>, Vec<String>) {
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .self_validating(self_validating)
+            .constrained_newtypes(true)
+            .build();
+        buffers(generate_rust(&schemas_of(schemas), &settings).expect("generate"))
+    }
+
+    #[test]
+    fn default_settings_generate_constrained_newtypes() {
+        let settings: CodeGenSettings = CodeGenSettings::builder().build();
+        let expected: bool = true;
+        let actual: bool = settings.constrained_newtypes;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtypes_off_keeps_plain_scalars_golden() {
+        let schema: Vec<Schema> = schemas_of(&[serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "pattern": "^[A-Z]"},
+                "age": {"type": "integer", "minimum": 1, "maximum": 150},
+                "score": {"type": "number", "multipleOf": 0.5}
+            }
+        })]);
+        let off: CodeGenSettings = CodeGenSettings::builder()
+            .self_validating(false)
+            .constrained_newtypes(false)
+            .build();
+        let actual: String = buffers(generate_rust(&schema, &off).expect("generate"))
+            .1
+            .remove(0);
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(min_length = 1, pattern = "^[A-Z]")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_string_property_golden() {
+        let actual: String = newtype_buffers(&[serde_json::json!({
+            "type": "object",
+            "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 10, "pattern": "^[A-Z]"}},
+            "required": ["name"],
+            "additionalProperties": false
+        })], false)
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(min_length = 1, max_length = 10, pattern = "^[A-Z]")]
+pub struct Name(String);
+
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub name: Name,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"name":{"maxLength":10,"minLength":1,"pattern":"^[A-Z]","type":"string"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/name"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_integer_with_narrower_bounds_and_multiple_of_golden() {
+        let actual: String = newtype_buffers(&[serde_json::json!({
+            "type": "object",
+            "properties": {"percent": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5}},
+            "required": ["percent"],
+            "additionalProperties": false
+        })], false)
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(minimum = 0, maximum = 100, multiple_of = 5)]
+pub struct Percent(u8);
+
+json_schema_rs::constrained_newtype!(scalar, Percent, u8, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub percent: Percent,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"percent":{"maximum":100,"minimum":0,"multipleOf":5,"type":"integer"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/percent"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_number_with_bounds_golden() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "type": "object",
+                "properties": {"ratio": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}},
+                "required": ["ratio"],
+                "additionalProperties": false
+            })],
+            false,
+        )
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(maximum = 1, exclusive_minimum = 0)]
+pub struct Ratio(f32);
+
+json_schema_rs::constrained_newtype!(f32, Ratio, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub ratio: Ratio,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"ratio":{"exclusiveMinimum":0,"maximum":1,"type":"number"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/ratio"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_integer_bounds_its_type_holds_stay_plain_golden() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "byte": {"type": "integer", "minimum": 0, "maximum": 255},
+                    "length": {"type": "string", "minLength": 0}
+                },
+                "required": ["byte", "length"],
+                "additionalProperties": false
+            })],
+            false,
+        )
+        .1
+        .remove(0);
+        let expected: &str = "//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub byte: u8,
+    #[json_schema(min_length = 0)]
+    pub length: String,
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_definition_is_named_after_its_key_golden() {
+        let actual: String = newtype_buffers(&[serde_json::json!({
+            "type": "object",
+            "properties": {
+                "home": {"$ref": "#/$defs/PostalCode"},
+                "work": {"$ref": "#/$defs/PostalCode"}
+            },
+            "additionalProperties": false,
+            "$defs": {"PostalCode": {"type": "string", "description": "A five-digit code.", "pattern": "^[0-9]{5}$"}}
+        })], false)
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+/// A five-digit code.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(pattern = "^[0-9]{5}$")]
+pub struct PostalCode(String);
+
+json_schema_rs::constrained_newtype!(string, PostalCode, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home: Option<PostalCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<PostalCode>,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"$defs":{"PostalCode":{"pattern":"^[0-9]{5}$","type":"string"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/$defs/PostalCode"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_root_scalar_golden() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "title": "Port",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+            })],
+            false,
+        )
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(title = "Port", minimum = 1, maximum = 65535)]
+pub struct Port(u16);
+
+json_schema_rs::constrained_newtype!(scalar, Port, u16, TYPE_VALIDATORS, 0);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"maximum":65535,"minimum":1,"type":"integer"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_optional_fields_default_accessors_golden() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string", "minLength": 1, "default": "none"},
+                    "level": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3}
+                },
+                "additionalProperties": false
+            })],
+            false,
+        )
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(min_length = 1)]
+pub struct Label(String);
+
+json_schema_rs::constrained_newtype!(string, Label, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(minimum = 1, maximum = 5)]
+pub struct Level(u8);
+
+json_schema_rs::constrained_newtype!(scalar, Level, u8, TYPE_VALIDATORS, 1);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "none")]
+    pub label: Option<Label>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 3)]
+    pub level: Option<Level>,
+}
+
+impl Root {
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn label_or_default(&self) -> &str {
+        self.label.as_deref().map_or("none", String::as_str)
+    }
+
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn level_or_default(&self) -> u8 {
+        self.level.map_or(3, Level::into_inner)
+    }
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"label":{"minLength":1,"type":"string"},"level":{"maximum":5,"minimum":1,"type":"integer"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/label"],
+        &["json-schema:///#/properties/level"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_string_with_not_golden() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "type": "object",
+                "properties": {"word": {"type": "string", "not": {"const": "forbidden"}}},
+                "required": ["word"],
+                "additionalProperties": false
+            })],
+            false,
+        )
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+pub struct Word(String);
+
+json_schema_rs::constrained_newtype!(string, Word, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub word: Word,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"word":{"not":{"const":"forbidden"},"type":"string"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/word"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_checked_format_golden() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                    "email": {"type": "string", "format": "email"},
+                    "note": {"type": "string", "format": "x-unknown"}
+                },
+                "required": ["email", "note"],
+                "additionalProperties": false
+            })],
+            false,
+        )
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+pub struct Email(String);
+
+json_schema_rs::constrained_newtype!(string, Email, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub email: Email,
+    pub note: String,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"$schema":"http://json-schema.org/draft-07/schema#","properties":{"email":{"format":"email","type":"string"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/email"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn constrained_newtype_with_self_validating_types_share_one_static_golden() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "type": "object",
+                "properties": {"name": {"type": "string", "minLength": 2}},
+                "required": ["name"],
+                "additionalProperties": false
+            })],
+            true,
+        )
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(min_length = 2)]
+pub struct Name(String);
+
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub name: Name,
+}
+
+impl Root {
+    /// Validates this value against its schema: every error the schema's validator reports.
+    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
+        TYPE_VALIDATORS.validate_serialized(1, self)
+    }
+}
+
+impl TryFrom<serde_json::Value> for Root {
+    type Error = json_schema_rs::TypeValidationError;
+
+    /// Validates `value` against the schema, then deserializes it.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        TYPE_VALIDATORS.deserialize(1, value)
+    }
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":2,"type":"string"}},"required":["name"],"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/name"],
+        &["json-schema:///#"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn constrained_newtype_uuid_with_pattern_golden() {
+        let actual: String = newtype_buffers(&[serde_json::json!({
+            "type": "object",
+            "properties": {"id": {"type": "string", "format": "uuid", "pattern": "^[0-9a-f-]+$"}},
+            "required": ["id"],
+            "additionalProperties": false
+        })], false)
+        .1
+        .remove(0);
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(pattern = "^[0-9a-f-]+$")]
+pub struct Id(Uuid);
+
+json_schema_rs::constrained_newtype!(uuid, Id, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    pub id: Id,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"id":{"format":"uuid","pattern":"^[0-9a-f-]+$","type":"string"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["json-schema:///#/properties/id"],
+    ],
+);
+
+"##;
         assert_eq!(expected, actual);
     }
 }

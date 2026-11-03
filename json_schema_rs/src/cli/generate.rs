@@ -124,6 +124,9 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
     if let Some(&on) = matches.get_one::<bool>("cgs-self-validating") {
         b = b.self_validating(on);
     }
+    if let Some(&on) = matches.get_one::<bool>("cgs-constrained-newtypes") {
+        b = b.constrained_newtypes(on);
+    }
     if let Some(src) = flag("cgs-model-name-source") {
         b = b.model_name_source(match src {
             "property-key" => ModelNameSource::PropertyKeyFirst,

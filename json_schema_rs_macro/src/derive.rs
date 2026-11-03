@@ -692,10 +692,13 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     let fields = match &input.data {
         syn::Data::Struct(s) => match &s.fields {
             Fields::Named(named) => &named.named,
+            Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
+                return expand_newtype_to_json_schema(&name, &input.attrs, &unnamed.unnamed[0]);
+            }
             Fields::Unnamed(_) | Fields::Unit => {
                 return Err(Error::new_spanned(
                     name,
-                    "ToJsonSchema derive only supports structs with named fields",
+                    "ToJsonSchema derive only supports structs with named fields and newtypes (one unnamed field)",
                 ));
             }
         },
@@ -896,6 +899,78 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         &name,
         id.as_deref(),
         &generator_ident,
+        &body,
+    ))
+}
+
+/// Expand `ToJsonSchema` for a newtype (`struct Name(T);`): `T`'s schema with the constraint
+/// keywords of the container's `#[json_schema(...)]` (`min_length`, `max_length`, `pattern`,
+/// `minimum`, `maximum`, `exclusive_minimum`, `exclusive_maximum`, `multiple_of`) and its
+/// `title`, `description` (or doc comments), `comment` and `id`. The newtype is a named type,
+/// in `$defs` like a struct.
+fn expand_newtype_to_json_schema(
+    name: &Ident,
+    attrs: &[Attribute],
+    field: &Field,
+) -> SynResult<TokenStream2> {
+    let ty: &Type = &field.ty;
+    // The constraint attributes are the container's: read them as a field's.
+    let container_field: Field = Field {
+        attrs: attrs.to_vec(),
+        ..field.clone()
+    };
+    let field: &Field = &container_field;
+    let ContainerExprs {
+        title: title_expr,
+        description: description_expr,
+        comment: comment_expr,
+        id_expr,
+        id,
+    } = container_exprs(attrs)?;
+    let min_expr: TokenStream2 = field_number_expr(field, "minimum")?;
+    let max_expr: TokenStream2 = field_number_expr(field, "maximum")?;
+    let exclusive_min_expr: TokenStream2 = field_number_expr(field, "exclusive_minimum")?;
+    let exclusive_max_expr: TokenStream2 = field_number_expr(field, "exclusive_maximum")?;
+    let multiple_of_expr: TokenStream2 = field_number_expr(field, "multiple_of")?;
+    let u64_expr = |value: Option<u64>| -> TokenStream2 {
+        value.map_or_else(
+            || quote! { None },
+            |n| {
+                let lit = proc_macro2::Literal::u64_unsuffixed(n);
+                quote! { Some(#lit) }
+            },
+        )
+    };
+    let min_length_expr: TokenStream2 = u64_expr(field_min_length(field)?);
+    let max_length_expr: TokenStream2 = u64_expr(field_max_length(field)?);
+    let pattern_expr: TokenStream2 = field_pattern(field)?.map_or_else(
+        || quote! { None },
+        |p| {
+            let lit = LitStr::new(&p, name.span());
+            quote! { Some(#lit.to_string()) }
+        },
+    );
+    let body: TokenStream2 = quote! {
+        let mut schema: ::json_schema_rs::JsonSchema =
+            <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator);
+        schema.id = #id_expr.or(schema.id);
+        schema.title = #title_expr.or(schema.title);
+        schema.description = #description_expr.or(schema.description);
+        schema.comment = #comment_expr.or(schema.comment);
+        schema.minimum = #min_expr.or(schema.minimum);
+        schema.maximum = #max_expr.or(schema.maximum);
+        schema.exclusive_minimum = #exclusive_min_expr.or(schema.exclusive_minimum);
+        schema.exclusive_maximum = #exclusive_max_expr.or(schema.exclusive_maximum);
+        schema.multiple_of = #multiple_of_expr.or(schema.multiple_of);
+        schema.min_length = #min_length_expr.or(schema.min_length);
+        schema.max_length = #max_length_expr.or(schema.max_length);
+        schema.pattern = #pattern_expr.or(schema.pattern);
+        schema
+    };
+    Ok(named_type_impl(
+        name,
+        id.as_deref(),
+        &quote! { generator },
         &body,
     ))
 }
