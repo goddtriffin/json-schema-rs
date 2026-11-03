@@ -32,8 +32,9 @@ pub enum UnknownProperties {
     /// Keep unknown keys in a `#[serde(flatten)]` map field on every object type, even where
     /// the schema forbids them (`additionalProperties: false`).
     Capture,
-    /// Ignore unknown keys: they are dropped when deserializing (faster: no map field, no
-    /// serde buffering). `additionalProperties: false` still rejects them.
+    /// Ignore unknown keys: they are dropped when deserializing (faster: no map field to fill,
+    /// and the struct derives serde's `Deserialize`). `additionalProperties: false` still
+    /// rejects them.
     Drop,
 }
 
