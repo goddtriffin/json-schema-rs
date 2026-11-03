@@ -7,6 +7,7 @@ use super::error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseR
 use super::settings::{DialectSettings, JsonSchemaSettings, resolve_dialect_for_uri};
 use super::type_set::TypeSet;
 use crate::json_pointer::JsonPointer;
+use crate::number;
 use memchr::memmem;
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -337,7 +338,7 @@ impl<'de> DeserializeSeed<'de> for MultipleOf {
         let Some(n) = Option::<serde_json::Number>::deserialize(deserializer)? else {
             return Ok(None);
         };
-        if n.as_f64().is_some_and(|f| f > 0.0) {
+        if number::is_positive(&n) {
             Ok(Some(n))
         } else {
             Err(de::Error::custom(format!(
@@ -361,31 +362,9 @@ impl<'de> DeserializeSeed<'de> for NonNegativeInteger {
         let Some(n) = Option::<serde_json::Number>::deserialize(deserializer)? else {
             return Ok(None);
         };
-        non_negative_integer(&n)
+        number::non_negative_integer(&n)
             .map(Some)
             .ok_or_else(|| de::Error::custom(format!("expected a non-negative integer, got {n}")))
-    }
-}
-
-/// The value of `n` as a `u64` when it is a non-negative integer by value: an unsigned integer,
-/// or a float with a zero fractional part below 2^64.
-fn non_negative_integer(n: &serde_json::Number) -> Option<u64> {
-    // 2^64: every float with a zero fraction in [0, 2^64) converts to `u64` exactly.
-    const U64_LIMIT: f64 = 18_446_744_073_709_551_616.0;
-    if let Some(u) = n.as_u64() {
-        return Some(u);
-    }
-    let f: f64 = n.as_f64()?;
-    if (0.0..U64_LIMIT).contains(&f) && f.fract() == 0.0 {
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "f is a non-negative whole number below 2^64, so the cast is exact"
-        )]
-        let u: u64 = f as u64;
-        Some(u)
-    } else {
-        None
     }
 }
 
@@ -965,7 +944,7 @@ fn check_keywords(
             if checks.lexical_counts
                 && COUNT_KEYWORDS.contains(&key.as_str())
                 && let Value::Number(n) = child
-                && n.is_f64()
+                && !number::is_integer(n, IntegerSemantics::Lexical)
             {
                 errors.push(JsonSchemaParseError::InvalidKeywordValue {
                     keyword: key.clone(),
@@ -3249,10 +3228,14 @@ mod tests {
 
     #[test]
     fn count_keyword_rejects_value_beyond_u64() {
-        let expected: Result<Schema, String> = Err(
-            "invalid JSON Schema: expected a non-negative integer, got 1.8446744073709552e+19 at line 1 column 34"
-                .to_string(),
-        );
+        // The default build holds 2^64 as the nearest `f64`; `arbitrary-precision` as written.
+        #[cfg(not(feature = "arbitrary-precision"))]
+        let written: &str = "1.8446744073709552e+19";
+        #[cfg(feature = "arbitrary-precision")]
+        let written: &str = "18446744073709551616";
+        let expected: Result<Schema, String> = Err(format!(
+            "invalid JSON Schema: expected a non-negative integer, got {written} at line 1 column 34"
+        ));
         let actual: Result<Schema, String> = parse_message(r#"{"maxLength":18446744073709551616}"#);
         assert_eq!(expected, actual);
     }
@@ -3316,7 +3299,13 @@ mod tests {
 
     #[test]
     fn draft4_rejects_exponent_count() {
-        let expected: KeywordValueOutcome = invalid_value("maxItems", "", "2.0");
+        // The default build holds `2e0` as the `f64` `2.0`; `arbitrary-precision` keeps the
+        // text, which `serde_json` writes with a signed exponent.
+        #[cfg(not(feature = "arbitrary-precision"))]
+        let written: &str = "2.0";
+        #[cfg(feature = "arbitrary-precision")]
+        let written: &str = "2e+0";
+        let expected: KeywordValueOutcome = invalid_value("maxItems", "", written);
         let actual: KeywordValueOutcome =
             parse_draft4(r#""maxItems":2e0"#, &JsonSchemaSettings::default());
         assert_eq!(expected, actual);

@@ -23,11 +23,17 @@ help: # Prints out help
 lint: ## lints the codebase
 	cargo fmt
 
+# Every feature except `arbitrary-precision`, which changes how every number is parsed and
+# compared (exact beyond 64 bits). `make test` runs the workspace in both builds.
+FEATURES_WITHOUT_ARBITRARY_PRECISION := json-schema-rs/uuid,json-schema-rs/http,json-schema-rs/indexmap,json-schema-rs-macro/uuid,json-schema-rs-macro/indexmap
+
 .PHONY: test
-test: ## runs tests (all features, so feature-gated code like uuid is always exercised)
+test: ## runs tests twice: every feature but arbitrary-precision (64-bit numbers), then all features (exact big numbers)
 	cargo fmt --check
 	cargo check
+	cargo clippy --tests --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION)
 	cargo clippy --tests --all-features
+	cargo test --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION)
 	cargo test --all-features
 
 .PHONY: fix
@@ -68,9 +74,11 @@ vendor_test_suite: ## clone the JSON Schema Test Suite at its pinned commit into
 	@./research/scripts/clone-json-schema-test-suite.sh
 
 .PHONY: test_json_schema_suite
-test_json_schema_suite: ## run only the official JSON Schema Test Suite gate (also part of make test); run make vendor_test_suite first
+test_json_schema_suite: ## run only the official JSON Schema Test Suite gate in both builds (also part of make test); run make vendor_test_suite first
+	cargo test --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION) --test json_schema_test_suite
 	cargo test --all-features --test json_schema_test_suite
 
 .PHONY: update_suite_xfail
-update_suite_xfail: ## rewrite json_schema_rs/tests/suite_xfail.json to list exactly the suite tests that fail today
+update_suite_xfail: ## rewrite json_schema_rs/tests/suite_xfail.json (and suite_xfail_arbitrary_precision.json) to list exactly the suite tests that fail today
+	JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1 cargo test --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION) --test json_schema_test_suite
 	JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1 cargo test --all-features --test json_schema_test_suite

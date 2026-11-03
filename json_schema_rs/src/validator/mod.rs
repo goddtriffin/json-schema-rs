@@ -5260,6 +5260,239 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    // --- Numbers beyond 64 bits: rounded to `f64` by default, exact with
+    // `arbitrary-precision` ---
+
+    const TWO_POW_64: &str = "18446744073709551616";
+    const TWO_POW_64_PLUS_ONE: &str = "18446744073709551617";
+
+    #[cfg(not(feature = "arbitrary-precision"))]
+    #[test]
+    fn const_two_pow_64_accepts_its_successor_rounded_to_one_f64() {
+        let expected: bool = true;
+        let actual: bool = is_valid(&format!(r#"{{"const":{TWO_POW_64}}}"#), TWO_POW_64_PLUS_ONE);
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn const_two_pow_64_rejects_its_successor() {
+        let expected: bool = false;
+        let actual: bool = is_valid(&format!(r#"{{"const":{TWO_POW_64}}}"#), TWO_POW_64_PLUS_ONE);
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn const_bignum_accepts_it_written_with_an_exponent() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            &format!(r#"{{"const":{TWO_POW_64}}}"#),
+            "1.8446744073709551616e19",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn enum_two_pow_64_rejects_its_successor() {
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            &format!(r#"{{"enum":[{TWO_POW_64}, "a"]}}"#),
+            TWO_POW_64_PLUS_ONE,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn enum_matches_its_bignum_exactly() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            &format!(r#"{{"enum":[{TWO_POW_64}, {TWO_POW_64_PLUS_ONE}]}}"#),
+            TWO_POW_64_PLUS_ONE,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(not(feature = "arbitrary-precision"))]
+    #[test]
+    fn unique_items_two_pow_64_and_its_successor_are_duplicates_rounded_to_one_f64() {
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            r#"{"uniqueItems":true}"#,
+            &format!("[{TWO_POW_64}, {TWO_POW_64_PLUS_ONE}]"),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn unique_items_two_pow_64_and_its_successor_are_unique() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            r#"{"uniqueItems":true}"#,
+            &format!("[{TWO_POW_64}, {TWO_POW_64_PLUS_ONE}]"),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn unique_items_bignum_written_two_ways_is_a_duplicate() {
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            r#"{"uniqueItems":true}"#,
+            &format!("[{TWO_POW_64}, 1.8446744073709551616e19]"),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(not(feature = "arbitrary-precision"))]
+    #[test]
+    fn maximum_two_pow_64_accepts_its_successor_rounded_to_one_f64() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            &format!(r#"{{"maximum":{TWO_POW_64}}}"#),
+            TWO_POW_64_PLUS_ONE,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn maximum_two_pow_64_rejects_its_successor_with_exact_numbers() {
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::AboveMaximum {
+                maximum: num(TWO_POW_64),
+                actual: num(TWO_POW_64_PLUS_ONE),
+            },
+            JsonPointer::root(),
+            kl("/maximum"),
+        )]);
+        let actual: ValidationResult = validate_text(
+            &format!(r#"{{"maximum":{TWO_POW_64}}}"#),
+            TWO_POW_64_PLUS_ONE,
+            &crate::json_schema::JsonSchemaSettings::default(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn maximum_error_displays_numbers_as_written() {
+        let schema: JsonSchema = Schema::new_from_str(
+            &format!(r#"{{"maximum":{TWO_POW_64}}}"#),
+            &crate::json_schema::JsonSchemaSettings::default(),
+        )
+        .expect("schema")
+        .into_object()
+        .expect("schema object");
+        let instance: serde_json::Value =
+            serde_json::from_str(TWO_POW_64_PLUS_ONE).expect("instance");
+        let expected: Vec<String> = vec![
+            "root: value 18446744073709551617 is above maximum 18446744073709551616".to_string(),
+        ];
+        let actual: Vec<String> = validate_usable(&schema, &instance)
+            .expect_err("above maximum")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn minimum_two_pow_64_plus_one_rejects_two_pow_64() {
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            &format!(r#"{{"minimum":{TWO_POW_64_PLUS_ONE}}}"#),
+            TWO_POW_64,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn exclusive_maximum_decimal_beyond_f64_precision() {
+        // The official suite's `optional/bignum.json` case.
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            r#"{"exclusiveMaximum":972783798187987123879878123.18878137}"#,
+            "972783798187987123879878123.188781371",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn minimum_number_beyond_f64_range() {
+        let expected: (bool, bool) = (true, false);
+        let actual: (bool, bool) = (
+            is_valid(r#"{"type":"number","minimum":1e400}"#, "1e401"),
+            is_valid(r#"{"type":"number","minimum":1e400}"#, "1e308"),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(not(feature = "arbitrary-precision"))]
+    #[test]
+    fn multiple_of_two_accepts_two_pow_64_successor_rounded_to_one_f64() {
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"multipleOf":2}"#, TWO_POW_64_PLUS_ONE);
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn multiple_of_two_distinguishes_two_pow_64_and_its_successor() {
+        let expected: (bool, bool) = (true, false);
+        let actual: (bool, bool) = (
+            is_valid(r#"{"multipleOf":2}"#, TWO_POW_64),
+            is_valid(r#"{"multipleOf":2}"#, TWO_POW_64_PLUS_ONE),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn multiple_of_accepts_tiny_positive_divisor() {
+        // `1e-400` underflows to `0.0` as an `f64`; exactly, it is positive.
+        let expected: bool = true;
+        let actual: bool = is_valid(r#"{"multipleOf":1e-400}"#, "3");
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(not(feature = "arbitrary-precision"))]
+    #[test]
+    fn draft4_integer_rejects_bignum_read_as_f64() {
+        let expected: bool = false;
+        let actual: bool = is_valid(
+            &format!(r#"{{"$schema":"{DRAFT4}","type":"integer"}}"#),
+            "12345678910111213141516171819202122232425262728293031",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn draft4_integer_accepts_bignum_written_without_fraction() {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            &format!(r#"{{"$schema":"{DRAFT4}","type":"integer"}}"#),
+            "12345678910111213141516171819202122232425262728293031",
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "arbitrary-precision")]
+    #[test]
+    fn integer_rejects_fraction_beyond_f64_precision() {
+        let expected: bool = false;
+        let actual: bool = is_valid(r#"{"type":"integer"}"#, "10000000000000000000.5");
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn multiple_of_integer_accepts_huge_whole_float() {
         let expected: bool = true;

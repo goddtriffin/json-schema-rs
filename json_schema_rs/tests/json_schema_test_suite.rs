@@ -2,7 +2,9 @@
 //!
 //! Every suite test in drafts 4, 6, 7, 2019-09 and 2020-12 (including `optional/`) is one
 //! reported test case, named `<draft>/<file> :: <group> :: <test>`. Known failures are listed
-//! in `tests/suite_xfail.json` (draft → file → group → tests). The run fails on:
+//! in `tests/suite_xfail.json` (draft → file → group → tests); a build with the
+//! `arbitrary-precision` feature, whose numbers are exact beyond 64 bits, reads
+//! `tests/suite_xfail_arbitrary_precision.json` instead. The run fails on:
 //!
 //! - an **unexpected failure**: a test not in the manifest returns the wrong verdict, or its
 //!   schema cannot be parsed;
@@ -17,8 +19,8 @@
 //! case whose two verdicts differ fails, whatever the manifest says.
 //!
 //! The suite must be cloned at `research/json-schema-test-suite/` (`make vendor_test_suite`);
-//! the run hard-fails when it is missing. `make update_suite_xfail` rewrites the manifest from
-//! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`).
+//! the run hard-fails when it is missing. `make update_suite_xfail` rewrites both manifests from
+//! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`, once per build).
 
 use json_schema_rs::{
     CompiledSchema, FormatMode, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidateError,
@@ -106,8 +108,15 @@ fn suite_root() -> PathBuf {
         .join("json-schema-test-suite")
 }
 
+/// The known-failure manifest of this build: numbers beyond 64 bits are exact only with the
+/// `arbitrary-precision` feature, so the two builds fail different suite tests.
+#[cfg(not(feature = "arbitrary-precision"))]
+const XFAIL_FILE: &str = "suite_xfail.json";
+#[cfg(feature = "arbitrary-precision")]
+const XFAIL_FILE: &str = "suite_xfail_arbitrary_precision.json";
+
 fn xfail_path() -> PathBuf {
-    manifest_dir().join("tests").join("suite_xfail.json")
+    manifest_dir().join("tests").join(XFAIL_FILE)
 }
 
 /// Collects all `.json` files under `dir` (iteratively), sorted by path.
@@ -354,15 +363,14 @@ fn build_trials(cases: Vec<Case>, manifest: &XfailManifest) -> Vec<Trial> {
             (false, Outcome::Failed(reason)) => Trial::test(name, move || {
                 Err(Failed::from(format!(
                     "unexpected failure: {reason}. Fix it, or record a known gap in \
-                     json_schema_rs/tests/suite_xfail.json (make update_suite_xfail)."
+                     json_schema_rs/tests/{XFAIL_FILE} (make update_suite_xfail)."
                 )))
             }),
             (true, Outcome::Passed) => Trial::test(name, || {
-                Err(Failed::from(
-                    "unexpected pass: remove this test from json_schema_rs/tests/suite_xfail.json \
+                Err(Failed::from(format!(
+                    "unexpected pass: remove this test from json_schema_rs/tests/{XFAIL_FILE} \
                      (make update_suite_xfail)."
-                        .to_string(),
-                ))
+                )))
             }),
         };
         trials.push(if xfail {
@@ -373,13 +381,13 @@ fn build_trials(cases: Vec<Case>, manifest: &XfailManifest) -> Vec<Trial> {
     }
     let stale: Vec<String> = expected_failures.iter().map(CaseKey::trial_name).collect();
     trials.push(Trial::test(
-        "suite_xfail.json lists only suite tests",
+        format!("{XFAIL_FILE} lists only suite tests"),
         move || {
             if stale.is_empty() {
                 Ok(())
             } else {
                 Err(Failed::from(format!(
-                    "suite_xfail.json names tests that are not in the suite:\n  {}",
+                    "{XFAIL_FILE} names tests that are not in the suite:\n  {}",
                     stale.join("\n  ")
                 )))
             }
@@ -413,11 +421,11 @@ fn main() {
                     read_manifest().unwrap_or_else(|message| panic!("{message}"));
                 build_trials(cases, &manifest)
             }
-            Err(message) => setup_failure("suite_xfail.json is writable", message),
+            Err(message) => setup_failure(&format!("{XFAIL_FILE} is writable"), message),
         },
         Ok(cases) => match read_manifest() {
             Ok(manifest) => build_trials(cases, &manifest),
-            Err(message) => setup_failure("suite_xfail.json is readable", message),
+            Err(message) => setup_failure(&format!("{XFAIL_FILE} is readable"), message),
         },
     };
     libtest_mimic::run(&args, trials).exit();
