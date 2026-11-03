@@ -215,8 +215,9 @@ pub fn run() {
                 .arg(
                     Arg::new("cgs-constrained-newtypes")
                         .long("cgs-constrained-newtypes")
-                        .action(clap::ArgAction::SetTrue)
-                        .help("Codegen Settings: generate a newtype for each string / integer / number / boolean whose schema asserts more than its Rust type holds (minLength, maxLength, pattern, bounds, multipleOf, ...); it validates on construction and deserialization (default: off)"),
+                        .value_name("BOOL")
+                        .value_parser(clap::value_parser!(bool))
+                        .help("Codegen Settings: generate a newtype for each string / integer / number / boolean whose schema asserts more than its Rust type holds (minLength, maxLength, pattern, bounds, multipleOf, ...); it validates on construction and deserialization (default: true)"),
                 )
                 .args(retrieval::retrieval_args()),
         )
