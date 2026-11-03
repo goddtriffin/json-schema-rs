@@ -888,6 +888,60 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    /// The embedded document codegen emits for two newtype properties with the same `pattern`
+    /// (`constrained_newtypes_with_equal_patterns_share_one_static_golden`).
+    const EQUAL_PATTERNS_ROOT: &str = r#"{"properties":{"billing":{"pattern":"^[A-Z]{2}$","type":"string"},"shipping":{"pattern":"^[A-Z]{2}$","type":"string"}}}"#;
+
+    #[test]
+    fn newtypes_with_equal_patterns_share_one_compiled_regex() {
+        let documents: [EmbeddedDocument<'_>; 1] = [parsed("json-schema:///", EQUAL_PATTERNS_ROOT)];
+        let types: [&[&str]; 2] = [
+            &["json-schema:///#/properties/billing"],
+            &["json-schema:///#/properties/shipping"],
+        ];
+        let validators: TypeValidators<'_> = TypeValidators::new(None, &documents, &types);
+        let expected: Vec<String> = vec!["^[A-Z]{2}$".to_string()];
+        let actual: Vec<String> = validators
+            .compiled()
+            .expect("compiles")
+            .0
+            .patterns
+            .iter()
+            .map(|pattern| pattern.source.clone())
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn newtypes_with_equal_patterns_both_reject_a_non_matching_value() {
+        let documents: [EmbeddedDocument<'_>; 1] = [parsed("json-schema:///", EQUAL_PATTERNS_ROOT)];
+        let types: [&[&str]; 2] = [
+            &["json-schema:///#/properties/billing"],
+            &["json-schema:///#/properties/shipping"],
+        ];
+        let validators: TypeValidators<'_> = TypeValidators::new(None, &documents, &types);
+        let expected: [bool; 4] = [true, false, true, false];
+        let actual: [bool; 4] = [
+            validators.is_valid(0, &json!("US")),
+            validators.is_valid(0, &json!("usa")),
+            validators.is_valid(1, &json!("GB")),
+            validators.is_valid(1, &json!("gb")),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn schemas_are_compiled_once_across_validations() {
+        let validators: TypeValidators<'static> = defs_validators();
+        let first: &CompiledSchema = &validators.compiled().expect("compiles").0;
+        let _ = validators.is_valid(0, &json!("Ada"));
+        let _ = validators.validate(1, &json!(3));
+        let second: &CompiledSchema = &validators.compiled().expect("compiles").0;
+        let expected: bool = true;
+        let actual: bool = std::ptr::eq(first, second);
+        assert_eq!(expected, actual);
+    }
+
     const DEFS_ROOT: &str = r#"{"$defs":{"Name":{"type":"string","minLength":2},"Age":{"type":"integer"}},"type":"object"}"#;
 
     fn defs_validators() -> TypeValidators<'static> {

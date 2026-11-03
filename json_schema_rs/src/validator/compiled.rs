@@ -2287,6 +2287,46 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    /// The source of every compiled regular expression, in compilation order.
+    fn compiled_patterns(compiled: &CompiledSchema) -> Vec<String> {
+        compiled
+            .patterns
+            .iter()
+            .map(|pattern| pattern.source.clone())
+            .collect()
+    }
+
+    #[test]
+    fn equal_patterns_are_compiled_once() {
+        let compiled: CompiledSchema = compile(&json!({
+            "$defs": {"Code": {"type": "string", "pattern": "^[a-z]+$"}},
+            "properties": {
+                "a": {"pattern": "^[a-z]+$"},
+                "b": {"pattern": "^[a-z]+$"},
+                "c": {"$ref": "#/$defs/Code"},
+                "d": {"items": {"pattern": "^[a-z]+$"}}
+            },
+            "patternProperties": {"^[a-z]+$": true}
+        }));
+        let expected: Vec<String> = vec!["^[a-z]+$".to_string()];
+        let actual: Vec<String> = compiled_patterns(&compiled);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patterns_differing_as_written_are_compiled_apart() {
+        let compiled: CompiledSchema = compile(&json!({
+            "properties": {
+                "a": {"pattern": "^[a-z]+$"},
+                "b": {"pattern": "^[a-z]+"},
+                "c": {"pattern": "^[a-z]+$"}
+            }
+        }));
+        let expected: Vec<String> = vec!["^[a-z]+$".to_string(), "^[a-z]+".to_string()];
+        let actual: Vec<String> = compiled_patterns(&compiled);
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn properties_list_is_shared_with_additional_properties() {
         let compiled: CompiledSchema = compile(&json!({
