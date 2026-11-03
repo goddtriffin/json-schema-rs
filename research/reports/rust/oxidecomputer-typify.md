@@ -300,3 +300,14 @@ No. Typify is codegen-only. `validate.rs::schema_value_validate` checks only `co
 
 - Whether schemars 0.8.22's `RootSchema` deserializer accepts `$defs` (the clone has no schemars source; evidence is the `x-rust-type.json` fixture only).
 - Behavior of generated code (nothing was compiled or run); `try_merge_schema_not`, `schema_is_named` and `value.rs` were only skimmed.
+
+## Constrained newtypes (generated API)
+
+Read for json-schema-rs #82 (`typify-impl/src/type_entry.rs` 1571-1673, `convert.rs` 795-903 and 1169-1180, `typify/tests/schemas/types-with-more-impls.rs`, `merged-schemas.rs`).
+
+- **Triggers:** a `type: string` with `minLength`, `maxLength` or `pattern` and no recognized `format` (uuid, date, date-time, ip, ipv4, ipv6 win and drop the constraints) becomes a checked newtype; a typed non-string `enum` becomes a checked `EnumValue` newtype, `not: {enum}` a `DenyValue` one. Always on, no setting.
+- **Not enforced:** number `minimum` / `maximum` / `exclusive*` / `multipleOf` (`convert_number` ignores its validation; a named bounded-number def becomes an unchecked `pub struct X(pub f64)` with `From<f64>`); integer bounds only pick the Rust type, `multipleOf` only turns that choice off (`// TODO`).
+- **Shape:** `#[derive(Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)] #[serde(transparent)] pub struct X(String);` with a private field (public when unconstrained), `Deref<Target = String>`, `From<X> for String`, `FromStr`, `TryFrom<&str>` / `TryFrom<String>`, and a `Deserialize` through `TryFrom`. No `AsRef`, no `into_inner`, no `Display` impl (although `has_impl` reports Display).
+- **Checks:** emitted inline, in the order max length, min length, pattern, returning at the first failure; lengths by `chars().count()` (code points); the pattern is a `static LazyLock<regress::Regex>` per type, checked at generation time (an invalid pattern is `Error::InvalidSchema`), matched with `find` (unanchored). Error: a per-crate `error::ConversionError(Cow<'static, str>)` with a static message (`"longer than 10 characters"`), without the value or a path.
+- **Naming:** a def becomes the newtype named after its key; an inline property gets `<Parent><Prop>` or its `title`. A def-level `default` is not carried onto the type.
+

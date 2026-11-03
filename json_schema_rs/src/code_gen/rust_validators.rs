@@ -184,8 +184,9 @@ pub(crate) struct BufferValidators {
 }
 
 impl BufferValidators {
-    /// Registers the validators of `items` (the named items of one buffer).
-    pub(crate) fn new(graph: &TypeGraph, items: &[TypeId]) -> BufferValidators {
+    /// Registers the validators of `items` (the named items of one buffer); `unions`: whether
+    /// `anyOf` / `oneOf` unions choose their variant by validation (self-validating types).
+    pub(crate) fn new(graph: &TypeGraph, items: &[TypeId], unions: bool) -> BufferValidators {
         let mut out: BufferValidators = BufferValidators::default();
         for &id in items {
             let target: Option<&ValidationTarget> = graph.targets[id.index()].as_ref();
@@ -196,6 +197,9 @@ impl BufferValidators {
             let TypeNode::Union(union) = graph.node(id) else {
                 continue;
             };
+            if !unions {
+                continue;
+            }
             if union.kind == UnionKind::TypeArray {
                 continue;
             }

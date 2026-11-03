@@ -120,7 +120,8 @@ pub(crate) fn run_generate(
 pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings, String> {
     let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
     let mut b = CodeGenSettings::builder()
-        .flatten_single_entry_combinators(matches.get_flag("cgs-flatten-single-entry-combinators"));
+        .flatten_single_entry_combinators(matches.get_flag("cgs-flatten-single-entry-combinators"))
+        .constrained_newtypes(matches.get_flag("cgs-constrained-newtypes"));
     if let Some(&on) = matches.get_one::<bool>("cgs-self-validating") {
         b = b.self_validating(on);
     }
