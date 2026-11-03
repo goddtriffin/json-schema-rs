@@ -5,6 +5,8 @@
 
 pub mod code_gen;
 pub mod error_list;
+#[doc(hidden)]
+pub mod generated_serde;
 pub mod json_pointer;
 pub mod json_schema;
 mod number;
