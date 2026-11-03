@@ -1,221 +1,44 @@
 //! Exact arithmetic on JSON numbers: comparison, the integer rule, `multipleOf`, and
 //! mathematical equality of JSON values (with a hash consistent with it).
 //!
-//! A [`serde_json::Number`] holds a `u64`, an `i64` or an `f64`. Integers compare as integers and
-//! `f64`s only with `f64`s; an integer against an `f64` is compared exactly, never by converting
-//! one side and accepting the rounding. Numbers beyond 64 bits are `f64`s as `serde_json` parses
-//! them (see design.md, *Numbers*).
+//! There is no epsilon anywhere; what "exact" covers depends on the build:
+//!
+//! - **Default build** (`float.rs`). A [`serde_json::Number`] holds a `u64`, an `i64` or an
+//!   `f64`. Integers compare as integers and `f64`s only with `f64`s; an integer against an
+//!   `f64` is compared exactly, never by converting one side and accepting the rounding.
+//!   Numbers beyond 64 bits are the `f64`s `serde_json` parsed them as, so `2^64` and
+//!   `2^64 + 1` are equal and `1e400` does not parse.
+//! - **`arbitrary-precision` build** (`exact.rs`). `serde_json` keeps every number as the text
+//!   it was written as, and each one is read as the exact decimal it denotes, of any size: an
+//!   integer within `i128` as an integer, anything else as a normalised sign, digit string and
+//!   power-of-ten exponent (see that module for the exponent range).
+//!
+//! Both builds share [`json_equal`], [`json_hash`] and [`JsonEqKey`] (see design.md,
+//! *Numbers*).
 
-use crate::json_schema::IntegerSemantics;
-use serde_json::{Number, Value};
+#[cfg(feature = "arbitrary-precision")]
+mod exact;
+#[cfg(not(feature = "arbitrary-precision"))]
+mod float;
+
+#[cfg(feature = "arbitrary-precision")]
+use exact::hash_number;
+#[cfg(feature = "arbitrary-precision")]
+pub(crate) use exact::{
+    cmp_num, integer_lower_bound, integer_upper_bound, is_integer, is_multiple_of, is_positive,
+    non_negative_integer,
+};
+#[cfg(not(feature = "arbitrary-precision"))]
+use float::hash_number;
+#[cfg(not(feature = "arbitrary-precision"))]
+pub(crate) use float::{
+    cmp_num, integer_lower_bound, integer_upper_bound, is_integer, is_multiple_of, is_positive,
+    non_negative_integer,
+};
+
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
-
-/// A JSON number lowered to the kind `serde_json` stored it as.
-#[derive(Debug, Clone, Copy)]
-enum Num {
-    Int(i128),
-    Float(f64),
-}
-
-impl From<&Number> for Num {
-    fn from(n: &Number) -> Self {
-        if let Some(u) = n.as_u64() {
-            Num::Int(i128::from(u))
-        } else if let Some(i) = n.as_i64() {
-            Num::Int(i128::from(i))
-        } else {
-            // A `Number` that is neither `u64` nor `i64` is an `f64`; `as_f64` is `Some` for it.
-            Num::Float(n.as_f64().unwrap_or(f64::NAN))
-        }
-    }
-}
-
-/// Compares two JSON numbers by mathematical value, exactly.
-///
-/// Integers compare as integers and two `f64`s as `f64`s. An integer `x` against an `f64` `f`
-/// first compares `x` rounded to the nearest `f64`: when that differs from `f`, rounding cannot
-/// have crossed `f` (the rounded value is the double nearest `x`), so the order stands; when it
-/// equals `f`, `f` is a whole number within ±2^64 and the two compare as integers.
-#[must_use]
-pub(crate) fn cmp_num(a: &Number, b: &Number) -> Ordering {
-    match (Num::from(a), Num::from(b)) {
-        (Num::Int(x), Num::Int(y)) => x.cmp(&y),
-        (Num::Float(x), Num::Float(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-        (Num::Int(x), Num::Float(f)) => cmp_int_float(x, f),
-        (Num::Float(f), Num::Int(x)) => cmp_int_float(x, f).reverse(),
-    }
-}
-
-/// Exact comparison of an integer (within ±2^64) with an `f64`. See [`cmp_num`].
-fn cmp_int_float(x: i128, f: f64) -> Ordering {
-    #[expect(clippy::cast_precision_loss)]
-    let rounded: f64 = x as f64;
-    match rounded.partial_cmp(&f) {
-        Some(Ordering::Equal) => {
-            // `f` equals a rounded 64-bit integer, so it is a whole number within ±2^64 and
-            // converts to `i128` exactly.
-            #[expect(clippy::cast_possible_truncation)]
-            let f_int: i128 = f as i128;
-            x.cmp(&f_int)
-        }
-        Some(order) => order,
-        None => Ordering::Equal,
-    }
-}
-
-/// Whether `n` is an integer under `semantics`: [`IntegerSemantics::Lexical`] accepts numbers
-/// `serde_json` read as `u64` / `i64` (written without a fraction or exponent and within 64
-/// bits); [`IntegerSemantics::Numeric`] also accepts any `f64` with a zero fractional part
-/// (`1.0`, `1e3`, and integers too large for 64 bits).
-#[must_use]
-pub(crate) fn is_integer(n: &Number, semantics: IntegerSemantics) -> bool {
-    match (Num::from(n), semantics) {
-        (Num::Int(_), _) => true,
-        (Num::Float(_), IntegerSemantics::Lexical) => false,
-        (Num::Float(f), IntegerSemantics::Numeric) => f.is_finite() && f.fract() == 0.0,
-    }
-}
-
-/// Magnitude below which a whole `f64` converts to `i128` with room to add or subtract one.
-const I128_SAFE_F64: f64 = 1_329_227_995_784_915_872_903_807_060_280_344_576.0; // 2^120
-
-/// The least integer that satisfies the lower bound `n`: `⌈n⌉` when inclusive (`minimum`),
-/// `⌊n⌋ + 1` when exclusive (`exclusiveMinimum`). `None` when `n` is an `f64` beyond ±2^120
-/// (no Rust integer type reaches it).
-#[must_use]
-pub(crate) fn integer_lower_bound(n: &Number, exclusive: bool) -> Option<i128> {
-    match Num::from(n) {
-        Num::Int(i) => Some(if exclusive { i + 1 } else { i }),
-        Num::Float(f) => {
-            let bound: f64 = if exclusive { f.floor() + 1.0 } else { f.ceil() };
-            float_to_i128(bound)
-        }
-    }
-}
-
-/// The greatest integer that satisfies the upper bound `n`: `⌊n⌋` when inclusive (`maximum`),
-/// `⌈n⌉ - 1` when exclusive (`exclusiveMaximum`). `None` when `n` is an `f64` beyond ±2^120.
-#[must_use]
-pub(crate) fn integer_upper_bound(n: &Number, exclusive: bool) -> Option<i128> {
-    match Num::from(n) {
-        Num::Int(i) => Some(if exclusive { i - 1 } else { i }),
-        Num::Float(f) => {
-            let bound: f64 = if exclusive { f.ceil() - 1.0 } else { f.floor() };
-            float_to_i128(bound)
-        }
-    }
-}
-
-/// A whole `f64` as `i128`, or `None` when it is not finite or beyond ±2^120.
-fn float_to_i128(whole: f64) -> Option<i128> {
-    if whole.is_finite() && whole.abs() < I128_SAFE_F64 {
-        #[expect(clippy::cast_possible_truncation)]
-        let i: i128 = whole as i128;
-        Some(i)
-    } else {
-        None
-    }
-}
-
-/// Whether `value` is an integer multiple of `divisor` (`value = k · divisor` for an integer
-/// `k`), decided exactly with no epsilon.
-///
-/// Two integers use `%`. Otherwise both numbers are read as the decimal they were written as:
-/// an `f64` is the shortest decimal that round-trips to it (`0.1` is `1 · 10^-1`, not the binary
-/// value nearest it), which is what the schema author wrote. See [`decimal_is_multiple`].
-/// Parsing rejects a `multipleOf` of zero or below (every draft requires it to be strictly
-/// positive); for a hand-built model, only `0` is a multiple of `0` and signs do not matter.
-#[must_use]
-pub(crate) fn is_multiple_of(value: &Number, divisor: &Number) -> bool {
-    match (Num::from(value), Num::from(divisor)) {
-        (Num::Int(v), Num::Int(d)) => {
-            if d == 0 {
-                v == 0
-            } else {
-                v % d == 0
-            }
-        }
-        (v, d) => match (decimal(v), decimal(d)) {
-            (Some(v), Some(d)) => decimal_is_multiple(v, d),
-            // Unreachable for JSON numbers: only non-finite `f64`s have no decimal form.
-            _ => false,
-        },
-    }
-}
-
-/// A non-negative decimal `mantissa · 10^exponent`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Decimal {
-    mantissa: u128,
-    exponent: i64,
-}
-
-/// The absolute value of `n` as a decimal: an integer as itself, an `f64` as the shortest decimal
-/// that round-trips to it (Rust's `{:e}` formatting). `None` for a non-finite `f64`.
-fn decimal(n: Num) -> Option<Decimal> {
-    match n {
-        Num::Int(i) => Some(Decimal {
-            mantissa: i.unsigned_abs(),
-            exponent: 0,
-        }),
-        Num::Float(f) => {
-            if !f.is_finite() {
-                return None;
-            }
-            // Shortest round-trip form, e.g. `7.5e-3`, `1e308`, `0e0`.
-            let text: String = format!("{:e}", f.abs());
-            let (digits, exponent) = text.split_once('e')?;
-            let exponent: i64 = exponent.parse().ok()?;
-            let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-            let mantissa: u128 = format!("{whole}{fraction}").parse().ok()?;
-            let fraction_len: i64 = i64::try_from(fraction.len()).ok()?;
-            Some(Decimal {
-                mantissa,
-                exponent: exponent - fraction_len,
-            })
-        }
-    }
-}
-
-/// Splits `n` (non-zero) into `(twos, fives, rest)` with `n = 2^twos · 5^fives · rest` and
-/// `rest` coprime to 10.
-fn split_twos_and_fives(mut n: u128) -> (i64, i64, u128) {
-    let mut twos: i64 = 0;
-    let mut fives: i64 = 0;
-    while n.is_multiple_of(2) {
-        n /= 2;
-        twos += 1;
-    }
-    while n.is_multiple_of(5) {
-        n /= 5;
-        fives += 1;
-    }
-    (twos, fives, n)
-}
-
-/// Whether `value = vm · 10^ve` is an integer multiple of `divisor = dm · 10^de`.
-///
-/// `value / divisor = (vm / dm) · 10^shift` with `shift = ve - de`. Split each mantissa into its
-/// twos, fives and a rest coprime to 10 (`vm = 2^s · 5^t · u`, `dm = 2^p · 5^q · r`). The
-/// quotient is an integer exactly when `r` divides `u` (no power of ten can cancel a factor
-/// coprime to 10) and the divisor's twos and fives are covered: `p ≤ s + shift` and
-/// `q ≤ t + shift`. Every step stays within `u128` / `i64`, so `1e308` against `0.123456789`
-/// needs no big-integer arithmetic.
-fn decimal_is_multiple(value: Decimal, divisor: Decimal) -> bool {
-    if value.mantissa == 0 {
-        return true;
-    }
-    if divisor.mantissa == 0 {
-        return false;
-    }
-    let shift: i64 = value.exponent - divisor.exponent;
-    let (value_twos, value_fives, value_rest) = split_twos_and_fives(value.mantissa);
-    let (divisor_twos, divisor_fives, divisor_rest) = split_twos_and_fives(divisor.mantissa);
-    value_rest.is_multiple_of(divisor_rest)
-        && divisor_twos <= value_twos + shift
-        && divisor_fives <= value_fives + shift
-}
 
 /// Whether two JSON values are equal as JSON Schema defines it (`const`, `enum`, `uniqueItems`):
 /// numbers by mathematical value (`1 == 1.0`), objects regardless of key order, arrays element by
@@ -279,7 +102,10 @@ enum HashTag {
     Null,
     Bool,
     Integer,
+    #[cfg(not(feature = "arbitrary-precision"))]
     Float,
+    #[cfg(feature = "arbitrary-precision")]
+    Decimal,
     String,
     Array,
     Object,
@@ -295,7 +121,8 @@ enum HashItem<'a> {
 /// Feeds `value` into `state` consistently with [`json_equal`]: equal values hash equally.
 ///
 /// A number that is a whole number within `i128` hashes as that integer (so `1` and `1.0`
-/// agree), any other number by its `f64` bits; an object's entries are hashed in key order, so
+/// agree), any other number by its `f64` bits (default build) or its normalised decimal
+/// (`arbitrary-precision`); an object's entries are hashed in key order, so
 /// insertion order does not matter. Iterative.
 pub(crate) fn json_hash<H: Hasher>(value: &Value, state: &mut H) {
     // The root is hashed without the stack, so a scalar never allocates.
@@ -335,29 +162,6 @@ pub(crate) fn json_hash<H: Hasher>(value: &Value, state: &mut H) {
                     stack.push(HashItem::Value(child));
                     stack.push(HashItem::Key(key));
                 }
-            }
-        }
-    }
-}
-
-/// Hashes a number so that numbers equal under [`cmp_num`] hash equally.
-fn hash_number<H: Hasher>(n: &Number, state: &mut H) {
-    match Num::from(n) {
-        Num::Int(i) => {
-            HashTag::Integer.hash(state);
-            i.hash(state);
-        }
-        Num::Float(f) => {
-            // 2^127: every whole `f64` below it in magnitude converts to `i128` exactly.
-            const I128_LIMIT: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0;
-            if f.fract() == 0.0 && f.abs() < I128_LIMIT {
-                HashTag::Integer.hash(state);
-                #[expect(clippy::cast_possible_truncation)]
-                let whole: i128 = f as i128;
-                whole.hash(state);
-            } else {
-                HashTag::Float.hash(state);
-                f.to_bits().hash(state);
             }
         }
     }

@@ -959,25 +959,10 @@ type ListKeyword<'p, 'r> = (
 /// arrays, the key or index.
 type Child<'r> = (Source<'r>, &'r str, Option<Step<'r>>);
 
-/// 2^64: every `f64` below it converts to a `u64` exactly.
-const U64_LIMIT: f64 = 18_446_744_073_709_551_616.0;
-
 /// A non-negative integer written as an integer or as a number with a zero fraction.
 fn count(value: &Value) -> Option<u64> {
     match value {
-        Value::Number(n) => n.as_u64().or_else(|| {
-            n.as_f64()
-                .filter(|f| *f >= 0.0 && f.fract() == 0.0 && *f < U64_LIMIT)
-                .map(|f| {
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        clippy::cast_sign_loss,
-                        reason = "checked non-negative, integral and in range above"
-                    )]
-                    let n: u64 = f as u64;
-                    n
-                })
-        }),
+        Value::Number(n) => number::non_negative_integer(n),
         _ => None,
     }
 }
@@ -2200,7 +2185,12 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn keyword_and_node_stay_small() {
+        // A `serde_json::Number` is 16 bytes by default and a `String` (24) under
+        // `arbitrary-precision`, which widens the numeric keywords.
+        #[cfg(not(feature = "arbitrary-precision"))]
         let expected: (usize, usize) = (24, 32);
+        #[cfg(feature = "arbitrary-precision")]
+        let expected: (usize, usize) = (32, 32);
         let actual: (usize, usize) = (size_of::<Keyword>(), size_of::<Node>());
         assert_eq!(expected, actual);
     }

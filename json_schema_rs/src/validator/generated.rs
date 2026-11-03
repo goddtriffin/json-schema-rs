@@ -1308,9 +1308,12 @@ mod tests {
     #[test]
     fn deserialize_reports_a_conforming_instance_serde_rejects() {
         let validators: TypeValidators<'_> = point_validators();
-        let expected: Result<Point, Outcome> = Err(Outcome::Json(
-            "invalid value: integer `10000000000000000000`, expected i64".to_string(),
-        ));
+        // `serde_json` words the out-of-range error differently when it keeps numbers as text.
+        #[cfg(not(feature = "arbitrary-precision"))]
+        let message: &str = "invalid value: integer `10000000000000000000`, expected i64";
+        #[cfg(feature = "arbitrary-precision")]
+        let message: &str = "invalid number";
+        let expected: Result<Point, Outcome> = Err(Outcome::Json(message.to_string()));
         let actual: Result<Point, Outcome> = outcome(
             validators.deserialize(0, json!({"x": 10_000_000_000_000_000_000_u64, "y": 0})),
         );
