@@ -23,7 +23,7 @@ pub use error::{
 };
 pub use generated::{
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError,
-    TypeValidationError, TypeValidators, UnionMatch,
+    NewtypeValue, TypeValidationError, TypeValidators, UnionMatch,
 };
 pub use output::{BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
 

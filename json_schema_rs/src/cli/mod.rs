@@ -212,6 +212,13 @@ pub fn run() {
                         .value_parser(clap::value_parser!(bool))
                         .help("Codegen Settings: generated types validate themselves against their schema (validate(), TryFrom<serde_json::Value>, anyOf / oneOf variants chosen by validation); the generated code embeds the schema parts their validation reaches (default: true)"),
                 )
+                .arg(
+                    Arg::new("cgs-constrained-newtypes")
+                        .long("cgs-constrained-newtypes")
+                        .value_name("BOOL")
+                        .value_parser(clap::value_parser!(bool))
+                        .help("Codegen Settings: generate a newtype for each string / integer / number / boolean whose schema asserts more than its Rust type holds (minLength, maxLength, pattern, bounds, multipleOf, ...); it validates on construction and deserialization (default: true)"),
+                )
                 .args(retrieval::retrieval_args()),
         )
         .subcommand(

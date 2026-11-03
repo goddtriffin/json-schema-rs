@@ -14,16 +14,16 @@
 //! explicit work queue: no recursion, whatever the schema depth.
 
 use super::{
-    Annotations, ArrayConstraints, Field, FloatWidth, IntWidth, NameProposal, NameTier, ObjectNode,
-    SchemaRoots, StringConstraints, StringFormat, TypeGraph, TypeId, TypeNode, UnionKind,
-    UnionNode, ValidationTarget, Variant,
+    Annotations, ArrayConstraints, Field, FloatWidth, IntWidth, NameProposal, NameTier, Newtype,
+    NumberConstraints, ObjectNode, SchemaRoots, StringConstraints, StringFormat, TypeGraph, TypeId,
+    TypeNode, UnionKind, UnionNode, ValidationTarget, Variant,
 };
 use crate::code_gen::settings::{CodeGenSettings, ModelNameSource, UnknownProperties};
 use crate::code_gen::{CodeGenError, CodeGenResult};
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    Dialect, JsonSchema, JsonSchemaSettings, JsonType, RefSiblings, Registry, Schema, SchemaRef,
-    Scope, TypeSet,
+    Dialect, FormatMode, JsonSchema, JsonSchemaSettings, JsonType, RefSiblings, Registry, Schema,
+    SchemaRef, Scope, TypeSet,
 };
 use crate::number;
 use serde_json::Value;
@@ -278,7 +278,7 @@ pub(crate) fn build(
 ) -> CodeGenResult<TypeGraph> {
     let mut graph: TypeGraph = TypeGraph::default();
     let mut memo: HashMap<(usize, NodeKey), TypeId> = HashMap::new();
-    let classes: Vec<usize> = if settings.self_validating && registries.len() > 1 {
+    let classes: Vec<usize> = if settings.validates() && registries.len() > 1 {
         registry_classes(registries)
     } else {
         (0..registries.len()).collect()
@@ -407,6 +407,14 @@ impl<'r> Builder<'_, 'r> {
         }
         while let Some((id, flat, mask, context)) = self.queue.pop() {
             let node: TypeNode = self.build_node(&flat, mask, &context)?;
+            if self.settings.constrained_newtypes && self.graph.targets[id.index()].is_some() {
+                self.graph.newtypes[id.index()] = self.newtype(&flat, mask, &node).map(Box::new);
+            }
+            // Without self-validating types only newtypes validate: other nodes keep the
+            // identity they have without a target.
+            if !self.settings.self_validating && self.graph.newtypes[id.index()].is_none() {
+                self.graph.targets[id.index()] = None;
+            }
             self.graph.nodes[id.index()] = node;
         }
         Ok(SchemaRoots { root, definitions })
@@ -425,7 +433,7 @@ impl<'r> Builder<'_, 'r> {
         } else {
             let id: TypeId = self.graph.push(TypeNode::Pending);
             self.memo.insert((self.schema_index, key), id);
-            if self.settings.self_validating {
+            if self.settings.validates() {
                 self.graph.targets[id.index()] = self.validation_target(&flat);
             }
             self.add_intrinsic_proposals(id, &flat);
@@ -610,7 +618,7 @@ impl<'r> Builder<'_, 'r> {
             let keep: bool = !drop_self
                 && (contributes(s, c.skip)
                     || (is_seed && !had_ref && !c.skips(skip::ANNOTATIONS) && has_annotations(s))
-                    || (self.settings.self_validating
+                    || (self.settings.validates()
                         && asserts_beyond_shape(s, self.registry.dialect(c.scope))));
             if keep {
                 out.push(c);
@@ -661,6 +669,93 @@ impl<'r> Builder<'_, 'r> {
             c.skip |= bit;
         }
         never
+    }
+
+    /// The newtype for `node` when it is a scalar whose conjunction asserts more than its Rust
+    /// type holds: a string length or `pattern`, a `format` the dialect checks (other than
+    /// `uuid` with a UUID type), integer bounds narrower than the integer type's range, any
+    /// bound on a float, or an assertion the type graph does not model (`multipleOf`, `not`,
+    /// ...).
+    fn newtype(&self, flat: &Flat<'r>, mask: TypeSet, node: &TypeNode) -> Option<Newtype> {
+        let beyond_shape = || {
+            flat.conjuncts
+                .iter()
+                .any(|c| asserts_beyond_shape(c.schema, self.registry.dialect(c.scope)))
+        };
+        let facts = || Facts::of(flat, mask, self.registry, self.conditionals);
+        let constrained: bool = match node {
+            TypeNode::Boolean => beyond_shape(),
+            TypeNode::String {
+                format,
+                constraints,
+            } => {
+                constraints.min_length.is_some_and(|n| n > 0)
+                    || constraints.max_length.is_some()
+                    || constraints.pattern.is_some()
+                    || self.checks_format(flat, *format)
+                    || beyond_shape()
+            }
+            TypeNode::Integer(width) => {
+                let (lo, hi): (Option<i128>, Option<i128>) = facts().integer_range();
+                let (width_lo, width_hi): (i128, i128) = width.range();
+                lo.is_some_and(|lo| lo > width_lo)
+                    || hi.is_some_and(|hi| hi < width_hi)
+                    || beyond_shape()
+            }
+            TypeNode::Number(_) => {
+                let f: Facts<'r> = facts();
+                f.lower.is_some()
+                    || f.upper.is_some()
+                    || f.exclusive_lower.is_some()
+                    || f.exclusive_upper.is_some()
+                    || beyond_shape()
+            }
+            _ => false,
+        };
+        if !constrained {
+            return None;
+        }
+        let numbers: NumberConstraints = match node {
+            TypeNode::Integer(_) | TypeNode::Number(_) => {
+                let f: Facts<'r> = facts();
+                let mut multiples: Vec<&serde_json::Number> = flat
+                    .conjuncts
+                    .iter()
+                    .filter_map(|c| c.schema.multiple_of.as_ref())
+                    .collect();
+                multiples.dedup_by(|a, b| number::cmp_num(a, b) == Ordering::Equal);
+                NumberConstraints {
+                    minimum: f.lower,
+                    maximum: f.upper,
+                    exclusive_minimum: f.exclusive_lower,
+                    exclusive_maximum: f.exclusive_upper,
+                    multiple_of: match multiples.as_slice() {
+                        [one] => Some((*one).clone()),
+                        _ => None,
+                    },
+                }
+            }
+            _ => NumberConstraints::default(),
+        };
+        Some(Newtype {
+            numbers,
+            annotations: annotations_of(flat),
+        })
+    }
+
+    /// Whether validating a string of `format` checks a `format` keyword of the conjunction: its
+    /// dialect asserts formats and defines the named one (`uuid` with a UUID type is the type's
+    /// own check).
+    fn checks_format(&self, flat: &Flat<'r>, format: StringFormat) -> bool {
+        if cfg!(feature = "uuid") && format == StringFormat::Uuid {
+            return false;
+        }
+        flat.conjuncts.iter().any(|c| {
+            c.schema.format.as_deref().is_some_and(|name| {
+                let dialect: Dialect = self.registry.dialect(c.scope);
+                dialect.format_mode == FormatMode::Assertion && dialect.defines_format(name)
+            })
+        })
     }
 
     /// Builds the node for a reserved id.

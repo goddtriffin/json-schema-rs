@@ -3299,3 +3299,41 @@ fn flatten_single_entry_keeps_any_of_when_payload_is_an_id_resource() {
     let actual: ReverseCodeGenResult = FlatHandWrittenResource::json_schema();
     assert_eq!(expected, actual);
 }
+
+/// A lowercase code.
+#[derive(ToJsonSchema)]
+#[json_schema(title = "Code", min_length = 1, max_length = 3, pattern = "^[a-z]+$")]
+#[expect(dead_code)]
+struct Code(String);
+
+#[test]
+fn derive_newtype_emits_inner_schema_with_container_constraints() {
+    let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(
+        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","title":"Code","description":"A lowercase code.","minLength":1,"maxLength":3,"pattern":"^[a-z]+$"}"#.to_string(),
+    );
+    let actual: Result<String, Vec<ReverseCodeGenError>> = Code::json_schema()
+        .map(|schema: JsonSchema| serde_json::to_string(&schema).expect("serialize"));
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(minimum = 1, exclusive_maximum = 100, multiple_of = 5)]
+#[expect(dead_code)]
+struct Step(u8);
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithNewtypes {
+    code: Code,
+    step: Option<Step>,
+}
+
+#[test]
+fn derive_newtype_fields_refer_to_their_defs_entries() {
+    let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(
+        r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","$defs":{"Code":{"type":"string","title":"Code","description":"A lowercase code.","minLength":1,"maxLength":3,"pattern":"^[a-z]+$"},"Step":{"type":"integer","minimum":1,"maximum":255,"exclusiveMaximum":100,"multipleOf":5}},"properties":{"code":{"$ref":"#/$defs/Code"},"step":{"$ref":"#/$defs/Step"}},"additionalProperties":false,"required":["code"]}"##.to_string(),
+    );
+    let actual: Result<String, Vec<ReverseCodeGenError>> = WithNewtypes::json_schema()
+        .map(|schema: JsonSchema| serde_json::to_string(&schema).expect("serialize"));
+    assert_eq!(expected, actual);
+}

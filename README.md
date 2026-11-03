@@ -261,6 +261,26 @@ let person: Person = Person::try_from(serde_json::json!({"name": "A"}))?; // Err
 person.validate()?;
 ```
 
+**Constrained newtypes (on by default).** Codegen generates a newtype for each string, integer, number or
+boolean whose schema asserts more than its Rust type holds (`minLength`, `maxLength`,
+`pattern`, a checked `format`, bounds narrower than the integer type, any bound on a
+float, `multipleOf`, `not`, ...): `pub struct Name(String);` with a private field, so it
+only ever holds a valid value. `TryFrom` (and `FromStr` / `TryFrom<&str>` for strings)
+and `Deserialize` validate through the same embedded validator, with its errors, so an
+invalid value is rejected at the field while deserializing; `Deref`, `AsRef`,
+`into_inner`, `From<Name>` and `Display` read it, and `Serialize` is the scalar's own (the
+impls come from one `json_schema_rs::constrained_newtype!` line per type). A
+`$defs` entry is named after its key, and the derive gives the constraints back. Errors
+while deserializing stop at the first invalid field (serde's behaviour); `TryFrom<serde_json::Value>`
+on a self-validating type reports every error. `.constrained_newtypes(false)`
+(`--cgs-constrained-newtypes false`) keeps such scalars as plain `String` / `u8` / `f64`;
+the setting is independent of self-validating types.
+
+```rust
+let name: Name = "Ada".parse()?; // Err for "" (minLength 1)
+let person: Person = serde_json::from_str(r#"{"name": ""}"#)?; // Err at the field
+```
+
 **Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
 `CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a
 document shares with another input go in the shared buffer:

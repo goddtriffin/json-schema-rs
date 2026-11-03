@@ -261,7 +261,7 @@ fn inline_slots(graph: &TypeGraph, node: &TypeNode) -> Vec<Slot> {
         .enumerate()
         .filter_map(|(slot, id)| {
             let id: TypeId = graph.peel(id);
-            graph.node(id).is_named().then_some((slot, id))
+            graph.is_named(id).then_some((slot, id))
         })
         .collect()
 }
