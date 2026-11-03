@@ -357,7 +357,8 @@ pub(crate) struct TypeGraph {
     pub(crate) targets: Vec<Option<ValidationTarget>>,
     /// Per node, whether it is a constrained newtype (only with `constrained_newtypes`; every
     /// newtype has a target).
-    pub(crate) newtypes: Vec<Option<Newtype>>,
+    /// Boxed, so a node that is not a newtype costs one pointer.
+    pub(crate) newtypes: Vec<Option<Box<Newtype>>>,
     /// Per input schema, the root and its definitions.
     pub(crate) schemas: Vec<SchemaRoots>,
 }

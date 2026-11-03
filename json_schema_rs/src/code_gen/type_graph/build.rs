@@ -408,7 +408,7 @@ impl<'r> Builder<'_, 'r> {
         while let Some((id, flat, mask, context)) = self.queue.pop() {
             let node: TypeNode = self.build_node(&flat, mask, &context)?;
             if self.settings.constrained_newtypes && self.graph.targets[id.index()].is_some() {
-                self.graph.newtypes[id.index()] = self.newtype(&flat, mask, &node);
+                self.graph.newtypes[id.index()] = self.newtype(&flat, mask, &node).map(Box::new);
             }
             // Without self-validating types only newtypes validate: other nodes keep the
             // identity they have without a target.
