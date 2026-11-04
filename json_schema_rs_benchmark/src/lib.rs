@@ -34,6 +34,12 @@ pub const LOW_CONFIDENCE_RATIO: f64 = 0.10;
 /// Marker appended to a low-confidence measurement in the Markdown report.
 pub const LOW_CONFIDENCE_MARK: &str = "†";
 
+/// The CLI tier's startup-baseline fixture: every tool on a trivial input (a draft-07
+/// `{"type": "object"}` schema; instance `{}` to accept, `[]` to reject). Its rows show each
+/// tool's fixed per-process cost (process start, runtime boot, module loading), which every other
+/// CLI row includes. It is rendered first in each CLI table and never counts toward a winner.
+pub const STARTUP_FIXTURE: &str = "startup";
+
 /// Rendered in a table cell that has no measurement.
 const MISSING_CELL: &str = "—";
 
@@ -284,11 +290,21 @@ pub struct CompatEntry {
     pub status: CompatStatus,
 }
 
+/// What one tool is: its release and the language and runtime it runs on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolInfo {
+    /// The release measured (e.g. `"0.60.2"`).
+    pub version: String,
+    /// The language and runtime the tool runs on (e.g. `"Rust (native)"`,
+    /// `"JavaScript (Node.js 26.13.0)"`), so readers can tell runtime cost from work.
+    pub runtime: String,
+}
+
 /// The full aggregated results of a harness run (serialized as `results.json`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkResults {
-    /// Version of each tool measured (`tool -> version`); empty when not captured.
-    pub tool_versions: BTreeMap<String, String>,
+    /// Every tool, keyed by the identifier its measurements use; empty when not captured.
+    pub tools: BTreeMap<String, ToolInfo>,
     /// Every measurement, in both tiers.
     pub measurements: Vec<Measurement>,
     /// Every compatibility entry, in both tiers.
@@ -471,11 +487,15 @@ impl BenchmarkResults {
         warnings
     }
 
-    /// Apply [`decide_cell`] to every cell that has at least one measurement.
+    /// Apply [`decide_cell`] to every cell that has at least one measurement, except the
+    /// [`STARTUP_FIXTURE`] baseline, which is reported but never contested.
     #[must_use]
     pub fn cell_outcomes(&self) -> BTreeMap<CellKey, CellOutcome> {
         let mut cells: BTreeMap<CellKey, BTreeMap<&str, Stats>> = BTreeMap::new();
         for measurement in &self.measurements {
+            if measurement.fixture == STARTUP_FIXTURE {
+                continue;
+            }
             let key: CellKey = CellKey {
                 tier: measurement.tier,
                 operation: measurement.operation,
@@ -553,10 +573,16 @@ impl BenchmarkResults {
         out.push_str("# Benchmark results\n\n");
         out.push_str(&methodology());
 
-        if !self.tool_versions.is_empty() {
-            out.push_str("\n## Tool versions\n\n| Tool | Version |\n|---|---|\n");
-            for (tool, version) in &self.tool_versions {
-                let _ = writeln!(out, "| {} | {} |", escape_cell(tool), escape_cell(version));
+        if !self.tools.is_empty() {
+            out.push_str("\n## Tools\n\n| Tool | Version | Language / runtime |\n|---|---|---|\n");
+            for (tool, info) in &self.tools {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} |",
+                    escape_cell(tool),
+                    escape_cell(&info.version),
+                    escape_cell(&info.runtime)
+                );
             }
         }
 
@@ -614,7 +640,14 @@ impl BenchmarkResults {
                 if cells.is_empty() {
                     continue;
                 }
-                let fixtures: BTreeSet<&str> = cells.keys().map(|(fixture, _)| *fixture).collect();
+                // The startup baseline leads the table; every other fixture follows by id.
+                let mut fixtures: Vec<&str> = cells
+                    .keys()
+                    .map(|(fixture, _)| *fixture)
+                    .collect::<BTreeSet<&str>>()
+                    .into_iter()
+                    .collect();
+                fixtures.sort_by_key(|fixture: &&str| *fixture != STARTUP_FIXTURE);
                 let tools: BTreeSet<&str> = cells.keys().map(|(_, tool)| *tool).collect();
 
                 let _ = write!(
@@ -643,7 +676,11 @@ impl BenchmarkResults {
                         Some(CellOutcome::Outright(tool)) => Some(tool.as_str()),
                         Some(CellOutcome::Tie | CellOutcome::Uncontested) | None => None,
                     };
-                    let _ = write!(out, "| {} |", escape_cell(fixture));
+                    if *fixture == STARTUP_FIXTURE {
+                        let _ = write!(out, "| *{STARTUP_FIXTURE}* |");
+                    } else {
+                        let _ = write!(out, "| {} |", escape_cell(fixture));
+                    }
                     for tool in &tools {
                         match cells.get(&(*fixture, *tool)) {
                             Some(stats) => {
@@ -763,7 +800,11 @@ fn methodology() -> String {
          and peak heap is the extra heap the operation allocates, recorded by a counting \
          allocator. **CLI**: every tool's binary runs end to end (process startup, file I/O, \
          and the operation), timed by hyperfine as median ± standard deviation over repeated \
-         runs after warmup; peak RSS is the process's peak resident set size. A cell is \
+         runs after warmup; peak RSS is the process's peak resident set size. Tools run on \
+         different runtimes (see Tools), and process start, runtime boot and module loading are \
+         part of every CLI run: each CLI table's *{STARTUP_FIXTURE}* row is the tool on a trivial \
+         input (a draft-07 `{{\"type\": \"object\"}}` schema), so that fixed cost can be told apart \
+         from the work, and it never counts toward a winner. A cell is \
          measured only when the tool is correct on it (see Compatibility). A cell's best tool \
          wins outright (**bold**) only when at least two tools were measured and its lead over \
          the runner-up exceeds both {:.0}% of its median and the sum of their standard \
@@ -987,12 +1028,18 @@ pub fn parse_index_tsv(text: &str) -> TsvParse<IndexEntry> {
     })
 }
 
-/// Parse `tool_versions.tsv` (`tool\tversion`) into `(tool, version)` rows.
+/// Parse `tools.tsv` (`tool\tversion\truntime`) into `(tool, info)` rows.
 #[must_use]
-pub fn parse_tool_versions_tsv(text: &str) -> TsvParse<(String, String)> {
+pub fn parse_tools_tsv(text: &str) -> TsvParse<(String, ToolInfo)> {
     parse_tsv(text, |line: &str| {
-        let fields: Vec<&str> = exact_fields(line, 2)?;
-        Ok((fields[0].to_owned(), fields[1].trim().to_owned()))
+        let fields: Vec<&str> = exact_fields(line, 3)?;
+        Ok((
+            fields[0].to_owned(),
+            ToolInfo {
+                version: fields[1].trim().to_owned(),
+                runtime: fields[2].trim().to_owned(),
+            },
+        ))
     })
 }
 
@@ -1792,16 +1839,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_versions_tsv_reads_pairs_and_skips_malformed() {
-        let text: &str = "typify\tcargo-typify 0.7.0\nboon\n";
-        let expected: TsvParse<(String, String)> = TsvParse {
-            rows: vec![("typify".to_owned(), "cargo-typify 0.7.0".to_owned())],
+    fn parse_tools_tsv_reads_rows_and_skips_malformed() {
+        let text: &str = "typify\t0.8.0\tRust (native)\nboon\t0.6.1\n";
+        let expected: TsvParse<(String, ToolInfo)> = TsvParse {
+            rows: vec![(
+                "typify".to_owned(),
+                ToolInfo {
+                    version: "0.8.0".to_owned(),
+                    runtime: "Rust (native)".to_owned(),
+                },
+            )],
             skipped: vec![SkippedLine {
                 line: 2,
-                reason: "expected 2 tab-separated fields, found 1".to_owned(),
+                reason: "expected 3 tab-separated fields, found 2".to_owned(),
             }],
         };
-        let actual: TsvParse<(String, String)> = parse_tool_versions_tsv(text);
+        let actual: TsvParse<(String, ToolInfo)> = parse_tools_tsv(text);
         assert_eq!(expected, actual);
     }
 
@@ -2017,12 +2070,19 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    fn native_tool(version: &str) -> ToolInfo {
+        ToolInfo {
+            version: version.to_owned(),
+            runtime: "Rust (native)".to_owned(),
+        }
+    }
+
     #[test]
     fn markdown_golden_small_run() {
         let results: BenchmarkResults = BenchmarkResults {
-            tool_versions: BTreeMap::from([
-                ("boon".to_owned(), "0.6.1".to_owned()),
-                ("jsonschemars".to_owned(), "0.0.6".to_owned()),
+            tools: BTreeMap::from([
+                ("boon".to_owned(), native_tool("0.6.1")),
+                ("typify".to_owned(), native_tool("0.8.0")),
             ]),
             measurements: vec![
                 // In-process validate (valid) time: a = outright, b = tie by noise.
@@ -2064,6 +2124,23 @@ mod tests {
                     Metric::PeakMemoryBytes,
                     stats(3_145_728.0, 0.0),
                 ),
+                // CLI startup baseline: leads the table, never decides a winner.
+                measurement(
+                    Tier::Cli,
+                    "jsonschemars",
+                    STARTUP_FIXTURE,
+                    Operation::Codegen,
+                    Metric::TimeSecs,
+                    stats(1e-3, 1e-5),
+                ),
+                measurement(
+                    Tier::Cli,
+                    "typify",
+                    STARTUP_FIXTURE,
+                    Operation::Codegen,
+                    Metric::TimeSecs,
+                    stats(5e-3, 1e-5),
+                ),
                 measurement(
                     Tier::Cli,
                     "typify",
@@ -2099,12 +2176,12 @@ mod tests {
     }
 
     const GOLDEN_AFTER_METHODOLOGY: &str = r"
-## Tool versions
+## Tools
 
-| Tool | Version |
-|---|---|
-| boon | 0.6.1 |
-| jsonschemars | 0.0.6 |
+| Tool | Version | Language / runtime |
+|---|---|---|
+| boon | 0.6.1 | Rust (native) |
+| typify | 0.8.0 | Rust (native) |
 
 ## Category winners
 
@@ -2136,6 +2213,7 @@ mod tests {
 
 | Fixture | jsonschemars | typify |
 |---|---|---|
+| *startup* | 1.000 ± 0.010 ms | 5.000 ± 0.010 ms |
 | small/a | **2.000 ± 0.100 ms** | 9.000 ± 0.200 ms |
 
 ### codegen — peak RSS
