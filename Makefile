@@ -22,6 +22,11 @@ help: # Prints out help
 .PHONY: lint
 lint: ## lints the codebase
 	cargo fmt
+	cargo fmt --manifest-path $(BENCHMARK_ISOLATED)
+
+# The benchmark competitors built apart from the workspace (their own workspace; see its Cargo.toml).
+# `make test` lints it in both of its builds; `make benchmark` runs them.
+BENCHMARK_ISOLATED := json_schema_rs_benchmark/isolated/Cargo.toml
 
 # Every feature except `arbitrary-precision`, which changes how every number is parsed and
 # compared (exact beyond 64 bits). `make test` runs the workspace in both builds.
@@ -30,9 +35,12 @@ FEATURES_WITHOUT_ARBITRARY_PRECISION := json-schema-rs/uuid,json-schema-rs/http,
 .PHONY: test
 test: ## runs tests twice: every feature but arbitrary-precision (64-bit numbers), then all features (exact big numbers)
 	cargo fmt --check
+	cargo fmt --check --manifest-path $(BENCHMARK_ISOLATED)
 	cargo check
 	cargo clippy --tests --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION)
 	cargo clippy --tests --all-features
+	CARGO_TARGET_DIR=$(CURDIR)/target cargo clippy --all-targets --manifest-path $(BENCHMARK_ISOLATED) --features corvus
+	CARGO_TARGET_DIR=$(CURDIR)/target cargo clippy --all-targets --manifest-path $(BENCHMARK_ISOLATED) --features jsonschema-macros
 	cargo test --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION)
 	cargo test --all-features
 

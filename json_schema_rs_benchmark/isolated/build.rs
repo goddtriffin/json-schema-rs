@@ -1,0 +1,124 @@
+//! Generates `$OUT_DIR/macro_validators.rs` for the `jsonschema-macros` build: one
+//! `#[jsonschema::validator]` struct per fixture, plus the `MACRO_VALIDATORS` table that maps each
+//! fixture id to its validator (or to why it has none).
+//!
+//! Fixtures come from the same discovery as every other tool (`BENCH_FIXTURE_ROOTS`, or the
+//! committed and generated fixture directories). The macro reports a schema it cannot compile as
+//! a compile error, which would fail the whole build, so each schema is first compiled with the
+//! same release's runtime validator, through a registry holding the fixture's resources: a
+//! schema it rejects gets a table entry with the rejection instead of a validator. A fixture with
+//! a `$ref` to a document it does not vendor gets neither: the harness never measures it.
+//!
+//! Without the `jsonschema-macros` feature the table is empty.
+
+use std::path::PathBuf;
+
+fn main() {
+    let out_dir: PathBuf = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
+    std::fs::write(out_dir.join("macro_validators.rs"), macros::source())
+        .expect("cannot write macro_validators.rs");
+}
+
+#[cfg(not(feature = "jsonschema-macros"))]
+mod macros {
+    /// The generated module of a build without compile-time validators.
+    pub(crate) fn source() -> String {
+        "/// Compile-time validators by fixture id (none in this build).\n\
+         pub static MACRO_VALIDATORS: &[(&str, MacroValidator)] = &[];\n"
+            .to_owned()
+    }
+}
+
+#[cfg(feature = "jsonschema-macros")]
+mod macros {
+    use json_schema_rs_benchmark::fixtures::{self, FIXTURE_ROOTS_ENV, Fixture, SCHEMA_FILE_NAME};
+    use std::fmt::Write as _;
+    use std::path::PathBuf;
+
+    /// The generated module of the `jsonschema-macros` build, from every discovered fixture.
+    pub(crate) fn source() -> String {
+        println!("cargo::rerun-if-env-changed={FIXTURE_ROOTS_ENV}");
+        // Cargo scans a watched directory recursively, so adding, removing or editing any fixture
+        // reruns this script. A root that does not exist is not watched (Cargo would rerun on
+        // every build).
+        for root in fixtures::configured_roots() {
+            if root.is_dir() {
+                println!("cargo::rerun-if-changed={}", root.display());
+            }
+        }
+        let found: Vec<Fixture> = fixtures::discover_configured()
+            .unwrap_or_else(|e| panic!("fixture discovery failed: {e}"));
+        render(&found)
+    }
+
+    /// The generated module: one validator struct per measurable fixture and the lookup table.
+    fn render(found: &[Fixture]) -> String {
+        let mut structs: String = String::new();
+        let mut table: String = String::new();
+        for (index, fixture) in found.iter().enumerate() {
+            if !fixture.unresolved_refs().is_empty() {
+                continue;
+            }
+            let schema_path: PathBuf = fixture.dir.join(SCHEMA_FILE_NAME);
+            if let Err(reason) = runtime_compile(fixture) {
+                let _ = writeln!(
+                    table,
+                    "    ({:?}, MacroValidator::Rejected({:?})),",
+                    fixture.id, reason
+                );
+                continue;
+            }
+            let mut resources: String = String::new();
+            for resource in &fixture.resources {
+                let _ = write!(
+                    resources,
+                    "{:?} => {{ path = {:?} }}, ",
+                    resource.uri,
+                    resource.path.display().to_string()
+                );
+            }
+            let _ = writeln!(
+                structs,
+                "#[jsonschema::validator(path = {:?}, resources = {{ {resources}}})]\n\
+             struct Validator{index};\n",
+                schema_path.display().to_string()
+            );
+            let _ = writeln!(
+                table,
+                "    ({:?}, MacroValidator::Built(|instance: &serde_json::Value| {{\n\
+             \x20       let errors: Vec<jsonschema::ValidationError<'_>> =\n\
+             \x20           Validator{index}::iter_errors(instance).collect();\n\
+             \x20       errors.is_empty()\n\
+             \x20   }})),",
+                fixture.id
+            );
+        }
+        format!(
+            "{structs}/// Compile-time validators by fixture id.\n\
+         pub static MACRO_VALIDATORS: &[(&str, MacroValidator)] = &[\n{table}];\n"
+        )
+    }
+
+    /// Compile the fixture's schema with jsonschema's runtime validator, its resources registered
+    /// under their URIs, as the main crate's `jsonschema` adapter does.
+    fn runtime_compile(fixture: &Fixture) -> Result<(), String> {
+        let parse = |text: &str| -> Result<serde_json::Value, String> {
+            serde_json::from_str(text).map_err(|e: serde_json::Error| e.to_string())
+        };
+        let schema: serde_json::Value = parse(&fixture.schema_text)?;
+        let mut builder: jsonschema::RegistryBuilder<'_> = jsonschema::Registry::new();
+        for resource in &fixture.resources {
+            builder = builder
+                .add(resource.uri.as_str(), parse(&resource.text)?)
+                .map_err(|e: jsonschema::ReferencingError| e.to_string())?;
+        }
+        let registry: jsonschema::Registry<'_> = builder
+            .prepare()
+            .map_err(|e: jsonschema::ReferencingError| e.to_string())?;
+        jsonschema::options()
+            .with_registry(&registry)
+            .build(&schema)
+            .map(|_validator: jsonschema::Validator| ())
+            .map_err(|e: jsonschema::ValidationError<'_>| e.to_string())
+    }
+}

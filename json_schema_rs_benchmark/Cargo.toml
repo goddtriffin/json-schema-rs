@@ -22,6 +22,7 @@ path = "src/bin/aggregate.rs"
 [[bin]]
 name = "boon_validate"
 path = "src/bin/boon_validate.rs"
+required-features = ["tools"]
 
 # Deterministic generator for the large synthetic fixtures (written under target/, never committed).
 [[bin]]
@@ -33,6 +34,7 @@ path = "src/bin/gen_fixtures.rs"
 [[bin]]
 name = "heap_profile"
 path = "src/bin/heap_profile.rs"
+required-features = ["tools"]
 
 # Prints the fixture set (id, dir, external refs) so the CLI tier discovers exactly what the
 # in-process tier does.
@@ -44,23 +46,49 @@ path = "src/bin/list_fixtures.rs"
 [[bench]]
 name = "cross_tool"
 harness = false
+required-features = ["tools"]
 
 [lints]
 workspace = true
 
+[features]
+default = ["tools"]
+# Every tool this crate links (and the binaries that run them). Off only for `isolated/`, which
+# reuses the fixture discovery and the generic harness without building these tools.
+tools = [
+    "dep:json-schema-rs",
+    "dep:boon",
+    "dep:jsonschema",
+    "dep:typify",
+    "dep:schemars",
+    "dep:prettyplease",
+    "dep:proc-macro2",
+    "dep:valico",
+    "dep:url",
+    "dep:jsonschema-valid",
+    "dep:self_cell",
+    "dep:schemafy_lib",
+    "dep:jsonschema_code_generator",
+]
+
 [dependencies]
-json-schema-rs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = "4"
-fluent-uri = "0.4"
-boon = "0.6"
-jsonschema = { version = "0.60", default-features = false }
-typify = { version = "0.8", default-features = false }
-schemars = "0.8"
-syn = "3"
-prettyplease = "0.3"
-peak_alloc = "0.3"
-
-[dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+fluent-uri = "0.4"
+peak_alloc = "0.3"
+syn = { version = "3", features = ["full"] }
+json-schema-rs = { workspace = true, optional = true }
+boon = { version = "0.6", optional = true }
+jsonschema = { version = "0.60", default-features = false, optional = true }
+typify = { version = "0.8", default-features = false, optional = true }
+schemars = { version = "0.8", optional = true }
+prettyplease = { version = "0.3", optional = true }
+proc-macro2 = { version = "1", optional = true }
+valico = { version = "4", optional = true }
+url = { version = "2", optional = true }
+jsonschema-valid = { version = "0.5", optional = true }
+self_cell = { version = "1", optional = true }
+schemafy_lib = { version = "0.6", optional = true }
+jsonschema_code_generator = { version = "2", optional = true }

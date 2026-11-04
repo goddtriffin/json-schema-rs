@@ -18,8 +18,10 @@
 //! For every metric, **lower is better** (time and peak memory). Every ordering is explicit
 //! and total, so the same inputs always render byte-identical `results.json` and `results.md`.
 
+#[cfg(feature = "tools")]
 pub mod adapters;
 pub mod fixtures;
+pub mod harness;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,7 +55,8 @@ const MIB: f64 = 1024.0 * 1024.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
-    /// Every tool linked as a Rust library into one process (criterion + counting allocator).
+    /// Every tool linked as a Rust library and called on in-memory inputs (criterion + counting
+    /// allocator).
     InProcess,
     /// Every tool's CLI binary run end to end, process startup included (hyperfine).
     Cli,
@@ -796,9 +799,12 @@ fn compat_order(entry: &CompatEntry) -> (Tier, Operation, &str, &str) {
 fn methodology() -> String {
     format!(
         "Two tiers, lower is better everywhere. **In-process**: every tool is linked as a Rust \
-         library into one process; time is criterion's median ± standard deviation per call, \
-         and peak heap is the extra heap the operation allocates, recorded by a counting \
-         allocator. **CLI**: every tool's binary runs end to end (process startup, file I/O, \
+         library and called on in-memory inputs (corvus-json-schema and jsonschema-macros each \
+         from a build of its own, so no tool's dependency features reach another's); time is \
+         criterion's median ± standard deviation per call, and peak heap is the extra heap the \
+         operation allocates, recorded by a counting allocator. jsonschema-macros compiles each \
+         schema into a validator when the benchmark is built, so it has no schema compile cells. \
+         **CLI**: every tool's binary runs end to end (process startup, file I/O, \
          and the operation), timed by hyperfine as median ± standard deviation over repeated \
          runs after warmup; peak RSS is the process's peak resident set size. Tools run on \
          different runtimes (see Tools), and process start, runtime boot and module loading are \

@@ -8,7 +8,11 @@
 #     process startup and file I/O are excluded. Time comes from criterion (benches/cross_tool.rs;
 #     median + spread); peak heap per operation comes from a counting allocator
 #     (src/bin/heap_profile.rs). Operations: codegen, schema_compile, validate_valid,
-#     validate_invalid. Tools: jsonschemars (our lib), jsonschema, boon, typify.
+#     validate_invalid. Tools: jsonschemars (our lib), jsonschema, boon, valico, jsonschema-valid,
+#     typify, schemafy, jsonschema_code_generator; and, from isolated/ (its own workspace, built
+#     once per feature so their dependency features never reach the other tools),
+#     corvus-json-schema and jsonschema-macros (compile-time validators generated from the fixture
+#     set). Every build appends to the same raw captures.
 #
 #   CLI tier — each tool's command-line front end timed end to end (startup, file I/O, parse,
 #     compile, generate/validate, exit) by hyperfine, with warmup and repeated runs; hyperfine
@@ -34,8 +38,8 @@
 #   2. Build release binaries (jsonschemars CLI + the benchmark crate's bins).
 #   3. Generate the synthetic fixtures (target/benchmark-fixtures; deterministic, not committed).
 #   4. Reset the raw capture dir and criterion's output dir.
-#   5. In-process peak heap + compat matrix (heap_profile).
-#   6. In-process timing (criterion).
+#   5. In-process peak heap + compat matrix (heap_profile, then isolated_heap_profile per feature).
+#   6. In-process timing (criterion: cross_tool, then the isolated bench per feature).
 #   7. CLI timing (hyperfine) + CLI compat matrix.
 #   8. Aggregate everything into the committed results.json + results.md.
 #
@@ -65,6 +69,10 @@ GENERATED_FIXTURES="${REPO_ROOT}/target/benchmark-fixtures"
 RAW_DIR="${CRATE_DIR}/target/benchmark-raw"
 CRITERION_DIR="${REPO_ROOT}/target/criterion"
 RELEASE_DIR="${REPO_ROOT}/target/release"
+ISOLATED_MANIFEST="${CRATE_DIR}/isolated/Cargo.toml"
+ISOLATED_LOCK="${CRATE_DIR}/isolated/Cargo.lock"
+# One build per feature: each competitor here must not share a build with the others.
+ISOLATED_FEATURES="corvus jsonschema-macros"
 export REPO_ROOT
 
 # shellcheck source=tools.sh
@@ -307,12 +315,23 @@ ${fixtures}"
     trap - EXIT
 }
 
-# _locked_version <crate>: the version Cargo.lock resolved for <crate> ("unknown" if absent; the
-# first entry when several versions are locked).
+# _locked_version <crate> [lock file]: the version a lock file (default: the workspace's
+# Cargo.lock) resolved for <crate> ("unknown" if absent; the first entry when several versions are
+# locked).
 _locked_version() {
     awk -v name="$1" '
         $0 == "name = \"" name "\"" { getline; gsub(/version = |"/, ""); print; found = 1; exit }
-        END { if (!found) print "unknown" }' "${REPO_ROOT}/Cargo.lock"
+        END { if (!found) print "unknown" }' "${2:-${REPO_ROOT}/Cargo.lock}"
+}
+
+# _isolated_cargo <subcommand> [cargo args...]: run a cargo subcommand on isolated/ with the
+# workspace's target directory, so its criterion output lands next to the main crate's (and its
+# builds reuse the same disk). The manifest goes right after the subcommand, ahead of any `--`.
+_isolated_cargo() {
+    local subcommand="$1"
+    shift
+    CARGO_TARGET_DIR="${REPO_ROOT}/target" cargo "${subcommand}" \
+        --manifest-path "${ISOLATED_MANIFEST}" "$@"
 }
 
 # _latest_stable <crate>: the newest non-prerelease version of <crate> on crates.io ("" when the
@@ -328,18 +347,33 @@ _latest_stable() {
 # both tiers measure the same release. When crates.io is unreachable the freshness half is
 # skipped with a warning; the CLI-matches-crate half always runs.
 check_competitor_versions() {
-    local stale=0 pair crate cli locked latest installed
-    # <linked crate>:<CLI binary of the same release, or "-" when the tool ships none>
-    for pair in jsonschema:jsonschema-cli typify:cargo-typify boon:-; do
+    local stale=0 pair crate cli locked latest installed lock manifest
+    # The isolated crate's lock file is resolved on its first build; resolve it now if absent.
+    if [[ ! -f "${ISOLATED_LOCK}" ]]; then
+        _isolated_cargo generate-lockfile
+    fi
+    # <linked crate>:<CLI binary of the same release, or "-" when the tool ships none>:<crate
+    # linked from isolated/ ("isolated") or from the main benchmark crate ("main")>
+    for pair in jsonschema:jsonschema-cli:main typify:cargo-typify:main boon:-:main \
+        valico:-:main jsonschema-valid:-:main schemafy_lib:-:main \
+        jsonschema_code_generator:-:main corvus-json-schema:-:isolated jsonschema:-:isolated; do
         crate="${pair%%:*}"
         cli="${pair#*:}"
-        locked="$(_locked_version "${crate}")"
+        cli="${cli%%:*}"
+        if [[ "${pair##*:}" == "isolated" ]]; then
+            lock="${ISOLATED_LOCK}"
+            manifest="json_schema_rs_benchmark/isolated/Cargo.toml"
+        else
+            lock="${REPO_ROOT}/Cargo.lock"
+            manifest="json_schema_rs_benchmark/Cargo.toml"
+        fi
+        locked="$(_locked_version "${crate}" "${lock}")"
         latest="$(_latest_stable "${crate}")"
         if [[ -z "${latest}" ]]; then
             echo "  WARNING: could not look up the newest ${crate} on crates.io; freshness not checked" >&2
         elif [[ "${locked}" != "${latest}" ]]; then
             echo "  STALE: ${crate} ${locked} is linked; newest stable is ${latest}" \
-                "(bump json_schema_rs_benchmark/Cargo.toml, then: cargo update -p ${crate})" >&2
+                "(bump ${manifest}, then: cargo update -p ${crate} --manifest-path ${manifest})" >&2
             stale=1
         fi
         [[ "${cli}" == "-" ]] && continue
@@ -434,6 +468,12 @@ main() {
         _tool_row jsonschema-cli "$(tool_version jsonschema-cli)"
         _tool_row boon "$(_locked_version boon)"
         _tool_row typify "$(_locked_version typify)"
+        _tool_row valico "$(_locked_version valico)"
+        _tool_row jsonschema-valid "$(_locked_version jsonschema-valid)"
+        _tool_row schemafy "$(_locked_version schemafy_lib)"
+        _tool_row jsonschema_code_generator "$(_locked_version jsonschema_code_generator)"
+        _tool_row corvus-json-schema "$(_locked_version corvus-json-schema "${ISOLATED_LOCK}")"
+        _tool_row jsonschema-macros "$(_locked_version jsonschema "${ISOLATED_LOCK}")"
         _tool_row blaze "$(npm_locked_version @sourcemeta/jsonschema)"
         _tool_row ajv "$(npm_locked_version ajv)"
         _tool_row quicktype "$(npm_locked_version quicktype)"
@@ -448,6 +488,12 @@ main() {
     # 5. In-process peak heap + compat.
     echo "==> in-process tier: peak heap + compat"
     "${RELEASE_DIR}/heap_profile" --output "${RAW_DIR}"
+    local feature
+    for feature in ${ISOLATED_FEATURES}; do
+        echo "==> in-process tier: peak heap + compat (isolated: ${feature})"
+        _isolated_cargo build --release --features "${feature}" --bin isolated_heap_profile
+        "${RELEASE_DIR}/isolated_heap_profile" --output "${RAW_DIR}"
+    done
 
     # 6. In-process timing.
     if [[ "${BENCH_SKIP_CRITERION:-0}" == "1" ]]; then
@@ -460,6 +506,11 @@ main() {
         criterion_args=(${BENCH_CRITERION_ARGS:---warm-up-time 0.5 --measurement-time 2 --sample-size 20})
         # `+` guard: an empty array under `set -u` is an unbound-variable error on bash 3.2.
         cargo bench -p json-schema-rs-benchmark --bench cross_tool -- ${criterion_args[@]+"${criterion_args[@]}"}
+        for feature in ${ISOLATED_FEATURES}; do
+            echo "==> in-process tier: criterion timing (isolated: ${feature})"
+            _isolated_cargo bench --features "${feature}" --bench isolated -- \
+                ${criterion_args[@]+"${criterion_args[@]}"}
+        done
     fi
 
     # 7. CLI timing.
