@@ -742,7 +742,11 @@ json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_jso
 });
 
 impl Root {
-    /// Validates this value against its schema: every error the schema's validator reports.
+    /// Validates this value against its schema.
+    ///
+    /// # Errors
+    ///
+    /// Every error the schema's validator reports, when this value does not satisfy the schema.
     pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
         TYPE_VALIDATORS.validate_serialized(0, self)
     }
@@ -818,7 +822,11 @@ json_schema_rs::deserialize_struct!(Name, additional: BTreeMap<String, serde_jso
 });
 
 impl Name {
-    /// Validates this value against its schema: every error the schema's validator reports.
+    /// Validates this value against its schema.
+    ///
+    /// # Errors
+    ///
+    /// Every error the schema's validator reports, when this value does not satisfy the schema.
     pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
         TYPE_VALIDATORS.validate_serialized(0, self)
     }
@@ -846,7 +854,11 @@ json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_jso
 });
 
 impl Root {
-    /// Validates this value against its schema: every error the schema's validator reports.
+    /// Validates this value against its schema.
+    ///
+    /// # Errors
+    ///
+    /// Every error the schema's validator reports, when this value does not satisfy the schema.
     pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
         TYPE_VALIDATORS.validate_serialized(1, self)
     }
