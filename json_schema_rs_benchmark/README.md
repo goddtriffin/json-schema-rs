@@ -29,9 +29,12 @@ files, `npm ci` in `competitors/node/` and `uv sync --frozen` in `competitors/py
 fetches the Python pinned in `.python-version`), into git-ignored directories.
 
 Competitors must also be their newest stable release: the run aborts with the upgrade command
-when a linked crate (`jsonschema`, `typify`, `boon` in `Cargo.lock`) is behind crates.io, when
+when a linked crate (`jsonschema`, `typify`, `boon`, `valico`, `jsonschema-valid`, `schemafy_lib`,
+`jsonschema_code_generator` in `Cargo.lock`; `corvus-json-schema` and `jsonschema` in
+`isolated/Cargo.lock`) is behind crates.io, when
 a competitor CLI is not the same release as its crate, or when an npm or PyPI competitor's pin is
-behind the registry. For a crate, bump the version in `Cargo.toml`, run `cargo update -p <crate>`,
+behind the registry. For a crate, bump the version in its `Cargo.toml`, run `cargo update -p <crate>` (with
+`--manifest-path isolated/Cargo.toml` for the isolated crates),
 and reinstall the CLI at that version; for npm, `npm install --save-exact <package>@<version>` in
 `competitors/node/`; for PyPI, `uv add <package>==<version>` in `competitors/python/`.
 
@@ -52,12 +55,19 @@ fixtures generated deterministically into `target/benchmark-fixtures/` on every 
 
 | Tier | How | Tools | Time | Memory |
 |---|---|---|---|---|
-| In-process | every tool linked as a library, called on in-memory inputs | json-schema-rs, [jsonschema], [boon], [typify] | [criterion] median ± stddev | peak heap per operation (counting allocator) |
+| In-process | every tool linked as a library, called on in-memory inputs | validators: json-schema-rs, [jsonschema] (runtime, and its compile-time macro as `jsonschema-macros`), [boon], [valico], [jsonschema-valid], [corvus-json-schema]; codegens: json-schema-rs, [typify], [schemafy], [jsonschema_code_generator] | [criterion] median ± stddev | peak heap per operation (counting allocator) |
 | CLI | every tool's binary end to end, startup included | Rust: `jsonschemars`, `jsonschema-cli`, `boon_validate`, `cargo-typify`; non-Rust: [Blaze], [ajv], [python-jsonschema], [fastjsonschema], [quicktype], [datamodel-code-generator], [json-schema-to-typescript] | [hyperfine] median ± stddev | peak RSS |
 
 Operations: `codegen` (schema → source; Rust for every tool but datamodel-code-generator, which
 emits pydantic, and json-schema-to-typescript, which emits TypeScript), `schema_compile`
-(in-process only), `validate_valid`, `validate_invalid`. Lower is better everywhere.
+(in-process only; not for `jsonschema-macros`, whose schemas compile when the benchmark is built),
+`validate_valid`, `validate_invalid`. Lower is better everywhere.
+
+`corvus-json-schema` and `jsonschema-macros` are built in [`isolated/`](isolated/Cargo.toml), a crate
+outside the workspace, one build each: corvus turns on serde_json's `preserve_order`, which would
+otherwise reach our library and every other tool, and the compile-time validators are generated
+from the fixture set, which only exists once the driver has generated it. Both builds append to the
+same raw captures as the main crate, so the report shows every tool side by side.
 
 Non-Rust tools are CLI-tier only: in-process numbers across languages are not comparable. Node
 and Python start slowly, so every CLI table opens with a *startup* row (each tool on a trivial
@@ -76,7 +86,8 @@ they set).
   `$id` the way it accepts extra documents (in-process: our `$ref` registry / an in-memory
   retriever for codegen, a `jsonschema` registry, boon's `add_resource`; CLI: extra
   `jsonschemars generate` inputs, `jsonschemars validate -r`, `boon_validate -r`). A tool that
-  cannot take extra documents (typify, `jsonschema-cli`) fails that cell with "cannot load the
+  cannot take extra documents (typify, schemafy, jsonschema_code_generator, jsonschema-valid,
+  `jsonschema-cli`) fails that cell with "cannot load the
   fixture's resource documents". A fixture with a `$ref` to any document it does not vendor
   (checked across the schema and its resources) is not measured at all. In-process, our codegen
   reaches the resources through a retriever, so only the schema gets root types (as in every
@@ -104,7 +115,8 @@ See [design.md](../design.md#benchmark-harness) for the full methodology.
 ```
 json_schema_rs_benchmark/
   src/lib.rs               # results model, statistics, winner rule, report rendering
-  src/adapters.rs          # every tool behind one interface (in-process tier)
+  src/harness.rs           # the Adapter trait, correctness check, heap profiler, criterion runner
+  src/adapters.rs          # every tool this crate links, behind the Adapter trait (in-process tier)
   src/fixtures.rs          # fixture discovery shared by both tiers
   src/bin/aggregate.rs     # raw captures -> results.{json,md}
   src/bin/heap_profile.rs  # per-operation peak heap + in-process compatibility
@@ -112,6 +124,8 @@ json_schema_rs_benchmark/
   src/bin/list_fixtures.rs # fixture list for the CLI tier
   src/bin/boon_validate.rs # thin boon CLI wrapper (boon-cli cannot register documents by $id)
   benches/cross_tool.rs    # criterion timing of every tool
+  isolated/                # corvus-json-schema and jsonschema-macros, built apart (own workspace);
+                           #   build.rs generates one compile-time validator per fixture
   scripts/run_benchmark.sh # driver invoked by `make benchmark`
   scripts/tools.sh         # CLI-tier tool definitions
   competitors/node/        # pinned npm competitors (package.json + lock) + ajv_validate.mjs
@@ -122,6 +136,11 @@ json_schema_rs_benchmark/
 ```
 
 [typify]: https://github.com/oxidecomputer/typify
+[valico]: https://github.com/s-panferov/valico
+[jsonschema-valid]: https://github.com/mdboom/jsonschema-valid
+[corvus-json-schema]: https://github.com/corvus-dotnet/Corvus.JsonSchema
+[schemafy]: https://github.com/Marwes/schemafy
+[jsonschema_code_generator]: https://github.com/tim-hellhake/jsonschema_code_generator
 [jsonschema]: https://github.com/Stranger6667/jsonschema
 [boon]: https://github.com/santhosh-tekuri/boon
 [criterion]: https://github.com/bheisler/criterion.rs
