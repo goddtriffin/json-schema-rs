@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "Non-Rust competitors for the json-schema-rs benchmark's CLI tier. Exact versions; run_benchmark.sh installs them with `uv sync --frozen` and aborts when one is behind PyPI's latest release."
 requires-python = ">=3.15"
 dependencies = [
-    "datamodel-code-generator==0.88.0",
+    "datamodel-code-generator==0.89.0",
     "fastjsonschema==2.22.3",
     "jsonschema==4.26.0",
 ]
