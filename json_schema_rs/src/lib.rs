@@ -30,7 +30,7 @@ pub use json_schema::{
     OfflineRetriever, RefSiblings, Registry, RegistryBuilder, RegistryError, RegistryErrors,
     Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope, SpecVersion,
     SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri, Vocabulary,
-    VocabularyKind, VocabularySet, file_uri, resolve_dialect,
+    VocabularyKind, VocabularySet, file_path, file_uri, resolve_dialect,
 };
 pub use number::json_equal;
 pub use reverse_code_gen::{

@@ -23,7 +23,7 @@ pub use registry::{
 };
 #[cfg(feature = "http")]
 pub use retrievers::HttpRetriever;
-pub use retrievers::{FileRetriever, file_uri};
+pub use retrievers::{FileRetriever, file_path, file_uri};
 pub use settings::{
     DialectSettings, JsonSchemaSettings, JsonSchemaSettingsBuilder, UnknownSchemaUri,
     resolve_dialect,
