@@ -752,7 +752,7 @@ impl TryFrom<serde_json::Value> for Root {
     type Error = json_schema_rs::TypeValidationError;
 
     /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
         TYPE_VALIDATORS.deserialize(0, value)
     }
 }
@@ -828,7 +828,7 @@ impl TryFrom<serde_json::Value> for Name {
     type Error = json_schema_rs::TypeValidationError;
 
     /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
         TYPE_VALIDATORS.deserialize(0, value)
     }
 }
@@ -856,7 +856,7 @@ impl TryFrom<serde_json::Value> for Root {
     type Error = json_schema_rs::TypeValidationError;
 
     /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
         TYPE_VALIDATORS.deserialize(1, value)
     }
 }
