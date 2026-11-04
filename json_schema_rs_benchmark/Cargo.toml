@@ -36,6 +36,12 @@ name = "heap_profile"
 path = "src/bin/heap_profile.rs"
 required-features = ["tools"]
 
+# Triage of a failed reverse-codegen models build: cargo JSON messages in, the models that do not
+# compile out (see src/reverse_models.rs).
+[[bin]]
+name = "model_build_failures"
+path = "src/bin/model_build_failures.rs"
+
 # Prints the fixture set (id, dir, external refs) so the CLI tier discovers exactly what the
 # in-process tier does.
 [[bin]]

@@ -78,7 +78,14 @@ impl CodeGenBackend for RustBackend {
         let per_schema: Vec<Vec<u8>> = (0..schemas.len())
             .map(|index| render_buffer(&graph, &plan, Home::Schema(index), sets.as_deref()))
             .collect::<CodeGenResult<Vec<Vec<u8>>>>()?;
-        Ok(GenerateRustOutput { shared, per_schema })
+        let root_types: Vec<String> = (0..schemas.len())
+            .map(|index| plan.root_type(&graph, index))
+            .collect();
+        Ok(GenerateRustOutput {
+            shared,
+            per_schema,
+            root_types,
+        })
     }
 }
 
@@ -156,6 +163,18 @@ struct Plan {
 }
 
 impl Plan {
+    /// The name of schema `schema`'s root type: its root alias, else the named item its root
+    /// peels to.
+    fn root_type(&self, graph: &TypeGraph, schema: usize) -> String {
+        self.root_aliases[schema].clone().unwrap_or_else(|| {
+            let root: TypeId = graph.peel(graph.schemas[schema].root);
+            self.items
+                .get(&root)
+                .map(|(_, name)| name.clone())
+                .expect("a root without an alias is a named item")
+        })
+    }
+
     fn new(graph: &TypeGraph, settings: &CodeGenSettings) -> Plan {
         let reach: Vec<BTreeSet<TypeId>> = passes::reachable(graph);
         // Which schemas use each named node.
@@ -12359,6 +12378,62 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
 );
 
 "##;
+        assert_eq!(expected, actual);
+    }
+
+    // --- Root type names ---
+
+    /// The root type names `generate_rust` reports for `values`, generated together.
+    fn root_types_of(values: &[serde_json::Value]) -> Vec<String> {
+        generate_rust(&schemas_of(values), &default_settings())
+            .unwrap()
+            .root_types
+    }
+
+    #[test]
+    fn root_types_names_a_titled_object_root_by_its_title() {
+        let expected: Vec<String> = vec!["Config".to_string()];
+        let actual: Vec<String> = root_types_of(&[serde_json::json!({
+            "title": "Config", "type": "object", "properties": {"a": {"type": "string"}}
+        })]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_types_names_an_untitled_object_root_root() {
+        let expected: Vec<String> = vec!["Root".to_string()];
+        let actual: Vec<String> = root_types_of(&[serde_json::json!({
+            "type": "object", "properties": {"a": {"type": "string"}}
+        })]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_types_names_the_alias_of_a_root_that_is_not_a_named_item() {
+        let expected: Vec<String> = vec!["Tags".to_string()];
+        let actual: Vec<String> = root_types_of(&[serde_json::json!({
+            "title": "Tags", "type": "array", "items": {"type": "string"}
+        })]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_types_has_one_name_per_schema_in_input_order() {
+        let expected: Vec<String> = vec!["First".to_string(), "Second".to_string()];
+        let actual: Vec<String> = root_types_of(&[
+            serde_json::json!({"title": "First", "type": "object", "properties": {"a": {"type": "string"}}}),
+            serde_json::json!({"title": "Second", "type": "object", "properties": {"b": {"type": "integer"}}}),
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn root_types_names_a_root_shared_with_another_schema() {
+        let shared_root: serde_json::Value = serde_json::json!({
+            "title": "Same", "type": "object", "properties": {"a": {"type": "string"}}
+        });
+        let expected: Vec<String> = vec!["Same".to_string(), "Same".to_string()];
+        let actual: Vec<String> = root_types_of(&[shared_root.clone(), shared_root]);
         assert_eq!(expected, actual);
     }
 }

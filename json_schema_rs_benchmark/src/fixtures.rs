@@ -363,6 +363,20 @@ fn document_uri(uri: &Iri<String>) -> String {
     uri.strip_fragment().normalize().as_str().to_owned()
 }
 
+/// Every valid instance of `fixture` (`instances/valid/*.json`), as (file name, text), sorted by
+/// file name; empty when it has none. Read on demand, for correctness probes that check more
+/// than the one instance [`Fixture::valid_instance`] holds.
+///
+/// # Errors
+///
+/// Returns a [`FixtureError`] when the directory or a file cannot be read.
+pub fn valid_instances(fixture: &Fixture) -> Result<Vec<(String, String)>, FixtureError> {
+    sorted_json_files(&fixture.dir.join("instances").join("valid"))?
+        .into_iter()
+        .map(|path: PathBuf| Ok((utf8_file_name(&path)?, read_text(&path)?)))
+        .collect()
+}
+
 /// Text of the first `*.json` file (sorted by file name) in `dir`; `None` when the directory
 /// is absent or holds no JSON file.
 fn first_instance(dir: &Path) -> Result<Option<String>, FixtureError> {
@@ -431,7 +445,7 @@ fn utf8_file_name(path: &Path) -> Result<String, FixtureError> {
 mod tests {
     use super::{
         Fixture, FixtureError, Resource, SCHEMA_FILE_NAME, default_roots, discover, parse_roots,
-        unresolved_refs,
+        unresolved_refs, valid_instances,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -490,6 +504,33 @@ mod tests {
             },
         ];
         let actual: Vec<Fixture> = discover(std::slice::from_ref(&root)).expect("discover");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn valid_instances_reads_every_valid_json_file_sorted_by_name() {
+        let root: PathBuf = scratch_dir("valid-instances");
+        write(&root.join("small/alpha").join(SCHEMA_FILE_NAME), "{}");
+        write(&root.join("small/alpha/instances/valid/b.json"), "2");
+        write(&root.join("small/alpha/instances/valid/a.json"), "1");
+        write(&root.join("small/alpha/instances/valid/0.txt"), "ignored");
+        write(&root.join("small/alpha/instances/invalid/x.json"), "3");
+        let fixtures: Vec<Fixture> = discover(std::slice::from_ref(&root)).expect("discover");
+        let expected: Vec<(String, String)> = vec![
+            ("a.json".to_owned(), "1".to_owned()),
+            ("b.json".to_owned(), "2".to_owned()),
+        ];
+        let actual: Vec<(String, String)> = valid_instances(&fixtures[0]).expect("read");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn valid_instances_is_empty_without_an_instances_directory() {
+        let root: PathBuf = scratch_dir("no-valid-instances");
+        write(&root.join("small/alpha").join(SCHEMA_FILE_NAME), "{}");
+        let fixtures: Vec<Fixture> = discover(std::slice::from_ref(&root)).expect("discover");
+        let expected: Vec<(String, String)> = Vec::new();
+        let actual: Vec<(String, String)> = valid_instances(&fixtures[0]).expect("read");
         assert_eq!(expected, actual);
     }
 

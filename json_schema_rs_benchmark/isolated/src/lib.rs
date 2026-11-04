@@ -11,15 +11,32 @@
 //!   `iter_errors` collected into a `Vec`, as the runtime `jsonschema` adapter does. Its schema is
 //!   compiled when the benchmark is built, so it has no `schema_compile` cell; "compiling" it at
 //!   run time only looks the fixture's validator up.
+//! * reverse codegen (feature `reverse-codegen`): our `ToJsonSchema` derive
+//!   (`T::json_schema()`) and schemars' (`schemars::schema_for!(T)`, default settings), each on
+//!   its own copy of the fixture's model (see `build.rs`). The timed call produces the tool's
+//!   in-memory schema; the correctness probe serializes it to JSON and checks it with our
+//!   validator against every valid instance of the fixture.
 
-#[cfg(all(feature = "corvus", feature = "jsonschema-macros"))]
-compile_error!("enable exactly one of the `corvus` and `jsonschema-macros` features per build");
-#[cfg(not(any(feature = "corvus", feature = "jsonschema-macros")))]
-compile_error!("enable one of the `corvus` and `jsonschema-macros` features");
+#[cfg(any(
+    all(feature = "corvus", feature = "jsonschema-macros"),
+    all(feature = "corvus", feature = "reverse-codegen"),
+    all(feature = "jsonschema-macros", feature = "reverse-codegen"),
+))]
+compile_error!(
+    "enable exactly one of the `corvus`, `jsonschema-macros` and `reverse-codegen` features per build"
+);
+#[cfg(not(any(
+    feature = "corvus",
+    feature = "jsonschema-macros",
+    feature = "reverse-codegen"
+)))]
+compile_error!("enable one of the `corvus`, `jsonschema-macros` and `reverse-codegen` features");
 
 use json_schema_rs_benchmark::fixtures::Fixture;
 use json_schema_rs_benchmark::harness::{Adapter, AdapterError, Operation, unsupported};
 use serde_json::Value;
+#[cfg(not(feature = "reverse-codegen"))]
+use std::convert::Infallible;
 use std::fmt;
 
 /// A compile-time validator generated for one fixture, or why it has none.
@@ -34,6 +51,20 @@ pub enum MacroValidator {
 
 include!(concat!(env!("OUT_DIR"), "/macro_validators.rs"));
 
+/// One fixture's reverse-codegen models: each tool's function returning its root type's schema,
+/// or why the tool has no model for the fixture.
+#[cfg(feature = "reverse-codegen")]
+#[derive(Debug, Clone, Copy)]
+pub struct ReverseModels {
+    /// `<Root as json_schema_rs::ToJsonSchema>::json_schema`.
+    pub jsonschemars: Result<fn() -> json_schema_rs::ReverseCodeGenResult, &'static str>,
+    /// `schemars::schema_for!(Root)`.
+    pub schemars: Result<fn() -> schemars::Schema, &'static str>,
+}
+
+#[cfg(feature = "reverse-codegen")]
+include!(concat!(env!("OUT_DIR"), "/reverse_models.rs"));
+
 /// A benchmarked tool built in this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IsolatedTool {
@@ -43,6 +74,12 @@ pub enum IsolatedTool {
     /// The `jsonschema` crate's compile-time validator (`macros` feature).
     #[cfg(feature = "jsonschema-macros")]
     JsonschemaMacros,
+    /// Our reverse codegen, the `ToJsonSchema` derive.
+    #[cfg(feature = "reverse-codegen")]
+    JsonSchemaRs,
+    /// The `schemars` crate's `JsonSchema` derive.
+    #[cfg(feature = "reverse-codegen")]
+    Schemars,
 }
 
 impl fmt::Display for IsolatedTool {
@@ -61,14 +98,78 @@ pub enum IsolatedCompiled {
     JsonschemaMacros(fn(&Value) -> bool),
 }
 
+/// A fixture's model, as one of this crate's reverse-codegen tools takes it.
+#[cfg(feature = "reverse-codegen")]
+#[derive(Debug, Clone, Copy)]
+pub enum IsolatedModel {
+    /// The root type's `ToJsonSchema::json_schema`.
+    JsonSchemaRs(fn() -> json_schema_rs::ReverseCodeGenResult),
+    /// `schemars::schema_for!` of the root type.
+    Schemars(fn() -> schemars::Schema),
+}
+
+/// A schema produced by one of this crate's reverse-codegen tools.
+#[cfg(feature = "reverse-codegen")]
+#[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "held unboxed: boxing would add an allocation to every timed reverse codegen call"
+)]
+pub enum IsolatedReversed {
+    /// Our schema model, or every problem the derive reported.
+    JsonSchemaRs(json_schema_rs::ReverseCodeGenResult),
+    /// schemars' schema.
+    Schemars(schemars::Schema),
+}
+
+#[cfg(feature = "reverse-codegen")]
+impl IsolatedReversed {
+    /// The schema as a JSON document.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::ReverseCodegen`] when our derive reported errors instead of a
+    /// schema, or the schema does not serialize.
+    pub fn to_json(&self) -> Result<String, AdapterError> {
+        let serialize_error = |e: serde_json::Error| AdapterError::ReverseCodegen(e.to_string());
+        match self {
+            IsolatedReversed::JsonSchemaRs(Ok(schema)) => {
+                serde_json::to_string(schema).map_err(serialize_error)
+            }
+            IsolatedReversed::JsonSchemaRs(Err(errors)) => Err(AdapterError::ReverseCodegen(
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>()
+                    .join("; "),
+            )),
+            IsolatedReversed::Schemars(schema) => {
+                serde_json::to_string(schema).map_err(serialize_error)
+            }
+        }
+    }
+}
+
 impl Adapter for IsolatedTool {
     type Compiled = IsolatedCompiled;
+    #[cfg(feature = "reverse-codegen")]
+    type Model = IsolatedModel;
+    #[cfg(not(feature = "reverse-codegen"))]
+    type Model = Infallible;
+    #[cfg(feature = "reverse-codegen")]
+    type Reversed = IsolatedReversed;
+    #[cfg(not(feature = "reverse-codegen"))]
+    type Reversed = Infallible;
 
     const ALL: &'static [IsolatedTool] = &[
         #[cfg(feature = "corvus")]
         IsolatedTool::Corvus,
         #[cfg(feature = "jsonschema-macros")]
         IsolatedTool::JsonschemaMacros,
+        #[cfg(feature = "reverse-codegen")]
+        IsolatedTool::JsonSchemaRs,
+        #[cfg(feature = "reverse-codegen")]
+        IsolatedTool::Schemars,
     ];
 
     fn id(self) -> &'static str {
@@ -77,18 +178,28 @@ impl Adapter for IsolatedTool {
             IsolatedTool::Corvus => "corvus-json-schema",
             #[cfg(feature = "jsonschema-macros")]
             IsolatedTool::JsonschemaMacros => "jsonschema-macros",
+            #[cfg(feature = "reverse-codegen")]
+            IsolatedTool::JsonSchemaRs => "jsonschemars",
+            #[cfg(feature = "reverse-codegen")]
+            IsolatedTool::Schemars => "schemars",
         }
     }
 
     fn supports(self, operation: Operation) -> bool {
         match self {
             #[cfg(feature = "corvus")]
-            IsolatedTool::Corvus => operation != Operation::Codegen,
+            IsolatedTool::Corvus => {
+                !matches!(operation, Operation::Codegen | Operation::ReverseCodegen)
+            }
             #[cfg(feature = "jsonschema-macros")]
             IsolatedTool::JsonschemaMacros => matches!(
                 operation,
                 Operation::ValidateValid | Operation::ValidateInvalid
             ),
+            #[cfg(feature = "reverse-codegen")]
+            IsolatedTool::JsonSchemaRs | IsolatedTool::Schemars => {
+                operation == Operation::ReverseCodegen
+            }
         }
     }
 
@@ -102,9 +213,16 @@ impl Adapter for IsolatedTool {
             IsolatedTool::Corvus => corvus::compile(fixture).map(IsolatedCompiled::Corvus),
             #[cfg(feature = "jsonschema-macros")]
             IsolatedTool::JsonschemaMacros => macro_validator(fixture),
+            #[cfg(feature = "reverse-codegen")]
+            IsolatedTool::JsonSchemaRs | IsolatedTool::Schemars => {
+                // Reverse codegen tools compile no schema.
+                let _ = fixture;
+                Err(unsupported(self, Operation::SchemaCompile))
+            }
         }
     }
 
+    #[cfg(not(feature = "reverse-codegen"))]
     fn validate(compiled: &IsolatedCompiled, instance: &Value) -> bool {
         match compiled {
             #[cfg(feature = "corvus")]
@@ -112,6 +230,41 @@ impl Adapter for IsolatedTool {
             #[cfg(feature = "jsonschema-macros")]
             IsolatedCompiled::JsonschemaMacros(validate) => validate(instance),
         }
+    }
+
+    #[cfg(feature = "reverse-codegen")]
+    fn validate(compiled: &IsolatedCompiled, _instance: &Value) -> bool {
+        match *compiled {}
+    }
+
+    #[cfg(feature = "reverse-codegen")]
+    fn model(self, fixture: &Fixture) -> Result<IsolatedModel, AdapterError> {
+        reverse::model(self, &fixture.id)
+    }
+
+    #[cfg(feature = "reverse-codegen")]
+    fn reverse_codegen(model: IsolatedModel) -> IsolatedReversed {
+        match model {
+            IsolatedModel::JsonSchemaRs(json_schema) => {
+                IsolatedReversed::JsonSchemaRs(json_schema())
+            }
+            IsolatedModel::Schemars(schema_for) => IsolatedReversed::Schemars(schema_for()),
+        }
+    }
+
+    #[cfg(not(feature = "reverse-codegen"))]
+    fn reverse_codegen(model: Infallible) -> Infallible {
+        match model {}
+    }
+
+    #[cfg(feature = "reverse-codegen")]
+    fn check_reversed(fixture: &Fixture, reversed: &IsolatedReversed) -> Result<(), AdapterError> {
+        reverse::check(fixture, reversed)
+    }
+
+    #[cfg(not(feature = "reverse-codegen"))]
+    fn check_reversed(_fixture: &Fixture, reversed: &Infallible) -> Result<(), AdapterError> {
+        match *reversed {}
     }
 }
 
@@ -170,5 +323,74 @@ mod corvus {
         validator
             .evaluate(instance, &mut collector)
             .unwrap_or(false)
+    }
+}
+
+#[cfg(feature = "reverse-codegen")]
+pub mod reverse {
+    //! Model lookup and the correctness probe of the reverse-codegen tools.
+
+    use super::{IsolatedModel, IsolatedReversed, IsolatedTool, REVERSE_MODELS, ReverseModels};
+    use json_schema_rs::{CompiledSchema, Registry, Schema};
+    use json_schema_rs_benchmark::fixtures::{self, Fixture};
+    use json_schema_rs_benchmark::harness::AdapterError;
+    use serde_json::Value;
+
+    /// `tool`'s model of the fixture `fixture_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::ReverseCodegen`] with why the tool has no model for the fixture.
+    pub fn model(tool: IsolatedTool, fixture_id: &str) -> Result<IsolatedModel, AdapterError> {
+        let models: &ReverseModels = REVERSE_MODELS
+            .iter()
+            .find(|(id, _models): &&(&str, ReverseModels)| *id == fixture_id)
+            .map(|(_id, models)| models)
+            .ok_or_else(|| {
+                AdapterError::ReverseCodegen(
+                    "fixture was not discovered when the benchmark was built".to_owned(),
+                )
+            })?;
+        let missing = |reason: &str| AdapterError::ReverseCodegen(reason.to_owned());
+        match tool {
+            IsolatedTool::JsonSchemaRs => models
+                .jsonschemars
+                .map(IsolatedModel::JsonSchemaRs)
+                .map_err(missing),
+            IsolatedTool::Schemars => models
+                .schemars
+                .map(IsolatedModel::Schemars)
+                .map_err(missing),
+        }
+    }
+
+    /// The probe: `reversed`, as JSON, is a schema our validator compiles, and it accepts every
+    /// valid instance of `fixture`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::ReverseCodegen`] naming the first problem.
+    pub fn check(fixture: &Fixture, reversed: &IsolatedReversed) -> Result<(), AdapterError> {
+        let wrong = |message: String| AdapterError::ReverseCodegen(message);
+        let text: String = reversed.to_json()?;
+        let schema: Schema = serde_json::from_str(&text)
+            .map_err(|e: serde_json::Error| wrong(format!("emitted schema does not parse: {e}")))?;
+        let registry: Registry<'static> = Registry::builder()
+            .build_owned(schema)
+            .map_err(|e| wrong(format!("emitted schema does not compile: {e}")))?;
+        let compiled: CompiledSchema = CompiledSchema::new(&registry)
+            .map_err(|e| wrong(format!("emitted schema does not compile: {e}")))?;
+        let instances: Vec<(String, String)> = fixtures::valid_instances(fixture)
+            .map_err(|e| wrong(format!("cannot read the valid instances: {e}")))?;
+        for (name, instance_text) in instances {
+            let instance: Value = serde_json::from_str(&instance_text)
+                .map_err(|e: serde_json::Error| AdapterError::InstanceParse(e.to_string()))?;
+            if compiled.validate(&instance).is_err() {
+                return Err(wrong(format!(
+                    "emitted schema rejects valid instance {name}"
+                )));
+            }
+        }
+        Ok(())
     }
 }
