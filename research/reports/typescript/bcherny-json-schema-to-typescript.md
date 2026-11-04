@@ -307,3 +307,7 @@ TypeScript only (interfaces, type aliases, enums). No option or module emits oth
 ## Validation (schema + JSON → errors)
 
 No instance validation. `src/validator.ts` checks only schema-internal consistency (tsEnumNames/enum length and uniqueness, minItems/maxItems relations, `deprecated` is boolean) and reports strings via `console.error`. Generated types can be used with other tools for runtime validation, but the library itself does not report schema + JSON errors. The `test/conformance` harness checks the generated types against the JSON-Schema-Test-Suite instances using the TypeScript compiler, but that is a test, not a product feature.
+
+## Benchmark harness notes
+
+- **CLI, checked 2026-11-03 (16.0.0).** `json2ts -i schema.json -o out.d.ts`; output is formatted with Prettier by default. `$ref`s to documents not on disk fail with a `ResolverError` when offline; there is no flag to register documents by `$id`.

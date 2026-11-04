@@ -299,3 +299,7 @@ Yes; this is the product.
 - **Type guards**: with TypeScript, `validate` is typed as a type predicate when the schema is a `JSONSchemaType<T>`.
 - **CLI**: separate package (ajv-cli).
 - **Not verified**: network behavior of `loadSchema` (user supplied), ajv-formats contents (not in this repo), performance claims in the README (no in-repo draft benchmark), and the CVE/regression history listed under JSON Schema support (taken from the earlier report).
+
+## Benchmark harness notes
+
+- **CLI, checked 2026-11-03.** `ajv-cli` 5.0.0 has had no release since 2021 (npm metadata last modified 2023), takes the draft as one `--spec` flag per run rather than reading each schema's `$schema`, and defaults to strict mode, which rejects spec-valid schemas with unknown keywords or formats. The benchmark therefore calls ajv 8.20.0 through a small wrapper (`json_schema_rs_benchmark/competitors/node/ajv_validate.mjs`) that picks `Ajv`/`Ajv2019`/`Ajv2020`/`ajv-draft-04` by `$schema`, sets `strict: false`, and registers resources with `addSchema`. Node 26 alone takes ~90 ms to start; the wrapper adds ~30 ms of module loading on a trivial schema. ajv does not recognise the legacy `$schema` `http://json-schema.org/schema#`.

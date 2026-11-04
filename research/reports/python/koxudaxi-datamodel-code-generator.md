@@ -368,3 +368,7 @@ Python only (Pydantic v2, dataclasses, TypedDict, msgspec). Inputs span many for
 ## Validation (schema + JSON → errors)
 
 No standalone (schema, instance) to errors API. `--generate-schema-validators` emits validator code inside generated models for a subset (required-groups from `anyOf/oneOf/not`, simple `if/then/else` required predicates, patternProperties, property counts, uniqueItems of objects; `model/runtime_validation.py`), and `--validators` injects user functions. The JSON-Schema-Test-Suite conformance run validates instances through the *generated Pydantic v2 models*, not through a validator in this package. Consumers validate with `Model.model_validate(...)`; the `[validation]` extra validates OpenAPI documents, not instances.
+
+## Benchmark harness notes
+
+- **CLI defaults, checked 2026-11-03 (0.88.0).** Without `--formatters` it warns that the default (black + isort, external formatters) will change to `builtin`; `--formatters builtin` cut a small schema's end-to-end time from ~259 ms to ~198 ms. It emits `NamingHintWarning`s when many class names are numbered collisions. It found no `$id`-keyed registry flag: `$ref`s resolve by file path or URL, so documents vendored under a different path cannot be supplied.

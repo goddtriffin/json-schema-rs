@@ -308,3 +308,7 @@ Yes; this is the library's sole purpose.
 - **Standard output formats**: `flag_output()`, `basic_output()`, `detailed_output()` return serializable structures with `keywordLocation`, `absoluteKeywordLocation`, `instanceLocation` and `error`/`errors`; checked against the official output-tests for 2019-09 and 2020-12 by `tests/output.rs`.
 - **Compile errors**: typed `CompileError` (load/parse URL, unsupported draft/scheme/vocabulary, duplicate id/anchor, bad pointer, anchor not found, invalid regex, metaschema validation failure with nested error, internal `Bug`).
 - **Not verified**: the JSON-Schema-Test-Suite submodule is empty in this clone, so test-suite pass rates are taken from the README claim, not checked.
+
+## Benchmark harness notes
+
+- **CLI, checked 2026-11-03.** `boon-cli` 0.6.2 (2025-08-27) installs a `boon` binary (`-d/-o/-f/-c/-k/--cacert`). It loads documents by their file URL only, so it cannot register a document under its `$id`; the benchmark keeps its own `boon_validate` wrapper for that.

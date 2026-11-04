@@ -287,3 +287,7 @@ Yes. This is the library’s primary function.
 - **API**: `validate(instance, schema)` raises `ValidationError` on first error (via `best_match`). `Validator(schema).validate(instance)` same. `Validator(schema).iter_errors(instance)` yields all validation errors. `Validator(schema).is_valid(instance)` returns bool.
 - **Output**: `ValidationError` with message, path (instance path), schema_path, validator, validator_value, instance, schema, context (sub-errors). `exceptions.best_match(errors)` returns one representative error. ErrorTree in exceptions can organize errors by path.
 - **CLI**: Deprecated CLI in `jsonschema/cli.py`: schema file and optional instance file(s); outputs success or error messages (plain or pretty). Users are directed to check-jsonschema for CLI use.
+
+## Benchmark harness notes
+
+- **CLI, checked 2026-11-03 (4.26.0).** The bundled `jsonschema` command is deprecated in favour of `check-jsonschema`, which has no flag to register documents by `$id`. The benchmark calls `jsonschema.validate` (meta-schema check + best error) with a `referencing.Registry` from a small wrapper (`json_schema_rs_benchmark/competitors/python/jsonschema_validate.py`); `referencing` never retrieves over the network unless given a `retrieve` callable.
