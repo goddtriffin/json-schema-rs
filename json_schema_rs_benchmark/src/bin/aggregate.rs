@@ -8,7 +8,7 @@
 //! - `RAW_DIR/inprocess_heap.tsv`: in-process peak heap per (tool, fixture, operation).
 //! - `RAW_DIR/inprocess_compat.tsv`, `RAW_DIR/cli/compat.tsv`: compatibility matrices.
 //! - `RAW_DIR/cli/index.tsv`: one hyperfine export per CLI cell (time and peak RSS).
-//! - `RAW_DIR/tool_versions.tsv`: version of each tool.
+//! - `RAW_DIR/tools.tsv`: version and language/runtime of each tool.
 //!
 //! Malformed lines and unreadable per-cell files are skipped with a warning on stderr naming
 //! the file (and line); they never fail the run silently. All parsing and rendering logic is
@@ -21,7 +21,7 @@ use clap::{Arg, Command};
 use json_schema_rs_benchmark::{
     BenchmarkResults, CriterionId, IndexEntry, Measurement, Stats, Tier, TsvParse,
     is_criterion_new_benchmark, parse_compat_tsv, parse_criterion_benchmark, parse_criterion_stats,
-    parse_heap_tsv, parse_hyperfine_json, parse_index_tsv, parse_tool_versions_tsv,
+    parse_heap_tsv, parse_hyperfine_json, parse_index_tsv, parse_tools_tsv,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -108,12 +108,11 @@ fn run(input: &Path, criterion: Option<&Path>, output: &Path) -> Result<(), Stri
             .extend(hyperfine_measurements(input, &entries)?);
     }
 
-    let versions_path: PathBuf = input.join("tool_versions.tsv");
-    if let Some(text) = read_optional(&versions_path)? {
-        results.tool_versions.extend(report_skipped(
-            &versions_path,
-            parse_tool_versions_tsv(&text),
-        ));
+    let tools_path: PathBuf = input.join("tools.tsv");
+    if let Some(text) = read_optional(&tools_path)? {
+        results
+            .tools
+            .extend(report_skipped(&tools_path, parse_tools_tsv(&text)));
     }
 
     for warning in results.normalize() {
