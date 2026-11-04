@@ -31,8 +31,16 @@ pub fn file_uri(path: &Path) -> Option<String> {
     Some(format!("file://{}", encoded.as_str()))
 }
 
-/// The local path a `file:` URI names (the inverse of [`file_uri`]).
-fn file_path(uri: &str) -> Result<PathBuf, String> {
+/// The local path a `file:` URI names (`file:///a/b%20c.json` → `/a/b c.json`; the inverse of
+/// [`file_uri`]), or `None` when `uri` is not a `file:` URI for this machine (another scheme, a
+/// remote host, or a path that is not UTF-8).
+#[must_use]
+pub fn file_path(uri: &str) -> Option<PathBuf> {
+    local_file_path(uri).ok()
+}
+
+/// [`file_path`], with the reason a URI names no local file.
+fn local_file_path(uri: &str) -> Result<PathBuf, String> {
     let parsed: Iri<&str> = Iri::parse(uri).map_err(|e| e.to_string())?;
     if !parsed.scheme().as_str().eq_ignore_ascii_case("file") {
         return Err("it is not a file: URI".to_string());
@@ -88,7 +96,7 @@ impl FileRetriever {
 impl Retrieve for FileRetriever {
     fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError> {
         let error = |reason: String| RetrieveError { reason };
-        let path: PathBuf = file_path(uri).map_err(error)?;
+        let path: PathBuf = local_file_path(uri).map_err(error)?;
         let root: PathBuf = self.root.canonicalize().map_err(|e| {
             error(format!(
                 "the file root {} cannot be read: {e}",
@@ -175,7 +183,7 @@ impl Retrieve for HttpRetriever {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileRetriever, file_path, file_uri};
+    use super::{FileRetriever, file_path, file_uri, local_file_path};
     use crate::json_schema::registry::{Retrieve, RetrieveError};
     use serde_json::{Value, json};
     use std::path::{Path, PathBuf};
@@ -205,32 +213,47 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
-    fn file_path_decodes_percent_escapes() {
+    fn local_file_path_decodes_percent_escapes() {
         let expected: Result<PathBuf, String> = Ok(PathBuf::from("/a/b c.json"));
-        let actual: Result<PathBuf, String> = file_path("file:///a/b%20c.json");
+        let actual: Result<PathBuf, String> = local_file_path("file:///a/b%20c.json");
         assert_eq!(expected, actual);
     }
 
     #[test]
     #[cfg(not(windows))]
-    fn file_path_accepts_localhost_authority() {
+    fn local_file_path_accepts_localhost_authority() {
         let expected: Result<PathBuf, String> = Ok(PathBuf::from("/a.json"));
-        let actual: Result<PathBuf, String> = file_path("file://localhost/a.json");
+        let actual: Result<PathBuf, String> = local_file_path("file://localhost/a.json");
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn file_path_rejects_remote_host() {
+    fn local_file_path_rejects_remote_host() {
         let expected: Result<PathBuf, String> =
             Err("it names the host \"example.com\"; only local files are read".to_string());
-        let actual: Result<PathBuf, String> = file_path("file://example.com/a.json");
+        let actual: Result<PathBuf, String> = local_file_path("file://example.com/a.json");
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn file_path_rejects_other_scheme() {
+    fn local_file_path_rejects_other_scheme() {
         let expected: Result<PathBuf, String> = Err("it is not a file: URI".to_string());
-        let actual: Result<PathBuf, String> = file_path("https://example.com/a.json");
+        let actual: Result<PathBuf, String> = local_file_path("https://example.com/a.json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn file_path_of_file_uri_is_its_path() {
+        let expected: Option<PathBuf> = Some(PathBuf::from("/a/b c.json"));
+        let actual: Option<PathBuf> = file_path("file:///a/b%20c.json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn file_path_of_other_scheme_is_none() {
+        let expected: Option<PathBuf> = None;
+        let actual: Option<PathBuf> = file_path("https://example.com/a.json");
         assert_eq!(expected, actual);
     }
 

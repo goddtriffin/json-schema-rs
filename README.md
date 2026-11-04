@@ -372,6 +372,9 @@ Then `use json_schema_rs_macro::json_schema_to_rust` and use any of these forms:
 A literal that starts with `{`, or is `true` or `false` (a boolean schema), is
 inline JSON; any other literal is a file path.
 
+Editing a schema file the macro read (a path input, or a file one of its `$ref`s
+names) rebuilds your crate on the next `cargo build`.
+
 When you pass **multiple** schemas (paths or inline), each schema’s types are
 emitted in a **separate Rust module** to avoid name collisions: one module per
 JSON Schema. Module names come from the file stem for paths (e.g. `simple` from
