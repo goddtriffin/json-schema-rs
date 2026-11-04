@@ -1177,7 +1177,7 @@ impl TryFrom<serde_json::Value> for Person {
     type Error = json_schema_rs::TypeValidationError;
 
     /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
         TYPE_VALIDATORS.deserialize(1, value)
     }
 }
@@ -4557,6 +4557,20 @@ fn type_graph_scenario(scenario_name: &str, default_code_gen: &CodeGenSettings) 
 }
 "##,
             ),
+            "self_validating_error_variant" => (
+                r#"{"title":"Level","enum":["debug","error"]}"#,
+                default_code_gen.clone(),
+                r#"fn main() {
+    use compile_test::Level;
+    let expected: (Option<Level>, bool) = (Some(Level::Error), true);
+    let actual: (Option<Level>, bool) = (
+        Level::try_from(serde_json::json!("error")).ok(),
+        Level::try_from(serde_json::json!("warn")).is_err(),
+    );
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
             "non_string_enum" => (
                 r#"{"type":"object","properties":{"level":{"enum":[1,2.5,true,null,"high"]}},"required":["level"]}"#,
                 default_code_gen.clone(),
@@ -5968,6 +5982,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "non_string_enum",
         "flatten_single_entry_combinators",
         "self_validating",
+        "self_validating_error_variant",
         "constrained_newtypes",
         "cross_file_refs",
     ]
