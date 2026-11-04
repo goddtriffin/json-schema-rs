@@ -8,16 +8,22 @@
 #     process startup and file I/O are excluded. Time comes from criterion (benches/cross_tool.rs;
 #     median + spread); peak heap per operation comes from a counting allocator
 #     (src/bin/heap_profile.rs). Operations: codegen, schema_compile, validate_valid,
-#     validate_invalid. Tools: jsonschemars (our lib), jsonschema, boon, valico, jsonschema-valid,
-#     typify, schemafy, jsonschema_code_generator; and, from isolated/ (its own workspace, built
-#     once per feature so their dependency features never reach the other tools),
-#     corvus-json-schema and jsonschema-macros (compile-time validators generated from the fixture
-#     set). Every build appends to the same raw captures.
+#     validate_invalid, reverse_codegen. Tools: jsonschemars (our lib), jsonschema, boon, valico,
+#     jsonschema-valid, typify, schemafy, jsonschema_code_generator; and, from isolated/ (its own
+#     workspace, built once per feature so their dependency features never reach the other
+#     tools), corvus-json-schema, jsonschema-macros (compile-time validators generated from the
+#     fixture set) and the reverse_codegen models (our codegen's Rust types for every fixture with
+#     both `#[derive(ToJsonSchema)]` and schemars' `#[derive(JsonSchema)]`; a model whose derive
+#     does not compile is excluded and recorded as a compat failure, see build_reverse_models).
+#     Every build appends to the same raw captures.
 #
 #   CLI tier — each tool's command-line front end timed end to end (startup, file I/O, parse,
 #     compile, generate/validate, exit) by hyperfine, with warmup and repeated runs; hyperfine
-#     also records each run's peak RSS. Operations: codegen, validate_valid, validate_invalid.
-#     Tools and their invocations are defined in scripts/tools.sh.
+#     also records each run's peak RSS. Operations: codegen, validate_valid, validate_invalid,
+#     reverse_codegen (language-native models -> JSON Schema: jsonschemars and schemars through
+#     the reverse_schema bin, pydantic, zod, ts-json-schema-generator; each non-Rust tool's models
+#     are generated from the fixture before timing, never timed or committed). Tools and their
+#     invocations are defined in scripts/tools.sh.
 #
 # Every Rust tool, ours and the competitors' alike (linked crates, the isolated builds, and the
 # competitor CLIs, which the driver installs), is built with one profile: `benchmark` in
@@ -27,7 +33,8 @@
 # changed. The profile is recorded in the results (the rustc row of the Tools table).
 #
 # A tool is only measured on a fixture/operation it handles CORRECTLY (codegen succeeds; valid
-# instance accepted; invalid instance rejected). Anything else is recorded as a compat failure and
+# instance accepted; invalid instance rejected; reverse codegen emits a schema our validator
+# accepts that accepts every valid instance of the fixture). Anything else is recorded as a compat failure and
 # left untimed, so a fast failure never masquerades as a fast result. The run is hermetic: a
 # fixture may vendor the documents its schema references (resources/*.json, registered under their
 # root $id with every tool that can take them; a tool that cannot is a compat failure), a fixture
@@ -43,7 +50,8 @@
 #      the registry's latest), so a run never measures against an outdated target. Install the
 #      Rust competitor CLIs (jsonschema-cli, cargo-typify) at the release the benchmark links.
 #      Record the versions and runtimes.
-#   2. Build the benchmark-profile binaries (jsonschemars CLI + the benchmark crate's bins).
+#   2. Build the benchmark-profile binaries (jsonschemars CLI + the benchmark crate's bins; the
+#      isolated bins, reverse_schema among them, are built per feature in step 5).
 #   3. Generate the synthetic fixtures (target/benchmark-fixtures; deterministic, not committed).
 #   4. Reset the raw capture dir and criterion's output dir.
 #   5. In-process peak heap + compat matrix (heap_profile, then isolated_heap_profile per feature).
@@ -53,6 +61,9 @@
 #
 # Raw captures (RAW_DIR = json_schema_rs_benchmark/target/benchmark-raw):
 #   tools.tsv                         tool \t version \t language/runtime
+#   reverse_exclude.tsv               tool \t fixture \t reason: reverse_codegen models excluded
+#                                     from the isolated build (the model does not compile)
+#   reverse_build.jsonl               cargo's JSON messages from the last reverse-codegen check
 #   inprocess_heap.tsv, inprocess_compat.tsv   (written by heap_profile)
 #   cli/compat.tsv                    tool \t fixture \t operation \t pass|fail \t detail
 #   cli/index.tsv                     tool \t fixture \t operation \t cli/<hyperfine export>.json
@@ -82,7 +93,7 @@ BUILD_DIR="${REPO_ROOT}/target/benchmark"
 ISOLATED_MANIFEST="${CRATE_DIR}/isolated/Cargo.toml"
 ISOLATED_LOCK="${CRATE_DIR}/isolated/Cargo.lock"
 # One build per feature: each competitor here must not share a build with the others.
-ISOLATED_FEATURES="corvus jsonschema-macros"
+ISOLATED_FEATURES="corvus jsonschema-macros reverse-codegen"
 export REPO_ROOT
 
 # shellcheck source=tools.sh
@@ -154,13 +165,18 @@ _cli_resources_unsupported() {
     echo "    $2 $4: FAIL (cannot load the fixture's resource documents)"
 }
 
+# _cli_fail <raw_dir> <tool> <fixture id> <operation> <reason>: record a compat failure.
+_cli_fail() {
+    printf '%s\t%s\t%s\tfail\t%s\n' "$2" "$3" "$4" "$(_tsv_field "$5")" >> "$1/cli/compat.tsv"
+    echo "    $2 $4: FAIL ($(_tsv_field "$5"))"
+}
+
 # _cli_measure <raw_dir> <tool> <fixture id> <operation> <expect: zero|nonzero> <command line>
 # Probe the command once for correctness, offline; on a correct result time it with hyperfine and index the
 # export, otherwise record a compat failure and skip timing.
 _cli_measure() {
     local raw_dir="$1" tool="$2" fid="$3" op="$4" expect="$5" cmd="$6"
-    local rc=0 err ok reason rel json
-    local -a hf_args
+    local rc=0 err ok reason
 
     # The probe runs offline: the benchmark is hermetic, so a tool that needs the network (to
     # fetch a remote $ref or meta-schema) fails here instead of having a download timed.
@@ -181,11 +197,18 @@ _cli_measure() {
         if [[ -n "${err}" && "${expect}" == "zero" ]]; then
             reason="${reason}: $(printf '%s\n' "${err}" | _failure_summary)"
         fi
-        printf '%s\t%s\t%s\tfail\t%s\n' "${tool}" "${fid}" "${op}" "$(_tsv_field "${reason}")" \
-            >> "${raw_dir}/cli/compat.tsv"
-        echo "    ${tool} ${op}: FAIL ($(_tsv_field "${reason}"))"
+        _cli_fail "${raw_dir}" "${tool}" "${fid}" "${op}" "${reason}"
         return 0
     fi
+    _cli_time "${raw_dir}" "${tool}" "${fid}" "${op}" "${expect}" "${cmd}"
+}
+
+# _cli_time <raw_dir> <tool> <fixture id> <operation> <expect: zero|nonzero> <command line>: time a
+# probe-correct command with hyperfine and index the export (a failed run is a compat failure).
+_cli_time() {
+    local raw_dir="$1" tool="$2" fid="$3" op="$4" expect="$5" cmd="$6"
+    local reason rel json
+    local -a hf_args
     rel="cli/${tool}__${fid//\//__}__${op}.json"
     json="${raw_dir}/${rel}"
     hf_args=(-N --warmup "${BENCH_CLI_WARMUP:-3}" --runs "${BENCH_CLI_RUNS:-15}" --style none
@@ -197,9 +220,7 @@ _cli_measure() {
     if ! hyperfine "${hf_args[@]}" "${cmd}" >/dev/null 2>"${raw_dir}/cli/.hyperfine.err"; then
         reason="hyperfine: $(grep -m 1 -v '^[[:space:]]*$' "${raw_dir}/cli/.hyperfine.err" || true)"
         rm -f "${json}" "${raw_dir}/cli/.hyperfine.err"
-        printf '%s\t%s\t%s\tfail\t%s\n' "${tool}" "${fid}" "${op}" "$(_tsv_field "${reason}")" \
-            >> "${raw_dir}/cli/compat.tsv"
-        echo "    ${tool} ${op}: FAIL ($(_tsv_field "${reason}"))"
+        _cli_fail "${raw_dir}" "${tool}" "${fid}" "${op}" "${reason}"
         return 0
     fi
     rm -f "${raw_dir}/cli/.hyperfine.err"
@@ -208,13 +229,79 @@ _cli_measure() {
     echo "    ${tool} ${op}: timed"
 }
 
-# _write_startup_fixture <work dir>: write the startup-baseline fixture (a draft-07
-# `{"type": "object"}` schema, valid instance `{}`, invalid instance `[]`) under <work dir> and
-# print its directory. Draft-07 because every tool supports it.
+# _cli_reverse <raw_dir> <work dir> <tool> <fixture id> <fixture dir> [resource...]: one
+# reverse_codegen cell. Generate the tool's models from the fixture's schema (untimed, offline),
+# run the timed command once offline and capture the schema it prints, check that schema with our
+# validator against every valid instance of the fixture, and only then time the command. A failed
+# generation, a failed run, a schema our validator does not accept or one that rejects a valid
+# instance is a compat failure and is not timed.
+_cli_reverse() {
+    local raw_dir="$1" work="$2" tool="$3" fid="$4" fdir="$5"
+    local model_dir gen cmd emitted rc=0 err instance checked=0 out
+    shift 5
+    model_dir="$(reverse_model_dir "${tool}" "${fid}")"
+    gen=""
+    if [[ -n "${model_dir}" ]]; then
+        rm -rf "${model_dir}"
+        mkdir -p "${model_dir}"
+        gen="$(reverse_model_cmd "${tool}" "${fdir}/schema.json" "${model_dir}" ${1+"$@"})"
+    fi
+    if [[ -n "${gen}" ]]; then
+        err="$(run_cmd_offline "${gen}" 2>&1)" || rc=$?
+        if [[ "${rc}" -ne 0 ]]; then
+            _cli_fail "${raw_dir}" "${tool}" "${fid}" reverse_codegen \
+                "model generation failed: $(printf '%s\n' "${err:-exit ${rc}}" | _failure_summary)"
+            return 0
+        fi
+        if ! err="$(reverse_model_check "${tool}" "${model_dir}")"; then
+            _cli_fail "${raw_dir}" "${tool}" "${fid}" reverse_codegen "model generation failed: ${err}"
+            return 0
+        fi
+    fi
+
+    cmd="$(reverse_codegen_cmd "${tool}" "${fid}" "${model_dir}")"
+    emitted="${work}/${tool}__${fid//\//__}__reverse_codegen.json"
+    rc=0
+    run_cmd_offline "${cmd}" > "${emitted}" 2> "${emitted}.err" || rc=$?
+    if [[ "${rc}" -ne 0 ]]; then
+        _cli_fail "${raw_dir}" "${tool}" "${fid}" reverse_codegen \
+            "exit ${rc}: $(_failure_summary < "${emitted}.err")"
+        return 0
+    fi
+    # The emitted schema must accept every valid instance (exit 0); exit 1 is a rejection, any
+    # other status means our validator could not use the schema at all.
+    while IFS= read -r instance; do
+        [[ -n "${instance}" ]] || continue
+        checked=1
+        rc=0
+        out="$("$(_jsonschemars_bin)" validate -s "${emitted}" -p "${instance}" 2>&1)" || rc=$?
+        if [[ "${rc}" -eq 1 ]]; then
+            _cli_fail "${raw_dir}" "${tool}" "${fid}" reverse_codegen \
+                "emitted schema rejects valid instance $(basename "${instance}")"
+            return 0
+        elif [[ "${rc}" -ne 0 ]]; then
+            _cli_fail "${raw_dir}" "${tool}" "${fid}" reverse_codegen \
+                "emitted schema is not a schema our validator accepts: $(printf '%s\n' "${out}" | _failure_summary)"
+            return 0
+        fi
+    done <<< "$(find "${fdir}/instances/valid" -mindepth 1 -maxdepth 1 -type f -name '*.json' 2>/dev/null | LC_ALL=C sort)"
+    if [[ "${checked}" -eq 0 ]]; then
+        _cli_fail "${raw_dir}" "${tool}" "${fid}" reverse_codegen \
+            "not measured: the fixture has no valid instance to check the emitted schema against"
+        return 0
+    fi
+    _cli_time "${raw_dir}" "${tool}" "${fid}" reverse_codegen zero "${cmd}"
+}
+
+# _write_startup_fixture <work dir>: write the startup-baseline fixture (a draft-07 object schema
+# with one optional string property, valid instance `{}`, invalid instance `[]`) under <work dir>
+# and print its directory. Draft-07 because every tool supports it; the property because a model
+# generator needs it to name a root type (quicktype names none for a bare `{"type": "object"}`).
+# The reverse_schema binary builds in the same schema (STARTUP_SCHEMA in src/reverse_models.rs).
 _write_startup_fixture() {
     local dir="$1/startup"
     mkdir -p "${dir}/instances/valid" "${dir}/instances/invalid"
-    printf '%s\n' '{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object"}' \
+    printf '%s\n' '{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "properties": {"name": {"type": "string"}}}' \
         > "${dir}/schema.json"
     printf '{}\n' > "${dir}/instances/valid/object.json"
     printf '[]\n' > "${dir}/instances/invalid/array.json"
@@ -239,6 +326,8 @@ run_cli_tier() {
     mkdir -p "${raw_dir}/cli"
     : > "${raw_dir}/cli/compat.tsv"
     : > "${raw_dir}/cli/index.tsv"
+    # Generated reverse_codegen models are per run: never reuse a previous run's.
+    rm -rf "$(_python_dir)/reverse-models" "$(_node_dir)/reverse-models"
     # Detect the offline mechanism once rather than per probe.
     BENCH_OFFLINE_WRAPPER="$(_offline_wrapper)"
     export BENCH_OFFLINE_WRAPPER
@@ -268,6 +357,9 @@ ${fixtures}"
                 for op in validate_valid validate_invalid; do
                     _cli_offline_skip "${raw_dir}" "${tool}" "${fid}" "${op}" "${unresolved}"
                 done
+            done
+            for tool in $(reverse_codegen_tools); do
+                _cli_offline_skip "${raw_dir}" "${tool}" "${fid}" reverse_codegen "${unresolved}"
             done
             continue
         fi
@@ -318,6 +410,14 @@ ${fixtures}"
             fi
             cmd="$(validate_cmd "${tool}" "${schema}" "${invalid}" ${resources[@]+"${resources[@]}"})"
             _cli_measure "${raw_dir}" "${tool}" "${fid}" validate_invalid nonzero "${cmd}"
+        done
+
+        for tool in $(reverse_codegen_tools); do
+            if [[ "${#resources[@]}" -gt 0 ]] && ! loads_resources "${tool}" reverse_codegen; then
+                _cli_resources_unsupported "${raw_dir}" "${tool}" "${fid}" reverse_codegen
+                continue
+            fi
+            _cli_reverse "${raw_dir}" "${work}" "${tool}" "${fid}" "${fdir}" ${resources[@]+"${resources[@]}"}
         done
     done <<< "${fixtures}"
 
@@ -374,7 +474,7 @@ check_competitor_versions() {
     # ("main")>
     for pair in jsonschema:main typify:main boon:main valico:main jsonschema-valid:main \
         schemafy_lib:main jsonschema_code_generator:main corvus-json-schema:isolated \
-        jsonschema:isolated; do
+        jsonschema:isolated schemars:isolated; do
         crate="${pair%%:*}"
         if [[ "${pair##*:}" == "isolated" ]]; then
             lock="${ISOLATED_LOCK}"
@@ -395,7 +495,8 @@ check_competitor_versions() {
     done
     # Non-Rust competitors: the lock file's pin must equal the registry's latest release.
     local package
-    for package in @sourcemeta/jsonschema ajv ajv-draft-04 quicktype json-schema-to-typescript; do
+    for package in @sourcemeta/jsonschema ajv ajv-draft-04 quicktype json-schema-to-typescript zod \
+        ts-json-schema-generator; do
         locked="$(npm_locked_version "${package}")"
         latest="$(npm view "${package}" version 2>/dev/null || true)"
         if [[ -z "${latest}" ]]; then
@@ -406,7 +507,7 @@ check_competitor_versions() {
             stale=1
         fi
     done
-    for package in jsonschema fastjsonschema datamodel-code-generator; do
+    for package in jsonschema fastjsonschema datamodel-code-generator pydantic; do
         locked="$(pypi_locked_version "${package}")"
         latest="$(_pypi_latest "${package}")"
         if [[ -z "${latest}" ]]; then
@@ -430,6 +531,52 @@ _pypi_latest() {
 # _tool_row <id> <version>: one tools.tsv row (id, version, language/runtime).
 _tool_row() {
     printf '%s\t%s\t%s\n' "$1" "$2" "$(tool_runtime "$1")"
+}
+
+# build_reverse_models: build isolated/ with the reverse-codegen feature (every bin, reverse_schema
+# among them), excluding each model that does not compile. Our codegen emits every fixture's Rust
+# types, one copy per tool with that tool's derive; a model that does not compile is that tool's
+# compat failure on that fixture, not a broken build. `cargo check` finds them (no code
+# generation, so each round is fast): after each failed check, model_build_failures reads cargo's
+# JSON messages and appends one "tool \t fixture \t reason" row per failing model to
+# BENCH_REVERSE_EXCLUDE, which the isolated build script reads to leave those models out. An error
+# it cannot attribute to one model aborts the run. Once the check passes, one benchmark-profile build
+# follows. BENCH_REVERSE_EXCLUDE stays exported so the later criterion build sees the same
+# exclusions.
+build_reverse_models() {
+    local attempt before after
+    export BENCH_REVERSE_EXCLUDE="${RAW_DIR}/reverse_exclude.tsv"
+    : > "${BENCH_REVERSE_EXCLUDE}"
+    for attempt in 1 2 3 4 5; do
+        if _isolated_cargo check --config "${PROFILE_CONFIG}" --profile benchmark \
+            --features reverse-codegen --bins \
+            --message-format=json > "${RAW_DIR}/reverse_build.jsonl"; then
+            if [[ -s "${BENCH_REVERSE_EXCLUDE}" ]]; then
+                echo "    excluded reverse_codegen models (model does not compile):"
+                sed 's/^/      /' "${BENCH_REVERSE_EXCLUDE}"
+            fi
+            _isolated_cargo build --config "${PROFILE_CONFIG}" --profile benchmark \
+                --features reverse-codegen --bins
+            return 0
+        fi
+        echo "    reverse-codegen check ${attempt} failed; excluding the models that did not compile"
+        before="$(wc -l < "${BENCH_REVERSE_EXCLUDE}")"
+        if ! "${BUILD_DIR}/model_build_failures" < "${RAW_DIR}/reverse_build.jsonl" \
+            >> "${BENCH_REVERSE_EXCLUDE}" 2> "${RAW_DIR}/model_build_failures.err"; then
+            echo "!! the reverse-codegen check failed for a reason no single model explains; aborting:" >&2
+            cat "${RAW_DIR}/model_build_failures.err" >&2
+            exit 1
+        fi
+        after="$(wc -l < "${BENCH_REVERSE_EXCLUDE}")"
+        if [[ "${after}" -le "${before}" ]]; then
+            echo "!! the reverse-codegen check failed but no new model was excluded; aborting" \
+                "(see ${RAW_DIR}/reverse_build.jsonl)" >&2
+            exit 1
+        fi
+    done
+    echo "!! the reverse-codegen check still fails after 5 attempts; aborting" \
+        "(see ${RAW_DIR}/reverse_build.jsonl)" >&2
+    exit 1
 }
 
 # --- main --------------------------------------------------------------------------------
@@ -488,13 +635,17 @@ main() {
         _tool_row jsonschema_code_generator "$(_locked_version jsonschema_code_generator)"
         _tool_row corvus-json-schema "$(_locked_version corvus-json-schema "${ISOLATED_LOCK}")"
         _tool_row jsonschema-macros "$(_locked_version jsonschema "${ISOLATED_LOCK}")"
+        _tool_row schemars "$(_locked_version schemars "${ISOLATED_LOCK}")"
         _tool_row blaze "$(npm_locked_version @sourcemeta/jsonschema)"
         _tool_row ajv "$(npm_locked_version ajv)"
         _tool_row quicktype "$(npm_locked_version quicktype)"
         _tool_row json-schema-to-typescript "$(npm_locked_version json-schema-to-typescript)"
+        _tool_row zod "$(npm_locked_version zod)"
+        _tool_row ts-json-schema-generator "$(npm_locked_version ts-json-schema-generator)"
         _tool_row datamodel-code-generator "$(pypi_locked_version datamodel-code-generator)"
         _tool_row python-jsonschema "$(pypi_locked_version jsonschema)"
         _tool_row fastjsonschema "$(pypi_locked_version fastjsonschema)"
+        _tool_row pydantic "$(pypi_locked_version pydantic)"
         _tool_row hyperfine "$(tool_version hyperfine)"
         _tool_row rustc "$(tool_version rustc)"
     } > "${RAW_DIR}/tools.tsv"
@@ -505,8 +656,12 @@ main() {
     local feature
     for feature in ${ISOLATED_FEATURES}; do
         echo "==> in-process tier: peak heap + compat (isolated: ${feature})"
-        _isolated_cargo build --config "${PROFILE_CONFIG}" --profile benchmark \
-            --features "${feature}" --bin isolated_heap_profile
+        if [[ "${feature}" == "reverse-codegen" ]]; then
+            build_reverse_models
+        else
+            _isolated_cargo build --config "${PROFILE_CONFIG}" --profile benchmark \
+                --features "${feature}" --bin isolated_heap_profile
+        fi
         "${BUILD_DIR}/isolated_heap_profile" --output "${RAW_DIR}"
     done
 

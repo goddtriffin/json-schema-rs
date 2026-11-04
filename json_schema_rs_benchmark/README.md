@@ -30,15 +30,17 @@ fetches the Python pinned in `.python-version`), into git-ignored directories.
 
 Competitors must also be their newest stable release: the run aborts with the upgrade command
 when a linked crate (`jsonschema`, `typify`, `boon`, `valico`, `jsonschema-valid`, `schemafy_lib`,
-`jsonschema_code_generator` in `Cargo.lock`; `corvus-json-schema` and `jsonschema` in
-`isolated/Cargo.lock`) is behind crates.io, or when an npm or PyPI competitor's pin is behind the
-registry. For a crate, bump the version in its `Cargo.toml` and run `cargo update -p <crate>` (with
+`jsonschema_code_generator` in `Cargo.lock`; `corvus-json-schema`, `jsonschema` and `schemars` in
+`isolated/Cargo.lock`) is behind crates.io, or when an npm (`@sourcemeta/jsonschema`, `ajv`,
+`ajv-draft-04`, `quicktype`, `json-schema-to-typescript`, `zod`, `ts-json-schema-generator`) or PyPI
+(`jsonschema`, `fastjsonschema`, `datamodel-code-generator`, `pydantic`) competitor's pin is behind
+the registry. For a crate, bump the version in its `Cargo.toml` and run `cargo update -p <crate>` (with
 `--manifest-path isolated/Cargo.toml` for the isolated crates); the driver installs the matching CLI
 on the next run. For npm, `npm install --save-exact <package>@<version>` in
 `competitors/node/`; for PyPI, `uv add <package>==<version>` in `competitors/python/`.
 
-Our own `jsonschemars` CLI, the `boon` wrapper and every in-process competitor (linked crates)
-are built by the driver.
+Our own `jsonschemars` CLI, the `boon` wrapper, the `reverse_schema` wrapper and every in-process
+competitor (linked crates) are built by the driver.
 
 ### Build profile
 
@@ -69,13 +71,34 @@ fixtures generated deterministically into `target/benchmark-fixtures/` on every 
 
 | Tier | How | Tools | Time | Memory |
 |---|---|---|---|---|
-| In-process | every tool linked as a library, called on in-memory inputs | validators: json-schema-rs, [jsonschema] (runtime, and its compile-time macro as `jsonschema-macros`), [boon], [valico], [jsonschema-valid], [corvus-json-schema]; codegens: json-schema-rs, [typify], [schemafy], [jsonschema_code_generator] | [criterion] median ± stddev | peak heap per operation (counting allocator) |
-| CLI | every tool's binary end to end, startup included | Rust: `jsonschemars`, `jsonschema-cli`, `boon_validate`, `cargo-typify`; non-Rust: [Blaze], [ajv], [python-jsonschema], [fastjsonschema], [quicktype], [datamodel-code-generator], [json-schema-to-typescript] | [hyperfine] median ± stddev | peak RSS |
+| In-process | every tool linked as a library, called on in-memory inputs | validators: json-schema-rs, [jsonschema] (runtime, and its compile-time macro as `jsonschema-macros`), [boon], [valico], [jsonschema-valid], [corvus-json-schema]; codegens: json-schema-rs, [typify], [schemafy], [jsonschema_code_generator]; reverse codegen: json-schema-rs, [schemars] | [criterion] median ± stddev | peak heap per operation (counting allocator) |
+| CLI | every tool's binary end to end, startup included | Rust: `jsonschemars`, `jsonschema-cli`, `boon_validate`, `cargo-typify`, `reverse_schema` (json-schema-rs and schemars); non-Rust: [Blaze], [ajv], [python-jsonschema], [fastjsonschema], [quicktype], [datamodel-code-generator], [json-schema-to-typescript], [pydantic], [zod], [ts-json-schema-generator] | [hyperfine] median ± stddev | peak RSS |
 
 Operations: `codegen` (schema → source; Rust for every tool but datamodel-code-generator, which
 emits pydantic, and json-schema-to-typescript, which emits TypeScript), `schema_compile`
 (in-process only; not for `jsonschema-macros`, whose schemas compile when the benchmark is built),
-`validate_valid`, `validate_invalid`. Lower is better everywhere.
+`validate_valid`, `validate_invalid`, `reverse_codegen` (language-native models → JSON Schema:
+`#[derive(ToJsonSchema)]`'s `T::json_schema()`, schemars' `schema_for!`, pydantic's
+`model_json_schema()`, zod v4's `z.toJSONSchema`, ts-json-schema-generator's CLI). Lower is better
+everywhere.
+
+`reverse_codegen` needs a model per fixture, so the models are generated from the fixture's schema
+at bench time, deterministically, and are never timed or committed: our codegen emits the Rust
+types, one copy per tool carrying that tool's derive (compiled into `isolated/`; a model that does
+not compile is excluded from the build and recorded as that tool's compat failure), datamodel-code-generator emits
+the pydantic models (`--class-name Root`), and quicktype emits the zod schemas
+(`--lang typescript-zod`) and the TypeScript types for ts-json-schema-generator
+(`--lang typescript --just-types --explicit-unions`, so a root union gets a name), registering the
+fixture's resources with `-S` (datamodel-code-generator cannot take them). A generator that fails,
+or emits models without the root type (quicktype names no root that is only a map, such as the
+startup schema, and emits no root zod schema for a root union) or TypeScript that does not
+type-check, is a compat failure for that tool and fixture. Before a cell is timed its emitted
+schema must be accepted by our validator and accept every valid instance of the fixture, so a
+fast-but-wrong schema is never timed. The CLI tier times one process per run: `reverse_schema`
+(our thin bin with every fixture's Rust models compiled in; `reverse_schema <jsonschemars|schemars>
+<fixture>`), and the thin wrappers `competitors/python/pydantic_schema.py` and
+`competitors/node/zod_schema.mjs` (pydantic and zod have no command line), each with the library's
+default options.
 
 `corvus-json-schema` and `jsonschema-macros` are built in [`isolated/`](isolated/Cargo.toml), a crate
 outside the workspace, one build each: corvus turns on serde_json's `preserve_order`, which would
@@ -85,11 +108,11 @@ same raw captures as the main crate, so the report shows every tool side by side
 
 Non-Rust tools are CLI-tier only: in-process numbers across languages are not comparable. Node
 and Python start slowly, so every CLI table opens with a *startup* row (each tool on a trivial
-draft-07 `{"type": "object"}` schema) that shows each tool's fixed per-process cost and never
+draft-07 object schema with one optional string property) that shows each tool's fixed per-process cost and never
 counts toward a winner. The report's Tools table lists every tool's version and language/runtime.
-ajv, python-jsonschema and fastjsonschema have no usable CLI, so thin wrappers in `competitors/`
-call them the way `boon_validate` calls boon (see design.md for why each exists and the options
-they set).
+ajv, python-jsonschema, fastjsonschema, pydantic and zod have no usable CLI, so thin wrappers in
+`competitors/` call them the way `boon_validate` calls boon (see design.md for why each exists and
+the options they set).
 
 ## Rules baked into the harness
 
@@ -115,6 +138,12 @@ they set).
 
 See [design.md](../design.md#benchmark-harness) for the full methodology.
 
+## Considered, not benchmarked
+
+- [facet-jsonschema] 0.46 (reverse codegen through `#[derive(Facet)]` reflection) implements too
+  little of the spec for a fair comparison: it panics with `todo!()` on every enum and map and
+  `unimplemented!()` on every `Option`, and recurses without a limit.
+
 ## Env knobs
 
 | Variable | Default | Effect |
@@ -137,13 +166,18 @@ json_schema_rs_benchmark/
   src/bin/gen_fixtures.rs  # deterministic large synthetic fixtures
   src/bin/list_fixtures.rs # fixture list for the CLI tier
   src/bin/boon_validate.rs # thin boon CLI wrapper (boon-cli cannot register documents by $id)
+  src/bin/model_build_failures.rs # cargo JSON messages -> reverse_codegen models to exclude
   benches/cross_tool.rs    # criterion timing of every tool
-  isolated/                # corvus-json-schema and jsonschema-macros, built apart (own workspace);
-                           #   build.rs generates one compile-time validator per fixture
+  isolated/                # corvus-json-schema, jsonschema-macros and the reverse_codegen models,
+                           #   built apart (own workspace, one build per feature); build.rs generates
+                           #   one compile-time validator and one Rust model per fixture;
+                           #   src/bin/reverse_schema.rs is the reverse_codegen CLI-tier wrapper
   scripts/run_benchmark.sh # driver invoked by `make benchmark`
   scripts/tools.sh         # CLI-tier tool definitions
-  competitors/node/        # pinned npm competitors (package.json + lock) + ajv_validate.mjs
-  competitors/python/      # pinned PyPI competitors (pyproject.toml + uv.lock) + validation wrappers
+  competitors/node/        # pinned npm competitors (package.json + lock) + ajv_validate.mjs,
+                           #   zod_schema.mjs; reverse-models/ (git-ignored) holds generated models
+  competitors/python/      # pinned PyPI competitors (pyproject.toml + uv.lock) + validation wrappers,
+                           #   pydantic_schema.py; reverse-models/ (git-ignored) holds generated models
   fixtures/<size>/<name>/  # schema.json, instances/{valid,invalid}/*.json, optional resources/*.json
   fixtures/manifest.json   # provenance and license of every committed schema, instance and resource
   results.json, results.md # committed aggregated results
@@ -166,3 +200,8 @@ json_schema_rs_benchmark/
 [quicktype]: https://github.com/glideapps/quicktype
 [datamodel-code-generator]: https://github.com/koxudaxi/datamodel-code-generator
 [json-schema-to-typescript]: https://github.com/bcherny/json-schema-to-typescript
+[schemars]: https://github.com/GREsau/schemars
+[facet-jsonschema]: https://github.com/facet-rs/facet
+[pydantic]: https://github.com/pydantic/pydantic
+[zod]: https://github.com/colinhacks/zod
+[ts-json-schema-generator]: https://github.com/vega/ts-json-schema-generator

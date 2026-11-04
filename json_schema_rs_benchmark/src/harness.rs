@@ -28,6 +28,9 @@ use std::time::Duration;
 pub enum Operation {
     /// Schema JSON text -> Rust source text.
     Codegen,
+    /// Rust types (a fixture's model, compiled into the build) -> the tool's in-memory JSON
+    /// Schema.
+    ReverseCodegen,
     /// Schema JSON text -> compiled, ready-to-validate schema.
     SchemaCompile,
     /// Compiled schema + parsed instance -> verdict, on the fixture's valid instance.
@@ -38,8 +41,9 @@ pub enum Operation {
 
 impl Operation {
     /// Every operation, in report order.
-    pub const ALL: [Operation; 4] = [
+    pub const ALL: [Operation; 5] = [
         Operation::Codegen,
+        Operation::ReverseCodegen,
         Operation::SchemaCompile,
         Operation::ValidateValid,
         Operation::ValidateInvalid,
@@ -50,6 +54,7 @@ impl Operation {
     pub const fn id(self) -> &'static str {
         match self {
             Operation::Codegen => "codegen",
+            Operation::ReverseCodegen => "reverse_codegen",
             Operation::SchemaCompile => "schema_compile",
             Operation::ValidateValid => "validate_valid",
             Operation::ValidateInvalid => "validate_invalid",
@@ -61,7 +66,7 @@ impl Operation {
     #[must_use]
     pub fn instance(self, fixture: &Fixture) -> Option<&str> {
         match self {
-            Operation::Codegen | Operation::SchemaCompile => None,
+            Operation::Codegen | Operation::ReverseCodegen | Operation::SchemaCompile => None,
             Operation::ValidateValid => fixture.valid_instance.as_deref(),
             Operation::ValidateInvalid => fixture.invalid_instance.as_deref(),
         }
@@ -78,11 +83,20 @@ impl fmt::Display for Operation {
 ///
 /// [`Adapter::codegen`] and [`Adapter::compile`] start from the fixture's schema text (and its
 /// resources' texts) held in memory; [`Adapter::validate`] starts from an already-compiled schema
-/// and an already-parsed instance.
+/// and an already-parsed instance; [`Adapter::reverse_codegen`] starts from the fixture's model
+/// (Rust types compiled into the build), already looked up.
 pub trait Adapter: Copy + fmt::Display + 'static {
     /// A schema compiled by this tool, held unboxed so compile timings include no adapter-added
     /// allocation.
     type Compiled;
+
+    /// A fixture's model, ready for [`Adapter::reverse_codegen`] (`Infallible` for a tool without
+    /// reverse codegen).
+    type Model: Copy;
+
+    /// The in-memory schema [`Adapter::reverse_codegen`] produces, in the tool's own type
+    /// (`Infallible` for a tool without reverse codegen).
+    type Reversed;
 
     /// Every tool of this kind, in report order.
     const ALL: &'static [Self];
@@ -113,6 +127,27 @@ pub trait Adapter: Copy + fmt::Display + 'static {
     /// Validate `instance` against `compiled` through the tool's full error-report API; `true`
     /// when the instance is valid.
     fn validate(compiled: &Self::Compiled, instance: &Value) -> bool;
+
+    /// Look up the model generated for `fixture`, ready for [`Adapter::reverse_codegen`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AdapterError`] when the tool has no reverse codegen, or the fixture has no
+    /// model this tool can take (its generation or this tool's derive failed).
+    fn model(self, _fixture: &Fixture) -> Result<Self::Model, AdapterError> {
+        Err(unsupported(self, Operation::ReverseCodegen))
+    }
+
+    /// Generate the JSON Schema of `model`'s root type through the tool's own API.
+    fn reverse_codegen(model: Self::Model) -> Self::Reversed;
+
+    /// The correctness probe of a reverse codegen result: `reversed`, as a JSON document, parses
+    /// as a schema and accepts every valid instance of `fixture`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::ReverseCodegen`] naming what is wrong.
+    fn check_reversed(fixture: &Fixture, reversed: &Self::Reversed) -> Result<(), AdapterError>;
 }
 
 /// Failure of an adapter call.
@@ -135,6 +170,8 @@ pub enum AdapterError {
     Compile(String),
     /// The tool failed to generate code.
     Codegen(String),
+    /// The tool's reverse codegen failed, or produced a schema that fails the correctness probe.
+    ReverseCodegen(String),
     /// The tool cannot take the fixture's resource documents.
     ResourcesUnsupported,
     /// The tool panicked.
@@ -154,6 +191,7 @@ impl fmt::Display for AdapterError {
             AdapterError::InstanceParse(message) => write!(f, "instance parse error: {message}"),
             AdapterError::Compile(message) => write!(f, "compile error: {message}"),
             AdapterError::Codegen(message) => write!(f, "codegen error: {message}"),
+            AdapterError::ReverseCodegen(message) => write!(f, "reverse codegen error: {message}"),
             AdapterError::ResourcesUnsupported => f.write_str(RESOURCES_UNSUPPORTED),
             AdapterError::Panic(message) => write!(f, "panic: {message}"),
         }
@@ -227,8 +265,9 @@ pub const RESOURCES_UNSUPPORTED: &str = "cannot load the fixture's resource docu
 /// fixture's valid instance. The CLI tier prints the same text.
 pub const VALID_REJECTED_SKIP: &str = "not measured: valid instance was rejected";
 
-/// Verify `tool` is correct on `fixture` for `operation`: codegen succeeds with Rust source, the
-/// schema compiles, the valid instance is accepted, or the invalid instance is rejected.
+/// Verify `tool` is correct on `fixture` for `operation`: codegen succeeds with Rust source,
+/// reverse codegen produces a schema that accepts every valid instance, the schema compiles, the
+/// valid instance is accepted, or the invalid instance is rejected.
 ///
 /// # Errors
 ///
@@ -267,6 +306,11 @@ fn check_inner<A: Adapter>(tool: A, fixture: &Fixture, operation: Operation) -> 
                         AdapterError::Codegen(format!("generated source is not Rust: {e}"))
                     })
             })
+            .map_err(|e: AdapterError| e.to_string()),
+        // A fast schema that is wrong is not a result: the probe must pass before it is timed.
+        Operation::ReverseCodegen => guarded(|| tool.model(fixture))
+            .and_then(|model: A::Model| guarded(|| Ok(A::reverse_codegen(model))))
+            .and_then(|reversed: A::Reversed| guarded(|| A::check_reversed(fixture, &reversed)))
             .map_err(|e: AdapterError| e.to_string()),
         Operation::SchemaCompile => guarded(|| tool.compile(fixture))
             .map(|_compiled: A::Compiled| ())
@@ -428,6 +472,12 @@ fn measure_heap<A: Adapter>(
         Operation::Codegen => Some(peak_of(peak, || {
             drop(black_box(tool.codegen(black_box(fixture))));
         })),
+        Operation::ReverseCodegen => {
+            let model: A::Model = tool.model(fixture).ok()?;
+            Some(peak_of(peak, || {
+                drop(black_box(A::reverse_codegen(black_box(model))));
+            }))
+        }
         Operation::SchemaCompile => Some(peak_of(peak, || {
             drop(black_box(tool.compile(black_box(fixture))));
         })),
@@ -468,7 +518,8 @@ const MEASUREMENT: Duration = Duration::from_secs(2);
 /// whose correctness check passes ([`check`]) are timed; every skipped cell prints a one-line
 /// `skip` notice to stderr. `codegen` and `schema_compile` start from the fixture's texts held in
 /// memory; `validate_valid` and `validate_invalid` start from an already-compiled schema and an
-/// already-parsed instance (both prepared outside the timed closure).
+/// already-parsed instance (both prepared outside the timed closure); `reverse_codegen` starts from
+/// the fixture's model, looked up outside the timed closure.
 ///
 /// Fixtures come from [`fixtures::discover_configured`] (`BENCH_FIXTURE_ROOTS`, or the committed
 /// and generated fixture directories). Criterion CLI flags (`--warm-up-time`,
@@ -535,6 +586,15 @@ fn bench_cell<A: Adapter>(
                 b.iter(|| tool.codegen(black_box(fixture)));
             });
         }
+        Operation::ReverseCodegen => {
+            let Ok(model) = tool.model(fixture) else {
+                eprintln!("skip {operation}/{tool}/{}: preparation failed", fixture.id);
+                return;
+            };
+            group.bench_with_input(id, &model, |b, model: &A::Model| {
+                b.iter(|| A::reverse_codegen(black_box(*model)));
+            });
+        }
         Operation::SchemaCompile => {
             group.bench_with_input(id, fixture, |b, fixture: &Fixture| {
                 b.iter(|| tool.compile(black_box(fixture)));
@@ -585,6 +645,7 @@ mod tests {
     fn operation_ids() {
         let expected: Vec<&str> = vec![
             "codegen",
+            "reverse_codegen",
             "schema_compile",
             "validate_valid",
             "validate_invalid",
