@@ -284,3 +284,7 @@ Yes. Primary feature.
 - **API**: `validate(schema, data, ...)` (convenience, compiles each call) or `compile(schema, ...)(data)` (recommended for reuse).
 - **compile()**: Generates code, exec’s it, returns the validation callable.
 - **Exceptions**: `JsonSchemaDefinitionException` for invalid schema during compile; `JsonSchemaValueException` for validation failure; `JsonSchemaValuesException` (list of JsonSchemaValueException) when `fast_fail=False`.
+
+## Benchmark harness notes
+
+- **Benchmarking notes, checked 2026-11-03 (2.22.3).** No validation command (`python -m fastjsonschema` prints the generated code). Remote `$ref`s go through `handlers={scheme: callable}`, which makes offline resource registration easy. A `$schema` it does not know (2019-09, 2020-12) falls back to draft 7 without an error, so 2020-12 schemas that use only draft-7 keywords validate correctly.

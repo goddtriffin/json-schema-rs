@@ -21,12 +21,19 @@ partial run would silently omit a competitor and misrepresent the comparison):
 cargo install hyperfine                # CLI-tier timing
 cargo install cargo-typify --locked    # codegen competitor (typify)
 cargo install jsonschema-cli --locked  # validation competitor (Stranger6667/jsonschema)
+brew install node uv                   # runtimes for the non-Rust competitors
 ```
 
+The non-Rust competitors need no manual install: the driver installs them from the committed lock
+files, `npm ci` in `competitors/node/` and `uv sync --frozen` in `competitors/python/` (uv also
+fetches the Python pinned in `.python-version`), into git-ignored directories.
+
 Competitors must also be their newest stable release: the run aborts with the upgrade command
-when a linked crate (`jsonschema`, `typify`, `boon` in `Cargo.lock`) is behind crates.io, or when
-a competitor CLI is not the same release as its crate. Bump the version in `Cargo.toml`, run
-`cargo update -p <crate>`, and reinstall the CLI at that version.
+when a linked crate (`jsonschema`, `typify`, `boon` in `Cargo.lock`) is behind crates.io, when
+a competitor CLI is not the same release as its crate, or when an npm or PyPI competitor's pin is
+behind the registry. For a crate, bump the version in `Cargo.toml`, run `cargo update -p <crate>`,
+and reinstall the CLI at that version; for npm, `npm install --save-exact <package>@<version>` in
+`competitors/node/`; for PyPI, `uv add <package>==<version>` in `competitors/python/`.
 
 Our own `jsonschemars` CLI, the `boon` wrapper and every in-process competitor (linked crates)
 are built by the driver.
@@ -46,10 +53,19 @@ fixtures generated deterministically into `target/benchmark-fixtures/` on every 
 | Tier | How | Tools | Time | Memory |
 |---|---|---|---|---|
 | In-process | every tool linked as a library, called on in-memory inputs | json-schema-rs, [jsonschema], [boon], [typify] | [criterion] median ± stddev | peak heap per operation (counting allocator) |
-| CLI | every tool's binary end to end, startup included | `jsonschemars`, `jsonschema-cli`, `boon_validate`, `cargo-typify` | [hyperfine] median ± stddev | peak RSS |
+| CLI | every tool's binary end to end, startup included | Rust: `jsonschemars`, `jsonschema-cli`, `boon_validate`, `cargo-typify`; non-Rust: [Blaze], [ajv], [python-jsonschema], [fastjsonschema], [quicktype], [datamodel-code-generator], [json-schema-to-typescript] | [hyperfine] median ± stddev | peak RSS |
 
-Operations: `codegen` (schema → Rust source), `schema_compile` (in-process only),
-`validate_valid`, `validate_invalid`. Lower is better everywhere.
+Operations: `codegen` (schema → source; Rust for every tool but datamodel-code-generator, which
+emits pydantic, and json-schema-to-typescript, which emits TypeScript), `schema_compile`
+(in-process only), `validate_valid`, `validate_invalid`. Lower is better everywhere.
+
+Non-Rust tools are CLI-tier only: in-process numbers across languages are not comparable. Node
+and Python start slowly, so every CLI table opens with a *startup* row (each tool on a trivial
+draft-07 `{"type": "object"}` schema) that shows each tool's fixed per-process cost and never
+counts toward a winner. The report's Tools table lists every tool's version and language/runtime.
+ajv, python-jsonschema and fastjsonschema have no usable CLI, so thin wrappers in `competitors/`
+call them the way `boon_validate` calls boon (see design.md for why each exists and the options
+they set).
 
 ## Rules baked into the harness
 
@@ -94,10 +110,12 @@ json_schema_rs_benchmark/
   src/bin/heap_profile.rs  # per-operation peak heap + in-process compatibility
   src/bin/gen_fixtures.rs  # deterministic large synthetic fixtures
   src/bin/list_fixtures.rs # fixture list for the CLI tier
-  src/bin/boon_validate.rs # thin boon CLI wrapper (boon has no CLI)
+  src/bin/boon_validate.rs # thin boon CLI wrapper (boon-cli cannot register documents by $id)
   benches/cross_tool.rs    # criterion timing of every tool
   scripts/run_benchmark.sh # driver invoked by `make benchmark`
   scripts/tools.sh         # CLI-tier tool definitions
+  competitors/node/        # pinned npm competitors (package.json + lock) + ajv_validate.mjs
+  competitors/python/      # pinned PyPI competitors (pyproject.toml + uv.lock) + validation wrappers
   fixtures/<size>/<name>/  # schema.json, instances/{valid,invalid}/*.json, optional resources/*.json
   fixtures/manifest.json   # provenance and license of every committed schema, instance and resource
   results.json, results.md # committed aggregated results
@@ -108,3 +126,10 @@ json_schema_rs_benchmark/
 [boon]: https://github.com/santhosh-tekuri/boon
 [criterion]: https://github.com/bheisler/criterion.rs
 [hyperfine]: https://github.com/sharkdp/hyperfine
+[Blaze]: https://github.com/sourcemeta/blaze
+[ajv]: https://github.com/ajv-validator/ajv
+[python-jsonschema]: https://github.com/python-jsonschema/jsonschema
+[fastjsonschema]: https://github.com/horejsek/python-fastjsonschema
+[quicktype]: https://github.com/glideapps/quicktype
+[datamodel-code-generator]: https://github.com/koxudaxi/datamodel-code-generator
+[json-schema-to-typescript]: https://github.com/bcherny/json-schema-to-typescript

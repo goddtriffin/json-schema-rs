@@ -278,3 +278,7 @@ Yes. Languages under `packages/quicktype-core/src/language/` (registered in `All
 ## Validation (schema + JSON → errors)
 
 No. quicktype does not validate a JSON instance against a JSON Schema and has no API or CLI for it. Schema-shape problems are reported only when they prevent conversion (`messageError`). The `.fail.json` fixtures check that generated parsers reject mismatches, not that quicktype validates.
+
+## Benchmark harness notes
+
+- **CLI, checked 2026-11-03 (26.0.0).** `quicktype --src-lang schema --lang rust --out x.rs schema.json` emits serde structs; on the benchmark fixtures it fails on CircleCI's config schema with "Internal error: We have additional properties but want to make a class". Node startup plus quicktype's module graph cost ~260 ms and ~125 MiB RSS before any work.
