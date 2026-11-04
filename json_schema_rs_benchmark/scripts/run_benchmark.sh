@@ -26,9 +26,11 @@
 # machine is different: the driver aborts up front rather than silently omit a competitor.
 #
 # Pipeline:
-#   1. Check required external tools, and that every competitor is its newest stable release
-#      (linked crate == crates.io's newest stable; CLI == that crate's release), so a run never
-#      measures against an outdated target. Record the versions.
+#   1. Check required external tools, install the non-Rust competitors from their lock files
+#      (competitors/node: npm ci; competitors/python: uv sync), and check that every competitor is
+#      its newest stable release (linked crate == crates.io's newest stable; CLI == that crate's
+#      release; npm / PyPI package == the registry's latest), so a run never measures against an
+#      outdated target. Record the versions and runtimes.
 #   2. Build release binaries (jsonschemars CLI + the benchmark crate's bins).
 #   3. Generate the synthetic fixtures (target/benchmark-fixtures; deterministic, not committed).
 #   4. Reset the raw capture dir and criterion's output dir.
@@ -38,7 +40,7 @@
 #   8. Aggregate everything into the committed results.json + results.md.
 #
 # Raw captures (RAW_DIR = json_schema_rs_benchmark/target/benchmark-raw):
-#   tool_versions.tsv                 tool \t version
+#   tools.tsv                         tool \t version \t language/runtime
 #   inprocess_heap.tsv, inprocess_compat.tsv   (written by heap_profile)
 #   cli/compat.tsv                    tool \t fixture \t operation \t pass|fail \t detail
 #   cli/index.tsv                     tool \t fixture \t operation \t cli/<hyperfine export>.json
@@ -188,6 +190,19 @@ _cli_measure() {
     echo "    ${tool} ${op}: timed"
 }
 
+# _write_startup_fixture <work dir>: write the startup-baseline fixture (a draft-07
+# `{"type": "object"}` schema, valid instance `{}`, invalid instance `[]`) under <work dir> and
+# print its directory. Draft-07 because every tool supports it.
+_write_startup_fixture() {
+    local dir="$1/startup"
+    mkdir -p "${dir}/instances/valid" "${dir}/instances/invalid"
+    printf '%s\n' '{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object"}' \
+        > "${dir}/schema.json"
+    printf '{}\n' > "${dir}/instances/valid/object.json"
+    printf '[]\n' > "${dir}/instances/invalid/array.json"
+    printf '%s\n' "${dir}"
+}
+
 # _cli_failed <raw_dir> <tool> <fixture id> <operation>: true if compat.tsv has a fail row for it.
 _cli_failed() {
     awk -F '\t' -v t="$2" -v f="$3" -v o="$4" \
@@ -219,6 +234,10 @@ run_cli_tier() {
     work="$(mktemp -d "${TMPDIR:-/tmp}/jsonschemars-bench-cli.XXXXXX")"
     # shellcheck disable=SC2064  # expand ${work} now: it is local and gone when the trap fires.
     trap "rm -rf '${work}'" EXIT
+    # The startup baseline (STARTUP_FIXTURE in src/lib.rs) leads the list: every tool on a trivial
+    # input, so each tool's fixed per-process cost can be told apart from the work.
+    fixtures="$(printf 'startup\t%s\t0\t\n' "$(_write_startup_fixture "${work}")")
+${fixtures}"
 
     while IFS="$(printf '\t')" read -r fid fdir resource_count unresolved; do
         [[ -n "${fid}" ]] || continue
@@ -331,7 +350,43 @@ check_competitor_versions() {
             stale=1
         fi
     done
+    # Non-Rust competitors: the lock file's pin must equal the registry's latest release.
+    local package
+    for package in @sourcemeta/jsonschema ajv ajv-draft-04 quicktype json-schema-to-typescript; do
+        locked="$(npm_locked_version "${package}")"
+        latest="$(npm view "${package}" version 2>/dev/null || true)"
+        if [[ -z "${latest}" ]]; then
+            echo "  WARNING: could not look up the newest ${package} on npm; freshness not checked" >&2
+        elif [[ "${locked}" != "${latest}" ]]; then
+            echo "  STALE: npm ${package} ${locked} is pinned; newest is ${latest}" \
+                "(in json_schema_rs_benchmark/competitors/node: npm install --save-exact ${package}@${latest})" >&2
+            stale=1
+        fi
+    done
+    for package in jsonschema fastjsonschema datamodel-code-generator; do
+        locked="$(pypi_locked_version "${package}")"
+        latest="$(_pypi_latest "${package}")"
+        if [[ -z "${latest}" ]]; then
+            echo "  WARNING: could not look up the newest ${package} on PyPI; freshness not checked" >&2
+        elif [[ "${locked}" != "${latest}" ]]; then
+            echo "  STALE: PyPI ${package} ${locked} is pinned; newest is ${latest}" \
+                "(in json_schema_rs_benchmark/competitors/python: uv add ${package}==${latest})" >&2
+            stale=1
+        fi
+    done
     return "${stale}"
+}
+
+# _pypi_latest <package>: the newest release of <package> on PyPI ("" when the lookup fails).
+_pypi_latest() {
+    curl -fsS --max-time 10 "https://pypi.org/pypi/$1/json" 2>/dev/null \
+        | "$(_python_bin)" -c 'import json, sys; print(json.load(sys.stdin)["info"]["version"])' \
+            2>/dev/null || true
+}
+
+# _tool_row <id> <version>: one tools.tsv row (id, version, language/runtime).
+_tool_row() {
+    printf '%s\t%s\t%s\n' "$1" "$2" "$(tool_runtime "$1")"
 }
 
 # --- main --------------------------------------------------------------------------------
@@ -344,6 +399,11 @@ main() {
     echo "==> checking required external tools"
     if ! check_required_tools; then
         echo "!! required tools are missing (see above); aborting." >&2
+        exit 1
+    fi
+    echo "==> installing non-Rust competitors from their lock files"
+    if ! install_competitor_envs; then
+        echo "!! installing the Node or Python competitors failed (see above); aborting." >&2
         exit 1
     fi
     echo "==> checking competitors are their newest stable releases"
@@ -365,14 +425,25 @@ main() {
     # 4. Fresh raw captures; stale criterion benches must never leak into the results.
     rm -rf "${RAW_DIR}" "${CRITERION_DIR}"
     mkdir -p "${RAW_DIR}"
-    local tool
-    for tool in $(required_external_tools) rustc; do
-        printf '%s\t%s\n' "${tool}" "$(tool_version "${tool}")"
-    done > "${RAW_DIR}/tool_versions.tsv"
-    # The in-process tier links these crates; record the versions Cargo.lock resolved.
-    for tool in jsonschema boon typify json-schema-rs; do
-        printf '%s\t%s\n' "${tool}" "$(_locked_version "${tool}")"
-    done >> "${RAW_DIR}/tool_versions.tsv"
+    # Every tool under the identifier its measurements use, with its release and runtime. Linked
+    # crates come from Cargo.lock (their CLIs were checked to match), the non-Rust competitors from
+    # their lock files.
+    {
+        _tool_row jsonschemars "$(_locked_version json-schema-rs)"
+        _tool_row jsonschema "$(_locked_version jsonschema)"
+        _tool_row jsonschema-cli "$(tool_version jsonschema-cli)"
+        _tool_row boon "$(_locked_version boon)"
+        _tool_row typify "$(_locked_version typify)"
+        _tool_row blaze "$(npm_locked_version @sourcemeta/jsonschema)"
+        _tool_row ajv "$(npm_locked_version ajv)"
+        _tool_row quicktype "$(npm_locked_version quicktype)"
+        _tool_row json-schema-to-typescript "$(npm_locked_version json-schema-to-typescript)"
+        _tool_row datamodel-code-generator "$(pypi_locked_version datamodel-code-generator)"
+        _tool_row python-jsonschema "$(pypi_locked_version jsonschema)"
+        _tool_row fastjsonschema "$(pypi_locked_version fastjsonschema)"
+        _tool_row hyperfine "$(tool_version hyperfine)"
+        _tool_row rustc "$(tool_version rustc)"
+    } > "${RAW_DIR}/tools.tsv"
 
     # 5. In-process peak heap + compat.
     echo "==> in-process tier: peak heap + compat"

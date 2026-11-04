@@ -3,8 +3,7 @@
 //! compiles the schema, validates the payload, and exits 0 on valid / non-zero on invalid.
 //! Each `-r FILE` registers one more document the schema references, under its root `$id`, the
 //! way the in-process tier hands a fixture's resources to boon (`Compiler::add_resource`).
-//!
-//! OWNER: competitor-wiring leaf.
+//! boon's own `boon-cli` cannot do this: it loads every document by its file URL.
 //!
 //! Uses clap's builder API (not derive) because the workspace forbids `allow_attributes`
 //! and clap's derive macro emits internal `#[allow(...)]` attributes.

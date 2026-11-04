@@ -1,0 +1,14 @@
+{
+  "name": "json-schema-rs-benchmark-competitors",
+  "private": true,
+  "description": "Non-Rust competitors for the json-schema-rs benchmark's CLI tier. Exact versions; run_benchmark.sh installs them with `npm ci` and aborts when one is behind npm's latest release.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "@sourcemeta/jsonschema": "17.3.2",
+    "ajv": "8.20.0",
+    "ajv-draft-04": "1.0.0",
+    "json-schema-to-typescript": "16.0.0",
+    "quicktype": "26.0.0"
+  }
+}
