@@ -27,4 +27,7 @@ Cargo.lock
 # Benchmark competitor environments, installed from the committed lock files by `make benchmark`
 json_schema_rs_benchmark/competitors/node/node_modules/
 json_schema_rs_benchmark/competitors/python/.venv/
+# reverse_codegen models generated from the fixtures by the driver (never committed)
+json_schema_rs_benchmark/competitors/node/reverse-models/
+json_schema_rs_benchmark/competitors/python/reverse-models/
 __pycache__/

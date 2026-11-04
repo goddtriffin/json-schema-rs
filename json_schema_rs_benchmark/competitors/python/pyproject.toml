@@ -7,6 +7,7 @@ dependencies = [
     "datamodel-code-generator==0.89.0",
     "fastjsonschema==2.22.3",
     "jsonschema==4.26.0",
+    "pydantic[email]==2.14.2",
 ]
 
 [tool.uv]

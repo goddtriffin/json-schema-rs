@@ -22,6 +22,7 @@
 pub mod adapters;
 pub mod fixtures;
 pub mod harness;
+pub mod reverse_models;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,8 +37,9 @@ pub const LOW_CONFIDENCE_RATIO: f64 = 0.10;
 /// Marker appended to a low-confidence measurement in the Markdown report.
 pub const LOW_CONFIDENCE_MARK: &str = "†";
 
-/// The CLI tier's startup-baseline fixture: every tool on a trivial input (a draft-07
-/// `{"type": "object"}` schema; instance `{}` to accept, `[]` to reject). Its rows show each
+/// The CLI tier's startup-baseline fixture: every tool on a trivial input (a draft-07 object
+/// schema with one optional string property, `name`; instance `{}` to accept, `[]` to reject).
+/// The property gives every model generator a root type to name. Its rows show each
 /// tool's fixed per-process cost (process start, runtime boot, module loading), which every other
 /// CLI row includes. It is rendered first in each CLI table and never counts toward a winner.
 pub const STARTUP_FIXTURE: &str = "startup";
@@ -91,6 +93,8 @@ impl Tier {
 pub enum Operation {
     /// Schema JSON text to Rust source text.
     Codegen,
+    /// Rust types (a fixture's model) to a JSON Schema.
+    ReverseCodegen,
     /// Schema JSON text to a compiled, ready-to-validate schema.
     SchemaCompile,
     /// Validating the fixture's valid instance against the compiled schema.
@@ -101,8 +105,9 @@ pub enum Operation {
 
 impl Operation {
     /// Every operation, in reporting order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Codegen,
+        Self::ReverseCodegen,
         Self::SchemaCompile,
         Self::ValidateValid,
         Self::ValidateInvalid,
@@ -113,6 +118,7 @@ impl Operation {
     pub const fn token(self) -> &'static str {
         match self {
             Self::Codegen => "codegen",
+            Self::ReverseCodegen => "reverse_codegen",
             Self::SchemaCompile => "schema_compile",
             Self::ValidateValid => "validate_valid",
             Self::ValidateInvalid => "validate_invalid",
@@ -132,6 +138,7 @@ impl Operation {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Codegen => "codegen",
+            Self::ReverseCodegen => "reverse codegen",
             Self::SchemaCompile => "schema compile",
             Self::ValidateValid => "validate (valid)",
             Self::ValidateInvalid => "validate (invalid)",
@@ -811,7 +818,8 @@ fn methodology() -> String {
          runs after warmup; peak RSS is the process's peak resident set size. Tools run on \
          different runtimes (see Tools), and process start, runtime boot and module loading are \
          part of every CLI run: each CLI table's *{STARTUP_FIXTURE}* row is the tool on a trivial \
-         input (a draft-07 `{{\"type\": \"object\"}}` schema), so that fixed cost can be told apart \
+         input (a draft-07 object schema with one optional string property), so that fixed cost \
+         can be told apart \
          from the work, and it never counts toward a winner. A cell is \
          measured only when the tool is correct on it (see Compatibility). A cell's best tool \
          wins outright (**bold**) only when at least two tools were measured and its lead over \
@@ -1316,7 +1324,8 @@ mod tests {
     #[test]
     fn operation_serializes_as_snake_case_token() {
         let expected: String =
-            "[\"codegen\",\"schema_compile\",\"validate_valid\",\"validate_invalid\"]".to_owned();
+            "[\"codegen\",\"reverse_codegen\",\"schema_compile\",\"validate_valid\",\"validate_invalid\"]"
+                .to_owned();
         let actual: String = serde_json::to_string(&Operation::ALL).expect("serializes");
         assert_eq!(expected, actual);
     }

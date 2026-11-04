@@ -43,6 +43,7 @@ use json_schema_rs::{
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -149,6 +150,10 @@ impl fmt::Debug for Compiled {
 
 impl Adapter for Tool {
     type Compiled = Compiled;
+    // Reverse codegen runs on models generated from the fixtures, which only exist once the
+    // driver has generated the fixture set, so it is measured in `isolated/`.
+    type Model = Infallible;
+    type Reversed = Infallible;
 
     const ALL: &'static [Tool] = &Tool::ALL;
 
@@ -171,6 +176,7 @@ impl Adapter for Tool {
                 self,
                 Tool::JsonSchemaRs | Tool::Typify | Tool::Schemafy | Tool::JsonschemaCodeGenerator
             ),
+            Operation::ReverseCodegen => false,
             Operation::SchemaCompile | Operation::ValidateValid | Operation::ValidateInvalid => {
                 matches!(
                     self,
@@ -250,6 +256,14 @@ impl Adapter for Tool {
                 })
             }
         }
+    }
+
+    fn reverse_codegen(model: Infallible) -> Infallible {
+        match model {}
+    }
+
+    fn check_reversed(_fixture: &Fixture, reversed: &Infallible) -> Result<(), AdapterError> {
+        match *reversed {}
     }
 }
 
