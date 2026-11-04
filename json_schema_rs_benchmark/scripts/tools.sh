@@ -227,8 +227,11 @@ pypi_locked_version() {
 # can tell a runtime's fixed cost (see the startup baseline) from the work.
 tool_runtime() {
     case "$1" in
-        jsonschemars | jsonschema | jsonschema-cli | boon | typify)
+        jsonschemars | jsonschema | jsonschema-cli | boon | typify | valico | jsonschema-valid \
+            | schemafy | jsonschema_code_generator | corvus-json-schema)
             echo "Rust (native)" ;;
+        jsonschema-macros)
+            echo "Rust (native); validators generated at compile time" ;;
         blaze)
             echo "C++ (native)" ;;
         ajv)
