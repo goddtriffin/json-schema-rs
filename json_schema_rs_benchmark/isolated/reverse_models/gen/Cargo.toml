@@ -1,0 +1,36 @@
+# Generator of the reverse-codegen models, the build-dependency of every model shard crate
+# (../shard_<n>). See src/lib.rs.
+
+[package]
+name = "reverse-model-gen"
+description = "Generates the reverse-codegen benchmark's models. Not published."
+version = "0.0.6"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[dependencies]
+json-schema-rs-benchmark = { path = "../../..", default-features = false }
+json-schema-rs = { path = "../../../../json_schema_rs" }
+serde_json = "1.0.149"
+syn = { version = "3", features = ["full", "visit-mut"] }
+prettyplease = "0.3"
+quote = "1"
+
+[lints.rust]
+unsafe_code = { level = "forbid", priority = 0 }
+unfulfilled_lint_expectations = { level = "forbid", priority = 1 }
+unused = { level = "deny", priority = -1 }
+
+[lints.clippy]
+allow_attributes = { level = "forbid", priority = 1 }
+multiple_crate_versions = { level = "allow", priority = 1 }
+nursery = { level = "allow", priority = 0 }
+all = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }

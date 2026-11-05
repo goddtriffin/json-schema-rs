@@ -170,8 +170,10 @@ json_schema_rs_benchmark/
   benches/cross_tool.rs    # criterion timing of every tool
   isolated/                # corvus-json-schema, jsonschema-macros and the reverse_codegen models,
                            #   built apart (own workspace, one build per feature); build.rs generates
-                           #   one compile-time validator and one Rust model per fixture;
-                           #   src/bin/reverse_schema.rs is the reverse_codegen CLI-tier wrapper
+                           #   one compile-time validator per fixture; reverse_models/ holds the
+                           #   model generator (gen/) and the 8 shard crates the models are spread
+                           #   over, so they compile in parallel; src/bin/reverse_schema.rs is
+                           #   the reverse_codegen CLI-tier wrapper
   scripts/run_benchmark.sh # driver invoked by `make benchmark`
   scripts/tools.sh         # CLI-tier tool definitions
   competitors/node/        # pinned npm competitors (package.json + lock) + ajv_validate.mjs,

@@ -1,12 +1,12 @@
-//! Names shared by the reverse-codegen models' build (`isolated/build.rs`), the build-failure
-//! triage (`src/bin/model_build_failures.rs`) and the driver.
+//! Names shared by the reverse-codegen models' generator (`isolated/reverse_models/gen`), the
+//! build-failure triage (`src/bin/model_build_failures.rs`) and the driver.
 //!
 //! The `reverse-codegen` build of `isolated/` compiles one model per (tool, fixture): the Rust
 //! types our codegen generates for the fixture's schema, carrying that tool's derive. A derive
 //! that cannot handle a model fails the whole build, so the driver checks it with
 //! `--message-format=json`, and on failure [`build_failures`] attributes each compiler error to
 //! the model whose file it is in. The driver appends those to the exclusion file named by
-//! [`EXCLUDE_ENV`] and builds again; `build.rs` leaves an excluded model out and records the
+//! [`EXCLUDE_ENV`] and builds again; the generator leaves an excluded model out and records the
 //! reason as that cell's compatibility failure.
 
 use serde_json::Value;

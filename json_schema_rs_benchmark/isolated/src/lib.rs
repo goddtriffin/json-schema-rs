@@ -13,7 +13,7 @@
 //!   run time only looks the fixture's validator up.
 //! * reverse codegen (feature `reverse-codegen`): our `ToJsonSchema` derive
 //!   (`T::json_schema()`) and schemars' (`schemars::schema_for!(T)`, default settings), each on
-//!   its own copy of the fixture's model (see `build.rs`). The timed call produces the tool's
+//!   its own copy of the fixture's model (see `reverse_models/gen`). The timed call produces the tool's
 //!   in-memory schema; the correctness probe serializes it to JSON and checks it with our
 //!   validator against every valid instance of the fixture.
 
@@ -51,19 +51,39 @@ pub enum MacroValidator {
 
 include!(concat!(env!("OUT_DIR"), "/macro_validators.rs"));
 
-/// One fixture's reverse-codegen models: each tool's function returning its root type's schema,
-/// or why the tool has no model for the fixture.
+/// One shard's table of our derive's models (fixture id to model).
 #[cfg(feature = "reverse-codegen")]
-#[derive(Debug, Clone, Copy)]
-pub struct ReverseModels {
-    /// `<Root as json_schema_rs::ToJsonSchema>::json_schema`.
-    pub jsonschemars: Result<fn() -> json_schema_rs::ReverseCodeGenResult, &'static str>,
-    /// `schemars::schema_for!(Root)`.
-    pub schemars: Result<fn() -> schemars::Schema, &'static str>,
-}
+type OurModels = &'static [(&'static str, reverse_models_shard_0::OurModel)];
 
+/// One shard's table of schemars' models (fixture id to model).
 #[cfg(feature = "reverse-codegen")]
-include!(concat!(env!("OUT_DIR"), "/reverse_models.rs"));
+type SchemarsModels = &'static [(&'static str, reverse_models_shard_0::SchemarsModel)];
+
+/// Every shard's table of our derive's models.
+#[cfg(feature = "reverse-codegen")]
+static OUR_MODELS: [OurModels; 8] = [
+    reverse_models_shard_0::JSONSCHEMARS,
+    reverse_models_shard_1::JSONSCHEMARS,
+    reverse_models_shard_2::JSONSCHEMARS,
+    reverse_models_shard_3::JSONSCHEMARS,
+    reverse_models_shard_4::JSONSCHEMARS,
+    reverse_models_shard_5::JSONSCHEMARS,
+    reverse_models_shard_6::JSONSCHEMARS,
+    reverse_models_shard_7::JSONSCHEMARS,
+];
+
+/// Every shard's table of schemars' models.
+#[cfg(feature = "reverse-codegen")]
+static SCHEMARS_MODELS: [SchemarsModels; 8] = [
+    reverse_models_shard_0::SCHEMARS,
+    reverse_models_shard_1::SCHEMARS,
+    reverse_models_shard_2::SCHEMARS,
+    reverse_models_shard_3::SCHEMARS,
+    reverse_models_shard_4::SCHEMARS,
+    reverse_models_shard_5::SCHEMARS,
+    reverse_models_shard_6::SCHEMARS,
+    reverse_models_shard_7::SCHEMARS,
+];
 
 /// A benchmarked tool built in this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -330,7 +350,7 @@ mod corvus {
 pub mod reverse {
     //! Model lookup and the correctness probe of the reverse-codegen tools.
 
-    use super::{IsolatedModel, IsolatedReversed, IsolatedTool, REVERSE_MODELS, ReverseModels};
+    use super::{IsolatedModel, IsolatedReversed, IsolatedTool, OUR_MODELS, SCHEMARS_MODELS};
     use json_schema_rs::{CompiledSchema, Registry, Schema};
     use json_schema_rs_benchmark::fixtures::{self, Fixture};
     use json_schema_rs_benchmark::harness::AdapterError;
@@ -342,25 +362,30 @@ pub mod reverse {
     ///
     /// Returns [`AdapterError::ReverseCodegen`] with why the tool has no model for the fixture.
     pub fn model(tool: IsolatedTool, fixture_id: &str) -> Result<IsolatedModel, AdapterError> {
-        let models: &ReverseModels = REVERSE_MODELS
-            .iter()
-            .find(|(id, _models): &&(&str, ReverseModels)| *id == fixture_id)
-            .map(|(_id, models)| models)
-            .ok_or_else(|| {
-                AdapterError::ReverseCodegen(
-                    "fixture was not discovered when the benchmark was built".to_owned(),
-                )
-            })?;
-        let missing = |reason: &str| AdapterError::ReverseCodegen(reason.to_owned());
+        /// The entry for `fixture_id` in any shard's table.
+        fn find<T: Copy>(
+            shards: &[&'static [(&'static str, Result<T, &'static str>)]],
+            fixture_id: &str,
+        ) -> Result<T, AdapterError> {
+            let entry: Result<T, &'static str> = shards
+                .iter()
+                .flat_map(|shard| shard.iter())
+                .find(|(id, _model)| *id == fixture_id)
+                .map(|(_id, model)| *model)
+                .ok_or_else(|| {
+                    AdapterError::ReverseCodegen(
+                        "fixture was not discovered when the benchmark was built".to_owned(),
+                    )
+                })?;
+            entry.map_err(|reason: &str| AdapterError::ReverseCodegen(reason.to_owned()))
+        }
         match tool {
-            IsolatedTool::JsonSchemaRs => models
-                .jsonschemars
-                .map(IsolatedModel::JsonSchemaRs)
-                .map_err(missing),
-            IsolatedTool::Schemars => models
-                .schemars
-                .map(IsolatedModel::Schemars)
-                .map_err(missing),
+            IsolatedTool::JsonSchemaRs => {
+                find(&OUR_MODELS, fixture_id).map(IsolatedModel::JsonSchemaRs)
+            }
+            IsolatedTool::Schemars => {
+                find(&SCHEMARS_MODELS, fixture_id).map(IsolatedModel::Schemars)
+            }
         }
     }
 
