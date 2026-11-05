@@ -3,9 +3,11 @@
 # tools.sh — per-tool CLI invocation definitions for the benchmark harness's CLI tier.
 #
 # This file is a library: scripts/run_benchmark.sh `source`s it. It does not run standalone and
-# has no `set -e` or top-level side effects. The sourcing script must set `REPO_ROOT` (repo root);
-# our own release binaries live at "$REPO_ROOT/target/release/{jsonschemars,boon_validate}", and the
-# non-Rust competitors in environments installed from the lock files under
+# has no `set -e` or top-level side effects. The sourcing script must set `REPO_ROOT` (repo root).
+# Every Rust tool is built with the benchmark profile (json_schema_rs_benchmark/profile.toml): our
+# own binaries live at "$REPO_ROOT/target/benchmark/{jsonschemars,boon_validate}", the Rust
+# competitor CLIs at "$REPO_ROOT/target/benchmark-tools/bin/" (see install_rust_cli_competitors),
+# and the non-Rust competitors in environments installed from the lock files under
 # "$REPO_ROOT/json_schema_rs_benchmark/competitors/" (node: npm, python: uv; see
 # install_competitor_envs).
 # Must stay compatible with bash 3.2 (the macOS system bash).
@@ -24,6 +26,9 @@
 #   _install_hint <cmd>              -> install command for a required tool
 #   check_required_tools             -> 0 if all present; else prints each missing one, returns 1
 #   tool_version <cmd>               -> version number of an external tool (e.g. 1.20.0)
+#   profile_summary                  -> the benchmark profile's settings (e.g. codegen-units = 1, ...)
+#   install_rust_cli_competitors <jsonschema version> <typify version>
+#                                    -> install jsonschema-cli and cargo-typify with the benchmark profile
 #   install_competitor_envs          -> install the Node and Python competitors from their lock files
 #   npm_locked_version <package>     -> version package-lock.json pins for an npm competitor
 #   pypi_locked_version <package>    -> version uv.lock pins for a Python competitor
@@ -52,23 +57,23 @@
 # ---------------------------------------------------------------------------------------
 # TOOL CLI SYNTAXES
 #
-#   jsonschemars (our CLI, "$REPO_ROOT/target/release/jsonschemars"):
+#   jsonschemars (our CLI, "$REPO_ROOT/target/benchmark/jsonschemars"):
 #       codegen:  jsonschemars generate rust -o <out_dir> <schema> [resource...]
 #                 (every input file is reachable from the others by its file URI and root $id;
 #                 each also gets its own output file)
 #       validate: jsonschemars validate -s <schema> [-r <resource>]... -p <payload>
 #                 (each -r registers a document under its file URI and root $id)
 #
-#   typify (https://github.com/oxidecomputer/typify, `cargo install cargo-typify`):
+#   typify (https://github.com/oxidecomputer/typify; the cargo-typify crate, installed by the driver):
 #       cargo-typify typify <schema> --output <out_dir>/<base>.rs   (no extra documents)
 #     The `cargo-typify` binary is invoked DIRECTLY. Going through `cargo typify` would add the
 #     cargo wrapper's own startup to every measurement. When run directly, cargo subcommands take
 #     their subcommand name as the first argument, hence the repeated `typify`.
 #
-#   jsonschema-cli (https://github.com/Stranger6667/jsonschema, `cargo install jsonschema-cli`):
+#   jsonschema-cli (https://github.com/Stranger6667/jsonschema; installed by the driver):
 #       jsonschema-cli validate <schema> -i <payload>   (no extra documents)
 #
-#   boon (our thin wrapper bin over the boon crate, "$REPO_ROOT/target/release/boon_validate";
+#   boon (our thin wrapper bin over the boon crate, "$REPO_ROOT/target/benchmark/boon_validate";
 #         boon's own `boon-cli` loads documents by file URL only, so it cannot take a fixture's
 #         resources under their $id):
 #       boon_validate -s <schema> [-r <resource>]... -p <payload>
@@ -113,8 +118,13 @@
 
 # --- helpers ---------------------------------------------------------------------------
 
-_jsonschemars_bin() { printf '%s/target/release/jsonschemars' "${REPO_ROOT:?REPO_ROOT not set}"; }
-_boon_bin() { printf '%s/target/release/boon_validate' "${REPO_ROOT:?REPO_ROOT not set}"; }
+_jsonschemars_bin() { printf '%s/target/benchmark/jsonschemars' "${REPO_ROOT:?REPO_ROOT not set}"; }
+_boon_bin() { printf '%s/target/benchmark/boon_validate' "${REPO_ROOT:?REPO_ROOT not set}"; }
+# The build profile of every Rust tool, and where the driver installs the Rust competitor CLIs.
+_profile_config() { printf '%s/json_schema_rs_benchmark/profile.toml' "${REPO_ROOT:?REPO_ROOT not set}"; }
+_rust_tools_root() { printf '%s/target/benchmark-tools' "${REPO_ROOT:?REPO_ROOT not set}"; }
+_typify_bin() { printf '%s/bin/cargo-typify' "$(_rust_tools_root)"; }
+_jsonschema_cli_bin() { printf '%s/bin/jsonschema-cli' "$(_rust_tools_root)"; }
 _competitors_dir() { printf '%s/json_schema_rs_benchmark/competitors' "${REPO_ROOT:?REPO_ROOT not set}"; }
 _node_dir() { printf '%s/node' "$(_competitors_dir)"; }
 _python_dir() { printf '%s/python' "$(_competitors_dir)"; }
@@ -153,17 +163,16 @@ _quote_argv() {
 
 # required_external_tools: every external binary the harness needs. A missing competitor would
 # silently drop out of the comparison and misrepresent it, so the driver aborts instead. Our own
-# bins (jsonschemars, boon_validate) are built by the driver and are not listed.
+# bins (jsonschemars, boon_validate) and the Rust competitor CLIs (jsonschema-cli, cargo-typify)
+# are built by the driver and are not listed.
 required_external_tools() {
-    printf '%s\n' hyperfine cargo-typify jsonschema-cli node npm uv
+    printf '%s\n' hyperfine node npm uv
 }
 
 # _install_hint <cmd>: how to install a required tool.
 _install_hint() {
     case "$1" in
         hyperfine)      echo "cargo install hyperfine" ;;
-        cargo-typify)   echo "cargo install cargo-typify" ;;
-        jsonschema-cli) echo "cargo install jsonschema-cli" ;;
         node | npm)     echo "brew install node (or https://nodejs.org)" ;;
         uv)             echo "brew install uv (or https://docs.astral.sh/uv)" ;;
         *)              echo "(unknown install method)" ;;
@@ -184,16 +193,51 @@ check_required_tools() {
 }
 
 # tool_version <cmd>: echo the first dotted version number the tool reports (or "unknown").
+# <cmd> is a program on PATH or a path; jsonschema-cli and cargo-typify name the driver's installs.
 tool_version() {
     local raw
     case "$1" in
         # As a cargo subcommand binary, cargo-typify expects its subcommand name first.
-        cargo-typify) raw="$(cargo-typify typify --version 2>&1 || true)" ;;
-        *)            raw="$("$1" --version 2>&1 || true)" ;;
+        cargo-typify)   raw="$("$(_typify_bin)" typify --version 2>&1 || true)" ;;
+        jsonschema-cli) raw="$("$(_jsonschema_cli_bin)" --version 2>&1 || true)" ;;
+        *)              raw="$("$1" --version 2>&1 || true)" ;;
     esac
     printf '%s\n' "${raw}" | awk '
         { for (i = 1; i <= NF; i++) if ($i ~ /^v?[0-9]+\.[0-9]+/) { sub(/^v/, "", $i); print $i; found = 1; exit } }
         END { if (!found) print "unknown" }'
+}
+
+# --- Rust competitor CLIs ---------------------------------------------------------------
+
+# profile_summary: the benchmark profile's own settings, comma-separated as profile.toml writes them
+# (`inherits` left out), e.g. `codegen-units = 1, lto = "thin"`.
+profile_summary() {
+    awk '
+        /^\[/ { in_profile = ($0 == "[profile.benchmark]"); next }
+        in_profile && /=/ && $1 != "inherits" { sub(/[[:space:]]*#.*/, ""); out = out sep $0; sep = ", " }
+        END { print out }' "$(_profile_config)"
+}
+
+# install_rust_cli_competitors <jsonschema version> <typify version>: install jsonschema-cli and
+# cargo-typify at the releases the benchmark links (so both tiers measure one release), built with
+# the benchmark profile like every other Rust tool, into _rust_tools_root. `--locked` builds each
+# with the dependency versions its release was published with. cargo install skips a crate already
+# installed at that version with the same toolchain; a changed profile is not something it tracks,
+# so the profile's settings are stamped next to the installs and a change reinstalls both.
+install_rust_cli_competitors() {
+    local root stamp profile force=""
+    root="$(_rust_tools_root)"
+    stamp="${root}/profile.stamp"
+    profile="$(profile_summary)"
+    # No stamp: an install of unknown profile (or none) may sit in the root.
+    if [[ ! -f "${stamp}" ]] || [[ "$(cat "${stamp}")" != "${profile}" ]]; then
+        force="--force"
+    fi
+    cargo install --locked ${force} --root "${root}" \
+        --config "$(_profile_config)" --profile benchmark "jsonschema-cli@$1" &&
+        cargo install --locked ${force} --root "${root}" \
+            --config "$(_profile_config)" --profile benchmark "cargo-typify@$2" &&
+        printf '%s\n' "${profile}" > "${stamp}"
 }
 
 # --- non-Rust competitor environments ---------------------------------------------------
@@ -243,7 +287,7 @@ tool_runtime() {
         hyperfine)
             echo "Rust (native); times the CLI tier" ;;
         rustc)
-            echo "compiles every Rust tool (release profile)" ;;
+            echo "compiles every Rust tool (one profile: $(profile_summary))" ;;
         *)
             echo "unknown" ;;
     esac
@@ -297,7 +341,7 @@ codegen_cmd() {
             _no_resources "${tool}" codegen "$#" || return
             base="$(basename "${schema}")"
             base="${base%.*}"
-            _quote_argv cargo-typify typify "${schema}" --output "${out_dir}/${base}.rs"
+            _quote_argv "$(_typify_bin)" typify "${schema}" --output "${out_dir}/${base}.rs"
             ;;
         quicktype)
             _no_resources "${tool}" codegen "$#" || return
@@ -345,7 +389,7 @@ validate_cmd() {
             ;;
         jsonschema-cli)
             _no_resources "${tool}" validate "$#" || return
-            _quote_argv jsonschema-cli validate "${schema}" -i "${payload}"
+            _quote_argv "$(_jsonschema_cli_bin)" validate "${schema}" -i "${payload}"
             ;;
         boon)
             resource_args=()

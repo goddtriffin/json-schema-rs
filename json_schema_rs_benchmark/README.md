@@ -19,27 +19,41 @@ partial run would silently omit a competitor and misrepresent the comparison):
 
 ```sh
 cargo install hyperfine                # CLI-tier timing
-cargo install cargo-typify --locked    # codegen competitor (typify)
-cargo install jsonschema-cli --locked  # validation competitor (Stranger6667/jsonschema)
 brew install node uv                   # runtimes for the non-Rust competitors
 ```
 
-The non-Rust competitors need no manual install: the driver installs them from the committed lock
-files, `npm ci` in `competitors/node/` and `uv sync --frozen` in `competitors/python/` (uv also
+The competitors need no manual install. The driver installs the Rust competitor CLIs
+(`jsonschema-cli`, `cargo-typify`) at the release the benchmark links, into
+`target/benchmark-tools/` (see *Build profile*), and the non-Rust competitors from the committed
+lock files, `npm ci` in `competitors/node/` and `uv sync --frozen` in `competitors/python/` (uv also
 fetches the Python pinned in `.python-version`), into git-ignored directories.
 
 Competitors must also be their newest stable release: the run aborts with the upgrade command
 when a linked crate (`jsonschema`, `typify`, `boon`, `valico`, `jsonschema-valid`, `schemafy_lib`,
 `jsonschema_code_generator` in `Cargo.lock`; `corvus-json-schema` and `jsonschema` in
-`isolated/Cargo.lock`) is behind crates.io, when
-a competitor CLI is not the same release as its crate, or when an npm or PyPI competitor's pin is
-behind the registry. For a crate, bump the version in its `Cargo.toml`, run `cargo update -p <crate>` (with
-`--manifest-path isolated/Cargo.toml` for the isolated crates),
-and reinstall the CLI at that version; for npm, `npm install --save-exact <package>@<version>` in
+`isolated/Cargo.lock`) is behind crates.io, or when an npm or PyPI competitor's pin is behind the
+registry. For a crate, bump the version in its `Cargo.toml` and run `cargo update -p <crate>` (with
+`--manifest-path isolated/Cargo.toml` for the isolated crates); the driver installs the matching CLI
+on the next run. For npm, `npm install --save-exact <package>@<version>` in
 `competitors/node/`; for PyPI, `uv add <package>==<version>` in `competitors/python/`.
 
 Our own `jsonschemars` CLI, the `boon` wrapper and every in-process competitor (linked crates)
 are built by the driver.
+
+### Build profile
+
+Every Rust tool, ours and every competitor's alike, is built with one profile, `benchmark` in
+[`profile.toml`](profile.toml): `codegen-units = 1` and `lto = "thin"` on top of `release`. The
+driver passes that file to every cargo command it runs (`--config profile.toml --profile
+benchmark`): the workspace builds and benches, both isolated builds, and the `cargo install` of
+each competitor CLI. Binaries land in `target/benchmark/`. The profile is recorded in the results
+(the `rustc` row of the Tools table).
+
+Why: with Cargo's default 16 codegen units, which unit a hot function lands in, and therefore what
+gets inlined into it, shifts when unrelated code is added to a crate. Adding a module the benchmark
+never calls moved in-process validation by up to 12%, a "regression" no code path caused. With one
+codegen unit and thin LTO the same comparison moves no cell beyond noise; without LTO or with fat
+LTO a few cells still moved 3-5%. Thin LTO was also the fastest of the three for every tool.
 
 Outputs, committed for PR review:
 
