@@ -539,7 +539,8 @@ _tool_row() {
 # compat failure on that fixture, not a broken build. `cargo check` finds them (no code
 # generation, so each round is fast): after each failed check, model_build_failures reads cargo's
 # JSON messages and appends one "tool \t fixture \t reason" row per failing model to
-# BENCH_REVERSE_EXCLUDE, which the isolated build script reads to leave those models out. An error
+# BENCH_REVERSE_EXCLUDE, which the model shards' build scripts read to leave those models out
+# (--keep-going, so every shard reports its errors in the same round). An error
 # it cannot attribute to one model aborts the run. Once the check passes, one benchmark-profile build
 # follows. BENCH_REVERSE_EXCLUDE stays exported so the later criterion build sees the same
 # exclusions.
@@ -549,7 +550,7 @@ build_reverse_models() {
     : > "${BENCH_REVERSE_EXCLUDE}"
     for attempt in 1 2 3 4 5; do
         if _isolated_cargo check --config "${PROFILE_CONFIG}" --profile benchmark \
-            --features reverse-codegen --bins \
+            --features reverse-codegen --bins --keep-going \
             --message-format=json > "${RAW_DIR}/reverse_build.jsonl"; then
             if [[ -s "${BENCH_REVERSE_EXCLUDE}" ]]; then
                 echo "    excluded reverse_codegen models (model does not compile):"

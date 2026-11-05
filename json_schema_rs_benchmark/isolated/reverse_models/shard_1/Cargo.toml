@@ -1,0 +1,42 @@
+# Reverse-codegen model shard 1 of 8 (see ../gen/src/lib.rs). Every shard shares one build
+# script and library source; the build script reads the shard number from the package name.
+
+[package]
+name = "reverse-models-shard-1"
+description = "Reverse-codegen benchmark models, shard 1. Not published."
+version = "0.0.6"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+build = "../shard_build.rs"
+
+[lib]
+path = "../shard_lib.rs"
+
+[dependencies]
+json-schema-rs = { path = "../../../../json_schema_rs" }
+json-schema-rs-macro = { path = "../../../../json_schema_rs_macro" }
+schemars = "1.2.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["float_roundtrip"] }
+
+[build-dependencies]
+reverse-model-gen = { path = "../gen" }
+
+[lints.rust]
+unsafe_code = { level = "forbid", priority = 0 }
+unfulfilled_lint_expectations = { level = "forbid", priority = 1 }
+unused = { level = "deny", priority = -1 }
+
+[lints.clippy]
+allow_attributes = { level = "forbid", priority = 1 }
+multiple_crate_versions = { level = "allow", priority = 1 }
+nursery = { level = "allow", priority = 0 }
+all = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
