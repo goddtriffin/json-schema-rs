@@ -1,18 +1,44 @@
 # json-schema-rs-benchmark
 
 Automated benchmark harness that measures `json-schema-rs` against competitor JSON Schema
-libraries on the same fixtures, driven by a single `make benchmark` target, and marks a
-per-category winner. This crate is a workspace member and is **not published**
-(`publish = false`).
+libraries on the same fixtures and marks a per-category winner. This crate is a workspace
+member and is **not published** (`publish = false`).
 
-> Running the harness and committing its results is a **hard requirement** for every PR.
-> See the repository [CLAUDE.md](../CLAUDE.md).
+> Running `make benchmark` and putting its report in the PR body is a **hard requirement** for
+> every PR. See the repository [CLAUDE.md](../CLAUDE.md).
 
 ## Run it
 
 ```sh
-make benchmark          # from the repo root
+make benchmark          # quick, every PR: our library + CLI, main vs the working tree (~5-10 min)
+make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
+
+### Quick mode (`make benchmark`)
+
+Measures only our library and CLI (`jsonschemars`), on two builds: the base commit (the merge
+base of `main` and `HEAD`; set `BENCH_BASE` for another ref) and the working tree, uncommitted
+changes included. Both sides are built with the benchmark profile, the base from a `git archive`
+of its commit in `target/benchmark-quick/base-src` with the working tree's `Cargo.lock`, and
+measured in the same session: in-process peak heap once per side (it is exact), then criterion
+and the CLI tier (hyperfine: codegen, validate_valid, validate_invalid, and the startup row) in
+`BENCH_QUICK_ROUNDS` rounds (default 2) in ABBA order. Every round's samples are pooled per side,
+so drift during the run lands on both sides alike; measuring both sides on the same day is what
+lets a PR tell a real change from the run-to-run drift between days (#100).
+
+The `compare` binary then prints which cells moved beyond noise (the winner rule below, applied
+to `main` vs the PR) as the PR body's *Performance* section, and writes it to
+`target/benchmark-quick/report.md`. A cell that passes its correctness probe on one side only is
+listed apart. Nothing committed changes.
+
+Reverse codegen is not measured in quick mode: its models take minutes to build per side (#102).
+A PR that changes the derive or reverse codegen, the harness, a competitor or a fixture runs
+`make benchmark_full` too.
+
+The first quick run builds the base side's dependencies from scratch into
+`target/benchmark-quick/base-target`; later runs only rebuild what changed.
+
+### Full mode (`make benchmark_full`)
 
 The external tools must be installed first, or the run aborts up front with install hints (a
 partial run would silently omit a competitor and misrepresent the comparison):
@@ -146,12 +172,17 @@ See [design.md](../design.md#benchmark-harness) for the full methodology.
 
 ## Env knobs
 
+Defaults are given as full mode / quick mode.
+
 | Variable | Default | Effect |
 |---|---|---|
-| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` | criterion arguments |
-| `BENCH_SKIP_CRITERION=1` | unset | skip in-process timing |
-| `BENCH_CLI_WARMUP` | `3` | hyperfine warmup runs per CLI cell |
-| `BENCH_CLI_RUNS` | `15` | hyperfine timed runs per CLI cell |
+| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` / `--warm-up-time 0.3 --measurement-time 1 --sample-size 20` | criterion arguments (per round in quick mode) |
+| `BENCH_SKIP_CRITERION=1` | unset (full mode only) | skip in-process timing |
+| `BENCH_CLI_WARMUP` | `3` / `2` | hyperfine warmup runs per CLI cell (and round) |
+| `BENCH_CLI_RUNS` | `15` / `10` | hyperfine timed runs per CLI cell (and round) |
+| `BENCH_BASE` | — / `main` | quick mode: the ref whose merge base with `HEAD` is the base side |
+| `BENCH_QUICK_ROUNDS` | — / `2` | quick mode: interleaved rounds per side |
+| `BENCH_TOOLS` | unset | comma-separated tool ids the in-process harness measures (quick mode sets `jsonschemars`) |
 
 ## Layout
 
@@ -163,6 +194,7 @@ json_schema_rs_benchmark/
   src/fixtures.rs          # fixture discovery shared by both tiers
   src/bin/aggregate.rs     # raw captures -> results.{json,md}
   src/bin/heap_profile.rs  # per-operation peak heap + in-process compatibility
+  src/bin/compare.rs       # quick mode: main vs the working tree, cells moved beyond noise
   src/bin/gen_fixtures.rs  # deterministic large synthetic fixtures
   src/bin/list_fixtures.rs # fixture list for the CLI tier
   src/bin/boon_validate.rs # thin boon CLI wrapper (boon-cli cannot register documents by $id)
@@ -174,7 +206,8 @@ json_schema_rs_benchmark/
                            #   model generator (gen/) and the 8 shard crates the models are spread
                            #   over, so they compile in parallel; src/bin/reverse_schema.rs is
                            #   the reverse_codegen CLI-tier wrapper
-  scripts/run_benchmark.sh # driver invoked by `make benchmark`
+  scripts/run_benchmark.sh # full-mode driver (`make benchmark_full`)
+  scripts/quick_benchmark.sh # quick-mode driver (`make benchmark`)
   scripts/tools.sh         # CLI-tier tool definitions
   competitors/node/        # pinned npm competitors (package.json + lock) + ajv_validate.mjs,
                            #   zod_schema.mjs; reverse-models/ (git-ignored) holds generated models

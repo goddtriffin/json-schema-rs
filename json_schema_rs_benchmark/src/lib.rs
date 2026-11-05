@@ -20,6 +20,7 @@
 
 #[cfg(feature = "tools")]
 pub mod adapters;
+pub mod compare;
 pub mod fixtures;
 pub mod harness;
 pub mod reverse_models;
@@ -1085,13 +1086,8 @@ pub fn parse_hyperfine_json(
     fixture: &str,
     operation: Operation,
 ) -> Result<Vec<Measurement>, String> {
-    let export: HyperfineExport =
-        serde_json::from_str(json).map_err(|e| format!("invalid hyperfine JSON: {e}"))?;
-    let result: &HyperfineResult = export
-        .results
-        .first()
-        .ok_or_else(|| "hyperfine export has no results".to_owned())?;
-    let time: Stats = Stats::from_samples(&result.times)
+    let samples: HyperfineSamples = parse_hyperfine_samples(json)?;
+    let time: Stats = Stats::from_samples(&samples.times)
         .ok_or_else(|| "hyperfine result has no timing samples".to_owned())?;
 
     let measurement = |metric: Metric, stats: Stats| -> Measurement {
@@ -1105,14 +1101,41 @@ pub fn parse_hyperfine_json(
         }
     };
     let mut out: Vec<Measurement> = vec![measurement(Metric::TimeSecs, time)];
-    if let Some(memory) = result
-        .memory_usage_byte
-        .as_deref()
-        .and_then(Stats::from_samples)
-    {
+    if let Some(memory) = Stats::from_samples(&samples.peak_memory_bytes) {
         out.push(measurement(Metric::PeakMemoryBytes, memory));
     }
     Ok(out)
+}
+
+/// The raw samples of one hyperfine result: every timed run's wall time and peak RSS.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HyperfineSamples {
+    /// Wall time of each run, in seconds (never empty).
+    pub times: Vec<f64>,
+    /// Peak resident set size of each run, in bytes (empty when hyperfine did not record it).
+    pub peak_memory_bytes: Vec<f64>,
+}
+
+/// Read the raw samples of a hyperfine export's first result.
+///
+/// # Errors
+///
+/// Returns a reason when the JSON is invalid, has no result, or has no timing samples.
+pub fn parse_hyperfine_samples(json: &str) -> Result<HyperfineSamples, String> {
+    let export: HyperfineExport =
+        serde_json::from_str(json).map_err(|e| format!("invalid hyperfine JSON: {e}"))?;
+    let result: HyperfineResult = export
+        .results
+        .into_iter()
+        .next()
+        .ok_or_else(|| "hyperfine export has no results".to_owned())?;
+    if result.times.is_empty() {
+        return Err("hyperfine result has no timing samples".to_owned());
+    }
+    Ok(HyperfineSamples {
+        times: result.times,
+        peak_memory_bytes: result.memory_usage_byte.unwrap_or_default(),
+    })
 }
 
 /// The subset of criterion's `benchmark.json` the aggregator reads.
@@ -1185,24 +1208,7 @@ pub fn parse_criterion_benchmark(json: &str) -> Result<Option<CriterionId>, Stri
 pub fn parse_criterion_stats(estimates_json: &str, sample_json: &str) -> Result<Stats, String> {
     let estimates: CriterionEstimates =
         serde_json::from_str(estimates_json).map_err(|e| format!("invalid estimates.json: {e}"))?;
-    let sample: CriterionSample =
-        serde_json::from_str(sample_json).map_err(|e| format!("invalid sample.json: {e}"))?;
-    if sample.iters.len() != sample.times.len() {
-        return Err(format!(
-            "sample.json has {} iters but {} times",
-            sample.iters.len(),
-            sample.times.len()
-        ));
-    }
-    if sample.iters.iter().any(|iters| *iters <= 0.0) {
-        return Err("sample.json has a non-positive iteration count".to_owned());
-    }
-    let per_iteration_secs: Vec<f64> = sample
-        .times
-        .iter()
-        .zip(&sample.iters)
-        .map(|(time, iters)| time / iters / 1e9)
-        .collect();
+    let per_iteration_secs: Vec<f64> = parse_criterion_samples(sample_json)?;
     let spread: Stats = Stats::from_samples(&per_iteration_secs)
         .ok_or_else(|| "sample.json has no samples".to_owned())?;
     Ok(Stats {
@@ -1212,6 +1218,69 @@ pub fn parse_criterion_stats(estimates_json: &str, sample_json: &str) -> Result<
         max: spread.max,
         samples: spread.samples,
     })
+}
+
+/// The per-iteration times of a criterion `sample.json`, in seconds: `times[i] / iters[i]` for
+/// every sample.
+///
+/// # Errors
+///
+/// Returns a reason when the document is invalid, has no samples, its arrays differ in length,
+/// or an iteration count is not positive.
+pub fn parse_criterion_samples(sample_json: &str) -> Result<Vec<f64>, String> {
+    let sample: CriterionSample =
+        serde_json::from_str(sample_json).map_err(|e| format!("invalid sample.json: {e}"))?;
+    if sample.iters.len() != sample.times.len() {
+        return Err(format!(
+            "sample.json has {} iters but {} times",
+            sample.iters.len(),
+            sample.times.len()
+        ));
+    }
+    if sample.iters.is_empty() {
+        return Err("sample.json has no samples".to_owned());
+    }
+    if sample.iters.iter().any(|iters| *iters <= 0.0) {
+        return Err("sample.json has a non-positive iteration count".to_owned());
+    }
+    Ok(sample
+        .times
+        .iter()
+        .zip(&sample.iters)
+        .map(|(time, iters)| time / iters / 1e9)
+        .collect())
+}
+
+/// Every `<...>/new/benchmark.json` under a criterion output directory, in sorted path order
+/// (walked with an explicit stack, no recursion). Empty when `root` does not exist.
+///
+/// # Errors
+///
+/// Returns a reason when a directory under `root` cannot be read.
+pub fn criterion_benchmark_files(
+    root: &std::path::Path,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    if !root.exists() {
+        return Ok(found);
+    }
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries: std::fs::ReadDir =
+            std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry: std::fs::DirEntry =
+                entry.map_err(|e| format!("reading dir entry in {}: {e}", dir.display()))?;
+            let path: std::path::PathBuf = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if is_criterion_new_benchmark(&path) {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// Whether a criterion output path is a `<...>/new/benchmark.json` file the aggregator
@@ -1923,6 +1992,44 @@ mod tests {
         )]);
         let actual: Result<Vec<Measurement>, String> =
             parse_hyperfine_json(json, "ours", "f", Operation::Codegen);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_hyperfine_samples_keeps_every_run() {
+        let json: &str = r#"{"results":[{"times":[0.5,0.25],"memory_usage_byte":[1024,2048]}]}"#;
+        let expected: Result<HyperfineSamples, String> = Ok(HyperfineSamples {
+            times: vec![0.5, 0.25],
+            peak_memory_bytes: vec![1024.0, 2048.0],
+        });
+        let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(json);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_hyperfine_samples_without_memory_has_no_memory_samples() {
+        let expected: Result<HyperfineSamples, String> = Ok(HyperfineSamples {
+            times: vec![0.5],
+            peak_memory_bytes: Vec::new(),
+        });
+        let actual: Result<HyperfineSamples, String> =
+            parse_hyperfine_samples(r#"{"results":[{"times":[0.5]}]}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_criterion_samples_divides_each_time_by_its_iterations() {
+        let expected: Result<Vec<f64>, String> = Ok(vec![2e-6, 1e-6]);
+        let actual: Result<Vec<f64>, String> =
+            parse_criterion_samples(r#"{"iters":[1.0,4.0],"times":[2000.0,4000.0]}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn parse_criterion_samples_rejects_empty_samples() {
+        let expected: Result<Vec<f64>, String> = Err("sample.json has no samples".to_owned());
+        let actual: Result<Vec<f64>, String> =
+            parse_criterion_samples(r#"{"iters":[],"times":[]}"#);
         assert_eq!(expected, actual);
     }
 

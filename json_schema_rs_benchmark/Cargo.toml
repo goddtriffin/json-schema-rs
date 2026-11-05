@@ -24,6 +24,11 @@ name = "boon_validate"
 path = "src/bin/boon_validate.rs"
 required-features = ["tools"]
 
+# The quick benchmark's report: our tool's cells on a base commit vs the working tree.
+[[bin]]
+name = "compare"
+path = "src/bin/compare.rs"
+
 # Deterministic generator for the large synthetic fixtures (written under target/, never committed).
 [[bin]]
 name = "gen_fixtures"

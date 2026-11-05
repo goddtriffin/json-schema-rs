@@ -25,7 +25,7 @@ lint: ## lints the codebase
 	cargo fmt --manifest-path $(BENCHMARK_ISOLATED)
 
 # The benchmark competitors built apart from the workspace (their own workspace; see its Cargo.toml).
-# `make test` lints it in each of its builds; `make benchmark` runs them.
+# `make test` lints it in each of its builds; `make benchmark_full` runs them.
 BENCHMARK_ISOLATED := json_schema_rs_benchmark/isolated/Cargo.toml
 
 # Every feature except `arbitrary-precision`, which changes how every number is parsed and
@@ -70,7 +70,11 @@ research_clone: ## clone or update competitor repos into research/repos/<lang>/<
 	@./research/scripts/clone-competitors.sh
 
 .PHONY: benchmark
-benchmark: ## run the full benchmark harness (our lib + competitors) and refresh committed results
+benchmark: ## quick benchmark for every PR (~5-10 min): our lib + CLI on main vs the working tree, same session; prints the PR's Performance section
+	@./json_schema_rs_benchmark/scripts/quick_benchmark.sh
+
+.PHONY: benchmark_full
+benchmark_full: ## full benchmark (~60 min): every tool and competitor; refreshes the committed results
 	@./json_schema_rs_benchmark/scripts/run_benchmark.sh
 
 .PHONY: differential

@@ -20,7 +20,7 @@
 use clap::{Arg, Command};
 use json_schema_rs_benchmark::{
     BenchmarkResults, CriterionId, IndexEntry, Measurement, Stats, Tier, TsvParse,
-    is_criterion_new_benchmark, parse_compat_tsv, parse_criterion_benchmark, parse_criterion_stats,
+    criterion_benchmark_files, parse_compat_tsv, parse_criterion_benchmark, parse_criterion_stats,
     parse_heap_tsv, parse_hyperfine_json, parse_index_tsv, parse_tools_tsv,
 };
 use std::path::{Path, PathBuf};
@@ -184,9 +184,8 @@ fn hyperfine_measurements(
     Ok(out)
 }
 
-/// Walk a criterion output directory iteratively (explicit stack, no recursion), collect every
-/// `*/new/benchmark.json` in sorted path order, and turn each benchmark of a known operation
-/// into an in-process time measurement.
+/// Turn every `*/new/benchmark.json` of a criterion output directory (in sorted path order) of a
+/// known operation into an in-process time measurement.
 fn criterion_measurements(root: &Path) -> Result<Vec<Measurement>, String> {
     if !root.exists() {
         eprintln!(
@@ -196,23 +195,7 @@ fn criterion_measurements(root: &Path) -> Result<Vec<Measurement>, String> {
         return Ok(Vec::new());
     }
 
-    let mut benchmark_files: Vec<PathBuf> = Vec::new();
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries: std::fs::ReadDir =
-            std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
-        for entry in entries {
-            let entry: std::fs::DirEntry =
-                entry.map_err(|e| format!("reading dir entry in {}: {e}", dir.display()))?;
-            let path: PathBuf = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if is_criterion_new_benchmark(&path) {
-                benchmark_files.push(path);
-            }
-        }
-    }
-    benchmark_files.sort();
+    let benchmark_files: Vec<PathBuf> = criterion_benchmark_files(root)?;
 
     let mut out: Vec<Measurement> = Vec::new();
     for benchmark_path in &benchmark_files {
