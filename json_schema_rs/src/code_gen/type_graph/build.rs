@@ -1303,6 +1303,17 @@ const ANNOTATION_KEYWORDS: [&str; 7] = [
     "contentSchema",
 ];
 
+/// Whether `s` has `keyword` (one the model keeps raw, such as `patternProperties` or
+/// `prefixItems`) with at least one entry, and its dialect defines it.
+fn has_keyword_entries(s: &JsonSchema, keyword: &str, dialect: Dialect) -> bool {
+    dialect.keyword(keyword).is_some()
+        && match s.extensions.get(keyword) {
+            Some(Value::Object(entries)) => !entries.is_empty(),
+            Some(Value::Array(entries)) => !entries.is_empty(),
+            _ => false,
+        }
+}
+
 fn has_annotations(s: &JsonSchema) -> bool {
     s.title.is_some()
         || s.description.is_some()
@@ -1541,7 +1552,11 @@ impl<'r> Facts<'r> {
             if s.min_length.is_some() || s.max_length.is_some() || s.pattern.is_some() {
                 inferred.insert(JsonType::String);
             }
-            if let Some(Schema::Object(items)) = &s.items {
+            // With a prefix (`prefixItems`), `items` applies only to the elements after it, so
+            // it does not type every element.
+            if let Some(Schema::Object(items)) = &s.items
+                && !has_keyword_entries(s, "prefixItems", registry.dialect(c.scope))
+            {
                 facts.items.push(Conjunct {
                     schema: items,
                     scope: c.scope,
@@ -1591,7 +1606,16 @@ impl<'r> Facts<'r> {
                     entry.required = true;
                 }
             }
-            match &s.additional_properties {
+            // A key that matches a `patternProperties` pattern of the same schema is checked
+            // against the pattern's schema, not `additionalProperties`, so with patterns
+            // `additionalProperties` neither types nor forbids the keys the schema does not name.
+            let additional: Option<&Schema> =
+                if has_keyword_entries(s, "patternProperties", registry.dialect(c.scope)) {
+                    None
+                } else {
+                    s.additional_properties.as_ref()
+                };
+            match additional {
                 None | Some(Schema::Bool(true)) => {}
                 Some(Schema::Bool(false)) => facts.deny_unknown = true,
                 Some(Schema::Object(a)) => facts.additional.push(Conjunct {
@@ -1616,17 +1640,20 @@ impl<'r> Facts<'r> {
         }
         // `then` / `else` hold conditionally, so the properties they add are optional fields: the
         // type accepts every valid instance and keeps every field. A key both define takes the
-        // union of the two; a key the base defines keeps the base's type.
+        // union of the two (one of them always applies); a key the base defines keeps the base's
+        // type. A key only one branch defines is unconstrained by it when the other applies, so
+        // it takes what the base gives any key it does not name (`additionalProperties`, else any
+        // value); when the base forbids such keys, it is no field at all.
         for c in &flat.conjuncts {
             if registry.dialect(c.scope).keyword("then").is_none() {
                 continue;
             }
             let s: &'r JsonSchema = c.schema;
-            let branches: Vec<(&str, &'r JsonSchema)> = ["then", "else"]
+            let branches: Vec<&'r JsonSchema> = ["then", "else"]
                 .into_iter()
-                .filter_map(|k| conditionals.get(s, k).map(|b| (k, b)))
+                .filter_map(|k| conditionals.get(s, k))
                 .collect();
-            for &(keyword, branch) in &branches {
+            for &branch in &branches {
                 for (key, property) in &branch.properties {
                     // Defined by the base, or already added from `then`.
                     if facts.properties.contains_key(key) {
@@ -1636,34 +1663,27 @@ impl<'r> Facts<'r> {
                         continue;
                     };
                     let in_both: bool = branches.len() == 2
-                        && branches.iter().all(|(_, b)| b.properties.contains_key(key));
-                    let (schema, pointer): (&'r JsonSchema, String) = if in_both {
+                        && branches.iter().all(|b| b.properties.contains_key(key));
+                    let conjuncts: Vec<Conjunct<'r>> = if in_both {
                         let Some(merged) = conditionals.merged(s, key) else {
                             continue;
                         };
-                        (
-                            merged,
-                            pointer_push(&pointer_push(&c.pointer, "then|else"), key),
-                        )
+                        vec![Conjunct {
+                            schema: merged,
+                            scope: c.scope,
+                            pointer: pointer_push(&pointer_push(&c.pointer, "then|else"), key),
+                            skip: 0,
+                        }]
+                    } else if facts.deny_unknown {
+                        continue;
                     } else {
-                        (
-                            p,
-                            pointer_push(
-                                &pointer_push(&pointer_push(&c.pointer, keyword), "properties"),
-                                key,
-                            ),
-                        )
+                        facts.additional.clone()
                     };
                     let entry: &mut PropertyFacts<'r> =
                         facts.properties.entry(key.clone()).or_default();
                     entry.description = non_empty(p.description.as_deref());
                     entry.deprecated = p.deprecated;
-                    entry.conjuncts.push(Conjunct {
-                        schema,
-                        scope: c.scope,
-                        pointer,
-                        skip: 0,
-                    });
+                    entry.conjuncts = conjuncts;
                 }
             }
         }
