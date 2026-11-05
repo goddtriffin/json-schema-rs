@@ -35,8 +35,8 @@ mod settings;
 use derive::expand_to_json_schema;
 use json_schema_rs::sanitizers::module_name_from_path;
 use json_schema_rs::{
-    CodeGenBackend, CodeGenInput, FileRetriever, Retrieve, RetrieveError, Schema, file_path,
-    file_uri,
+    CodeGenBackend, CodeGenInput, FileRetriever, JsonSchemaSettings, Retrieve, RetrieveError,
+    Schema, file_path, file_uri,
 };
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -124,6 +124,90 @@ fn retrieved_path(manifest_root: &Path, path: &Path) -> proc_macro2::TokenStream
     }
 }
 
+/// Add `error` to `errors`, the errors found so far (each becomes its own compile error).
+fn push_error(errors: &mut Option<syn::Error>, error: syn::Error) {
+    match errors {
+        Some(all) => all.combine(error),
+        None => *errors = Some(error),
+    }
+}
+
+/// The parsed input schemas, each with its retrieval URI, the module name and span for each,
+/// and the `include_bytes!` argument for each path input.
+struct LoadedSchemas {
+    schemas: Vec<(Schema, Option<String>)>,
+    mod_names: Vec<(String, Span)>,
+    tracked: Vec<proc_macro2::TokenStream>,
+}
+
+/// Read and parse every schema literal (inline JSON or a path relative to `manifest_dir`).
+fn load_schemas(
+    literals: &[LitStr],
+    manifest_dir: &str,
+    json_schema_settings: &JsonSchemaSettings,
+) -> SynResult<LoadedSchemas> {
+    let mut tracked: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut schemas: Vec<(Schema, Option<String>)> = Vec::with_capacity(literals.len());
+    let mut mod_names: Vec<(String, proc_macro2::Span)> = Vec::with_capacity(literals.len());
+
+    // Every literal is read and parsed, so each problem in each schema is reported at once.
+    let mut errors: Option<syn::Error> = None;
+    for (index, lit) in literals.iter().enumerate() {
+        let s = lit.value();
+        let s = s.trim();
+        let inline: bool = s.starts_with('{') || s == "true" || s == "false";
+        let (json_str, mod_name, uri): (String, String, Option<String>) = if inline {
+            (s.to_string(), format!("schema_{index}"), None)
+        } else {
+            let path = std::path::Path::new(manifest_dir).join(s);
+            let contents: String = match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(e) => {
+                    push_error(
+                        &mut errors,
+                        syn::Error::new(lit.span(), format!("failed to read schema file {s}: {e}")),
+                    );
+                    continue;
+                }
+            };
+            let name = module_name_from_path(s);
+            // The file's own URI is the base for its relative `$ref`s to sibling files.
+            let uri: Option<String> = path.canonicalize().ok().as_deref().and_then(file_uri);
+            tracked.push(if Path::new(s).is_absolute() {
+                quote! { #s }
+            } else {
+                manifest_relative(s)
+            });
+            (contents, name, uri)
+        };
+
+        // One error per problem, at the literal: the span says which schema it is about, as the
+        // CLI's `<file>: ` prefix does, so the library's message needs no prefix of its own.
+        match Schema::new_from_str(&json_str, json_schema_settings) {
+            Ok(schema) => {
+                schemas.push((schema, uri));
+                mod_names.push((mod_name, lit.span()));
+            }
+            Err(parse_errors) => {
+                for parse_error in parse_errors {
+                    push_error(
+                        &mut errors,
+                        syn::Error::new(lit.span(), parse_error.to_string()),
+                    );
+                }
+            }
+        }
+    }
+    match errors {
+        Some(errors) => Err(errors),
+        None => Ok(LoadedSchemas {
+            schemas,
+            mod_names,
+            tracked,
+        }),
+    }
+}
+
 #[proc_macro_derive(ToJsonSchema, attributes(json_schema))]
 pub fn derive_to_json_schema(input: TokenStream) -> TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input as DeriveInput);
@@ -155,38 +239,16 @@ fn json_schema_to_rust_impl(
     // dep-info and Cargo rebuilds when it changes.
     let mut tracked: Vec<proc_macro2::TokenStream> = Vec::new();
 
-    let mut schemas: Vec<(Schema, Option<String>)> =
-        Vec::with_capacity(schema_inputs.literals.len());
-    let mut mod_names: Vec<(String, proc_macro2::Span)> =
-        Vec::with_capacity(schema_inputs.literals.len());
-
-    for (index, lit) in schema_inputs.literals.iter().enumerate() {
-        let s = lit.value();
-        let s = s.trim();
-        let inline: bool = s.starts_with('{') || s == "true" || s == "false";
-        let (json_str, mod_name, uri): (String, String, Option<String>) = if inline {
-            (s.to_string(), format!("schema_{index}"), None)
-        } else {
-            let path = std::path::Path::new(&manifest_dir).join(s);
-            let contents = std::fs::read_to_string(&path).map_err(|e| {
-                syn::Error::new(lit.span(), format!("failed to read schema file {s}: {e}"))
-            })?;
-            let name = module_name_from_path(s);
-            // The file's own URI is the base for its relative `$ref`s to sibling files.
-            let uri: Option<String> = path.canonicalize().ok().as_deref().and_then(file_uri);
-            tracked.push(if Path::new(s).is_absolute() {
-                quote! { #s }
-            } else {
-                manifest_relative(s)
-            });
-            (contents, name, uri)
-        };
-
-        let schema: Schema = Schema::new_from_str(&json_str, &settings.json_schema)
-            .map_err(|e| syn::Error::new(lit.span(), format!("invalid JSON Schema: {e}")))?;
-        schemas.push((schema, uri));
-        mod_names.push((mod_name, lit.span()));
-    }
+    let LoadedSchemas {
+        schemas,
+        mod_names,
+        tracked: input_files,
+    } = load_schemas(
+        &schema_inputs.literals,
+        &manifest_dir,
+        &settings.json_schema,
+    )?;
+    tracked.extend(input_files);
 
     // `$ref`s to files that are not macro inputs are read from inside the crate's directory.
     let retriever: TrackingRetriever = TrackingRetriever {
@@ -321,14 +383,56 @@ mod tests {
 
     #[test]
     fn disallow_unknown_fields_rejects_unknown_key() {
-        let expected: Vec<(String, usize, usize)> = vec![(
-            r#"invalid JSON Schema: unknown keyword "colour" at root"#.to_string(),
-            1,
-            0,
-        )];
+        let expected: Vec<(String, usize, usize)> =
+            vec![(r#"unknown keyword "colour" at root"#.to_string(), 1, 0)];
         let actual: Vec<(String, usize, usize)> = expansion_errors(
             r##"r#"{"type":"string","colour":"blue"}"#, disallow_unknown_fields = true"##,
         );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn every_unknown_key_is_its_own_error() {
+        let expected: Vec<(String, usize, usize)> = vec![
+            (r#"unknown keyword "colour" at root"#.to_string(), 1, 0),
+            (
+                r#"unknown keyword "size" at /properties/a"#.to_string(),
+                1,
+                0,
+            ),
+        ];
+        let actual: Vec<(String, usize, usize)> = expansion_errors(
+            r##"r#"{"colour":"blue","properties":{"a":{"size":1}}}"#, disallow_unknown_fields = true"##,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn every_failing_literal_is_reported() {
+        let expected: Vec<(String, usize, usize)> = vec![
+            (
+                "invalid JSON Schema: invalid type: string \"x\", expected a JSON number at line 1 \
+                 column 14"
+                    .to_string(),
+                1,
+                0,
+            ),
+            (
+                "failed to read schema file missing.json: No such file or directory (os error 2)"
+                    .to_string(),
+                1,
+                22,
+            ),
+            (
+                "invalid JSON Schema: invalid type: string \"y\", expected a JSON number at line 1 \
+                 column 14"
+                    .to_string(),
+                1,
+                38,
+            ),
+        ];
+        let actual: Vec<(String, usize, usize)> =
+            expansion_errors(r##"r#"{"minimum":"x"}"#, "missing.json", r#"{"maximum":"y"}"#"##);
         assert_eq!(expected, actual);
     }
 
@@ -343,7 +447,7 @@ mod tests {
     #[test]
     fn unknown_schema_uri_reject_rejects_unrecognised_schema() {
         let expected: Vec<(String, usize, usize)> = vec![(
-            r#"invalid JSON Schema: unknown $schema "https://example.com/meta""#.to_string(),
+            r#"unknown $schema "https://example.com/meta""#.to_string(),
             1,
             0,
         )];
@@ -365,7 +469,7 @@ mod tests {
     #[test]
     fn boolean_exclusive_minimum_is_an_error_by_default() {
         let expected: Vec<(String, usize, usize)> = vec![(
-            "invalid JSON Schema: invalid JSON Schema: invalid type: boolean `true`, expected a \
+            "invalid JSON Schema: invalid type: boolean `true`, expected a \
              JSON number at line 1 column 53"
                 .to_string(),
             1,
