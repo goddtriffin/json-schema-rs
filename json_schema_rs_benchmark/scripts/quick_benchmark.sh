@@ -5,15 +5,22 @@
 # side by side and measured in the same session. It prints the PR body's *Performance* section and
 # never touches the committed results (`make benchmark_full` refreshes those).
 #
-# Why the same session: cells drift by up to 10% in-process, and much more on the CLI tier,
-# between runs on different days (#100). Measuring both sides now, in interleaved rounds whose
-# samples are pooled per side, lets that drift land on both alike, so only what the change moved
-# shows up.
+# Why the same session, cell by cell, from equal-length paths (#100; see design.md, *Quick
+# mode*): the machine is shared (other builds, benchmarks, sessions), so its speed drifts over
+# minutes and load arrives in bursts of seconds. Results from another day differ by up to 10%
+# in-process, and whole-tier rounds a minute apart disagreed on 44 of 48 in-process cells in an
+# A/A run (both sides the same commit). So every cell runs its rounds back to back, alternating
+# the sides (base, head, head, base for two rounds), and `compare` summarizes each round by its
+# lowest sample (the one no burst reached) and each side by the median of its rounds. Both
+# sides' executables run from copies at paths of the same length: the path sits on the process's
+# stack, and a longer one slowed an identical binary's sub-microsecond cells by up to 5.5%.
 #
 # What it measures, for `jsonschemars` only (BENCH_TOOLS restricts the harness to it):
 #   - in-process peak heap (heap_profile), once per side: it is exact;
-#   - in-process time (criterion), BENCH_QUICK_ROUNDS rounds per side in ABBA order;
-#   - CLI time and peak RSS (hyperfine), the same rounds, on every fixture: codegen,
+#   - in-process time (criterion), cell by cell (BENCH_CELL), BENCH_QUICK_ROUNDS rounds per side
+#     in ABBA order;
+#   - CLI time and peak RSS (hyperfine), BENCH_QUICK_ROUNDS rounds, each running every cell
+#     with its two sides back to back (base first in odd rounds), on every fixture: codegen,
 #     validate_valid, validate_invalid, and the startup baseline.
 # Reverse codegen is not measured here: its models take minutes to build per side (#102). A PR
 # that changes the derive or reverse codegen runs `make benchmark_full` instead.
@@ -25,6 +32,10 @@
 #   base-src/       the base commit's tree (git archive; re-extracted when the base moves), with
 #                   the working tree's Cargo.lock so both sides build the same dependencies
 #   base-target/    its CARGO_TARGET_DIR (kept between runs, so later builds are incremental)
+#   run/{base,head}/ each side's timed executables (the criterion bench and jsonschemars), copied
+#                   to paths of the same length: the executable's path sits on the process's
+#                   stack, and a longer one shifted an identical binary's sub-microsecond cells by
+#                   up to 5.5% (#100)
 #   {base,head}/    each side's captures: heap/, criterion/<round>/, cli/
 #   report.md       the comparison (also printed)
 # The head side builds in the workspace's own target directory, like the full run.
@@ -34,8 +45,10 @@
 #                         HEAD, so changes that landed on it since the branch left are not
 #                         counted. BENCH_BASE=HEAD with a clean tree is an A/A control.
 #   BENCH_QUICK_ROUNDS    rounds per side (default 2)
+#   BENCH_QUICK_CONFIRM_ROUNDS  further rounds per side for each cell that moved (default 4; 0
+#                         skips confirmation)
 #   BENCH_CRITERION_ARGS  criterion args (default: --warm-up-time 0.3 --measurement-time 1
-#                         --sample-size 20)
+#                         --sample-size 20 --noplot), per cell and round
 #   BENCH_CLI_WARMUP      hyperfine warmup runs per cell and round (default 2)
 #   BENCH_CLI_RUNS        hyperfine timed runs per cell and round (default 10)
 #
@@ -54,8 +67,10 @@ QUICK_DIR="${REPO_ROOT}/target/benchmark-quick"
 BASE_SRC="${QUICK_DIR}/base-src"
 BASE_TARGET="${QUICK_DIR}/base-target"
 BASE_BUILD_DIR="${BASE_TARGET}/benchmark"
+RUN_DIR="${QUICK_DIR}/run"
 TOOL="jsonschemars"
 ROUNDS="${BENCH_QUICK_ROUNDS:-2}"
+CONFIRM_ROUNDS="${BENCH_QUICK_CONFIRM_ROUNDS:-4}"
 export REPO_ROOT
 
 # shellcheck source=tools.sh
@@ -101,17 +116,60 @@ build_side() {
     printf '%s\n' "${exe}"
 }
 
-# run_criterion <side> <bench exe> <round>: one criterion round of our cells.
-run_criterion() {
-    local side="$1" exe="$2" round="$3"
+# list_cells <bench exe>: the in-process cells of our tool that the side's harness checks
+# correct, one `<operation>/<fixture id>` per line.
+list_cells() {
+    "$1" --bench --list 2>/dev/null | sed -n "s|^\([a-z_]*\)/${TOOL}/\(.*\): benchmark\$|\1/\2|p"
+}
+
+# run_criterion_cell <side> <bench exe> <round> <operation/fixture id>: one criterion round of
+# one cell. BENCH_CELL restricts the harness to it (the base side's harness may predate it, so
+# the exact criterion filter restricts the timing too).
+run_criterion_cell() {
+    local side="$1" exe="$2" round="$3" cell="$4" filter
     local -a criterion_args
     # Word-split the knob on purpose: it is a list of criterion flags.
     # shellcheck disable=SC2206
-    criterion_args=(${BENCH_CRITERION_ARGS:---warm-up-time 0.3 --measurement-time 1 --sample-size 20})
-    echo "==> in-process time: ${side}, round ${round}"
-    CRITERION_HOME="${QUICK_DIR}/${side}/criterion/${round}" "${exe}" --bench "/${TOOL}/" \
-        ${criterion_args[@]+"${criterion_args[@]}"} > "${QUICK_DIR}/${side}/criterion-${round}.log" 2>&1 \
-        || { echo "!! criterion failed (see ${QUICK_DIR}/${side}/criterion-${round}.log)" >&2; exit 1; }
+    criterion_args=(${BENCH_CRITERION_ARGS:---warm-up-time 0.3 --measurement-time 1 --sample-size 20 --noplot})
+    filter="${cell%%/*}/${TOOL}/${cell#*/}"
+    filter="^$(printf '%s' "${filter}" | sed 's/[][\.*^$+?(){}|]/\\&/g')\$"
+    BENCH_CELL="${cell}" CRITERION_HOME="${QUICK_DIR}/${side}/criterion/${round}" "${exe}" \
+        --bench "${filter}" ${criterion_args[@]+"${criterion_args[@]}"} \
+        >> "${QUICK_DIR}/${side}/criterion.log" 2>&1 \
+        || { echo "!! criterion failed on ${cell} (see ${QUICK_DIR}/${side}/criterion.log)" >&2; exit 1; }
+}
+
+# run_inprocess <base exe> <head exe> <first round> <last round> [cells file]: every cell's
+# criterion rounds back to back, the sides alternating per round (base first in odd rounds);
+# only the cells the file lists, when given. A cell one side does not list (its check fails
+# there) is measured on the other side only, and compare lists it apart.
+run_inprocess() {
+    local base_exe="$1" head_exe="$2" first="$3" last="$4" only="${5:-}"
+    local base_cells head_cells cells cell round side count
+    local -a sides
+    base_cells="$(list_cells "${base_exe}")"
+    head_cells="$(list_cells "${head_exe}")"
+    cells="$(printf '%s\n%s\n' "${base_cells}" "${head_cells}" | sed '/^$/d' | LC_ALL=C sort -u)"
+    if [[ -n "${only}" ]]; then
+        cells="$(printf '%s\n' "${cells}" | grep -xF -f "${only}" || true)"
+    fi
+    count="$(printf '%s\n' "${cells}" | sed '/^$/d' | wc -l | tr -d ' ')"
+    echo "==> in-process time: ${count} cells, rounds ${first}-${last} per side, interleaved per cell"
+    while IFS= read -r cell; do
+        [[ -n "${cell}" ]] || continue
+        for round in $(seq "${first}" "${last}"); do
+            if (( round % 2 == 1 )); then sides=(base head); else sides=(head base); fi
+            for side in "${sides[@]}"; do
+                if [[ "${side}" == base ]]; then
+                    if printf '%s\n' "${base_cells}" | grep -qxF "${cell}"; then
+                        run_criterion_cell base "${base_exe}" "${round}" "${cell}"
+                    fi
+                elif printf '%s\n' "${head_cells}" | grep -qxF "${cell}"; then
+                    run_criterion_cell head "${head_exe}" "${round}" "${cell}"
+                fi
+            done
+        done
+    done <<< "${cells}"
 }
 
 # _cli_probe <command line> <expect: zero|nonzero>: true when the command, run offline, exits as
@@ -146,14 +204,14 @@ _cli_time() {
     fi
 }
 
-# run_cli <round>: one round of every CLI cell, both sides, in the round's order. A cell whose
-# probe fails on a side is not timed there.
+# run_cli <round> [cells file]: one round of every CLI cell (only the `<operation>/<fixture id>`
+# cells the file lists, when given), both sides, in the round's order. A cell whose probe fails
+# on a side is not timed there.
 run_cli() {
-    local round="$1" fixtures fid fdir resource_count unresolved schema valid invalid out
-    local head_bin base_bin op expect payload cmd side
+    local round="$1" only="${2:-}" fixtures fid fdir resource_count unresolved schema valid invalid out
+    local build_bin op expect payload cmd side
     local -a resources sides
-    head_bin="$(_jsonschemars_bin)"
-    base_bin="${BASE_BUILD_DIR}/jsonschemars"
+    build_bin="$(_jsonschemars_bin)"
     if (( round % 2 == 1 )); then sides=(base head); else sides=(head base); fi
     echo "==> CLI: round ${round} (${sides[*]})"
     fixtures="$(printf 'startup\t%s\t0\t\n' "$(_write_startup "${QUICK_DIR}/work")")
@@ -170,6 +228,9 @@ $("${BUILD_DIR}/list_fixtures")"
             done <<< "$(find "${fdir}/resources" -mindepth 1 -maxdepth 1 -name '*.json' | LC_ALL=C sort)"
         fi
         for op in codegen validate_valid validate_invalid; do
+            if [[ -n "${only}" ]] && ! grep -qxF "${op}/${fid}" "${only}"; then
+                continue
+            fi
             case "${op}" in
                 codegen)
                     expect=zero
@@ -183,10 +244,7 @@ $("${BUILD_DIR}/list_fixtures")"
                     cmd="$(validate_cmd "${TOOL}" "${schema}" "${payload}" ${resources[@]+"${resources[@]}"})" ;;
             esac
             for side in "${sides[@]}"; do
-                local side_cmd="${cmd}"
-                if [[ "${side}" == base ]]; then
-                    side_cmd="${cmd//"${head_bin}"/"${base_bin}"}"
-                fi
+                local side_cmd="${cmd//"${build_bin}"/"${RUN_DIR}/${side}/jsonschemars"}"
                 if _cli_probe "${side_cmd}" "${expect}"; then
                     _cli_time "${side}" "${fid}" "${op}" "${expect}" "${side_cmd}" "${round}"
                 elif [[ "${round}" == 1 ]]; then
@@ -226,6 +284,15 @@ main() {
     echo "==> building ${base_ref} (${base_sha:0:9})"
     extract_base "${base_sha}"
     base_exe="$(build_side "${BASE_SRC}" "${BASE_TARGET}")"
+    # Time both sides from paths of the same length (see RUN_DIR in the layout above).
+    rm -rf "${RUN_DIR}"
+    mkdir -p "${RUN_DIR}/base" "${RUN_DIR}/head"
+    cp "${base_exe}" "${RUN_DIR}/base/cross_tool"
+    cp "${BASE_BUILD_DIR}/jsonschemars" "${RUN_DIR}/base/jsonschemars"
+    cp "${head_exe}" "${RUN_DIR}/head/cross_tool"
+    cp "$(_jsonschemars_bin)" "${RUN_DIR}/head/jsonschemars"
+    base_exe="${RUN_DIR}/base/cross_tool"
+    head_exe="${RUN_DIR}/head/cross_tool"
 
     echo "==> generating synthetic fixtures"
     "${BUILD_DIR}/gen_fixtures" --output "${GENERATED_FIXTURES}"
@@ -246,18 +313,31 @@ main() {
     "${BUILD_DIR}/heap_profile" --output "${QUICK_DIR}/head/heap" 2> "${QUICK_DIR}/head/heap.log" \
         || { echo "!! heap profile failed (see ${QUICK_DIR}/head/heap.log)" >&2; exit 1; }
 
-    for round in $(seq 1 "${ROUNDS}"); do
-        if (( round % 2 == 1 )); then
-            run_criterion base "${base_exe}" "${round}"
-            run_criterion head "${head_exe}" "${round}"
-        else
-            run_criterion head "${head_exe}" "${round}"
-            run_criterion base "${base_exe}" "${round}"
-        fi
-    done
+    run_inprocess "${base_exe}" "${head_exe}" 1 "${ROUNDS}"
     for round in $(seq 1 "${ROUNDS}"); do
         run_cli "${round}"
     done
+
+    # Confirmation: re-measure every cell that moved in CONFIRM_ROUNDS further rounds, so the
+    # final comparison of those cells rests on more processes per side (see design.md).
+    if (( CONFIRM_ROUNDS > 0 )); then
+        "${BUILD_DIR}/compare" --base "${QUICK_DIR}/base" --head "${QUICK_DIR}/head" \
+            --tool "${TOOL}" --base-label "${base_ref}" \
+            --moved-in-process "${QUICK_DIR}/moved-in-process.txt" \
+            --moved-cli "${QUICK_DIR}/moved-cli.txt" > /dev/null
+        local first=$(( ROUNDS + 1 )) last=$(( ROUNDS + CONFIRM_ROUNDS ))
+        if [[ -s "${QUICK_DIR}/moved-in-process.txt" ]]; then
+            echo "==> confirming the moved in-process cells"
+            run_inprocess "${base_exe}" "${head_exe}" "${first}" "${last}" \
+                "${QUICK_DIR}/moved-in-process.txt"
+        fi
+        if [[ -s "${QUICK_DIR}/moved-cli.txt" ]]; then
+            echo "==> confirming the moved CLI cells"
+            for round in $(seq "${first}" "${last}"); do
+                run_cli "${round}" "${QUICK_DIR}/moved-cli.txt"
+            done
+        fi
+    fi
     rm -rf "${QUICK_DIR}/work"
 
     echo "==> report (${QUICK_DIR}/report.md)"

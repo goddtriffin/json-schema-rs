@@ -117,8 +117,8 @@ blocks (the Performance tables), and nothing the PR did not cause appears at all
   draft) with counts. If nothing changed, write `n/a`.
 - **Performance:** our library's time and memory (peak heap / peak RSS) versus `main`, from
   `make benchmark`'s report (`target/benchmark-quick/report.md`), which measures both in the
-  same session. A cell counts only if it moved beyond noise (larger than the 3% threshold and
-  the standard deviations the harness uses for winners) **and** sits on a code path the PR
+  same session. A cell counts only if it moved beyond noise (the report's rule: the median of each
+  side's per-round minimums differs by more than 3% and more than the two sides' spreads) **and** sits on a code path the PR
   changed; a cell that moved but runs only code the PR did not touch is noise and is left
   out. When the PR also ran `make benchmark_full`, say how category winners changed. Write a short visible summary (the biggest few with before → after, the count of
   cells that moved, any change in category winners, and why things moved), then two tables,

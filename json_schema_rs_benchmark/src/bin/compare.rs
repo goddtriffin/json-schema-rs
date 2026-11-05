@@ -4,11 +4,11 @@
 //!
 //! Each side's directory holds what `scripts/quick_benchmark.sh` captured for it:
 //!
-//! - `heap/inprocess_heap.tsv`: in-process peak heap (one exact value per cell);
+//! - `heap/inprocess_heap.tsv`: in-process peak heap (one exact value per cell, one round);
 //! - `criterion/<round>/...`: one criterion output directory per round, whose `sample.json`
-//!   samples are pooled across rounds;
+//!   is that cell's round;
 //! - `cli/index.tsv` and the hyperfine exports it lists (paths relative to the side's
-//!   directory), one export per cell and round, pooled the same way.
+//!   directory), one export per cell and round.
 //!
 //! Rows of other tools are ignored, so a side whose harness measured every tool still compares.
 //! Malformed lines and unreadable files are skipped with a warning on stderr; a head side with no
@@ -18,7 +18,7 @@
 //! and clap's derive macro emits internal `#[allow(...)]` attributes.
 
 use clap::{Arg, Command};
-use json_schema_rs_benchmark::compare::{Comparison, Samples, add_samples, compare};
+use json_schema_rs_benchmark::compare::{Comparison, Samples, add_round, compare};
 use json_schema_rs_benchmark::{
     CellKey, CriterionId, HyperfineSamples, IndexEntry, Measurement, Metric, Tier, TsvParse,
     criterion_benchmark_files, parse_criterion_benchmark, parse_criterion_samples, parse_heap_tsv,
@@ -64,6 +64,18 @@ fn main() -> ExitCode {
                 .value_name("FILE")
                 .help("Also write the report to FILE"),
         )
+        .arg(
+            Arg::new("moved-in-process")
+                .long("moved-in-process")
+                .value_name("FILE")
+                .help("Write the moved in-process cells to FILE, one <operation>/<fixture id> per line"),
+        )
+        .arg(
+            Arg::new("moved-cli")
+                .long("moved-cli")
+                .value_name("FILE")
+                .help("Write the moved CLI cells to FILE, one <operation>/<fixture id> per line"),
+        )
         .get_matches();
     let arg = |name: &str| -> String {
         matches
@@ -75,9 +87,15 @@ fn main() -> ExitCode {
     let head: PathBuf = PathBuf::from(arg("head"));
     let tool: String = arg("tool");
     let base_label: String = arg("base-label");
-    let output: Option<PathBuf> = matches.get_one::<String>("output").map(PathBuf::from);
+    let path_arg =
+        |name: &str| -> Option<PathBuf> { matches.get_one::<String>(name).map(PathBuf::from) };
+    let outputs: Outputs = Outputs {
+        report: path_arg("output"),
+        moved_in_process: path_arg("moved-in-process"),
+        moved_cli: path_arg("moved-cli"),
+    };
 
-    match run(&base, &head, &tool, &base_label, output.as_deref()) {
+    match run(&base, &head, &tool, &base_label, &outputs) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("compare: error: {err}");
@@ -86,12 +104,19 @@ fn main() -> ExitCode {
     }
 }
 
+/// Where to write the report and the moved-cell lists, besides printing the report.
+struct Outputs {
+    report: Option<PathBuf>,
+    moved_in_process: Option<PathBuf>,
+    moved_cli: Option<PathBuf>,
+}
+
 fn run(
     base: &Path,
     head: &Path,
     tool: &str,
     base_label: &str,
-    output: Option<&Path>,
+    outputs: &Outputs,
 ) -> Result<(), String> {
     let base_samples: Samples = read_side(base, tool)?;
     let head_samples: Samples = read_side(head, tool)?;
@@ -103,14 +128,29 @@ fn run(
     }
     let comparison: Comparison = compare(&base_samples, &head_samples);
     let report: String = comparison.to_markdown(base_label);
-    if let Some(path) = output {
-        std::fs::write(path, &report).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    let write = |path: &Path, text: &str| -> Result<(), String> {
+        std::fs::write(path, text).map_err(|e| format!("writing {}: {e}", path.display()))
+    };
+    if let Some(path) = &outputs.report {
+        write(path, &report)?;
+    }
+    for (path, tier) in [
+        (&outputs.moved_in_process, Tier::InProcess),
+        (&outputs.moved_cli, Tier::Cli),
+    ] {
+        if let Some(path) = path {
+            let mut lines: String = comparison.moved_cells(tier).join("\n");
+            if !lines.is_empty() {
+                lines.push('\n');
+            }
+            write(path, &lines)?;
+        }
     }
     print!("{report}");
     Ok(())
 }
 
-/// Every sample of `tool` one side captured, pooled by cell.
+/// Every sample of `tool` one side captured, by cell and round.
 fn read_side(dir: &Path, tool: &str) -> Result<Samples, String> {
     let mut samples: Samples = Samples::new();
 
@@ -118,7 +158,7 @@ fn read_side(dir: &Path, tool: &str) -> Result<Samples, String> {
     if let Some(text) = read_optional(&heap_path)? {
         for measurement in report_skipped(&heap_path, parse_heap_tsv(&text)) {
             if measurement.tool == tool {
-                add_samples(
+                add_round(
                     &mut samples,
                     key_of(&measurement),
                     [measurement.stats.median],
@@ -147,7 +187,7 @@ fn read_side(dir: &Path, tool: &str) -> Result<Samples, String> {
             continue;
         };
         match parse_criterion_samples(&sample) {
-            Ok(values) => add_samples(
+            Ok(values) => add_round(
                 &mut samples,
                 CellKey {
                     tier: Tier::InProcess,
@@ -196,9 +236,9 @@ fn read_side(dir: &Path, tool: &str) -> Result<Samples, String> {
                     fixture: entry.fixture.clone(),
                 }
             };
-            add_samples(&mut samples, cell(Metric::TimeSecs), exported.times);
+            add_round(&mut samples, cell(Metric::TimeSecs), exported.times);
             if !exported.peak_memory_bytes.is_empty() {
-                add_samples(
+                add_round(
                     &mut samples,
                     cell(Metric::PeakMemoryBytes),
                     exported.peak_memory_bytes,
