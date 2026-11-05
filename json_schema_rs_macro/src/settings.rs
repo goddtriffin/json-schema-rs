@@ -384,10 +384,7 @@ pub(crate) fn resolve(args: &[SettingArg]) -> SynResult<MacroSettings> {
             ))
         };
         if let Err(error) = result {
-            match &mut errors {
-                Some(all) => all.combine(error),
-                None => errors = Some(error),
-            }
+            crate::push_error(&mut errors, error);
         }
     }
     match errors {
