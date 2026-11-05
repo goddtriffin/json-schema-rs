@@ -5,12 +5,12 @@ libraries on the same fixtures and marks a per-category winner. This crate is a 
 member and is **not published** (`publish = false`).
 
 > Running `make benchmark` and putting its report in the PR body is a **hard requirement** for
-> every PR. See the repository [CLAUDE.md](../CLAUDE.md).
+> every PR that changes the library, CLI or macros. See the repository [CLAUDE.md](../CLAUDE.md).
 
 ## Run it
 
 ```sh
-make benchmark          # quick, every PR: our library + CLI, main vs the working tree (~5-10 min)
+make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~5-10 min)
 make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
 
