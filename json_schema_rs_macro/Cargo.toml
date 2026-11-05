@@ -34,7 +34,10 @@ syn = { version = "2", features = ["full"] }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
-indexmap.workspace = true
+# Generated `IndexSet` fields derive serde.
+indexmap = { workspace = true, features = ["serde"] }
+# Line and column of spans outside a compiler run, so unit tests can check where an error points.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
