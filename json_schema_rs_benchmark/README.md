@@ -20,16 +20,38 @@ Measures only our library and CLI (`jsonschemars`), on two builds: the base comm
 base of `main` and `HEAD`; set `BENCH_BASE` for another ref) and the working tree, uncommitted
 changes included. Both sides are built with the benchmark profile, the base from a `git archive`
 of its commit in `target/benchmark-quick/base-src` with the working tree's `Cargo.lock`, and
-measured in the same session: in-process peak heap once per side (it is exact), then criterion
-and the CLI tier (hyperfine: codegen, validate_valid, validate_invalid, and the startup row) in
-`BENCH_QUICK_ROUNDS` rounds (default 2) in ABBA order. Every round's samples are pooled per side,
-so drift during the run lands on both sides alike; measuring both sides on the same day is what
-lets a PR tell a real change from the run-to-run drift between days (#100).
+measured in the same session, interleaved cell by cell: in-process peak heap once per side (it is
+exact), then criterion one cell at a time (`BENCH_CELL`), each cell's `BENCH_QUICK_ROUNDS` rounds
+(default 2) back to back in ABBA order (base, head, head, base), then the CLI tier (hyperfine:
+codegen, validate_valid, validate_invalid, and the startup row) in the same number of rounds, each
+running every cell's two sides back to back. Both sides' timed executables run from copies at
+paths of the same length (`target/benchmark-quick/run/{base,head}/`).
 
-The `compare` binary then prints which cells moved beyond noise (the winner rule below, applied
-to `main` vs the PR) as the PR body's *Performance* section, and writes it to
-`target/benchmark-quick/report.md`. A cell that passes its correctness probe on one side only is
-listed apart. Nothing committed changes.
+The `compare` binary then prints which cells moved beyond noise as the PR body's *Performance*
+section, and writes it to `target/benchmark-quick/report.md`. Each round (one process) of a cell
+is summarized by its **lowest sample**; each side by the **median of its rounds' lowest samples**,
+with their standard deviation as the spread. A cell moved when the two sides differ by more than
+3% of `main`'s value and by more than the sum of both spreads. Every cell that moved is then
+measured again in `BENCH_QUICK_CONFIRM_ROUNDS` further rounds per side (default 4), in the same
+order, and the report judges it on all its rounds: a real change moves every process, while a
+false move comes from two rounds whose spread happened to be small. A cell that passes its
+correctness probe on one side only is listed apart. Nothing committed changes.
+
+Why this design: the machine is shared (other builds, benchmarks, sessions), and three effects
+moved cells with no code change (#100), each measured with A/A runs (both sides the same commit):
+
+| Effect | What it did | Countered by |
+|---|---|---|
+| Drift: speed changes over minutes, load arrives in bursts of seconds | results from another day differ by up to 10% in-process; whole-tier rounds a minute apart disagreed on 44 of 48 in-process cells | interleaving per cell (5 of 48), the lowest sample per round |
+| Paths: the executable's path sits on the process's stack; a path compiled into the binary shifts its layout | the same binary from a longer path ran a sub-microsecond cell 5.5% slower in all 8 processes; builds of one commit from two checkouts differed by up to 8% on one cell | equal-length executable paths; no absolute path compiled into the bench (the default fixture directory is read at run time) |
+| Per-process layout: each process gets its own memory layout | some sub-microsecond cells run about 4% faster in some processes | the median across rounds, with their spread as the noise; confirmation rounds for every cell that moved |
+
+The original design (whole-tier rounds, pooled medians, unequal paths) reported 3 of 174 cells
+moved in an A/A run (up to +12%). Two A/A runs of this one reported none: 2 to 4 cells per run
+moved after the first two rounds, and their confirmation rounds cleared every one. On A/A
+captures with injected changes, the per-round rule caught 88% of cells at +4%, 93% at +5% and
+all at +10% (pooled medians: 83%, 90%, 99.5%). A run takes about 6-7.5 minutes. A cell that moved but runs only code the PR did not touch is
+still noise; the PR body counts only cells on changed code paths (see CLAUDE.md).
 
 Reverse codegen is not measured in quick mode: its models take minutes to build per side (#102).
 A PR that changes the derive or reverse codegen, the harness, a competitor or a fixture runs
@@ -176,13 +198,15 @@ Defaults are given as full mode / quick mode.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` / `--warm-up-time 0.3 --measurement-time 1 --sample-size 20` | criterion arguments (per round in quick mode) |
+| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` / `--warm-up-time 0.3 --measurement-time 1 --sample-size 20 --noplot` | criterion arguments (per cell and round in quick mode) |
 | `BENCH_SKIP_CRITERION=1` | unset (full mode only) | skip in-process timing |
 | `BENCH_CLI_WARMUP` | `3` / `2` | hyperfine warmup runs per CLI cell (and round) |
 | `BENCH_CLI_RUNS` | `15` / `10` | hyperfine timed runs per CLI cell (and round) |
 | `BENCH_BASE` | — / `main` | quick mode: the ref whose merge base with `HEAD` is the base side |
 | `BENCH_QUICK_ROUNDS` | — / `2` | quick mode: interleaved rounds per side |
+| `BENCH_QUICK_CONFIRM_ROUNDS` | — / `4` | quick mode: further rounds per side for each cell that moved (`0` skips) |
 | `BENCH_TOOLS` | unset | comma-separated tool ids the in-process harness measures (quick mode sets `jsonschemars`) |
+| `BENCH_CELL` | unset | one in-process cell the criterion bench checks and times, `<operation>/<fixture id>` (quick mode sets it per cell) |
 
 ## Layout
 

@@ -536,6 +536,38 @@ fn selected_tools<A: Adapter>() -> Vec<A> {
         .collect()
 }
 
+/// Environment variable restricting criterion to one cell per tool: `<operation>/<fixture id>`
+/// (`validate_valid/small/config`). Unset or blank times every cell. The quick benchmark runs
+/// each cell on its own, alternating the two builds, so only that cell is checked and timed (a
+/// criterion filter would still run the correctness check of every cell first).
+pub const CELL_ENV: &str = "BENCH_CELL";
+
+/// The cell a [`CELL_ENV`] value selects: `None` (every cell) when the value is unset or blank,
+/// else the operation token before the first `/` and the fixture id after it.
+///
+/// # Errors
+///
+/// Returns a reason when the operation token is unknown or the fixture id is empty.
+pub fn cell_selection(value: Option<&str>) -> Result<Option<(Operation, String)>, String> {
+    let Some(value) = value
+        .map(str::trim)
+        .filter(|value: &&str| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let (token, fixture) = value.split_once('/').unwrap_or((value, ""));
+    let operation: Operation = Operation::ALL
+        .into_iter()
+        .find(|operation: &Operation| operation.id() == token)
+        .ok_or_else(|| format!("{CELL_ENV}={value}: unknown operation `{token}`"))?;
+    if fixture.is_empty() {
+        return Err(format!(
+            "{CELL_ENV}={value}: no fixture id (expected `<operation>/<fixture id>`)"
+        ));
+    }
+    Ok(Some((operation, fixture.to_owned())))
+}
+
 // --- Criterion timing --------------------------------------------------------------------
 
 /// Samples per benchmark: enough for a stable median at a practical total runtime.
@@ -556,17 +588,33 @@ const MEASUREMENT: Duration = Duration::from_secs(2);
 /// the fixture's model, looked up outside the timed closure.
 ///
 /// Fixtures come from [`fixtures::discover_configured`] (`BENCH_FIXTURE_ROOTS`, or the committed
-/// and generated fixture directories). Criterion CLI flags (`--warm-up-time`,
-/// `--measurement-time`, `--sample-size`, filters) override the defaults set here.
+/// and generated fixture directories). [`TOOLS_ENV`] restricts the tools and [`CELL_ENV`] the
+/// cell. Criterion CLI flags (`--warm-up-time`, `--measurement-time`, `--sample-size`, filters)
+/// override the defaults set here.
 #[must_use]
 pub fn cross_tool_main<A: Adapter>() -> ExitCode {
-    let all_fixtures: Vec<Fixture> = match fixtures::discover_configured() {
+    let cell: Option<(Operation, String)> =
+        match cell_selection(std::env::var(CELL_ENV).ok().as_deref()) {
+            Ok(cell) => cell,
+            Err(reason) => {
+                eprintln!("cross_tool: {reason}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let mut all_fixtures: Vec<Fixture> = match fixtures::discover_configured() {
         Ok(found) => found,
         Err(err) => {
             eprintln!("cross_tool: fixture discovery failed: {err}");
             return ExitCode::FAILURE;
         }
     };
+    if let Some((_, fixture_id)) = &cell {
+        all_fixtures.retain(|fixture: &Fixture| &fixture.id == fixture_id);
+        if all_fixtures.is_empty() {
+            eprintln!("cross_tool: {CELL_ENV}: no fixture `{fixture_id}` under the fixture roots");
+            return ExitCode::FAILURE;
+        }
+    }
     let mut criterion: Criterion = Criterion::default()
         .sample_size(SAMPLE_SIZE)
         .warm_up_time(WARM_UP)
@@ -574,6 +622,12 @@ pub fn cross_tool_main<A: Adapter>() -> ExitCode {
         .configure_from_args();
     let tools: Vec<A> = selected_tools::<A>();
     for operation in Operation::ALL {
+        if cell
+            .as_ref()
+            .is_some_and(|(selected, _): &(Operation, String)| *selected != operation)
+        {
+            continue;
+        }
         bench_operation(&mut criterion, operation, &all_fixtures, &tools);
     }
     criterion.final_summary();
@@ -663,7 +717,10 @@ fn bench_cell<A: Adapter>(
 
 #[cfg(test)]
 mod tests {
-    use super::{AdapterError, Operation, guarded, machine_independent, one_line, tool_selection};
+    use super::{
+        AdapterError, Operation, cell_selection, guarded, machine_independent, one_line,
+        tool_selection,
+    };
     use crate::fixtures::Fixture;
     use std::path::PathBuf;
 
@@ -722,6 +779,47 @@ mod tests {
     fn machine_independent_keeps_a_reason_without_the_directory() {
         let expected: String = "compile error: bad".to_owned();
         let actual: String = machine_independent("compile error: bad", &fixture_in(""));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn cell_selection_is_every_cell_when_unset() {
+        let expected: Result<Option<(Operation, String)>, String> = Ok(None);
+        let actual: Result<Option<(Operation, String)>, String> = cell_selection(None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn cell_selection_is_every_cell_when_blank() {
+        let expected: Result<Option<(Operation, String)>, String> = Ok(None);
+        let actual: Result<Option<(Operation, String)>, String> = cell_selection(Some("  "));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn cell_selection_splits_the_operation_from_a_nested_fixture_id() {
+        let expected: Result<Option<(Operation, String)>, String> =
+            Ok(Some((Operation::ValidateValid, "small/config".to_owned())));
+        let actual: Result<Option<(Operation, String)>, String> =
+            cell_selection(Some("validate_valid/small/config"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn cell_selection_rejects_an_unknown_operation() {
+        let expected: Result<Option<(Operation, String)>, String> =
+            Err("BENCH_CELL=validate/small/config: unknown operation `validate`".to_owned());
+        let actual: Result<Option<(Operation, String)>, String> =
+            cell_selection(Some("validate/small/config"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn cell_selection_rejects_a_missing_fixture_id() {
+        let expected: Result<Option<(Operation, String)>, String> = Err(
+            "BENCH_CELL=codegen: no fixture id (expected `<operation>/<fixture id>`)".to_owned(),
+        );
+        let actual: Result<Option<(Operation, String)>, String> = cell_selection(Some("codegen"));
         assert_eq!(expected, actual);
     }
 

@@ -12,10 +12,10 @@
 //! one of its documents (see [`Fixture::unresolved_refs`]).
 //!
 //! Roots come from the `BENCH_FIXTURE_ROOTS` environment variable (`:`-separated absolute
-//! directories). When it is unset or empty, the roots are the committed fixtures directory
-//! (`<CARGO_MANIFEST_DIR>/fixtures`) and the generated fixtures directory
-//! (`<CARGO_MANIFEST_DIR>/../target/benchmark-fixtures`). A root that does not exist is
-//! skipped, so the generated tier is optional.
+//! directories). When it is unset or empty, the roots are the benchmark crate's committed
+//! fixtures directory (`fixtures/`) and the generated fixtures directory
+//! (`../target/benchmark-fixtures/`), found from `CARGO_MANIFEST_DIR` when the process runs (see
+//! [`default_roots`]). A root that does not exist is skipped, so the generated tier is optional.
 //!
 //! Every fixture's text is loaded eagerly so measured code never touches the filesystem.
 //! Discovery walks directories with plain loops (no recursion) and returns fixtures sorted
@@ -94,6 +94,9 @@ pub enum FixtureError {
         /// Why it cannot be registered.
         reason: String,
     },
+    /// `BENCH_FIXTURE_ROOTS` is unset or empty and there are no default roots (the process was
+    /// not started by cargo inside the benchmark crate).
+    NoRoots,
     /// Two roots provide a fixture with the same id.
     DuplicateId {
         /// The duplicated fixture id.
@@ -117,6 +120,11 @@ impl fmt::Display for FixtureError {
             FixtureError::InvalidResource { path, reason } => {
                 write!(f, "invalid resource {}: {reason}", path.display())
             }
+            FixtureError::NoRoots => write!(
+                f,
+                "no fixture roots: set {FIXTURE_ROOTS_ENV}, or run through cargo in the benchmark \
+                 crate"
+            ),
             FixtureError::DuplicateId { id, first, second } => write!(
                 f,
                 "duplicate fixture id {id}: {} and {}",
@@ -133,18 +141,35 @@ impl std::error::Error for FixtureError {
             FixtureError::Io { source, .. } => Some(source),
             FixtureError::NonUtf8Name { .. }
             | FixtureError::InvalidResource { .. }
+            | FixtureError::NoRoots
             | FixtureError::DuplicateId { .. } => None,
         }
     }
 }
 
-/// The default fixture roots: committed fixtures, then generated fixtures.
+/// The default fixture roots: committed fixtures, then generated fixtures, under the benchmark
+/// crate's directory. That directory is the nearest of `CARGO_MANIFEST_DIR` and its ancestors
+/// holding `fixtures/manifest.json`, so the isolated crate inside it (and its build script) finds
+/// the same fixtures. Empty when the variable is unset or no such directory exists.
+///
+/// `CARGO_MANIFEST_DIR` is read when the process runs (cargo sets it for `cargo bench`, `run`,
+/// `test` and build scripts), never compiled in: an absolute path compiled into the bench makes
+/// two builds of the same source differ in layout when their checkouts' paths differ in length,
+/// which moved a cell by 5% in the quick benchmark's A/A runs (#100).
 #[must_use]
 pub fn default_roots() -> Vec<PathBuf> {
-    let manifest_dir: &Path = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
+        return Vec::new();
+    };
+    let Some(crate_dir) = Path::new(&manifest_dir)
+        .ancestors()
+        .find(|dir: &&Path| dir.join("fixtures").join("manifest.json").is_file())
+    else {
+        return Vec::new();
+    };
     vec![
-        manifest_dir.join("fixtures"),
-        manifest_dir
+        crate_dir.join("fixtures"),
+        crate_dir
             .join("..")
             .join("target")
             .join("benchmark-fixtures"),
@@ -178,10 +203,14 @@ pub fn configured_roots() -> Vec<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns a [`FixtureError`] when a directory or file cannot be read, a path is not UTF-8,
-/// or two roots provide the same fixture id.
+/// Returns a [`FixtureError`] when there are no roots, a directory or file cannot be read, a
+/// path is not UTF-8, or two roots provide the same fixture id.
 pub fn discover_configured() -> Result<Vec<Fixture>, FixtureError> {
-    discover(&configured_roots())
+    let roots: Vec<PathBuf> = configured_roots();
+    if roots.is_empty() {
+        return Err(FixtureError::NoRoots);
+    }
+    discover(&roots)
 }
 
 /// Discover and load every `<group>/<name>/schema.json` fixture under `roots`, sorted by id.
