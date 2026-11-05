@@ -9,7 +9,8 @@ see [design.md](design.md).
 
 1. **Spec adherence and correctness.** Behaviour matches the JSON Schema specification for
    every draft we support. Correctness is everything: nothing outranks it.
-2. **Performance: speed, then memory.** Fast and lean, measured with `make benchmark`.
+2. **Performance: speed, then memory.** Fast and lean, measured with `make benchmark`
+   (and against competitors with `make benchmark_full`).
    When speed and memory conflict, choose speed: a much faster design is worth somewhat
    more memory.
 3. **The user-facing API.** Sane defaults and the behaviour users would most expect (library,
@@ -33,21 +34,32 @@ Backwards compatibility is **not** a priority and **never** a justification (req
    principles, and the per-keyword notes). design.md is the single source of truth for
    design and reasoning; keep it updated after implementing.
 
-3. **Run the benchmark and differential harnesses once, at the end, and commit their results.**
+3. **Run the benchmark and differential harnesses once, at the end.**
    - Correctness comes first. Only after `make lint test` passes and the change is done, run
      `make benchmark` and `make differential` as the last step before opening (or updating)
      the PR. Each takes several minutes: never run them mid-work or repeatedly.
-   - The benchmark harness is the **guiding star** for performance: it is how we detect and
-     reason about performance regressions and improvements across our library and
-     competitors (see [json_schema_rs_benchmark/README.md](json_schema_rs_benchmark/README.md)).
-     The differential harness measures how much of the official JSON Schema Test Suite we pass
+   - The benchmark harness is the **guiding star** for performance (see
+     [json_schema_rs_benchmark/README.md](json_schema_rs_benchmark/README.md)). It has two
+     modes:
+     - `make benchmark` (**every PR**, about 5–10 min): our library and CLI only, built from
+       `main` and from the working tree and measured side by side in the same session, so
+       run-to-run drift cancels out. It prints the PR body's *Performance* section and changes
+       no committed file.
+     - `make benchmark_full` (about 60 min): every tool, ours and the competitors', and it
+       refreshes the committed `json_schema_rs_benchmark/results.{json,md}`. Run it as well as
+       `make benchmark` (which still writes the PR body's report) when the PR changes the benchmark
+       harness, a competitor or a fixture, or the derive or reverse codegen (the quick mode
+       does not measure reverse codegen), and on a quiet machine when the cross-tool tables
+       should be refreshed.
+   - The differential harness measures how much of the official JSON Schema Test Suite we pass
      next to other implementations (see
-     [json_schema_rs_differential/README.md](json_schema_rs_differential/README.md)).
-   - The committed results files (`json_schema_rs_benchmark/results.{json,md}` and
-     `json_schema_rs_differential/results.{json,md}`) **must be up to date** so PR review sees
-     the real impact of the change in the diff.
-   - **A PR is not complete until both harnesses have been run and their results files are
-     committed and current.** This is non-negotiable.
+     [json_schema_rs_differential/README.md](json_schema_rs_differential/README.md)). Its
+     committed results (`json_schema_rs_differential/results.{json,md}`) **must be up to date**
+     so PR review sees the real impact of the change in the diff.
+   - **A PR is not complete until `make benchmark` and `make differential` have been run, the
+     differential results are committed and current, and the PR body carries the quick
+     benchmark's report** (plus the full run's refreshed results when the PR needs one). This
+     is non-negotiable.
 
 4. **No backwards compatibility before 1.0.** The crate is pre-1.0 (`0.x`): there are no
    users to keep working, so every change makes the API, behaviour and docs what they should
@@ -94,7 +106,7 @@ Every change goes through a pull request that a human reviews and merges.
 ## Pull request body
 
 Succinct, at-a-glance, actionable: what changed and why, then these two sections, both
-measured against `main`'s committed results files. Highlight what matters most and give
+measured against `main`. Highlight what matters most and give
 counts for the rest in the visible text; full detail goes only in collapsed `<details>`
 blocks (the Performance tables), and nothing the PR did not cause appears at all.
 
@@ -103,11 +115,12 @@ blocks (the Performance tables), and nothing the PR did not cause appears at all
   `json_schema_rs/tests/suite_xfail.json` (and `suite_xfail_arbitrary_precision.json` for the `arbitrary-precision` build), and the compliance/coverage change per draft in
   `json_schema_rs_differential/results.md`. Name the most relevant groups (keyword and
   draft) with counts. If nothing changed, write `n/a`.
-- **Performance:** our library's time and memory (peak heap / peak RSS) versus `main`'s
-  benchmark results. A cell counts only if it moved beyond noise (larger than the 3% threshold
-  and the standard deviations the harness uses for winners) **and** sits on a code path the PR
-  changed; a cell that moved but runs only code the PR did not touch is run-to-run noise and is
-  left out. Write a short visible summary (the biggest few with before → after, the count of
+- **Performance:** our library's time and memory (peak heap / peak RSS) versus `main`, from
+  `make benchmark`'s report (`target/benchmark-quick/report.md`), which measures both in the
+  same session. A cell counts only if it moved beyond noise (larger than the 3% threshold and
+  the standard deviations the harness uses for winners) **and** sits on a code path the PR
+  changed; a cell that moved but runs only code the PR did not touch is noise and is left
+  out. When the PR also ran `make benchmark_full`, say how category winners changed. Write a short visible summary (the biggest few with before → after, the count of
   cells that moved, any change in category winners, and why things moved), then two tables,
   **Memory** and **Time**, each collapsed by default in its own `<details>` block, listing
   **every** counted cell: tier, fixture, operation, `main`, this PR, change (%), sorted by

@@ -24,7 +24,7 @@ specs/json-schema.org/*
 .DS_Store
 Cargo.lock
 
-# Benchmark competitor environments, installed from the committed lock files by `make benchmark`
+# Benchmark competitor environments, installed from the committed lock files by `make benchmark_full`
 json_schema_rs_benchmark/competitors/node/node_modules/
 json_schema_rs_benchmark/competitors/python/.venv/
 # reverse_codegen models generated from the fixtures by the driver (never committed)

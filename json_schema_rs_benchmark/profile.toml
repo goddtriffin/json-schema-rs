@@ -1,6 +1,6 @@
-# The build profile of every Rust tool `make benchmark` measures: our library and CLI, every linked
-# competitor, the isolated builds, and the competitor CLIs the driver installs. The driver passes
-# this file to each of those cargo commands (`--config profile.toml --profile benchmark`), so every
+# The build profile of every Rust tool the benchmark measures (`make benchmark` and
+# `make benchmark_full`): our library and CLI, every linked competitor, the isolated builds, and
+# the competitor CLIs the driver installs. The drivers pass this file to each of those cargo commands (`--config profile.toml --profile benchmark`), so every
 # tool is built alike and the profile is defined once.
 #
 # - codegen-units = 1: with Cargo's default of 16, which unit a hot function lands in (and so what
