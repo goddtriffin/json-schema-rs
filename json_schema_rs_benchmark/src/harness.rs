@@ -405,15 +405,17 @@ pub fn heap_profile_main<A: Adapter>(peak: PeakAlloc) -> ExitCode {
     }
 }
 
-/// Profile every cell of `A` and append both TSV files under `output`.
+/// Profile every cell of the selected tools of `A` (see [`TOOLS_ENV`]) and append both TSV files
+/// under `output`.
 fn heap_profile<A: Adapter>(peak: PeakAlloc, output: &Path) -> Result<(), String> {
     let all_fixtures: Vec<Fixture> =
         fixtures::discover_configured().map_err(|e| format!("fixture discovery failed: {e}"))?;
+    let tools: Vec<A> = selected_tools::<A>();
     let mut compat: String = String::new();
     let mut heap: String = String::new();
     for fixture in &all_fixtures {
         for operation in Operation::ALL {
-            for tool in A::ALL.iter().copied() {
+            for tool in tools.iter().copied() {
                 if !tool.supports(operation) {
                     continue;
                 }
@@ -502,6 +504,38 @@ fn peak_of(peak: PeakAlloc, mut op: impl FnMut()) -> u64 {
     u64::try_from(peak_bytes.saturating_sub(start)).unwrap_or(u64::MAX)
 }
 
+/// Environment variable restricting a run to some tools: their ids, comma-separated. Unset or
+/// blank measures every tool. The quick benchmark sets it to our tool, so neither the heap
+/// profile nor criterion spends time checking or measuring a competitor.
+pub const TOOLS_ENV: &str = "BENCH_TOOLS";
+
+/// The tool ids a [`TOOLS_ENV`] value selects: `None` (every tool) when the value is unset or
+/// blank, else each non-blank comma-separated id, trimmed.
+#[must_use]
+pub fn tool_selection(value: Option<&str>) -> Option<Vec<String>> {
+    let ids: Vec<String> = value?
+        .split(',')
+        .map(str::trim)
+        .filter(|id: &&str| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if ids.is_empty() { None } else { Some(ids) }
+}
+
+/// The tools of `A` this run measures, in `A::ALL` order (see [`TOOLS_ENV`]).
+fn selected_tools<A: Adapter>() -> Vec<A> {
+    let selection: Option<Vec<String>> = tool_selection(std::env::var(TOOLS_ENV).ok().as_deref());
+    A::ALL
+        .iter()
+        .copied()
+        .filter(|tool: &A| {
+            selection
+                .as_ref()
+                .is_none_or(|ids: &Vec<String>| ids.iter().any(|id: &String| id == tool.id()))
+        })
+        .collect()
+}
+
 // --- Criterion timing --------------------------------------------------------------------
 
 /// Samples per benchmark: enough for a stable median at a practical total runtime.
@@ -538,18 +572,21 @@ pub fn cross_tool_main<A: Adapter>() -> ExitCode {
         .warm_up_time(WARM_UP)
         .measurement_time(MEASUREMENT)
         .configure_from_args();
+    let tools: Vec<A> = selected_tools::<A>();
     for operation in Operation::ALL {
-        bench_operation::<A>(&mut criterion, operation, &all_fixtures);
+        bench_operation(&mut criterion, operation, &all_fixtures, &tools);
     }
     criterion.final_summary();
     ExitCode::SUCCESS
 }
 
-/// Benchmark every correct (tool, fixture) cell of `operation` in one group named after it.
+/// Benchmark every correct (tool, fixture) cell of `operation` among `tools` in one group named
+/// after it.
 fn bench_operation<A: Adapter>(
     criterion: &mut Criterion,
     operation: Operation,
     all_fixtures: &[Fixture],
+    tools: &[A],
 ) {
     let mut group: BenchmarkGroup<'_, WallTime> = criterion.benchmark_group(operation.id());
     // Flat sampling keeps slow cells (whole-schema codegen and compilation of large schemas)
@@ -558,7 +595,7 @@ fn bench_operation<A: Adapter>(
         group.sampling_mode(SamplingMode::Flat);
     }
     for fixture in all_fixtures {
-        for tool in A::ALL.iter().copied() {
+        for tool in tools.iter().copied() {
             if !tool.supports(operation) {
                 continue;
             }
@@ -626,7 +663,7 @@ fn bench_cell<A: Adapter>(
 
 #[cfg(test)]
 mod tests {
-    use super::{AdapterError, Operation, guarded, machine_independent, one_line};
+    use super::{AdapterError, Operation, guarded, machine_independent, one_line, tool_selection};
     use crate::fixtures::Fixture;
     use std::path::PathBuf;
 
@@ -685,6 +722,28 @@ mod tests {
     fn machine_independent_keeps_a_reason_without_the_directory() {
         let expected: String = "compile error: bad".to_owned();
         let actual: String = machine_independent("compile error: bad", &fixture_in(""));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn tool_selection_is_every_tool_when_unset() {
+        let expected: Option<Vec<String>> = None;
+        let actual: Option<Vec<String>> = tool_selection(None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn tool_selection_is_every_tool_when_blank() {
+        let expected: Option<Vec<String>> = None;
+        let actual: Option<Vec<String>> = tool_selection(Some(" , "));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn tool_selection_lists_each_trimmed_id() {
+        let expected: Option<Vec<String>> =
+            Some(vec!["jsonschemars".to_owned(), "boon".to_owned()]);
+        let actual: Option<Vec<String>> = tool_selection(Some("jsonschemars, boon,"));
         assert_eq!(expected, actual);
     }
 }

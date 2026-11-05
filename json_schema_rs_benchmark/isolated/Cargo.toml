@@ -13,7 +13,7 @@
 #   for typify.
 #
 # Enable exactly one feature per build. This crate is its own workspace (not a member of the
-# repository's), so `make test` and `make lint` never build it; `make benchmark` does.
+# repository's), so `make test` and `make lint` never build it; `make benchmark_full` does.
 
 [package]
 name = "json-schema-rs-benchmark-isolated"

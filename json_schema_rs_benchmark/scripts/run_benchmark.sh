@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# run_benchmark.sh — top-level driver for the json-schema-rs benchmark harness (`make benchmark`).
+# run_benchmark.sh — driver of the full json-schema-rs benchmark (`make benchmark_full`): every tool,
+# refreshing the committed results. The quick per-PR mode is quick_benchmark.sh (`make benchmark`).
 #
 # The harness measures every tool in two tiers:
 #
