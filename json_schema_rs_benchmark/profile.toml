@@ -1,0 +1,19 @@
+# The build profile of every Rust tool `make benchmark` measures: our library and CLI, every linked
+# competitor, the isolated builds, and the competitor CLIs the driver installs. The driver passes
+# this file to each of those cargo commands (`--config profile.toml --profile benchmark`), so every
+# tool is built alike and the profile is defined once.
+#
+# - codegen-units = 1: with Cargo's default of 16, which unit a hot function lands in (and so what
+#   gets inlined into it) shifts when unrelated code is added to a crate. Adding an unused module
+#   moved our in-process cells by up to 10% with no code path changed.
+# - lto = "thin": with one codegen unit, the same unused module moved no cell beyond noise with thin
+#   LTO, while a few still moved 3-5% without LTO or with fat LTO. Thin was also the fastest for
+#   every tool (fat was 1-6% slower than thin per tool, geometric mean over its cells).
+#
+# A profile defined here (not in a Cargo.toml) reaches the isolated crate's own workspace and the
+# competitor CLIs' own packages too. A change to its settings reinstalls the competitor CLIs (see tools.sh).
+
+[profile.benchmark]
+inherits = "release"
+codegen-units = 1
+lto = "thin"
