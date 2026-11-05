@@ -1,11 +1,27 @@
 //! Procedural macro `json_schema_to_rust!` and derive `ToJsonSchema` for json-schema-rs.
 //!
-//! Use with the `json-schema-rs` crate: add `json-schema-rs` with the `macro` feature
-//! (or add `json-schema-rs-macro` directly), then invoke
+//! Add `json-schema-rs` and `json-schema-rs-macro`, then invoke
 //! `json_schema_to_rust!("path/to/schema.json")` or
 //! `json_schema_to_rust!(r#"{"type":"object", ...}"#)`. A literal that starts with `{`, or is
 //! `true` or `false` (a boolean schema), is inline JSON; any other literal is a path relative to
 //! `CARGO_MANIFEST_DIR`.
+//!
+//! Settings follow the schema literals as `name = value`, one per `CodeGenSettings` and
+//! `JsonSchemaSettings` field, named like the builder methods; a flag takes `true` / `false` and
+//! an enum its variant name:
+//!
+//! ```ignore
+//! json_schema_to_rust!(
+//!     "schemas/a.json",
+//!     dedupe_mode = Disabled,
+//!     unique_items = BTreeSet,
+//!     forced_spec_version = Draft07,
+//! );
+//! ```
+//!
+//! A setting left out keeps the builder's default. An unknown setting, an unknown value, a
+//! repeated setting, and `unique_items = IndexSet` without this crate's `indexmap` feature are
+//! compile errors at their span.
 //!
 //! Cargo rebuilds the invoking crate when any schema file the macro read changes: every path
 //! input and every file a schema `$ref`s.
@@ -14,37 +30,55 @@
 //! `#[json_schema(title = "...")]` on the struct and `#[serde(rename = "...")]` on fields.
 
 mod derive;
+mod settings;
 
 use derive::expand_to_json_schema;
 use json_schema_rs::sanitizers::module_name_from_path;
 use json_schema_rs::{
-    CodeGenBackend, CodeGenInput, CodeGenSettings, FileRetriever, Retrieve, RetrieveError, Schema,
-    file_path, file_uri,
+    CodeGenBackend, CodeGenInput, FileRetriever, Retrieve, RetrieveError, Schema, file_path,
+    file_uri,
 };
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use serde_json::Value;
+use settings::{MacroSettings, SettingArg};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use syn::parse::{Parse, ParseStream};
 use syn::{DeriveInput, LitStr, Result as SynResult, Token};
 
-/// Parse one or more string literals (paths or inline JSON).
-struct SchemaInputs {
+/// The macro's arguments: one or more string literals (paths or inline JSON), then any settings
+/// (`name = value`, see [`settings`]), separated by commas, with an optional trailing comma.
+struct MacroInput {
     literals: Vec<LitStr>,
+    settings: Vec<SettingArg>,
 }
 
-impl Parse for SchemaInputs {
+impl Parse for MacroInput {
     fn parse(input: ParseStream<'_>) -> SynResult<Self> {
-        let mut literals = Vec::new();
-        literals.push(input.parse()?);
-        while input.peek(Token![,]) {
+        let mut literals: Vec<LitStr> = vec![input.parse()?];
+        let mut settings: Vec<SettingArg> = Vec::new();
+        while !input.is_empty() {
             input.parse::<Token![,]>()?;
-            literals.push(input.parse()?);
+            if input.is_empty() {
+                break;
+            }
+            if input.peek(LitStr) {
+                let literal: LitStr = input.parse()?;
+                if !settings.is_empty() {
+                    return Err(syn::Error::new(
+                        literal.span(),
+                        "schema literals come before the settings",
+                    ));
+                }
+                literals.push(literal);
+            } else {
+                settings.push(input.parse()?);
+            }
         }
-        Ok(SchemaInputs { literals })
+        Ok(MacroInput { literals, settings })
     }
 }
 
@@ -111,7 +145,8 @@ pub fn json_schema_to_rust(input: TokenStream) -> TokenStream {
 fn json_schema_to_rust_impl(
     input: proc_macro2::TokenStream,
 ) -> SynResult<proc_macro2::TokenStream> {
-    let schema_inputs: SchemaInputs = syn::parse2(input)?;
+    let schema_inputs: MacroInput = syn::parse2(input)?;
+    let settings: MacroSettings = settings::resolve(&schema_inputs.settings)?;
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|_| syn::Error::new(Span::call_site(), "CARGO_MANIFEST_DIR not set"))?;
 
@@ -147,7 +182,7 @@ fn json_schema_to_rust_impl(
             (contents, name, uri)
         };
 
-        let schema: Schema = Schema::try_from(json_str.as_str())
+        let schema: Schema = Schema::new_from_str(&json_str, &settings.json_schema)
             .map_err(|e| syn::Error::new(lit.span(), format!("invalid JSON Schema: {e}")))?;
         schemas.push((schema, uri));
         mod_names.push((mod_name, lit.span()));
@@ -158,18 +193,19 @@ fn json_schema_to_rust_impl(
         inner: FileRetriever::new(&manifest_dir),
         retrieved: RefCell::new(Vec::new()),
     };
-    let mut input: CodeGenInput<'_> = CodeGenInput::new().retriever(&retriever);
+    let mut input: CodeGenInput<'_> = CodeGenInput::new()
+        .retriever(&retriever)
+        .settings(settings.json_schema.clone());
     for (schema, uri) in &schemas {
         input = match uri {
             Some(uri) => input.schema_at(uri.clone(), schema),
             None => input.schema(schema),
         };
     }
-    let code_gen_settings: CodeGenSettings = CodeGenSettings::builder().build();
     let backend = json_schema_rs::RustBackend;
     let output: json_schema_rs::GenerateRustOutput =
         backend
-            .generate(&input, &code_gen_settings)
+            .generate(&input, &settings.code_gen)
             .map_err(|e| syn::Error::new(Span::call_site(), format!("codegen failed: {e}")))?;
 
     drop(input);
@@ -228,8 +264,151 @@ fn json_schema_to_rust_impl(
 
 #[cfg(test)]
 mod tests {
-    use super::{manifest_relative, retrieved_path};
+    use super::{json_schema_to_rust_impl, manifest_relative, retrieved_path};
+    use proc_macro2::TokenStream;
     use std::path::Path;
+    use std::str::FromStr;
+
+    /// The messages of the errors the macro reports for arguments `source`, each with its line
+    /// (1-based) and column (0-based); empty when it expands.
+    fn expansion_errors(source: &str) -> Vec<(String, usize, usize)> {
+        let tokens: TokenStream = TokenStream::from_str(source).expect("tokenize");
+        match json_schema_to_rust_impl(tokens) {
+            Ok(_) => Vec::new(),
+            Err(errors) => errors
+                .into_iter()
+                .map(|error| {
+                    let start = error.span().start();
+                    (error.to_string(), start.line, start.column)
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn settings_after_literals_with_trailing_comma_expand() {
+        let expected: Vec<(String, usize, usize)> = Vec::new();
+        let actual: Vec<(String, usize, usize)> = expansion_errors(
+            r##"r#"{"type":"string"}"#, r#"{"type":"integer"}"#, dedupe_mode = Disabled, self_validating = false,"##,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn literal_after_setting_is_an_error_at_the_literal() {
+        let expected: Vec<(String, usize, usize)> = vec![(
+            "schema literals come before the settings".to_string(),
+            1,
+            48,
+        )];
+        let actual: Vec<(String, usize, usize)> = expansion_errors(
+            r##"r#"{"type":"string"}"#, dedupe_mode = Disabled, r#"{"type":"integer"}"#"##,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn setting_without_value_is_an_error() {
+        let expected: Vec<(String, usize, usize)> = vec![(
+            "expected a setting value: `true`, `false` or a variant name".to_string(),
+            1,
+            38,
+        )];
+        let actual: Vec<(String, usize, usize)> =
+            expansion_errors(r##"r#"{"type":"string"}"#, dedupe_mode = "Full""##);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn disallow_unknown_fields_rejects_unknown_key() {
+        let expected: Vec<(String, usize, usize)> = vec![(
+            r#"invalid JSON Schema: unknown keyword "colour" at root"#.to_string(),
+            1,
+            0,
+        )];
+        let actual: Vec<(String, usize, usize)> = expansion_errors(
+            r##"r#"{"type":"string","colour":"blue"}"#, disallow_unknown_fields = true"##,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unknown_key_is_ignored_by_default() {
+        let expected: Vec<(String, usize, usize)> = Vec::new();
+        let actual: Vec<(String, usize, usize)> =
+            expansion_errors(r##"r#"{"type":"string","colour":"blue"}"#"##);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unknown_schema_uri_reject_rejects_unrecognised_schema() {
+        let expected: Vec<(String, usize, usize)> = vec![(
+            r#"invalid JSON Schema: unknown $schema "https://example.com/meta""#.to_string(),
+            1,
+            0,
+        )];
+        let actual: Vec<(String, usize, usize)> = expansion_errors(
+            r##"r#"{"$schema":"https://example.com/meta","type":"string"}"#, unknown_schema_uri = Reject"##,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn exclusive_bounds_boolean_modifier_accepts_boolean_exclusive_minimum() {
+        let expected: Vec<(String, usize, usize)> = Vec::new();
+        let actual: Vec<(String, usize, usize)> = expansion_errors(
+            r##"r#"{"type":"integer","minimum":5,"exclusiveMinimum":true}"#, exclusive_bounds = BooleanModifier"##,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn boolean_exclusive_minimum_is_an_error_by_default() {
+        let expected: Vec<(String, usize, usize)> = vec![(
+            "invalid JSON Schema: invalid JSON Schema: invalid type: boolean `true`, expected a \
+             JSON number at line 1 column 53"
+                .to_string(),
+            1,
+            0,
+        )];
+        let actual: Vec<(String, usize, usize)> =
+            expansion_errors(r##"r#"{"type":"integer","minimum":5,"exclusiveMinimum":true}"#"##);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unrecognised_schema_falls_back_by_default() {
+        let expected: Vec<(String, usize, usize)> = Vec::new();
+        let actual: Vec<(String, usize, usize)> =
+            expansion_errors(r##"r#"{"$schema":"https://example.com/meta","type":"string"}"#"##);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settings_errors_are_reported_together() {
+        let expected: Vec<(String, usize, usize)> = vec![
+            (
+                "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
+                 `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
+                 `self_validating`, `constrained_newtypes`, `disallow_unknown_fields`, \
+                 `forced_spec_version`, `default_spec_version`, `format_mode`, \
+                 `integer_semantics`, `exclusive_bounds`, `ref_siblings` or `unknown_schema_uri`"
+                    .to_string(),
+                1,
+                24,
+            ),
+            (
+                "unknown value `List` for `unique_items`; expected `Vec`, `HashSet`, `BTreeSet` \
+                 or `IndexSet`"
+                    .to_string(),
+                1,
+                54,
+            ),
+        ];
+        let actual: Vec<(String, usize, usize)> =
+            expansion_errors(r##"r#"{"type":"string"}"#, dedupe = Full, unique_items = List"##);
+        assert_eq!(expected, actual);
+    }
 
     #[test]
     fn manifest_relative_joins_manifest_dir_env() {

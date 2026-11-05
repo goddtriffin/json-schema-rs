@@ -372,6 +372,38 @@ Then `use json_schema_rs_macro::json_schema_to_rust` and use any of these forms:
 A literal that starts with `{`, or is `true` or `false` (a boolean schema), is
 inline JSON; any other literal is a file path.
 
+**Settings** follow the schema literals as `name = value`: every
+`CodeGenSettings` and `JsonSchemaSettings` field, named like its builder method.
+A flag takes `true` or `false`, an enum its variant name, and a setting left out
+keeps the builder's default:
+
+```rust
+json_schema_to_rust!(
+    "schemas/a.json",
+    dedupe_mode = Disabled,
+    unique_items = BTreeSet,
+    flatten_single_entry_combinators = true,
+    forced_spec_version = Draft07,
+);
+```
+
+- Codegen: `model_name_source = TitleFirst|PropertyKeyFirst`,
+  `dedupe_mode = Disabled|Functional|Full`, `unknown_properties = Capture|Drop`,
+  `unique_items = Vec|HashSet|BTreeSet|IndexSet` (`IndexSet` needs the macro's
+  `indexmap` feature), `flatten_single_entry_combinators`, `self_validating`,
+  `constrained_newtypes`.
+- Schema ingestion: `disallow_unknown_fields`,
+  `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
+  (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,
+  `integer_semantics = Lexical|Numeric`,
+  `exclusive_bounds = BooleanModifier|Numeric`, `ref_siblings = Ignored|Evaluated`,
+  `unknown_schema_uri = Fallback|Reject`. They apply to the input schemas and to
+  every file a `$ref` reads.
+
+An unknown setting, an unknown value, a setting given twice and
+`unique_items = IndexSet` without the `indexmap` feature are compile errors at
+the offending token, all reported at once.
+
 Editing a schema file the macro read (a path input, or a file one of its `$ref`s
 names) rebuilds your crate on the next `cargo build`.
 
