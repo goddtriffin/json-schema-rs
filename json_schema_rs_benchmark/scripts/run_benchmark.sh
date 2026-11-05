@@ -19,6 +19,13 @@
 #     also records each run's peak RSS. Operations: codegen, validate_valid, validate_invalid.
 #     Tools and their invocations are defined in scripts/tools.sh.
 #
+# Every Rust tool, ours and the competitors' alike (linked crates, the isolated builds, and the
+# competitor CLIs, which the driver installs), is built with one profile: `benchmark` in
+# profile.toml (one codegen unit and thin LTO), passed to every cargo command with --config. With
+# Cargo's default 16 codegen units, which unit a hot function lands in, and so what is inlined into
+# it, shifts when unrelated code is added to a crate, which moved cells by ~10% with no code path
+# changed. The profile is recorded in the results (the rustc row of the Tools table).
+#
 # A tool is only measured on a fixture/operation it handles CORRECTLY (codegen succeeds; valid
 # instance accepted; invalid instance rejected). Anything else is recorded as a compat failure and
 # left untimed, so a fast failure never masquerades as a fast result. The run is hermetic: a
@@ -32,10 +39,11 @@
 # Pipeline:
 #   1. Check required external tools, install the non-Rust competitors from their lock files
 #      (competitors/node: npm ci; competitors/python: uv sync), and check that every competitor is
-#      its newest stable release (linked crate == crates.io's newest stable; CLI == that crate's
-#      release; npm / PyPI package == the registry's latest), so a run never measures against an
-#      outdated target. Record the versions and runtimes.
-#   2. Build release binaries (jsonschemars CLI + the benchmark crate's bins).
+#      its newest stable release (linked crate == crates.io's newest stable; npm / PyPI package ==
+#      the registry's latest), so a run never measures against an outdated target. Install the
+#      Rust competitor CLIs (jsonschema-cli, cargo-typify) at the release the benchmark links.
+#      Record the versions and runtimes.
+#   2. Build the benchmark-profile binaries (jsonschemars CLI + the benchmark crate's bins).
 #   3. Generate the synthetic fixtures (target/benchmark-fixtures; deterministic, not committed).
 #   4. Reset the raw capture dir and criterion's output dir.
 #   5. In-process peak heap + compat matrix (heap_profile, then isolated_heap_profile per feature).
@@ -68,7 +76,9 @@ COMMITTED_FIXTURES="${CRATE_DIR}/fixtures"
 GENERATED_FIXTURES="${REPO_ROOT}/target/benchmark-fixtures"
 RAW_DIR="${CRATE_DIR}/target/benchmark-raw"
 CRITERION_DIR="${REPO_ROOT}/target/criterion"
-RELEASE_DIR="${REPO_ROOT}/target/release"
+# The build profile of every Rust tool (see the header), and where it puts its binaries.
+PROFILE_CONFIG="${CRATE_DIR}/profile.toml"
+BUILD_DIR="${REPO_ROOT}/target/benchmark"
 ISOLATED_MANIFEST="${CRATE_DIR}/isolated/Cargo.toml"
 ISOLATED_LOCK="${CRATE_DIR}/isolated/Cargo.lock"
 # One build per feature: each competitor here must not share a build with the others.
@@ -114,7 +124,7 @@ _first_instance() {
 # (list_fixtures) so both tiers measure the same set. <unresolved refs> lists the $refs naming a
 # document the fixture does not vendor (empty when every one resolves).
 discover_fixtures() {
-    "${RELEASE_DIR}/list_fixtures"
+    "${BUILD_DIR}/list_fixtures"
 }
 
 # _resources <fixture dir>: the fixture's resource documents (resources/*.json), one per line,
@@ -219,7 +229,7 @@ _cli_failed() {
 }
 
 # run_cli_tier <raw_dir>: time every (fixture, operation, tool) cell's CLI with hyperfine, writing
-# <raw_dir>/cli/{compat.tsv,index.tsv,*.json}. Expects tools.sh sourced, the release binaries
+# <raw_dir>/cli/{compat.tsv,index.tsv,*.json}. Expects tools.sh sourced, the benchmark-profile binaries
 # built, and BENCH_FIXTURE_ROOTS exported.
 run_cli_tier() {
     local raw_dir="$1"
@@ -324,6 +334,14 @@ _locked_version() {
         END { if (!found) print "unknown" }' "${2:-${REPO_ROOT}/Cargo.lock}"
 }
 
+# _profile_cargo <subcommand> [cargo args...]: run a cargo build or bench with the benchmark
+# profile. The profile goes right after the subcommand, ahead of any `--`.
+_profile_cargo() {
+    local subcommand="$1"
+    shift
+    cargo "${subcommand}" --config "${PROFILE_CONFIG}" --profile benchmark "$@"
+}
+
 # _isolated_cargo <subcommand> [cargo args...]: run a cargo subcommand on isolated/ with the
 # workspace's target directory, so its criterion output lands next to the main crate's (and its
 # builds reuse the same disk). The manifest goes right after the subcommand, ahead of any `--`.
@@ -343,23 +361,21 @@ _latest_stable() {
 
 # check_competitor_versions: fail unless every competitor is its newest stable release, so the
 # harness never measures against a target that has already moved. Each linked crate (Cargo.lock)
-# must equal the newest stable on crates.io, and each CLI must equal the crate it ships with, so
-# both tiers measure the same release. When crates.io is unreachable the freshness half is
-# skipped with a warning; the CLI-matches-crate half always runs.
+# must equal the newest stable on crates.io (the Rust competitor CLIs are then installed at that
+# release, so both tiers measure the same one). When crates.io is unreachable the check is skipped
+# with a warning.
 check_competitor_versions() {
-    local stale=0 pair crate cli locked latest installed lock manifest
+    local stale=0 pair crate locked latest lock manifest
     # The isolated crate's lock file is resolved on its first build; resolve it now if absent.
     if [[ ! -f "${ISOLATED_LOCK}" ]]; then
         _isolated_cargo generate-lockfile
     fi
-    # <linked crate>:<CLI binary of the same release, or "-" when the tool ships none>:<crate
-    # linked from isolated/ ("isolated") or from the main benchmark crate ("main")>
-    for pair in jsonschema:jsonschema-cli:main typify:cargo-typify:main boon:-:main \
-        valico:-:main jsonschema-valid:-:main schemafy_lib:-:main \
-        jsonschema_code_generator:-:main corvus-json-schema:-:isolated jsonschema:-:isolated; do
+    # <linked crate>:<crate linked from isolated/ ("isolated") or from the main benchmark crate
+    # ("main")>
+    for pair in jsonschema:main typify:main boon:main valico:main jsonschema-valid:main \
+        schemafy_lib:main jsonschema_code_generator:main corvus-json-schema:isolated \
+        jsonschema:isolated; do
         crate="${pair%%:*}"
-        cli="${pair#*:}"
-        cli="${cli%%:*}"
         if [[ "${pair##*:}" == "isolated" ]]; then
             lock="${ISOLATED_LOCK}"
             manifest="json_schema_rs_benchmark/isolated/Cargo.toml"
@@ -374,13 +390,6 @@ check_competitor_versions() {
         elif [[ "${locked}" != "${latest}" ]]; then
             echo "  STALE: ${crate} ${locked} is linked; newest stable is ${latest}" \
                 "(bump ${manifest}, then: cargo update -p ${crate} --manifest-path ${manifest})" >&2
-            stale=1
-        fi
-        [[ "${cli}" == "-" ]] && continue
-        installed="$(tool_version "${cli}")"
-        if [[ "${installed}" != "${latest:-${locked}}" ]]; then
-            echo "  STALE: ${cli} ${installed} is installed; expected ${latest:-${locked}}" \
-                "(install: cargo install ${cli}@${latest:-${locked}} --locked)" >&2
             stale=1
         fi
     done
@@ -445,23 +454,28 @@ main() {
         echo "!! out-of-date competitors (see above); upgrade them and re-run." >&2
         exit 1
     fi
+    echo "==> installing the Rust competitor CLIs (benchmark profile: $(profile_summary))"
+    if ! install_rust_cli_competitors "$(_locked_version jsonschema)" "$(_locked_version typify)"; then
+        echo "!! installing jsonschema-cli or cargo-typify failed (see above); aborting." >&2
+        exit 1
+    fi
 
     # 2. Build.
-    echo "==> building release binaries"
-    cargo build --release -p json-schema-rs --bin jsonschemars
-    cargo build --release -p json-schema-rs-benchmark --bins
+    echo "==> building benchmark-profile binaries ($(profile_summary))"
+    _profile_cargo build -p json-schema-rs --bin jsonschemars
+    _profile_cargo build -p json-schema-rs-benchmark --bins
 
     # 3. Synthetic fixtures.
     echo "==> generating synthetic fixtures"
-    "${RELEASE_DIR}/gen_fixtures" --output "${GENERATED_FIXTURES}"
+    "${BUILD_DIR}/gen_fixtures" --output "${GENERATED_FIXTURES}"
     export BENCH_FIXTURE_ROOTS="${COMMITTED_FIXTURES}:${GENERATED_FIXTURES}"
 
     # 4. Fresh raw captures; stale criterion benches must never leak into the results.
     rm -rf "${RAW_DIR}" "${CRITERION_DIR}"
     mkdir -p "${RAW_DIR}"
     # Every tool under the identifier its measurements use, with its release and runtime. Linked
-    # crates come from Cargo.lock (their CLIs were checked to match), the non-Rust competitors from
-    # their lock files.
+    # crates come from Cargo.lock (the CLIs are installed at the same releases and report their
+    # own), the non-Rust competitors from their lock files.
     {
         _tool_row jsonschemars "$(_locked_version json-schema-rs)"
         _tool_row jsonschema "$(_locked_version jsonschema)"
@@ -487,12 +501,13 @@ main() {
 
     # 5. In-process peak heap + compat.
     echo "==> in-process tier: peak heap + compat"
-    "${RELEASE_DIR}/heap_profile" --output "${RAW_DIR}"
+    "${BUILD_DIR}/heap_profile" --output "${RAW_DIR}"
     local feature
     for feature in ${ISOLATED_FEATURES}; do
         echo "==> in-process tier: peak heap + compat (isolated: ${feature})"
-        _isolated_cargo build --release --features "${feature}" --bin isolated_heap_profile
-        "${RELEASE_DIR}/isolated_heap_profile" --output "${RAW_DIR}"
+        _isolated_cargo build --config "${PROFILE_CONFIG}" --profile benchmark \
+            --features "${feature}" --bin isolated_heap_profile
+        "${BUILD_DIR}/isolated_heap_profile" --output "${RAW_DIR}"
     done
 
     # 6. In-process timing.
@@ -505,10 +520,12 @@ main() {
         # shellcheck disable=SC2206
         criterion_args=(${BENCH_CRITERION_ARGS:---warm-up-time 0.5 --measurement-time 2 --sample-size 20})
         # `+` guard: an empty array under `set -u` is an unbound-variable error on bash 3.2.
-        cargo bench -p json-schema-rs-benchmark --bench cross_tool -- ${criterion_args[@]+"${criterion_args[@]}"}
+        _profile_cargo bench -p json-schema-rs-benchmark --bench cross_tool -- \
+            ${criterion_args[@]+"${criterion_args[@]}"}
         for feature in ${ISOLATED_FEATURES}; do
             echo "==> in-process tier: criterion timing (isolated: ${feature})"
-            _isolated_cargo bench --features "${feature}" --bench isolated -- \
+            _isolated_cargo bench --config "${PROFILE_CONFIG}" --profile benchmark \
+                --features "${feature}" --bench isolated -- \
                 ${criterion_args[@]+"${criterion_args[@]}"}
         done
     fi
@@ -519,7 +536,7 @@ main() {
 
     # 8. Aggregate.
     echo "==> aggregating results"
-    "${RELEASE_DIR}/aggregate" \
+    "${BUILD_DIR}/aggregate" \
         --input "${RAW_DIR}" \
         --criterion "${CRITERION_DIR}" \
         --output "${CRATE_DIR}"

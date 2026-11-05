@@ -804,6 +804,8 @@ fn methodology() -> String {
          criterion's median ± standard deviation per call, and peak heap is the extra heap the \
          operation allocates, recorded by a counting allocator. jsonschema-macros compiles each \
          schema into a validator when the benchmark is built, so it has no schema compile cells. \
+         Every Rust tool, ours and the competitors' alike (in-process and CLI), is built with \
+         the same profile, given in the Tools table's rustc row. \
          **CLI**: every tool's binary runs end to end (process startup, file I/O, \
          and the operation), timed by hyperfine as median ± standard deviation over repeated \
          runs after warmup; peak RSS is the process's peak resident set size. Tools run on \
