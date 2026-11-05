@@ -34,16 +34,24 @@ Backwards compatibility is **not** a priority and **never** a justification (req
    principles, and the per-keyword notes). design.md is the single source of truth for
    design and reasoning; keep it updated after implementing.
 
-3. **Run the benchmark and differential harnesses once, at the end.**
+3. **Run the benchmark and differential harnesses once, at the end, when the PR changes what
+   our consumers run.**
+   - **When:** the PR changes anything that can change a consumer's experience or program:
+     the library, the CLI or the macros (`json_schema_rs/`, `json_schema_rs_macro/`, outside
+     their tests), what they generate, or their dependencies or features. A PR that does not
+     (docs, agent instructions, tests only, CI, Makefile targets that do not change what is
+     built) skips both harnesses to save time, and its PR body says so in one line under each
+     section (`n/a: no library change`). A PR that changes a harness runs that harness (see
+     `make benchmark_full` below for the benchmark).
    - Correctness comes first. Only after `make lint test` passes and the change is done, run
      `make benchmark` and `make differential` as the last step before opening (or updating)
      the PR. Each takes several minutes: never run them mid-work or repeatedly.
    - The benchmark harness is the **guiding star** for performance (see
      [json_schema_rs_benchmark/README.md](json_schema_rs_benchmark/README.md)). It has two
      modes:
-     - `make benchmark` (**every PR**, about 5–10 min): our library and CLI only, built from
-       `main` and from the working tree and measured side by side in the same session, so
-       run-to-run drift cancels out. It prints the PR body's *Performance* section and changes
+     - `make benchmark` (**every PR that changes the library**, about 5–10 min): our library
+       and CLI only, built from `main` and from the working tree and measured side by side in
+       the same session, so run-to-run drift cancels out. It prints the PR body's *Performance* section and changes
        no committed file.
      - `make benchmark_full` (about 60 min): every tool, ours and the competitors', and it
        refreshes the committed `json_schema_rs_benchmark/results.{json,md}`. Run it as well as
@@ -56,10 +64,10 @@ Backwards compatibility is **not** a priority and **never** a justification (req
      [json_schema_rs_differential/README.md](json_schema_rs_differential/README.md)). Its
      committed results (`json_schema_rs_differential/results.{json,md}`) **must be up to date**
      so PR review sees the real impact of the change in the diff.
-   - **A PR is not complete until `make benchmark` and `make differential` have been run, the
-     differential results are committed and current, and the PR body carries the quick
-     benchmark's report** (plus the full run's refreshed results when the PR needs one). This
-     is non-negotiable.
+   - **A PR that changes the library is not complete until `make benchmark` and
+     `make differential` have been run, the differential results are committed and current,
+     and the PR body carries the quick benchmark's report** (plus the full run's refreshed
+     results when the PR needs one). This is non-negotiable.
 
 4. **No backwards compatibility before 1.0.** The crate is pre-1.0 (`0.x`): there are no
    users to keep working, so every change makes the API, behaviour and docs what they should
@@ -95,13 +103,31 @@ Every change goes through a pull request that a human reviews and merges.
 1. **Work on a feature branch**, never on `main` (e.g. `feat/<topic>`, `fix/<topic>`).
 2. **Review your own changes before opening the PR.** Read the full diff, run `make lint test`,
    and fix what you find. Once it is correct, run `make benchmark` and `make differential` as
-   the final step (requirement 3). Only open a PR that is ready for a human to review.
+   the final step when the PR changes the library (requirement 3). Only open a PR that is
+   ready for a human to review.
 3. **Commit, push, and open the PR** once it is ready. Link the issue it closes (`closes #N`).
    Write the body from the [PR template](.github/PULL_REQUEST_TEMPLATE/pull_request_template.md);
    see *Pull request body* below.
 4. **Never merge a PR**, and never push to `main`. Wait for a human reviewer to approve and merge.
-5. **After the PR is merged:** switch to `main`, pull, delete the local feature branch, and close
-   any related issues that did not close automatically (and tick them off in the roadmap #15).
+5. **After the PR is merged:** switch to `main`, pull, delete the local feature branch (and the
+   remote one if GitHub did not), and close any related issues that did not close automatically
+   (and tick them off in the roadmap #15).
+
+## Clean up after yourself
+
+Never leave anything running or lying around that you are not actively using. The machine is
+shared with other sessions, and whatever you leave behind costs them CPU, memory, disk and
+benchmark accuracy.
+
+- **Background processes:** stop every background shell, wait loop, monitor, server, benchmark
+  or smoke test as soon as you no longer need its result. Before ending a turn, check that
+  nothing of yours is still running. A wait loop must be able to exit: `pgrep -f <pattern>`
+  matches the loop's own command line, so `until ! pgrep -f ...` never ends; wait on an output
+  file or the job's own exit instead.
+- **Files:** delete scratch files, copied binaries, temporary crates and their target directories
+  once you are done with them. Run `cargo clean` after build-heavy work when the disk is tight.
+- **Git:** once a PR is merged, clean up its branch (see *Version control*, step 5) and any
+  worktree you created for it.
 
 ## Pull request body
 
