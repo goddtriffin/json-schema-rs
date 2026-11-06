@@ -6,8 +6,8 @@ use super::utils::{
 };
 use clap::ArgMatches;
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, DedupeMode, JsonSchemaSettings, ModelNameSource, Schema,
-    UniqueItemsType, UnknownProperties, file_uri, generate_rust,
+    CodeGenInput, CodeGenSettings, DedupeMode, FormatTypes, JsonSchemaSettings, ModelNameSource,
+    Schema, UniqueItemsType, UnknownProperties, file_uri, generate_rust,
 };
 use std::fs;
 use std::io::Write;
@@ -144,6 +144,12 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
         b = b.unknown_properties(match mode {
             "capture" => UnknownProperties::Capture,
             _ => UnknownProperties::Drop,
+        });
+    }
+    if let Some(mode) = flag("cgs-format-types") {
+        b = b.format_types(match mode {
+            "follow-dialect" => FormatTypes::FollowDialect,
+            _ => FormatTypes::Typed,
         });
     }
     if let Some(kind) = flag("cgs-unique-items") {

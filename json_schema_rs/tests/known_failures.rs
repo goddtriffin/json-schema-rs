@@ -256,14 +256,14 @@ json_schema_rs::deserialize_struct!(Item0, additional: BTreeMap<String, serde_js
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "Item")]
 pub struct Item1 {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
     pub y: Option<i64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Item1, additional: BTreeMap<String, serde_json::Value>, {
-    "y" => y: Option<i64>,
+    "y" => y: Option<i64> = default(json_schema_rs::integer::deserialize),
 });
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
@@ -318,6 +318,7 @@ use std::collections::BTreeMap;
 pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<Box<Node>>,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub value: i64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
@@ -325,7 +326,7 @@ pub struct Node {
 
 json_schema_rs::deserialize_struct!(Node, additional: BTreeMap<String, serde_json::Value>, {
     "next" => next: Option<Box<Node>>,
-    "value" => value: i64,
+    "value" => value: i64 = with(json_schema_rs::integer::deserialize),
 });
 
 "#
@@ -351,6 +352,7 @@ pub struct Node {
     pub children: Option<Vec<Node>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<Box<Node>>,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub value: i64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
@@ -359,7 +361,7 @@ pub struct Node {
 json_schema_rs::deserialize_struct!(Node, additional: BTreeMap<String, serde_json::Value>, {
     "children" => children: Option<Vec<Node>>,
     "next" => next: Option<Box<Node>>,
-    "value" => value: i64,
+    "value" => value: i64 = with(json_schema_rs::integer::deserialize),
 });
 
 "#
@@ -381,7 +383,7 @@ use std::collections::BTreeMap;
 pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<Box<Node>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
     pub value: Option<i64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
@@ -389,7 +391,7 @@ pub struct Node {
 
 json_schema_rs::deserialize_struct!(Node, additional: BTreeMap<String, serde_json::Value>, {
     "next" => next: Option<Box<Node>>,
-    "value" => value: Option<i64>,
+    "value" => value: Option<i64> = default(json_schema_rs::integer::deserialize),
 });
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]

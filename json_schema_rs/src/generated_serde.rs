@@ -23,7 +23,8 @@
 /// absence: `None` for an `Option`, else a `missing field` error (serde's rule).
 ///
 /// `json_schema_rs::deserialize_struct!(Name, additional: Map, { fields })`, where `Map` is a
-/// `BTreeMap<String, V>` or `HashMap<String, V>` and each field is one of:
+/// `BTreeMap<String, V>` or `HashMap<String, V>` (`additional: Map = with(path)` reads each `V`
+/// through `path`) and each field is one of:
 /// - `"key" => field: Type`: read as `Type`.
 /// - `"key" => field: Type = with(path)`: read through `path`; absence is an error.
 /// - `"key" => field: Type = default(path)`: read through `path`; absence is
@@ -58,7 +59,7 @@
 #[macro_export]
 macro_rules! deserialize_struct {
     (
-        $name:ident, $additional:ident : $map:ty, {
+        $name:ident, $additional:ident : $map:ty $( = with ( $value_with:path ) )?, {
             $( $key:literal => $field:ident : $ty:ty $( = $mode:ident ( $with:path ) )? ),* $(,)?
         }
     ) => {
@@ -90,7 +91,8 @@ macro_rules! deserialize_struct {
                                     }
                                 )*
                                 _ => {
-                                    let value: <$map as $crate::generated_serde::__private::AdditionalProperties>::Value = map.next_value()?;
+                                    let value: <$map as $crate::generated_serde::__private::AdditionalProperties>::Value =
+                                        $crate::deserialize_struct!(@read map, <$map as $crate::generated_serde::__private::AdditionalProperties>::Value $(, $value_with)?);
                                     $crate::generated_serde::__private::AdditionalProperties::insert(&mut additional, key.into_string(), value);
                                 }
                             }
@@ -143,7 +145,8 @@ macro_rules! deserialize_struct {
 /// from it is the result. When none does, the error is serde's: `data did not match any variant
 /// of untagged enum Name`.
 ///
-/// `json_schema_rs::deserialize_untagged!(Name { Variant(Type), ... })`:
+/// `json_schema_rs::deserialize_untagged!(Name { Variant(Type), ... })`; `Variant(Type = with(path))`
+/// reads that variant through `path` instead of `Type`'s `Deserialize`:
 ///
 /// ```
 /// #[derive(Debug, PartialEq, serde::Serialize)]
@@ -174,14 +177,14 @@ macro_rules! deserialize_untagged {
             }
         }
     };
-    ($name:ident { $( $variant:ident ( $ty:ty ) ),+ $(,)? }) => {
+    ($name:ident { $( $variant:ident ( $ty:ty $( = with ( $with:path ) )? ) ),+ $(,)? }) => {
         // A deprecated type or field is still read (as serde's derive does).
         #[allow(deprecated)]
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<__D: ::serde::Deserializer<'de>>(deserializer: __D) -> Result<Self, __D::Error> {
                 let value: ::serde_json::Value = <::serde_json::Value as ::serde::Deserialize>::deserialize(deserializer)?;
                 $(
-                    if let Ok(variant) = <$ty as ::serde::Deserialize>::deserialize(&value) {
+                    if let Ok(variant) = $crate::deserialize_untagged!(@read &value, $ty $(, $with)?) {
                         return Ok(Self::$variant(variant));
                     }
                 )+
@@ -192,6 +195,13 @@ macro_rules! deserialize_untagged {
             }
         }
     };
+    (@read $value:expr, $ty:ty) => {
+        <$ty as ::serde::Deserialize>::deserialize($value)
+    };
+    (@read $value:expr, $ty:ty, $with:path) => {{
+        let read: Result<$ty, ::serde_json::Error> = $with($value);
+        read
+    }};
 }
 
 /// Helpers of the generated-code macros; not public API.

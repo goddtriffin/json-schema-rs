@@ -5,9 +5,9 @@
 //! builder default.
 
 use json_schema_rs::{
-    CodeGenSettings, DedupeMode, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings,
-    ModelNameSource, RefSiblings, SpecVersion, UniqueItemsType, UnknownProperties,
-    UnknownSchemaUri,
+    CodeGenSettings, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes, IntegerSemantics,
+    JsonSchemaSettings, ModelNameSource, RefSiblings, SpecVersion, UniqueItemsType,
+    UnknownProperties, UnknownSchemaUri,
 };
 use proc_macro2::Span;
 use std::collections::BTreeSet;
@@ -51,7 +51,7 @@ impl Parse for SettingArg {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 15] = [
+const SETTING_NAMES: [&str; 16] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -59,6 +59,7 @@ const SETTING_NAMES: [&str; 15] = [
     "flatten_single_entry_combinators",
     "self_validating",
     "constrained_newtypes",
+    "format_types",
     "disallow_unknown_fields",
     "forced_spec_version",
     "default_spec_version",
@@ -83,6 +84,11 @@ const DEDUPE_MODES: &[(&str, DedupeMode)] = &[
 const UNKNOWN_PROPERTIES: &[(&str, UnknownProperties)] = &[
     ("Capture", UnknownProperties::Capture),
     ("Drop", UnknownProperties::Drop),
+];
+
+const FORMAT_TYPES: &[(&str, FormatTypes)] = &[
+    ("Typed", FormatTypes::Typed),
+    ("FollowDialect", FormatTypes::FollowDialect),
 ];
 
 const SPEC_VERSIONS: &[(&str, SpecVersion)] = &[
@@ -136,6 +142,7 @@ struct Overrides {
     flatten_single_entry_combinators: Option<bool>,
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
+    format_types: Option<FormatTypes>,
     disallow_unknown_fields: Option<bool>,
     forced_spec_version: Option<SpecVersion>,
     default_spec_version: Option<SpecVersion>,
@@ -178,6 +185,7 @@ impl Overrides {
                 constrained_newtypes: self
                     .constrained_newtypes
                     .unwrap_or(code_gen_default.constrained_newtypes),
+                format_types: self.format_types.unwrap_or(code_gen_default.format_types),
             },
             json_schema: JsonSchemaSettings {
                 disallow_unknown_fields: self
@@ -317,6 +325,10 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
         ),
         "self_validating" => set(&mut overrides.self_validating, boolean(setting, value)),
         "constrained_newtypes" => set(&mut overrides.constrained_newtypes, boolean(setting, value)),
+        "format_types" => set(
+            &mut overrides.format_types,
+            variant(setting, value, FORMAT_TYPES),
+        ),
         "disallow_unknown_fields" => set(
             &mut overrides.disallow_unknown_fields,
             boolean(setting, value),
@@ -397,7 +409,7 @@ pub(crate) fn resolve(args: &[SettingArg]) -> SynResult<MacroSettings> {
 mod tests {
     use super::{MacroSettings, SettingArg, resolve};
     use json_schema_rs::{
-        CodeGenSettings, DedupeMode, ExclusiveBounds, FormatMode, IntegerSemantics,
+        CodeGenSettings, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes, IntegerSemantics,
         JsonSchemaSettings, ModelNameSource, RefSiblings, SpecVersion, UniqueItemsType,
         UnknownProperties, UnknownSchemaUri,
     };
@@ -452,6 +464,7 @@ mod tests {
                 .flatten_single_entry_combinators(true)
                 .self_validating(false)
                 .constrained_newtypes(false)
+                .format_types(FormatTypes::FollowDialect)
                 .build(),
             json_schema: JsonSchemaSettings::builder()
                 .disallow_unknown_fields(true)
@@ -468,7 +481,7 @@ mod tests {
             "model_name_source = PropertyKeyFirst, dedupe_mode = Disabled, \
              unknown_properties = Drop, unique_items = BTreeSet, \
              flatten_single_entry_combinators = true, self_validating = false, \
-             constrained_newtypes = false, disallow_unknown_fields = true, \
+             constrained_newtypes = false, format_types = FollowDialect, disallow_unknown_fields = true, \
              forced_spec_version = Draft07, default_spec_version = Draft04, \
              format_mode = Assertion, integer_semantics = Lexical, \
              exclusive_bounds = BooleanModifier, ref_siblings = Evaluated, \
@@ -489,6 +502,7 @@ mod tests {
                 .flatten_single_entry_combinators(false)
                 .self_validating(true)
                 .constrained_newtypes(true)
+                .format_types(FormatTypes::Typed)
                 .build(),
             json_schema: JsonSchemaSettings::builder()
                 .disallow_unknown_fields(false)
@@ -505,7 +519,7 @@ mod tests {
             "model_name_source = TitleFirst, dedupe_mode = Functional, \
              unknown_properties = Capture, unique_items = HashSet, \
              flatten_single_entry_combinators = false, self_validating = true, \
-             constrained_newtypes = true, disallow_unknown_fields = false, \
+             constrained_newtypes = true, format_types = Typed, disallow_unknown_fields = false, \
              forced_spec_version = Draft201909, default_spec_version = Draft06, \
              format_mode = Annotation, integer_semantics = Numeric, \
              exclusive_bounds = Numeric, ref_siblings = Ignored, \
@@ -559,7 +573,7 @@ mod tests {
         let expected: Vec<Located> = vec![(
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
-             `self_validating`, `constrained_newtypes`, `disallow_unknown_fields`, \
+             `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
              `forced_spec_version`, `default_spec_version`, `format_mode`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings` or `unknown_schema_uri`"
                 .to_string(),
@@ -643,7 +657,7 @@ mod tests {
             (
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
-                 `self_validating`, `constrained_newtypes`, `disallow_unknown_fields`, \
+                 `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
                  `forced_spec_version`, `default_spec_version`, `format_mode`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings` or `unknown_schema_uri`"
                     .to_string(),

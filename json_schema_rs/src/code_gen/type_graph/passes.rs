@@ -150,7 +150,7 @@ fn local_signature(node: &TypeNode, mode: DedupeMode) -> String {
         | TypeNode::Any
         | TypeNode::Null
         | TypeNode::Boolean
-        | TypeNode::Integer(_)
+        | TypeNode::Integer(..)
         | TypeNode::Number(_)
         | TypeNode::String { .. }
         | TypeNode::Array { .. }

@@ -627,6 +627,9 @@ impl<'a> TypeValidators<'a> {
 /// - `constrained_newtype!(string, Name, VALIDATORS, 0)`: wraps `String`.
 /// - `constrained_newtype!(scalar, Age, u8, VALIDATORS, 0)`: wraps a `Copy` scalar (`bool`, an
 ///   integer, `f64`).
+/// - `constrained_newtype!(integer, Age, u8, VALIDATORS, 0)`: wraps an integer read by JSON
+///   Schema's integer rule (draft 6 on: `1.0` is the integer 1; see
+///   [`json_schema_rs::integer`](crate::integer)).
 /// - `constrained_newtype!(f32, Ratio, VALIDATORS, 0)`: wraps `f32`, deserialized as the `f64`
 ///   read and validated before it is narrowed.
 /// - `constrained_newtype!(uuid, Id, VALIDATORS, 0)`: wraps `uuid::Uuid`, validated as the
@@ -713,6 +716,26 @@ macro_rules! constrained_newtype {
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 Self::try_from(<$inner as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .map_err(::serde::de::Error::custom)
+            }
+        }
+
+        $crate::constrained_newtype!(@as_ref, $name, $inner);
+        $crate::constrained_newtype!(@readers, $name, $inner);
+    };
+    (integer, $name:ident, $inner:ty, $validators:ident, $index:expr) => {
+        impl TryFrom<$inner> for $name {
+            type Error = $crate::TypeValidationError;
+
+            /// Validates `value` against the schema: every error the schema's validator reports.
+            fn try_from(value: $inner) -> Result<Self, Self::Error> {
+                $validators.validate_newtype($index, value).map(Self)
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Self::try_from(<$inner as $crate::integer::DeserializeInteger>::deserialize_integer(deserializer)?)
                     .map_err(::serde::de::Error::custom)
             }
         }

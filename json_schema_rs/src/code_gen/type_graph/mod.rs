@@ -11,7 +11,7 @@ pub(crate) mod passes;
 
 pub(crate) use build::{Conditionals, build};
 
-use crate::json_schema::JsonType;
+use crate::json_schema::{IntegerSemantics, JsonType};
 use serde_json::Value;
 
 /// Index of a node in a [`TypeGraph`].
@@ -201,7 +201,9 @@ pub(crate) enum TypeNode {
     /// Only `null`.
     Null,
     Boolean,
-    Integer(IntWidth),
+    /// An integer of the width, read by the dialect's integer rule (`Numeric`: `1.0` is an
+    /// integer).
+    Integer(IntWidth, IntegerSemantics),
     Number(FloatWidth),
     String {
         format: StringFormat,
@@ -241,7 +243,7 @@ impl TypeNode {
             | TypeNode::Any
             | TypeNode::Null
             | TypeNode::Boolean
-            | TypeNode::Integer(_)
+            | TypeNode::Integer(..)
             | TypeNode::Number(_)
             | TypeNode::String { .. }
             | TypeNode::Enum(_) => Vec::new(),
@@ -260,7 +262,7 @@ impl TypeNode {
             | TypeNode::Any
             | TypeNode::Null
             | TypeNode::Boolean
-            | TypeNode::Integer(_)
+            | TypeNode::Integer(..)
             | TypeNode::Number(_)
             | TypeNode::String { .. }
             | TypeNode::Enum(_) => Vec::new(),
@@ -397,7 +399,7 @@ pub(crate) fn scalar_json_type(node: &TypeNode) -> Option<JsonType> {
     match node {
         TypeNode::Null => Some(JsonType::Null),
         TypeNode::Boolean => Some(JsonType::Boolean),
-        TypeNode::Integer(_) => Some(JsonType::Integer),
+        TypeNode::Integer(..) => Some(JsonType::Integer),
         TypeNode::Number(_) => Some(JsonType::Number),
         TypeNode::String { .. } => Some(JsonType::String),
         TypeNode::Array { .. } => Some(JsonType::Array),
