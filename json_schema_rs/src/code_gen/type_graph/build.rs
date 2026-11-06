@@ -18,12 +18,12 @@ use super::{
     NumberConstraints, ObjectNode, SchemaRoots, StringConstraints, StringFormat, TypeGraph, TypeId,
     TypeNode, UnionKind, UnionNode, ValidationTarget, Variant,
 };
-use crate::code_gen::settings::{CodeGenSettings, ModelNameSource, UnknownProperties};
+use crate::code_gen::settings::{CodeGenSettings, FormatTypes, ModelNameSource, UnknownProperties};
 use crate::code_gen::{CodeGenError, CodeGenResult};
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    Dialect, FormatMode, JsonSchema, JsonSchemaSettings, JsonType, RefSiblings, Registry, Schema,
-    SchemaRef, Scope, TypeSet,
+    Dialect, FormatMode, IntegerSemantics, JsonSchema, JsonSchemaSettings, JsonType, RefSiblings,
+    Registry, Schema, SchemaRef, Scope, TypeSet,
 };
 use crate::number;
 use serde_json::Value;
@@ -695,7 +695,7 @@ impl<'r> Builder<'_, 'r> {
                     || self.checks_format(flat, *format)
                     || beyond_shape()
             }
-            TypeNode::Integer(width) => {
+            TypeNode::Integer(width, _) => {
                 let (lo, hi): (Option<i128>, Option<i128>) = facts().integer_range();
                 let (width_lo, width_hi): (i128, i128) = width.range();
                 lo.is_some_and(|lo| lo > width_lo)
@@ -716,7 +716,7 @@ impl<'r> Builder<'_, 'r> {
             return None;
         }
         let numbers: NumberConstraints = match node {
-            TypeNode::Integer(_) | TypeNode::Number(_) => {
+            TypeNode::Integer(..) | TypeNode::Number(_) => {
                 let f: Facts<'r> = facts();
                 let mut multiples: Vec<&serde_json::Number> = flat
                     .conjuncts
@@ -741,6 +741,45 @@ impl<'r> Builder<'_, 'r> {
             numbers,
             annotations: annotations_of(flat),
         })
+    }
+
+    /// The string format whose Rust type the node gets: `uuid` with
+    /// [`FormatTypes::Typed`](crate::FormatTypes::Typed), or with
+    /// [`FormatTypes::FollowDialect`](crate::FormatTypes::FollowDialect) only where a conjunct's
+    /// dialect asserts it.
+    fn string_format(&self, flat: &Flat<'r>, facts: &Facts<'r>) -> StringFormat {
+        let format: StringFormat = facts.string_format();
+        if format == StringFormat::Plain || self.settings.format_types == FormatTypes::Typed {
+            return format;
+        }
+        let asserted: bool = flat.conjuncts.iter().any(|c| {
+            c.schema.format.as_deref() == Some("uuid") && {
+                let dialect: Dialect = self.registry.dialect(c.scope);
+                dialect.format_mode == FormatMode::Assertion && dialect.defines_format("uuid")
+            }
+        });
+        if asserted {
+            format
+        } else {
+            StringFormat::Plain
+        }
+    }
+
+    /// How the node's integers are read: `Lexical` (only numbers written as integers) when a
+    /// conjunct that says `"type": "integer"` follows draft 4's rule, else `Numeric` (any number
+    /// with a zero fraction, `1.0` included).
+    fn integer_semantics(&self, flat: &Flat<'r>) -> IntegerSemantics {
+        let lexical: bool = flat.conjuncts.iter().any(|c| {
+            c.schema
+                .type_
+                .is_some_and(|t| t.contains(JsonType::Integer))
+                && self.registry.dialect(c.scope).integer_semantics == IntegerSemantics::Lexical
+        });
+        if lexical {
+            IntegerSemantics::Lexical
+        } else {
+            IntegerSemantics::Numeric
+        }
     }
 
     /// Whether validating a string of `format` checks a `format` keyword of the conjunction: its
@@ -825,12 +864,12 @@ impl<'r> Builder<'_, 'r> {
             JsonType::Boolean => TypeNode::Boolean,
             JsonType::Integer => match facts.integer_range() {
                 (Some(lo), Some(hi)) if lo > hi => uninhabited(annotations),
-                _ => TypeNode::Integer(facts.integer_width()),
+                _ => TypeNode::Integer(facts.integer_width(), self.integer_semantics(flat)),
             },
             JsonType::Number if facts.number_range_is_empty() => uninhabited(annotations),
             JsonType::Number => TypeNode::Number(facts.float_width()),
             JsonType::String => TypeNode::String {
-                format: facts.string_format(),
+                format: self.string_format(flat, &facts),
                 constraints: facts.string_constraints.clone(),
             },
             JsonType::Array => {

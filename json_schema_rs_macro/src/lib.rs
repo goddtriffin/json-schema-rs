@@ -494,7 +494,7 @@ mod tests {
             (
                 "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
-                 `self_validating`, `constrained_newtypes`, `disallow_unknown_fields`, \
+                 `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
                  `forced_spec_version`, `default_spec_version`, `format_mode`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings` or `unknown_schema_uri`"
                     .to_string(),
