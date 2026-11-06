@@ -15,7 +15,9 @@ see [design.md](design.md).
    more memory.
 3. **The user-facing API.** Sane defaults and the behaviour users would most expect (library,
    CLI, generated code). Keep the spec-faithful default; offer a setting where users
-   reasonably differ.
+   reasonably differ. One deliberate exception, chosen by the maintainer: codegen maps
+   `format: "uuid"` to `Uuid` by default even where 2019-09 / 2020-12 only annotate formats
+   (`FormatTypes::Typed`; `FollowDialect` is the spec-exact setting; see design.md, *format*).
 
 **Tests adapt to the library, never the reverse.** Never shape the API, defaults or output to
 make testing easier, deterministic or idempotent. When the best behaviour is hard to test, the

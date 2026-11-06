@@ -67,6 +67,24 @@ pub enum UniqueItemsType {
     IndexSet,
 }
 
+/// Whether a `format` codegen has a Rust type for (`uuid` → `uuid::Uuid`, with the `uuid`
+/// feature) gets that type when the schema's dialect only annotates formats.
+///
+/// The default, [`Typed`](FormatTypes::Typed), **deliberately diverges from drafts 2019-09 and
+/// 2020-12**, where `format` is an annotation by default and any string satisfies
+/// `"format": "uuid"`: a schema author who writes `uuid` means a UUID, so the field is a `Uuid`
+/// and a string that is not one fails to deserialize. [`FollowDialect`](FormatTypes::FollowDialect)
+/// is the spec-exact choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FormatTypes {
+    /// The format's Rust type wherever the format appears, whatever the dialect's format mode.
+    #[default]
+    Typed,
+    /// The format's Rust type only where the dialect asserts the format (`format_mode` is
+    /// `Assertion` and the draft defines it); elsewhere the plain `String` the annotation allows.
+    FollowDialect,
+}
+
 /// Language-agnostic code generation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeGenSettings {
@@ -107,6 +125,10 @@ pub struct CodeGenSettings {
     /// depends on `json-schema-rs` and `serde_json`. Off, such scalars are the plain Rust scalar
     /// (`String`, `u8`, `f64`), checked only by a self-validating parent's `validate` / `TryFrom`.
     pub constrained_newtypes: bool,
+    /// Whether a typed `format` (`uuid`) gets its Rust type when the dialect only annotates
+    /// formats (default [`FormatTypes::Typed`], a deliberate divergence from 2019-09 and
+    /// 2020-12; see [`FormatTypes`]).
+    pub format_types: FormatTypes,
 }
 
 impl CodeGenSettings {
@@ -127,6 +149,7 @@ impl Default for CodeGenSettings {
             flatten_single_entry_combinators: false,
             self_validating: true,
             constrained_newtypes: true,
+            format_types: FormatTypes::Typed,
         }
     }
 }
@@ -141,6 +164,7 @@ pub struct CodeGenSettingsBuilder {
     flatten_single_entry_combinators: Option<bool>,
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
+    format_types: Option<FormatTypes>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -196,6 +220,13 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Choose when a typed `format` gets its Rust type (see [`FormatTypes`]).
+    #[must_use]
+    pub fn format_types(mut self, value: FormatTypes) -> Self {
+        self.format_types = Some(value);
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -209,6 +240,7 @@ impl CodeGenSettingsBuilder {
                 .unwrap_or_default(),
             self_validating: self.self_validating.unwrap_or(true),
             constrained_newtypes: self.constrained_newtypes.unwrap_or(true),
+            format_types: self.format_types.unwrap_or_default(),
         }
     }
 }

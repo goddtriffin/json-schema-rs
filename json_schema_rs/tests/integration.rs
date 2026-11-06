@@ -1,9 +1,9 @@
 //! Integration test: public API for schema parsing and code generation, and CLI binary.
 
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, CompileError, CompileErrors, DedupeMode, JsonSchema, JsonType,
-    ModelNameSource, RegistryError, RegistryErrors, Schema, SchemaError, SpecVersion,
-    UniqueItemsType, UnknownProperties, ValidateError, generate_rust, validate,
+    CodeGenInput, CodeGenSettings, CompileError, CompileErrors, DedupeMode, FormatTypes,
+    JsonSchema, JsonType, ModelNameSource, RegistryError, RegistryErrors, Schema, SchemaError,
+    SpecVersion, UniqueItemsType, UnknownProperties, ValidateError, generate_rust, validate,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -481,13 +481,14 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub count: i64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "count" => count: i64,
+    "count" => count: i64 = with(json_schema_rs::integer::deserialize),
 });
 
 "#;
@@ -529,14 +530,14 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
     pub count: Option<i64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "count" => count: Option<i64>,
+    "count" => count: Option<i64> = default(json_schema_rs::integer::deserialize),
 });
 
 "#;
@@ -578,13 +579,14 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub byte: u8,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "byte" => byte: u8,
+    "byte" => byte: u8 = with(json_schema_rs::integer::deserialize),
 });
 
 "#;
@@ -626,13 +628,14 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub byte: u8,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "byte" => byte: u8,
+    "byte" => byte: u8 = with(json_schema_rs::integer::deserialize),
 });
 
 "#;
@@ -1507,6 +1510,7 @@ mod unique_items {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Points {
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub x: i64,
 }
 
@@ -2457,6 +2461,7 @@ pub struct Node {
     pub children: Option<Vec<Node>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<Box<Node>>,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub value: i64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
@@ -2465,7 +2470,7 @@ pub struct Node {
 json_schema_rs::deserialize_struct!(Node, additional: BTreeMap<String, serde_json::Value>, {
     "children" => children: Option<Vec<Node>>,
     "next" => next: Option<Box<Node>>,
-    "value" => value: i64,
+    "value" => value: i64 = with(json_schema_rs::integer::deserialize),
 });
 
 "#
@@ -2582,6 +2587,7 @@ pub struct Cat {
 #[derive(Debug, Clone, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Dog {
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub bark: i64,
 }
 
@@ -2738,7 +2744,7 @@ pub enum Amount {
     Number(f64),
 }
 
-json_schema_rs::deserialize_untagged!(Amount { Integer(i64), Number(f64) });
+json_schema_rs::deserialize_untagged!(Amount { Integer(i64 = with(json_schema_rs::integer::deserialize)), Number(f64) });
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -3336,13 +3342,14 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub count: i64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "count" => count: i64,
+    "count" => count: i64 = with(json_schema_rs::integer::deserialize),
 });
 
 "#;
@@ -3366,14 +3373,14 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
     pub count: Option<i64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "count" => count: Option<i64>,
+    "count" => count: Option<i64> = default(json_schema_rs::integer::deserialize),
 });
 
 "#;
@@ -3638,13 +3645,14 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub byte: u8,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "byte" => byte: u8,
+    "byte" => byte: u8 = with(json_schema_rs::integer::deserialize),
 });
 
 "#;
@@ -4874,6 +4882,63 @@ fn main() {
 }
 "#,
             ),
+            "integer_accepts_zero_fraction" => (
+                r#"{"type":"object","properties":{"n":{"type":"integer"},"small":{"type":"integer","minimum":0,"maximum":255},"list":{"type":"array","items":{"type":"integer"}},"either":{"type":["integer","string"]}},"required":["n"]}"#,
+                default_code_gen.clone(),
+                r##"fn main() {
+    use compile_test::Either;
+    let root: compile_test::Root =
+        serde_json::from_str(r#"{"n":1.0,"small":2e0,"list":[1,2.0],"either":3.0}"#).unwrap();
+    let either: Option<i64> = match root.either {
+        Some(Either::Integer(value)) => Some(value),
+        Some(Either::String(_)) | None => None,
+    };
+    let fraction_rejected: bool =
+        serde_json::from_str::<compile_test::Root>(r#"{"n":1.5}"#).is_err();
+    let out_of_range_rejected: bool =
+        serde_json::from_str::<compile_test::Root>(r#"{"small":256.0,"n":1}"#).is_err();
+    let expected: (i64, Option<u8>, Option<Vec<i64>>, Option<i64>, bool, bool) =
+        (1, Some(2), Some(vec![1, 2]), Some(3), true, true);
+    let actual: (i64, Option<u8>, Option<Vec<i64>>, Option<i64>, bool, bool) = (
+        root.n,
+        root.small,
+        root.list,
+        either,
+        fraction_rejected,
+        out_of_range_rejected,
+    );
+    assert_eq!(expected, actual);
+}
+"##,
+            ),
+            "integer_draft4_lexical" => (
+                r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"object","properties":{"n":{"type":"integer"},"small":{"type":"integer","minimum":0,"maximum":255},"list":{"type":"array","items":{"type":"integer"}},"either":{"type":["integer","string"]}},"required":["n"]}"#,
+                default_code_gen.clone(),
+                r##"fn main() {
+    let zero_fraction_rejected: bool =
+        serde_json::from_str::<compile_test::Root>(r#"{"n":1.0}"#).is_err();
+    let root: compile_test::Root = serde_json::from_str(r#"{"n":1}"#).unwrap();
+    let expected: (bool, i64) = (true, 1);
+    let actual: (bool, i64) = (zero_fraction_rejected, root.n);
+    assert_eq!(expected, actual);
+}
+"##,
+            ),
+            "format_types_follow_dialect" => (
+                r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}}}"#,
+                CodeGenSettings::builder()
+                    .format_types(FormatTypes::FollowDialect)
+                    .build(),
+                r#"fn main() {
+    let instance: serde_json::Value = serde_json::json!({"id": "not-a-uuid"});
+    let root: compile_test::Root = serde_json::from_value(instance.clone()).unwrap();
+    let validated: bool = compile_test::Root::try_from(instance.clone()).is_ok();
+    let expected: (serde_json::Value, bool) = (instance, true);
+    let actual: (serde_json::Value, bool) = (serde_json::to_value(&root).unwrap(), validated);
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
             _ => panic!("unknown scenario: {scenario_name}"),
         };
     // The `self_validating` scenario's `main` compares with the library validator on the same
@@ -5940,6 +6005,199 @@ json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_jso
 }
 
 #[test]
+fn cli_generate_rust_integer_reads_zero_fraction_numbers() {
+    let schema_json = r#"{"type":"object","properties":{"n":{"type":"integer"},"small":{"type":"integer","minimum":0,"maximum":255},"list":{"type":"array","items":{"type":"integer"}},"either":{"type":["integer","string"]}},"required":["n"]}"#;
+    let actual: (bool, String) = cli_generate_single(schema_json, &[]);
+    let expected: (bool, String) = (
+        true,
+        r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum Either {
+    Integer(i64),
+    String(String),
+}
+
+json_schema_rs::deserialize_untagged!(Either { Integer(i64 = with(json_schema_rs::integer::deserialize)), String(String) });
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub either: Option<Either>,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<i64>>,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub n: i64,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub small: Option<u8>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
+    "either" => either: Option<Either>,
+    "list" => list: Option<Vec<i64>> = default(json_schema_rs::integer::deserialize),
+    "n" => n: i64 = with(json_schema_rs::integer::deserialize),
+    "small" => small: Option<u8> = default(json_schema_rs::integer::deserialize),
+});
+
+"#
+        .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_rust_draft4_integer_stays_lexical() {
+    let schema_json = r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"object","properties":{"n":{"type":"integer"},"small":{"type":"integer","minimum":0,"maximum":255},"list":{"type":"array","items":{"type":"integer"}},"either":{"type":["integer","string"]}},"required":["n"]}"#;
+    let actual: (bool, String) = cli_generate_single(schema_json, &[]);
+    let expected: (bool, String) = (
+        true,
+        r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum Either {
+    Integer(i64),
+    String(String),
+}
+
+json_schema_rs::deserialize_untagged!(Either { Integer(i64), String(String) });
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub either: Option<Either>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<i64>>,
+    pub n: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub small: Option<u8>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
+    "either" => either: Option<Either>,
+    "list" => list: Option<Vec<i64>>,
+    "n" => n: i64,
+    "small" => small: Option<u8>,
+});
+
+"#
+        .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn cli_generate_rust_uuid_format_typed_by_default_in_annotation_dialect() {
+    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}}}"#;
+    let actual: (bool, String) = cli_generate_single(schema_json, &[]);
+    let expected: (bool, String) = (
+        true,
+        r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Uuid>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
+    "id" => id: Option<Uuid>,
+});
+
+"#
+        .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_rust_format_types_follow_dialect_keeps_annotated_uuid_string() {
+    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}}}"#;
+    let actual: (bool, String) =
+        cli_generate_single(schema_json, &["--cgs-format-types", "follow-dialect"]);
+    let expected: (bool, String) = (
+        true,
+        r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
+    "id" => id: Option<String>,
+});
+
+"#
+        .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "uuid")]
+#[test]
+fn cli_generate_rust_format_types_follow_dialect_types_asserted_uuid() {
+    let schema_json = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}}}"#;
+    let actual: (bool, String) = cli_generate_single(
+        schema_json,
+        &[
+            "--cgs-format-types",
+            "follow-dialect",
+            "--jss-format-mode",
+            "assertion",
+        ],
+    );
+    let expected: (bool, String) = (
+        true,
+        r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Uuid>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
+    "id" => id: Option<Uuid>,
+});
+
+"#
+        .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_generate_rust_additional_properties_false() {
     let schema_json = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}"#;
     let actual: (bool, String) = cli_generate_single(schema_json, &[]);
@@ -6200,6 +6458,9 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "pattern_properties_untyped_additional_map",
         "pattern_properties_additional_false_open_map",
         "prefix_items_untyped_items",
+        "integer_accepts_zero_fraction",
+        "integer_draft4_lexical",
+        "format_types_follow_dialect",
     ]
     .into_iter()
     .chain(INDEXMAP_SCENARIOS.iter().copied())

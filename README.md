@@ -257,6 +257,24 @@ one entry as that entry's type instead of a one-variant enum (off by default, so
 derive gives the combinator back); `#[json_schema(flatten_single_entry)]` on a
 one-variant untagged enum derives its payload's schema instead of a one-entry `anyOf`.
 
+**Integers.** From draft 6 on an integer is any number with a zero fraction, so generated
+integer types accept `1.0` and `2e0` (fields, items, map values, union variants and
+newtypes read through `json_schema_rs::integer`); draft 4 accepts only numbers written as
+integers. A fraction, or a number the Rust type cannot hold, fails to deserialize. An
+integer without both bounds is `i64`: a valid integer beyond its range (`2^63`) fails to
+deserialize; give the schema `minimum` / `maximum` for a wider type (`u64`). A type alias of
+a std type (`pub type Root = Vec<i64>;`) deserializes through serde's own impl; read it
+through `json_schema_rs::integer::Integer<Root>` to apply the rule.
+
+**`format: "uuid"` is a `Uuid` (a deliberate divergence).** With the `uuid` feature,
+codegen emits `uuid::Uuid` for `format: "uuid"` in every draft, so a string that is not a
+UUID fails to deserialize. In 2019-09 and 2020-12 `format` is only an annotation by
+default, so the schema itself accepts any string there; we diverge on purpose, since a
+schema author who writes `uuid` means a UUID. `.format_types(FormatTypes::FollowDialect)`
+(`--cgs-format-types follow-dialect`) is the spec-exact choice: `Uuid` only where the
+dialect asserts formats (`format_mode` `Assertion`), else `String`. The validator follows
+the spec either way.
+
 **Self-validating types (on by default).** Generated types enforce their whole schema
 through this library's validator, with the same errors (`ValidationError`s) it gives:
 every generated struct, enum and union gets `validate(&self)` and
@@ -392,7 +410,7 @@ json_schema_to_rust!(
   `dedupe_mode = Disabled|Functional|Full`, `unknown_properties = Capture|Drop`,
   `unique_items = Vec|HashSet|BTreeSet|IndexSet` (`IndexSet` needs the macro's
   `indexmap` feature), `flatten_single_entry_combinators`, `self_validating`,
-  `constrained_newtypes`.
+  `constrained_newtypes`, `format_types = Typed|FollowDialect`.
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,

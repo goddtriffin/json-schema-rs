@@ -219,6 +219,13 @@ pub fn run() {
                         .value_parser(clap::value_parser!(bool))
                         .help("Codegen Settings: generate a newtype for each string / integer / number / boolean whose schema asserts more than its Rust type holds (minLength, maxLength, pattern, bounds, multipleOf, ...); it validates on construction and deserialization (default: true)"),
                 )
+                .arg(
+                    Arg::new("cgs-format-types")
+                        .long("cgs-format-types")
+                        .value_name("MODE")
+                        .value_parser(["typed", "follow-dialect"])
+                        .help("Codegen Settings: when format \"uuid\" becomes uuid::Uuid (with the `uuid` feature): typed = always, even where 2019-09 / 2020-12 only annotate formats (a deliberate divergence); follow-dialect = only where the dialect asserts the format, else String (default: typed)"),
+                )
                 .args(retrieval::retrieval_args()),
         )
         .subcommand(

@@ -445,14 +445,22 @@ impl TryFrom<serde_json::Value> for {name} {{
     )
 }
 
+/// One variant of a generated union.
+pub(crate) struct UnionVariant {
+    pub(crate) name: String,
+    /// Its Rust type.
+    pub(crate) ty: String,
+    /// It reads through `json_schema_rs::integer` (an integer type, or a container of them).
+    pub(crate) integers: bool,
+}
+
 /// The `Deserialize` of an `anyOf` / `oneOf` union: buffer the value once, then take the first
 /// variant whose branch the value satisfies (for `oneOf`, the one) and that deserializes.
-/// `variants` holds each variant's name and Rust type.
 pub(crate) fn render_union_deserialize(
     name: &str,
     kind: UnionKind,
     entries: &UnionEntries,
-    variants: &[(String, String)],
+    variants: &[UnionVariant],
 ) -> String {
     let mode: &str = match kind {
         UnionKind::OneOf => "OneOf",
@@ -480,11 +488,21 @@ pub(crate) fn render_union_deserialize(
     );
     out.push_str("        for candidate in candidates {\n");
     out.push_str("            let variant: Result<Self, serde_json::Error> = match candidate {\n");
-    for (i, (variant, ty)) in variants.iter().enumerate() {
-        let _ = writeln!(
-            out,
-            "                {i} => <{ty} as Deserialize>::deserialize(&value).map(Self::{variant}),"
-        );
+    for (
+        i,
+        UnionVariant {
+            name: variant,
+            ty,
+            integers,
+        },
+    ) in variants.iter().enumerate()
+    {
+        let read: String = if *integers {
+            format!("json_schema_rs::integer::deserialize::<_, {ty}>(&value)")
+        } else {
+            format!("<{ty} as Deserialize>::deserialize(&value)")
+        };
+        let _ = writeln!(out, "                {i} => {read}.map(Self::{variant}),");
     }
     out.push_str("                _ => continue,\n            };\n");
     out.push_str("            if let Ok(variant) = variant {\n                return Ok(variant);\n            }\n        }\n");

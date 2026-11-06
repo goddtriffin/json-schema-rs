@@ -7,6 +7,7 @@ pub mod code_gen;
 pub mod error_list;
 #[doc(hidden)]
 pub mod generated_serde;
+pub mod integer;
 pub mod json_pointer;
 pub mod json_schema;
 mod number;
@@ -16,8 +17,8 @@ pub mod validator;
 
 pub use code_gen::{
     CodeGenBackend, CodeGenError, CodeGenInput, CodeGenResult, CodeGenSettings,
-    CodeGenSettingsBuilder, DedupeMode, GenerateRustOutput, ModelNameSource, RustBackend,
-    UniqueItemsType, UnknownProperties, generate_rust,
+    CodeGenSettingsBuilder, DedupeMode, FormatTypes, GenerateRustOutput, ModelNameSource,
+    RustBackend, UniqueItemsType, UnknownProperties, generate_rust,
 };
 pub use error_list::ErrorList;
 pub use json_pointer::{JsonPointer, JsonPointerError};
