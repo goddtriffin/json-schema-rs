@@ -25,7 +25,8 @@ lint: ## lints the codebase
 	cargo fmt --manifest-path $(BENCHMARK_ISOLATED)
 
 # The benchmark competitors built apart from the workspace (their own workspace; see its Cargo.toml).
-# `make test` lints it in each of its builds; `make benchmark_full` runs them.
+# `make test` lints it in each of its builds; `make benchmark` runs its generated-types build,
+# `make benchmark_full` every build.
 BENCHMARK_ISOLATED := json_schema_rs_benchmark/isolated/Cargo.toml
 
 # Every feature except `arbitrary-precision`, which changes how every number is parsed and
@@ -45,7 +46,10 @@ test: ## runs tests twice: every feature but arbitrary-precision (64-bit numbers
 	CARGO_TARGET_DIR=$(CURDIR)/target cargo clippy --all-targets --manifest-path $(BENCHMARK_ISOLATED) --features jsonschema-macros
 	# Fixture roots set to a directory without fixtures: only the built-in startup model is generated,
 	# so this lints the harness code, not the generated models (whose lint cleanliness is codegen's).
+	# Each model feature on its own and both together (the full run builds them together).
 	BENCH_FIXTURE_ROOTS=$(CURDIR)/target/no-benchmark-fixtures CARGO_TARGET_DIR=$(CURDIR)/target cargo clippy --all-targets --manifest-path $(BENCHMARK_ISOLATED) --features reverse-codegen
+	BENCH_FIXTURE_ROOTS=$(CURDIR)/target/no-benchmark-fixtures CARGO_TARGET_DIR=$(CURDIR)/target cargo clippy --all-targets --manifest-path $(BENCHMARK_ISOLATED) --features generated-types
+	BENCH_FIXTURE_ROOTS=$(CURDIR)/target/no-benchmark-fixtures CARGO_TARGET_DIR=$(CURDIR)/target cargo clippy --all-targets --manifest-path $(BENCHMARK_ISOLATED) --features reverse-codegen,generated-types
 	cargo test --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION)
 	cargo test --all-features
 
