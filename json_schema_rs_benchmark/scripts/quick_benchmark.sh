@@ -16,14 +16,20 @@
 # stack, and a longer one slowed an identical binary's sub-microsecond cells by up to 5.5%.
 #
 # What it measures, for `jsonschemars` only (BENCH_TOOLS restricts the harness to it):
-#   - in-process peak heap (heap_profile), once per side: it is exact;
+#   - in-process peak heap (heap_profile, isolated_heap_profile), once per side: it is exact;
 #   - in-process time (criterion), cell by cell (BENCH_CELL), BENCH_QUICK_ROUNDS rounds per side
-#     in ABBA order;
+#     in ABBA order: the main crate's cells (cross_tool) and the generated-types cells (isolated/'s
+#     `generated-types` build: every fixture's instances deserialized into our codegen's types,
+#     built from that side's codegen and library);
 #   - CLI time and peak RSS (hyperfine), BENCH_QUICK_ROUNDS rounds, each running every cell
 #     with its two sides back to back (base first in odd rounds), on every fixture: codegen,
 #     validate_valid, validate_invalid, and the startup baseline.
 # Reverse codegen is not measured here: its models take minutes to build per side (#102). A PR
-# that changes the derive or reverse codegen runs `make benchmark_full` instead.
+# that changes the derive or reverse codegen runs `make benchmark_full` instead. As in the full
+# run, the fixtures in `MODELS_NOT_BUILT` (src/models.rs) have no model, since their types take too
+# long to build (#102, #111).
+# A side whose isolated/ has no `generated-types` feature (a base older than it) has no
+# generated-types cells, and compare lists the head's apart.
 #
 # Every cell is probed for correctness first (as in the full run); a cell measured on only one
 # side is listed apart, since a cell that stops passing its check is a correctness change.
@@ -32,11 +38,19 @@
 #   base-src/       the base commit's tree (git archive; re-extracted when the base moves), with
 #                   the working tree's Cargo.lock so both sides build the same dependencies
 #   base-target/    its CARGO_TARGET_DIR (kept between runs, so later builds are incremental)
-#   run/{base,head}/ each side's timed executables (the criterion bench and jsonschemars), copied
+#   isolated-{base,head}/  each side's CARGO_TARGET_DIR for isolated/'s generated-types build (its
+#                   own workspace). Both build with every source and target path remapped
+#                   (--remap-path-prefix: the side's root to /src, this directory to /target):
+#                   isolated/ reaches the library through path dependencies outside its
+#                   workspace, which cargo compiles under their absolute paths, and the base's
+#                   are longer (base-src/...), a compiled-in path difference (#100)
+#   {base,head}-model-exclude.tsv  each side's model exclusions (see build_models in tools.sh)
+#   run/{base,head}/ each side's timed executables (the criterion benches and jsonschemars), copied
 #                   to paths of the same length: the executable's path sits on the process's
 #                   stack, and a longer one shifted an identical binary's sub-microsecond cells by
 #                   up to 5.5% (#100)
-#   {base,head}/    each side's captures: heap/, criterion/<round>/, cli/
+#   {base,head}/    each side's captures: heap/, criterion/<round>/, cli/, models/ (the model
+#                   build's cargo messages), cells-{cross_tool,isolated}.txt (each bench's cells)
 #   report.md       the comparison (also printed)
 # The head side builds in the workspace's own target directory, like the full run.
 #
@@ -98,6 +112,10 @@ extract_base() {
     if [[ -f "${REPO_ROOT}/Cargo.lock" ]]; then
         cp "${REPO_ROOT}/Cargo.lock" "${BASE_SRC}/Cargo.lock"
     fi
+    local isolated_lock="json_schema_rs_benchmark/isolated/Cargo.lock"
+    if [[ -f "${REPO_ROOT}/${isolated_lock}" && -d "$(dirname "${BASE_SRC}/${isolated_lock}")" ]]; then
+        cp "${REPO_ROOT}/${isolated_lock}" "${BASE_SRC}/${isolated_lock}"
+    fi
 }
 
 # build_side <source root> <target dir>: build the side's CLI, heap profiler and criterion bench,
@@ -117,9 +135,30 @@ build_side() {
 }
 
 # list_cells <bench exe>: the in-process cells of our tool that the side's harness checks
-# correct, one `<operation>/<fixture id>` per line.
+# correct, one `<operation>/<fixture id>` per line (none when the executable does not exist).
 list_cells() {
+    [[ -x "$1" ]] || return 0
     "$1" --bench --list 2>/dev/null | sed -n "s|^\([a-z_]*\)/${TOOL}/\(.*\): benchmark\$|\1/\2|p"
+}
+
+# record_cells <side>: list each of the side's benches' cells into its cells-<bench>.txt.
+record_cells() {
+    local side="$1" bench
+    for bench in cross_tool isolated; do
+        list_cells "${RUN_DIR}/${side}/${bench}" > "${QUICK_DIR}/${side}/cells-${bench}.txt"
+    done
+}
+
+# cell_bench <side> <operation/fixture id>: the side's bench that measures the cell (cross_tool or
+# isolated); nothing when neither does (its check fails on that side).
+cell_bench() {
+    local side="$1" cell="$2" bench
+    for bench in cross_tool isolated; do
+        if grep -qxF "${cell}" "${QUICK_DIR}/${side}/cells-${bench}.txt"; then
+            printf '%s\n' "${bench}"
+            return 0
+        fi
+    done
 }
 
 # run_criterion_cell <side> <bench exe> <round> <operation/fixture id>: one criterion round of
@@ -139,17 +178,16 @@ run_criterion_cell() {
         || { echo "!! criterion failed on ${cell} (see ${QUICK_DIR}/${side}/criterion.log)" >&2; exit 1; }
 }
 
-# run_inprocess <base exe> <head exe> <first round> <last round> [cells file]: every cell's
-# criterion rounds back to back, the sides alternating per round (base first in odd rounds);
-# only the cells the file lists, when given. A cell one side does not list (its check fails
-# there) is measured on the other side only, and compare lists it apart.
+# run_inprocess <first round> <last round> [cells file]: every cell's criterion rounds back to
+# back, the sides alternating per round (base first in odd rounds), each side on the bench that
+# lists the cell (record_cells); only the cells the file lists, when given. A cell one side does
+# not list (its check fails there) is measured on the other side only, and compare lists it apart.
 run_inprocess() {
-    local base_exe="$1" head_exe="$2" first="$3" last="$4" only="${5:-}"
-    local base_cells head_cells cells cell round side count
+    local first="$1" last="$2" only="${3:-}"
+    local cells cell round side bench count
     local -a sides
-    base_cells="$(list_cells "${base_exe}")"
-    head_cells="$(list_cells "${head_exe}")"
-    cells="$(printf '%s\n%s\n' "${base_cells}" "${head_cells}" | sed '/^$/d' | LC_ALL=C sort -u)"
+    cells="$(cat "${QUICK_DIR}"/base/cells-*.txt "${QUICK_DIR}"/head/cells-*.txt \
+        | sed '/^$/d' | LC_ALL=C sort -u)"
     if [[ -n "${only}" ]]; then
         cells="$(printf '%s\n' "${cells}" | grep -xF -f "${only}" || true)"
     fi
@@ -160,16 +198,42 @@ run_inprocess() {
         for round in $(seq "${first}" "${last}"); do
             if (( round % 2 == 1 )); then sides=(base head); else sides=(head base); fi
             for side in "${sides[@]}"; do
-                if [[ "${side}" == base ]]; then
-                    if printf '%s\n' "${base_cells}" | grep -qxF "${cell}"; then
-                        run_criterion_cell base "${base_exe}" "${round}" "${cell}"
-                    fi
-                elif printf '%s\n' "${head_cells}" | grep -qxF "${cell}"; then
-                    run_criterion_cell head "${head_exe}" "${round}" "${cell}"
+                bench="$(cell_bench "${side}" "${cell}")"
+                if [[ -n "${bench}" ]]; then
+                    run_criterion_cell "${side}" "${RUN_DIR}/${side}/${bench}" "${round}" "${cell}"
                 fi
             done
         done
     done <<< "${cells}"
+}
+
+# build_generated_types <side> <source root>: build the side's isolated/ `generated-types` bench
+# and heap profiler (see isolated-{base,head}/ in the layout above) and print the bench
+# executable's path; print nothing when the side's isolated/ has no such feature. Needs the
+# fixture roots (the model shards generate their types from them at build time).
+build_generated_types() {
+    local side="$1" root="$2" manifest target exclude exe
+    local -a remap
+    manifest="${root}/json_schema_rs_benchmark/isolated/Cargo.toml"
+    if ! grep -q '^generated-types = ' "${manifest}"; then
+        echo "    ${side}: isolated/ has no generated-types feature; no generated-types cells" >&2
+        return 0
+    fi
+    target="${QUICK_DIR}/isolated-${side}"
+    exclude="${QUICK_DIR}/${side}-model-exclude.tsv"
+    : > "${exclude}"
+    remap=(--config "build.rustflags = [\"--remap-path-prefix=${root}=/src\", \"--remap-path-prefix=${target}=/target\"]")
+    CARGO_TARGET_DIR="${target}" build_models "${manifest}" generated-types "${exclude}" \
+        "${QUICK_DIR}/${side}/models" "${remap[@]}" >&2 || exit 1
+    exe="$(CARGO_TARGET_DIR="${target}" cargo bench --manifest-path "${manifest}" \
+        --config "${PROFILE_CONFIG}" --profile benchmark --features generated-types "${remap[@]}" \
+        --bench isolated --no-run --message-format=json \
+        | grep -o '"executable":"[^"]*"' | grep '/deps/isolated-' | tail -n 1 | cut -d '"' -f 4)"
+    if [[ -z "${exe}" || ! -x "${exe}" ]]; then
+        echo "!! no isolated bench executable built under ${target}" >&2
+        exit 1
+    fi
+    printf '%s\n' "${exe}"
 }
 
 # _cli_probe <command line> <expect: zero|nonzero>: true when the command, run offline, exits as
@@ -268,7 +332,7 @@ _write_startup() {
 }
 
 main() {
-    local base_ref base_sha base_exe head_exe round side
+    local base_ref base_sha base_exe head_exe base_types_exe head_types_exe round side
     base_ref="${BENCH_BASE:-main}"
     base_sha="$(git -C "${REPO_ROOT}" merge-base "${base_ref}" HEAD)"
     echo "==> quick benchmark: ${TOOL}, ${base_ref} (${base_sha:0:9}) vs the working tree"
@@ -280,19 +344,10 @@ main() {
     echo "==> building the working tree ($(profile_summary))"
     head_exe="$(build_side "${REPO_ROOT}" "${REPO_ROOT}/target")"
     _profile_cargo "${REPO_ROOT}" "${REPO_ROOT}/target" build -p json-schema-rs-benchmark \
-        --bin gen_fixtures --bin list_fixtures --bin compare
+        --bin gen_fixtures --bin list_fixtures --bin compare --bin model_build_failures
     echo "==> building ${base_ref} (${base_sha:0:9})"
     extract_base "${base_sha}"
     base_exe="$(build_side "${BASE_SRC}" "${BASE_TARGET}")"
-    # Time both sides from paths of the same length (see RUN_DIR in the layout above).
-    rm -rf "${RUN_DIR}"
-    mkdir -p "${RUN_DIR}/base" "${RUN_DIR}/head"
-    cp "${base_exe}" "${RUN_DIR}/base/cross_tool"
-    cp "${BASE_BUILD_DIR}/jsonschemars" "${RUN_DIR}/base/jsonschemars"
-    cp "${head_exe}" "${RUN_DIR}/head/cross_tool"
-    cp "$(_jsonschemars_bin)" "${RUN_DIR}/head/jsonschemars"
-    base_exe="${RUN_DIR}/base/cross_tool"
-    head_exe="${RUN_DIR}/head/cross_tool"
 
     echo "==> generating synthetic fixtures"
     "${BUILD_DIR}/gen_fixtures" --output "${GENERATED_FIXTURES}"
@@ -307,13 +362,40 @@ main() {
         : > "${QUICK_DIR}/${side}/cli/index.tsv"
     done
 
+    echo "==> building the generated types: the working tree"
+    head_types_exe="$(build_generated_types head "${REPO_ROOT}")"
+    echo "==> building the generated types: ${base_ref} (${base_sha:0:9})"
+    base_types_exe="$(build_generated_types base "${BASE_SRC}")"
+
+    # Time both sides from paths of the same length (see RUN_DIR in the layout above).
+    rm -rf "${RUN_DIR}"
+    mkdir -p "${RUN_DIR}/base" "${RUN_DIR}/head"
+    cp "${base_exe}" "${RUN_DIR}/base/cross_tool"
+    cp "${BASE_BUILD_DIR}/jsonschemars" "${RUN_DIR}/base/jsonschemars"
+    cp "${head_exe}" "${RUN_DIR}/head/cross_tool"
+    cp "$(_jsonschemars_bin)" "${RUN_DIR}/head/jsonschemars"
+    if [[ -n "${base_types_exe}" ]]; then
+        cp "${base_types_exe}" "${RUN_DIR}/base/isolated"
+    fi
+    if [[ -n "${head_types_exe}" ]]; then
+        cp "${head_types_exe}" "${RUN_DIR}/head/isolated"
+    fi
+
     echo "==> in-process peak heap"
     "${BASE_BUILD_DIR}/heap_profile" --output "${QUICK_DIR}/base/heap" 2> "${QUICK_DIR}/base/heap.log" \
         || { echo "!! base heap profile failed (see ${QUICK_DIR}/base/heap.log)" >&2; exit 1; }
     "${BUILD_DIR}/heap_profile" --output "${QUICK_DIR}/head/heap" 2> "${QUICK_DIR}/head/heap.log" \
         || { echo "!! heap profile failed (see ${QUICK_DIR}/head/heap.log)" >&2; exit 1; }
+    for side in base head; do
+        local profiler="${QUICK_DIR}/isolated-${side}/benchmark/isolated_heap_profile"
+        if [[ -x "${RUN_DIR}/${side}/isolated" ]]; then
+            "${profiler}" --output "${QUICK_DIR}/${side}/heap" 2>> "${QUICK_DIR}/${side}/heap.log" \
+                || { echo "!! ${side} generated-types heap profile failed (see ${QUICK_DIR}/${side}/heap.log)" >&2; exit 1; }
+        fi
+        record_cells "${side}"
+    done
 
-    run_inprocess "${base_exe}" "${head_exe}" 1 "${ROUNDS}"
+    run_inprocess 1 "${ROUNDS}"
     for round in $(seq 1 "${ROUNDS}"); do
         run_cli "${round}"
     done
@@ -328,8 +410,7 @@ main() {
         local first=$(( ROUNDS + 1 )) last=$(( ROUNDS + CONFIRM_ROUNDS ))
         if [[ -s "${QUICK_DIR}/moved-in-process.txt" ]]; then
             echo "==> confirming the moved in-process cells"
-            run_inprocess "${base_exe}" "${head_exe}" "${first}" "${last}" \
-                "${QUICK_DIR}/moved-in-process.txt"
+            run_inprocess "${first}" "${last}" "${QUICK_DIR}/moved-in-process.txt"
         fi
         if [[ -s "${QUICK_DIR}/moved-cli.txt" ]]; then
             echo "==> confirming the moved CLI cells"

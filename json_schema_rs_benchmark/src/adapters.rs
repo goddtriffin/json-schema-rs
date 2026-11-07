@@ -176,7 +176,14 @@ impl Adapter for Tool {
                 self,
                 Tool::JsonSchemaRs | Tool::Typify | Tool::Schemafy | Tool::JsonschemaCodeGenerator
             ),
-            Operation::ReverseCodegen => false,
+            // Generated types are compiled per fixture, in `isolated/`.
+            Operation::ReverseCodegen
+            | Operation::DeserializeValid
+            | Operation::TryFromValid
+            | Operation::TryFromInvalid
+            | Operation::DeserializeValidNoNewtypes
+            | Operation::TryFromValidNoNewtypes
+            | Operation::TryFromInvalidNoNewtypes => false,
             Operation::SchemaCompile | Operation::ValidateValid | Operation::ValidateInvalid => {
                 matches!(
                     self,

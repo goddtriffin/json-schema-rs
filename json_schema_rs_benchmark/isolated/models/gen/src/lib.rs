@@ -1,39 +1,46 @@
-//! Generator of the reverse-codegen models, the build-dependency of every model shard crate
-//! (`reverse_models/shard_<n>`; see `isolated/Cargo.toml`).
+//! Generator of the benchmark's models, the build-dependency of every model shard crate
+//! (`models/shard_<n>`; see `isolated/Cargo.toml`).
 //!
 //! The models: for every measurable fixture (and the CLI tier's startup baseline), the Rust types
-//! our codegen generates for its schema (default settings, its resources reachable through an
-//! in-memory retriever, as in the codegen benchmark), in one copy per tool:
+//! our codegen generates for its schema (its resources reachable through an in-memory retriever,
+//! as in the codegen benchmark), in the copies the shard's features ask for ([`ModelCopy`]):
 //!
-//! * `jsonschemars`: the generated source as is (it derives our `ToJsonSchema`).
-//! * `schemars`: the same source with `schemars::JsonSchema` in place of our derive, and each
-//!   `#[json_schema(...)]` constraint restated as the `#[schemars(...)]` attribute a schemars
-//!   user would write (`length`, `range`, `regex`, `title`, `description`, `required`, an
-//!   enum's literal values through a `transform`, and every other keyword through `extend`), so
-//!   both derives describe the same schema. A one-of union keeps schemars' own `anyOf` for an
-//!   untagged enum.
+//! * `jsonschemars` (both features): the generated source as is, default settings. It derives our
+//!   `ToJsonSchema` (`reverse-codegen`) and is the type every generated-types operation of the
+//!   default settings deserializes into (`generated-types`).
+//! * `schemars` (`reverse-codegen`): the same source with `schemars::JsonSchema` in place of our
+//!   derive, and each `#[json_schema(...)]` constraint restated as the `#[schemars(...)]`
+//!   attribute a schemars user would write (`length`, `range`, `regex`, `title`, `description`,
+//!   `required`, an enum's literal values through a `transform`, and every other keyword through
+//!   `extend`), so both derives describe the same schema. A one-of union keeps schemars' own
+//!   `anyOf` for an untagged enum.
+//! * `jsonschemars-no-newtypes` (`generated-types`): our codegen with
+//!   `constrained_newtypes(false)`, for the `*_no_newtypes` operations.
+//!
+//! A fixture in `MODELS_NOT_BUILT` (`json_schema_rs_benchmark::models`) has no model in any copy:
+//! its types take too long to build (#102, #111). Its tables' rows hold the reason.
 //!
 //! **Shards.** The models are about 400K lines of generated Rust. In one crate they compile one
 //! after another (rustc's front end is serial within a crate, and the benchmark profile has one
 //! codegen unit), so they are spread over [`SHARDS`] crates that cargo compiles in parallel, each
-//! with the same benchmark profile. Every shard's build script generates every fixture's model
-//! (our codegen is fast) and assigns the (tool, fixture) models to shards the same way:
-//! largest first, each to the shard with the fewest lines so far. A shard then writes only its
-//! own models. The build then takes about as long as its slowest model: `generated/wide-object`'s
-//! model alone takes about 7 minutes to optimize (#102), the models together 43 minutes in one
-//! crate.
+//! with the same benchmark profile and features. Every shard's build script generates every
+//! fixture's models (our codegen is fast) and assigns the (copy, fixture) models to shards the
+//! same way: largest first, each to the shard with the fewest lines so far. A shard then writes
+//! only its own models. The build then takes about as long as its slowest model (the reverse
+//! codegen models took 43 minutes in one crate); `MODELS_NOT_BUILT` leaves out the models that
+//! take minutes or more on their own (#102, #111).
 //!
-//! Each copy is a module of its own (`$OUT_DIR/reverse_models/<tool>/<fixture>/model.rs`), so a
-//! derive that cannot handle a model fails only that model. The driver turns such a build failure
-//! into rows of the exclusion file (`BENCH_REVERSE_EXCLUDE`, see
-//! `json_schema_rs_benchmark::reverse_models`), and an excluded model is left out, its table
-//! entry holding the reason. A fixture whose codegen fails has no model for any tool.
+//! Each copy is a module of its own (`$OUT_DIR/models/<copy>/<fixture>/model.rs`), so a
+//! model that does not compile fails only that model. The driver turns such a build failure
+//! into rows of the exclusion file (`BENCH_MODEL_EXCLUDE`, see
+//! `json_schema_rs_benchmark::models`), and an excluded model is left out, its table
+//! entries holding the reason. A fixture whose codegen fails has no model for any copy.
 
 use json_schema_rs::{CodeGenInput, CodeGenSettings, GenerateRustOutput, Schema, generate_rust};
 use json_schema_rs_benchmark::fixtures::{self, Fixture};
-use json_schema_rs_benchmark::reverse_models::{
+use json_schema_rs_benchmark::models::{
     EXCLUDE_ENV, Exclusion, MODEL_FILE_NAME, MODELS_DIR_NAME, STARTUP_FIXTURE_ID, STARTUP_SCHEMA,
-    model_dir_name, parse_exclusions,
+    model_dir_name, model_not_built, parse_exclusions,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -42,13 +49,70 @@ use std::path::{Path, PathBuf};
 use syn::punctuated::Punctuated;
 use syn::visit_mut::VisitMut;
 
-/// Number of model shard crates (`reverse_models/shard_0` .. `shard_7`). The largest model is
+/// Number of model shard crates (`models/shard_0` .. `shard_7`). The largest model is
 /// about a sixth of all model lines and the slowest one most of the build's time, so more shards
 /// would not shorten it.
 pub const SHARDS: usize = 8;
 
-/// Tool ids; the first is ours.
-const TOOLS: [&str; 2] = ["jsonschemars", "schemars"];
+/// One copy of a fixture's model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ModelCopy {
+    /// Our codegen, default settings.
+    Ours,
+    /// Our codegen's default output, with schemars' derive in place of ours.
+    Schemars,
+    /// Our codegen with `constrained_newtypes(false)`.
+    OursNoNewtypes,
+}
+
+impl ModelCopy {
+    /// The copy's id: its directory name, and the tool id of its exclusion rows.
+    const fn id(self) -> &'static str {
+        match self {
+            ModelCopy::Ours => "jsonschemars",
+            ModelCopy::Schemars => "schemars",
+            ModelCopy::OursNoNewtypes => "jsonschemars-no-newtypes",
+        }
+    }
+
+    /// Whether the copy is our codegen's output with constrained newtypes on.
+    const fn newtypes(self) -> bool {
+        !matches!(self, ModelCopy::OursNoNewtypes)
+    }
+}
+
+/// The features of the shard being built (cargo sets `CARGO_FEATURE_<NAME>` for each).
+#[derive(Debug, Clone, Copy)]
+struct Features {
+    /// `reverse-codegen`: our derive's and schemars' models.
+    reverse_codegen: bool,
+    /// `generated-types`: the generated-types operations' entry points, both settings.
+    generated_types: bool,
+}
+
+impl Features {
+    fn from_env() -> Features {
+        Features {
+            reverse_codegen: std::env::var_os("CARGO_FEATURE_REVERSE_CODEGEN").is_some(),
+            generated_types: std::env::var_os("CARGO_FEATURE_GENERATED_TYPES").is_some(),
+        }
+    }
+
+    /// The copies these features need, in a fixed order.
+    fn copies(self) -> Vec<ModelCopy> {
+        let mut copies: Vec<ModelCopy> = Vec::new();
+        if self.reverse_codegen || self.generated_types {
+            copies.push(ModelCopy::Ours);
+        }
+        if self.reverse_codegen {
+            copies.push(ModelCopy::Schemars);
+        }
+        if self.generated_types {
+            copies.push(ModelCopy::OursNoNewtypes);
+        }
+        copies
+    }
+}
 
 /// A model to build: the fixture id, and its schema text and resources.
 struct Input {
@@ -57,15 +121,19 @@ struct Input {
     resources: BTreeMap<String, String>,
 }
 
-/// One (tool, fixture) model before it is written: our codegen's output, or why there is none.
+/// Our codegen's output for one input: the source and its root type's name, or why there is
+/// none.
+type Generated = Result<(String, String), String>;
+
+/// One (copy, fixture) model before it is written: its source, or why there is none.
 struct Planned<'a> {
-    tool: &'static str,
+    copy: ModelCopy,
     index: usize,
     input: &'a Input,
     generated: Result<&'a (String, String), &'a str>,
 }
 
-/// Build script of shard crate `CARGO_PKG_NAME` (`reverse-models-shard-<n>`): writes the shard's
+/// Build script of shard crate `CARGO_PKG_NAME` (`models-shard-<n>`): writes the shard's
 /// models and `$OUT_DIR/models.rs`, its module declarations and lookup tables.
 ///
 /// # Panics
@@ -79,15 +147,31 @@ pub fn build_shard() {
         .next()
         .and_then(|n: &str| n.parse().ok())
         .filter(|n: &usize| *n < SHARDS)
-        .unwrap_or_else(|| panic!("{package} is not named reverse-models-shard-<0..{SHARDS}>"));
+        .unwrap_or_else(|| panic!("{package} is not named models-shard-<0..{SHARDS}>"));
     let out_dir: PathBuf = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
-    std::fs::write(out_dir.join("models.rs"), source(shard, &out_dir))
-        .expect("cannot write models.rs");
+    std::fs::write(
+        out_dir.join("models.rs"),
+        source(shard, &out_dir, Features::from_env()),
+    )
+    .expect("cannot write models.rs");
 }
 
-/// The shard's generated module: its models' `mod` declarations and its `JSONSCHEMARS` and
-/// `SCHEMARS` tables (fixture id to the tool's root-schema function, or why it has none).
-fn source(shard: usize, out_dir: &Path) -> String {
+/// The tables of one shard's generated module, as Rust source lines.
+#[derive(Default)]
+struct Tables {
+    /// `JSONSCHEMARS`: our derive's root-schema function per fixture.
+    reverse_ours: String,
+    /// `SCHEMARS`: schemars' root-schema function per fixture.
+    reverse_schemars: String,
+    /// `TYPES`: the default settings' generated types per fixture.
+    types: String,
+    /// `TYPES_NO_NEWTYPES`: the no-newtypes generated types per fixture.
+    types_no_newtypes: String,
+}
+
+/// The shard's generated module: its models' `mod` declarations and the tables its features
+/// ask for (fixture id to the model's entry point, or why it has none).
+fn source(shard: usize, out_dir: &Path, features: Features) -> String {
     println!(
         "cargo::rerun-if-env-changed={}",
         fixtures::FIXTURE_ROOTS_ENV
@@ -119,12 +203,23 @@ fn source(shard: usize, out_dir: &Path) -> String {
             });
         }
     }
-    let generated: Vec<Result<(String, String), String>> = inputs.iter().map(generate).collect();
+    let copies: Vec<ModelCopy> = features.copies();
+    let with_newtypes: Vec<Generated> = inputs.iter().map(|i| generate(i, true)).collect();
+    let without_newtypes: Vec<Generated> = if copies.contains(&ModelCopy::OursNoNewtypes) {
+        inputs.iter().map(|i| generate(i, false)).collect()
+    } else {
+        Vec::new()
+    };
     let mut planned: Vec<Planned<'_>> = Vec::new();
-    for (index, (input, generated)) in inputs.iter().zip(&generated).enumerate() {
-        for tool in TOOLS {
+    for (index, input) in inputs.iter().enumerate() {
+        for copy in copies.iter().copied() {
+            let generated: &Generated = if copy.newtypes() {
+                &with_newtypes[index]
+            } else {
+                &without_newtypes[index]
+            };
             planned.push(Planned {
-                tool,
+                copy,
                 index,
                 input,
                 generated: generated.as_ref().map_err(String::as_str),
@@ -137,38 +232,129 @@ fn source(shard: usize, out_dir: &Path) -> String {
         std::fs::remove_dir_all(&models_dir).expect("cannot clear the models directory");
     }
     let mut modules: String = String::new();
-    let mut ours: String = String::new();
-    let mut schemars: String = String::new();
+    let mut tables: Tables = Tables::default();
     for (model, _shard) in planned
         .iter()
         .zip(&assignment)
         .filter(|(_model, assigned): &(&Planned<'_>, &usize)| **assigned == shard)
     {
-        let entry: String = match model.generated {
-            Ok((source, root)) => {
-                model_entry(&models_dir, &mut modules, model, source, root, &excluded)
-            }
-            Err(reason) => format!("Err({:?})", format!("no model: {reason}")),
+        let written: Result<(String, String), String> = match model.generated {
+            Ok((source, root)) => write_model(&models_dir, &mut modules, model, source, &excluded)
+                .map(|(module, try_from)| (module, entry_types(root, try_from))),
+            Err(reason) => Err(format!("no model: {reason}")),
         };
-        let table: &mut String = if model.tool == "schemars" {
-            &mut schemars
-        } else {
-            &mut ours
-        };
-        let _ = writeln!(table, "    ({:?}, {entry}),", model.input.id);
+        add_entries(&mut tables, model, &written, features);
     }
-    format!(
-        "{modules}\n/// Our derive's models in this shard, by fixture id.\n\
-         pub static JSONSCHEMARS: &[(&str, OurModel)] = &[\n{ours}];\n\n\
-         /// schemars' models in this shard, by fixture id.\n\
-         pub static SCHEMARS: &[(&str, SchemarsModel)] = &[\n{schemars}];\n"
-    )
+    modules + &render_tables(&tables, features)
 }
 
-/// The shard of each planned model: largest first (by lines of our generated source; a model
+/// The `pub static` tables `features` ask for.
+fn render_tables(tables: &Tables, features: Features) -> String {
+    let mut out: String = String::new();
+    let mut table = |doc: &str, name: &str, ty: &str, rows: &str| {
+        let _ = write!(
+            out,
+            "\n/// {doc}, by fixture id.\npub static {name}: &[(&str, {ty})] = &[\n{rows}];\n"
+        );
+    };
+    if features.reverse_codegen {
+        table(
+            "Our derive's models in this shard",
+            "JSONSCHEMARS",
+            "OurModel",
+            &tables.reverse_ours,
+        );
+        table(
+            "schemars' models in this shard",
+            "SCHEMARS",
+            "SchemarsModel",
+            &tables.reverse_schemars,
+        );
+    }
+    if features.generated_types {
+        table(
+            "The default settings' generated types in this shard",
+            "TYPES",
+            "Types",
+            &tables.types,
+        );
+        table(
+            "The no-newtypes generated types in this shard",
+            "TYPES_NO_NEWTYPES",
+            "Types",
+            &tables.types_no_newtypes,
+        );
+    }
+    out
+}
+
+/// Add `model`'s rows to the tables its copy fills: `written` is the model's module and the
+/// generated-types expression of its root type, or why it has none.
+fn add_entries(
+    tables: &mut Tables,
+    model: &Planned<'_>,
+    written: &Result<(String, String), String>,
+    features: Features,
+) {
+    let id: &str = &model.input.id;
+    let row = |table: &mut String, entry: String| {
+        let _ = writeln!(table, "    ({id:?}, {entry}),");
+    };
+    let root: &str = model.generated.map_or("", |(_source, root)| root.as_str());
+    match model.copy {
+        ModelCopy::Ours => {
+            if features.reverse_codegen {
+                row(
+                    &mut tables.reverse_ours,
+                    match written {
+                        Ok((module, _types)) => format!(
+                            "Ok(<{module}::{root} as json_schema_rs::ToJsonSchema>::json_schema)"
+                        ),
+                        Err(reason) => format!("Err({reason:?})"),
+                    },
+                );
+            }
+            if features.generated_types {
+                row(&mut tables.types, types_entry(written));
+            }
+        }
+        ModelCopy::Schemars => row(
+            &mut tables.reverse_schemars,
+            match written {
+                Ok((module, _types)) => format!("Ok(|| schemars::schema_for!({module}::{root}))"),
+                Err(reason) => format!("Err({reason:?})"),
+            },
+        ),
+        ModelCopy::OursNoNewtypes => {
+            row(&mut tables.types_no_newtypes, types_entry(written));
+        }
+    }
+}
+
+/// A `TYPES` row's entry: the generated-types expression with the model's module filled in.
+fn types_entry(written: &Result<(String, String), String>) -> String {
+    match written {
+        Ok((module, types)) => format!("Ok({})", types.replace("{module}", module)),
+        Err(reason) => format!("Err({reason:?})"),
+    }
+}
+
+/// The `GeneratedTypes` expression of root type `root` (in module `{module}`, filled in later).
+fn entry_types(root: &str, try_from: Option<&'static str>) -> String {
+    match try_from {
+        None => format!(
+            "json_schema_rs_benchmark::harness::GeneratedTypes::with_try_from::<{{module}}::{root}>()"
+        ),
+        Some(reason) => format!(
+            "json_schema_rs_benchmark::harness::GeneratedTypes::without_try_from::<{{module}}::{root}>({reason:?})"
+        ),
+    }
+}
+
+/// The shard of each planned model: largest first (by lines of its generated source; a model
 /// without source weighs nothing), each to the least-loaded shard, ties to the lowest. The
-/// order depends only on the fixtures, so every shard's build script computes the same
-/// assignment.
+/// order depends only on the fixtures and the features, so every shard's build script computes
+/// the same assignment.
 fn assign(planned: &[Planned<'_>]) -> Vec<usize> {
     let weight = |model: &Planned<'_>| -> usize {
         model
@@ -182,7 +368,7 @@ fn assign(planned: &[Planned<'_>]) -> Vec<usize> {
         weight(&planned[*b])
             .cmp(&weight(&planned[*a]))
             .then_with(|| planned[*a].input.id.cmp(&planned[*b].input.id))
-            .then_with(|| planned[*a].tool.cmp(planned[*b].tool))
+            .then_with(|| planned[*a].copy.cmp(&planned[*b].copy))
     });
     let mut load: [usize; SHARDS] = [0; SHARDS];
     let mut assignment: Vec<usize> = vec![0; planned.len()];
@@ -196,7 +382,7 @@ fn assign(planned: &[Planned<'_>]) -> Vec<usize> {
     assignment
 }
 
-/// The exclusion file's rows by (tool, fixture); none when the variable is unset.
+/// The exclusion file's rows by (copy id, fixture); none when the variable is unset.
 fn exclusions() -> BTreeMap<(String, String), String> {
     let Some(path) = std::env::var_os(EXCLUDE_ENV).filter(|path| !path.is_empty()) else {
         return BTreeMap::new();
@@ -210,11 +396,17 @@ fn exclusions() -> BTreeMap<(String, String), String> {
         .collect()
 }
 
-/// Our codegen of the input's schema: the source and its root type's name.
-fn generate(input: &Input) -> Result<(String, String), String> {
+/// Our codegen of the input's schema (default settings, with `constrained_newtypes(newtypes)`):
+/// the source and its root type's name; none for a fixture in `MODELS_NOT_BUILT`.
+fn generate(input: &Input, newtypes: bool) -> Generated {
+    if let Some(reason) = model_not_built(&input.id) {
+        return Err(reason.to_owned());
+    }
     let schema: Schema = serde_json::from_str(&input.schema_text)
         .map_err(|e: serde_json::Error| format!("schema parse error: {e}"))?;
-    let settings: CodeGenSettings = CodeGenSettings::builder().build();
+    let settings: CodeGenSettings = CodeGenSettings::builder()
+        .constrained_newtypes(newtypes)
+        .build();
     let mut codegen_input: CodeGenInput<'_> = CodeGenInput::new().schema(&schema);
     if !input.resources.is_empty() {
         let mut documents: BTreeMap<String, Value> = BTreeMap::new();
@@ -237,42 +429,79 @@ fn generate(input: &Input) -> Result<(String, String), String> {
         .map_err(|e| format!("generated source is not UTF-8: {e}"))
 }
 
-/// Write one tool's model (unless excluded) and return its table entry.
-fn model_entry(
+/// Write one model (unless excluded): returns its module name and, for our copies, why the
+/// root type has no `TryFrom<serde_json::Value>` (`None` when it has one), or why the model was
+/// left out.
+fn write_model(
     models_dir: &Path,
     modules: &mut String,
     model: &Planned<'_>,
     generated: &str,
-    root: &str,
     excluded: &BTreeMap<(String, String), String>,
-) -> String {
-    let tool: &str = model.tool;
-    if let Some(reason) = excluded.get(&(tool.to_owned(), model.input.id.clone())) {
-        return format!("Err({reason:?})");
+) -> Result<(String, Option<&'static str>), String> {
+    let copy: ModelCopy = model.copy;
+    if let Some(reason) = excluded.get(&(copy.id().to_owned(), model.input.id.clone())) {
+        return Err(reason.clone());
     }
-    let source: String = if tool == "schemars" {
-        match schemars_source(generated) {
-            Ok(source) => source,
-            Err(reason) => return format!("Err({:?})", format!("no model: {reason}")),
-        }
+    let root: &str = model.generated.map_or("", |(_source, root)| root.as_str());
+    let (source, try_from): (String, Option<&'static str>) = if copy == ModelCopy::Schemars {
+        (
+            schemars_source(generated).map_err(|reason| format!("no model: {reason}"))?,
+            None,
+        )
     } else {
-        generated.to_owned()
+        (generated.to_owned(), root_try_from(generated, root)?)
     };
-    let dir: PathBuf = models_dir.join(tool).join(model_dir_name(&model.input.id));
+    let dir: PathBuf = models_dir
+        .join(copy.id())
+        .join(model_dir_name(&model.input.id));
     std::fs::create_dir_all(&dir).expect("cannot create a model directory");
     let file: PathBuf = dir.join(MODEL_FILE_NAME);
     std::fs::write(&file, source).expect("cannot write a model");
-    let module: String = format!("{}_{}", tool.replace('-', "_"), model.index);
+    let module: String = format!("{}_{}", copy.id().replace('-', "_"), model.index);
     let _ = writeln!(
         modules,
         "#[doc(hidden)]\n#[path = {:?}]\npub mod {module};",
         file.display().to_string()
     );
-    if tool == "schemars" {
-        format!("Ok(|| schemars::schema_for!({module}::{root}))")
+    Ok((module, try_from))
+}
+
+/// Why root type `root` of `generated` has no `TryFrom<serde_json::Value>` (self-validating types
+/// give one to every struct, enum and union with a validation target; a root type alias or a
+/// constrained newtype has none), or `None` when it has one.
+fn root_try_from(generated: &str, root: &str) -> Result<Option<&'static str>, String> {
+    let file: syn::File = syn::parse_file(generated)
+        .map_err(|e| format!("no model: generated source is not Rust: {e}"))?;
+    let has_try_from: bool = file.items.iter().any(|item: &syn::Item| {
+        let syn::Item::Impl(item) = item else {
+            return false;
+        };
+        let Some((trait_path, _for)) = &item.trait_ else {
+            return false;
+        };
+        let self_is_root: bool = matches!(
+            item.self_ty.as_ref(),
+            syn::Type::Path(ty) if ty.qself.is_none() && ty.path.is_ident(root)
+        );
+        let names_try_from_value: bool = trait_path.segments.last().is_some_and(|segment| {
+            segment.ident == "TryFrom" && {
+                use quote::ToTokens as _;
+                segment
+                    .arguments
+                    .to_token_stream()
+                    .to_string()
+                    .replace(' ', "")
+                    == "<serde_json::Value>"
+            }
+        });
+        self_is_root && names_try_from_value
+    });
+    Ok(if has_try_from {
+        None
     } else {
-        format!("Ok(<{module}::{root} as json_schema_rs::ToJsonSchema>::json_schema)")
-    }
+        Some("the root type has no TryFrom<serde_json::Value>")
+    })
 }
 
 /// `generated` with schemars' derive and attributes in place of ours.
