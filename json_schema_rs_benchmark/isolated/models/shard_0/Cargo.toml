@@ -1,14 +1,19 @@
-# Reverse-codegen model shard 3 of 8 (see ../gen/src/lib.rs). Every shard shares one build
-# script and library source; the build script reads the shard number from the package name.
+# Benchmark model shard 0 of 8 (see ../gen/src/lib.rs). Every shard shares one build script and
+# library source; the build script reads the shard number from the package name, and the models
+# it writes from the features (the same on every shard: isolated/ enables them on all eight).
 
 [package]
-name = "reverse-models-shard-3"
-description = "Reverse-codegen benchmark models, shard 3. Not published."
+name = "models-shard-0"
+description = "Benchmark models, shard 0. Not published."
 version = "0.0.6"
 edition = "2024"
 rust-version = "1.99"
 publish = false
 build = "../shard_build.rs"
+
+[features]
+reverse-codegen = ["dep:schemars"]
+generated-types = ["dep:json-schema-rs-benchmark"]
 
 [lib]
 path = "../shard_lib.rs"
@@ -16,12 +21,13 @@ path = "../shard_lib.rs"
 [dependencies]
 json-schema-rs = { path = "../../../../json_schema_rs" }
 json-schema-rs-macro = { path = "../../../../json_schema_rs_macro" }
-schemars = "1.2.3"
+schemars = { version = "1.2.3", optional = true }
+json-schema-rs-benchmark = { path = "../../..", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["float_roundtrip"] }
 
 [build-dependencies]
-reverse-model-gen = { path = "../gen" }
+model-gen = { path = "../gen" }
 
 [lints.rust]
 unsafe_code = { level = "forbid", priority = 0 }

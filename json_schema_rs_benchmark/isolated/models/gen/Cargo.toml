@@ -1,9 +1,9 @@
-# Generator of the reverse-codegen models, the build-dependency of every model shard crate
+# Generator of the benchmark's models, the build-dependency of every model shard crate
 # (../shard_<n>). See src/lib.rs.
 
 [package]
-name = "reverse-model-gen"
-description = "Generates the reverse-codegen benchmark's models. Not published."
+name = "model-gen"
+description = "Generates the benchmark's models. Not published."
 version = "0.0.6"
 edition = "2024"
 rust-version = "1.99"

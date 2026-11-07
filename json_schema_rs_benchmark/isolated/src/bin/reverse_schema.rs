@@ -1,7 +1,7 @@
 //! Thin CLI over this crate's reverse-codegen tools, for the benchmark's CLI tier:
 //! `reverse_schema <tool> <fixture id>` prints the JSON Schema that `tool` (`jsonschemars` or
 //! `schemars`) generates for the root type of the fixture's model, which is compiled into this
-//! binary (see `reverse_models/gen`), and exits 0. With no model for that tool and fixture, or an unknown
+//! binary (see `models/gen`), and exits 0. With no model for that tool and fixture, or an unknown
 //! tool, it prints why to stderr and exits 1.
 //!
 //! No Rust reverse-codegen tool ships a command-line front end (both are derives), so this

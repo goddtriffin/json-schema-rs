@@ -9,13 +9,16 @@
 #     process startup and file I/O are excluded. Time comes from criterion (benches/cross_tool.rs;
 #     median + spread); peak heap per operation comes from a counting allocator
 #     (src/bin/heap_profile.rs). Operations: codegen, schema_compile, validate_valid,
-#     validate_invalid, reverse_codegen. Tools: jsonschemars (our lib), jsonschema, boon, valico,
-#     jsonschema-valid, typify, schemafy, jsonschema_code_generator; and, from isolated/ (its own
-#     workspace, built once per feature so their dependency features never reach the other
-#     tools), corvus-json-schema, jsonschema-macros (compile-time validators generated from the
-#     fixture set) and the reverse_codegen models (our codegen's Rust types for every fixture with
-#     both `#[derive(ToJsonSchema)]` and schemars' `#[derive(JsonSchema)]`; a model whose derive
-#     does not compile is excluded and recorded as a compat failure, see build_reverse_models).
+#     validate_invalid, reverse_codegen, and the generated-types operations (deserialize_valid,
+#     try_from_valid, try_from_invalid, each also *_no_newtypes). Tools: jsonschemars (our lib),
+#     jsonschema, boon, valico, jsonschema-valid, typify, schemafy, jsonschema_code_generator; and,
+#     from isolated/ (its own workspace, built once per feature so their dependency features never
+#     reach the other tools), corvus-json-schema, jsonschema-macros (compile-time validators
+#     generated from the fixture set) and the models (our codegen's Rust types for every fixture:
+#     with `#[derive(ToJsonSchema)]` and with schemars' `#[derive(JsonSchema)]` for reverse_codegen,
+#     and with constrained newtypes on and off for the generated-types operations, all in one build;
+#     a model that does not compile is excluded and recorded as a compat failure, see build_models
+#     in tools.sh).
 #     Every build appends to the same raw captures.
 #
 #   CLI tier — each tool's command-line front end timed end to end (startup, file I/O, parse,
@@ -62,9 +65,9 @@
 #
 # Raw captures (RAW_DIR = json_schema_rs_benchmark/target/benchmark-raw):
 #   tools.tsv                         tool \t version \t language/runtime
-#   reverse_exclude.tsv               tool \t fixture \t reason: reverse_codegen models excluded
-#                                     from the isolated build (the model does not compile)
-#   reverse_build.jsonl               cargo's JSON messages from the last reverse-codegen check
+#   model_exclude.tsv                 copy \t fixture \t reason: models excluded from the isolated
+#                                     build (the model does not compile)
+#   model_build.jsonl                 cargo's JSON messages from the last model check
 #   inprocess_heap.tsv, inprocess_compat.tsv   (written by heap_profile)
 #   cli/compat.tsv                    tool \t fixture \t operation \t pass|fail \t detail
 #   cli/index.tsv                     tool \t fixture \t operation \t cli/<hyperfine export>.json
@@ -94,7 +97,7 @@ BUILD_DIR="${REPO_ROOT}/target/benchmark"
 ISOLATED_MANIFEST="${CRATE_DIR}/isolated/Cargo.toml"
 ISOLATED_LOCK="${CRATE_DIR}/isolated/Cargo.lock"
 # One build per feature: each competitor here must not share a build with the others.
-ISOLATED_FEATURES="corvus jsonschema-macros reverse-codegen"
+ISOLATED_FEATURES="corvus jsonschema-macros reverse-codegen,generated-types"
 export REPO_ROOT
 
 # shellcheck source=tools.sh
@@ -298,7 +301,7 @@ _cli_reverse() {
 # with one optional string property, valid instance `{}`, invalid instance `[]`) under <work dir>
 # and print its directory. Draft-07 because every tool supports it; the property because a model
 # generator needs it to name a root type (quicktype names none for a bare `{"type": "object"}`).
-# The reverse_schema binary builds in the same schema (STARTUP_SCHEMA in src/reverse_models.rs).
+# The reverse_schema binary builds in the same schema (STARTUP_SCHEMA in src/models.rs).
 _write_startup_fixture() {
     local dir="$1/startup"
     mkdir -p "${dir}/instances/valid" "${dir}/instances/invalid"
@@ -534,53 +537,6 @@ _tool_row() {
     printf '%s\t%s\t%s\n' "$1" "$2" "$(tool_runtime "$1")"
 }
 
-# build_reverse_models: build isolated/ with the reverse-codegen feature (every bin, reverse_schema
-# among them), excluding each model that does not compile. Our codegen emits every fixture's Rust
-# types, one copy per tool with that tool's derive; a model that does not compile is that tool's
-# compat failure on that fixture, not a broken build. `cargo check` finds them (no code
-# generation, so each round is fast): after each failed check, model_build_failures reads cargo's
-# JSON messages and appends one "tool \t fixture \t reason" row per failing model to
-# BENCH_REVERSE_EXCLUDE, which the model shards' build scripts read to leave those models out
-# (--keep-going, so every shard reports its errors in the same round). An error
-# it cannot attribute to one model aborts the run. Once the check passes, one benchmark-profile build
-# follows. BENCH_REVERSE_EXCLUDE stays exported so the later criterion build sees the same
-# exclusions.
-build_reverse_models() {
-    local attempt before after
-    export BENCH_REVERSE_EXCLUDE="${RAW_DIR}/reverse_exclude.tsv"
-    : > "${BENCH_REVERSE_EXCLUDE}"
-    for attempt in 1 2 3 4 5; do
-        if _isolated_cargo check --config "${PROFILE_CONFIG}" --profile benchmark \
-            --features reverse-codegen --bins --keep-going \
-            --message-format=json > "${RAW_DIR}/reverse_build.jsonl"; then
-            if [[ -s "${BENCH_REVERSE_EXCLUDE}" ]]; then
-                echo "    excluded reverse_codegen models (model does not compile):"
-                sed 's/^/      /' "${BENCH_REVERSE_EXCLUDE}"
-            fi
-            _isolated_cargo build --config "${PROFILE_CONFIG}" --profile benchmark \
-                --features reverse-codegen --bins
-            return 0
-        fi
-        echo "    reverse-codegen check ${attempt} failed; excluding the models that did not compile"
-        before="$(wc -l < "${BENCH_REVERSE_EXCLUDE}")"
-        if ! "${BUILD_DIR}/model_build_failures" < "${RAW_DIR}/reverse_build.jsonl" \
-            >> "${BENCH_REVERSE_EXCLUDE}" 2> "${RAW_DIR}/model_build_failures.err"; then
-            echo "!! the reverse-codegen check failed for a reason no single model explains; aborting:" >&2
-            cat "${RAW_DIR}/model_build_failures.err" >&2
-            exit 1
-        fi
-        after="$(wc -l < "${BENCH_REVERSE_EXCLUDE}")"
-        if [[ "${after}" -le "${before}" ]]; then
-            echo "!! the reverse-codegen check failed but no new model was excluded; aborting" \
-                "(see ${RAW_DIR}/reverse_build.jsonl)" >&2
-            exit 1
-        fi
-    done
-    echo "!! the reverse-codegen check still fails after 5 attempts; aborting" \
-        "(see ${RAW_DIR}/reverse_build.jsonl)" >&2
-    exit 1
-}
-
 # --- main --------------------------------------------------------------------------------
 
 main() {
@@ -658,8 +614,11 @@ main() {
     local feature
     for feature in ${ISOLATED_FEATURES}; do
         echo "==> in-process tier: peak heap + compat (isolated: ${feature})"
-        if [[ "${feature}" == "reverse-codegen" ]]; then
-            build_reverse_models
+        if [[ "${feature}" == *reverse-codegen* ]]; then
+            : > "${RAW_DIR}/model_exclude.tsv"
+            CARGO_TARGET_DIR="${REPO_ROOT}/target" build_models "${ISOLATED_MANIFEST}" \
+                "${feature}" "${RAW_DIR}/model_exclude.tsv" "${RAW_DIR}" \
+                || exit 1
         else
             _isolated_cargo build --config "${PROFILE_CONFIG}" --profile benchmark \
                 --features "${feature}" --bin isolated_heap_profile

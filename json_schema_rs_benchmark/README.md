@@ -53,6 +53,11 @@ captures with injected changes, the per-round rule caught 88% of cells at +4%, 9
 all at +10% (pooled medians: 83%, 90%, 99.5%). A run takes about 6-7.5 minutes. A cell that moved but runs only code the PR did not touch is
 still noise; the PR body counts only cells on changed code paths (see CLAUDE.md).
 
+The generated-types cells (see *What it measures*) come from each side's own build of
+`isolated/`'s `generated-types` feature: that side's codegen generates the types, which link that
+side's library. Each side builds into `target/benchmark-quick/isolated-{base,head}` with every
+source and target path remapped (`--remap-path-prefix`), because `isolated/` is its own workspace
+and cargo compiles the library under its absolute path, which is longer on the base side.
 Reverse codegen is not measured in quick mode: its models take minutes to build per side (#102).
 A PR that changes the derive or reverse codegen, the harness, a competitor or a fixture runs
 `make benchmark_full` too.
@@ -119,7 +124,7 @@ fixtures generated deterministically into `target/benchmark-fixtures/` on every 
 
 | Tier | How | Tools | Time | Memory |
 |---|---|---|---|---|
-| In-process | every tool linked as a library, called on in-memory inputs | validators: json-schema-rs, [jsonschema] (runtime, and its compile-time macro as `jsonschema-macros`), [boon], [valico], [jsonschema-valid], [corvus-json-schema]; codegens: json-schema-rs, [typify], [schemafy], [jsonschema_code_generator]; reverse codegen: json-schema-rs, [schemars] | [criterion] median ± stddev | peak heap per operation (counting allocator) |
+| In-process | every tool linked as a library, called on in-memory inputs | validators: json-schema-rs, [jsonschema] (runtime, and its compile-time macro as `jsonschema-macros`), [boon], [valico], [jsonschema-valid], [corvus-json-schema]; codegens: json-schema-rs, [typify], [schemafy], [jsonschema_code_generator]; reverse codegen: json-schema-rs, [schemars]; generated types: json-schema-rs | [criterion] median ± stddev | peak heap per operation (counting allocator) |
 | CLI | every tool's binary end to end, startup included | Rust: `jsonschemars`, `jsonschema-cli`, `boon_validate`, `cargo-typify`, `reverse_schema` (json-schema-rs and schemars); non-Rust: [Blaze], [ajv], [python-jsonschema], [fastjsonschema], [quicktype], [datamodel-code-generator], [json-schema-to-typescript], [pydantic], [zod], [ts-json-schema-generator] | [hyperfine] median ± stddev | peak RSS |
 
 Operations: `codegen` (schema → source; Rust for every tool but datamodel-code-generator, which
@@ -127,13 +132,19 @@ emits pydantic, and json-schema-to-typescript, which emits TypeScript), `schema_
 (in-process only; not for `jsonschema-macros`, whose schemas compile when the benchmark is built),
 `validate_valid`, `validate_invalid`, `reverse_codegen` (language-native models → JSON Schema:
 `#[derive(ToJsonSchema)]`'s `T::json_schema()`, schemars' `schema_for!`, pydantic's
-`model_json_schema()`, zod v4's `z.toJSONSchema`, ts-json-schema-generator's CLI). Lower is better
-everywhere.
+`model_json_schema()`, zod v4's `z.toJSONSchema`, ts-json-schema-generator's CLI), and the
+generated-types operations (ours only, in-process): the fixture's instance deserialized into the
+types our codegen generates for its schema, `deserialize_valid` (plain `serde_json::from_str` of
+the root type), `try_from_valid` and `try_from_invalid` (the root type's
+`TryFrom<serde_json::Value>`, which validates the whole instance; the instance's clone is made
+outside the timing), each also `*_no_newtypes` on types generated with
+`constrained_newtypes(false)`. Lower is better everywhere.
 
-`reverse_codegen` needs a model per fixture, so the models are generated from the fixture's schema
-at bench time, deterministically, and are never timed or committed: our codegen emits the Rust
-types, one copy per tool carrying that tool's derive (compiled into `isolated/`; a model that does
-not compile is excluded from the build and recorded as that tool's compat failure), datamodel-code-generator emits
+`reverse_codegen` and the generated-types operations need a model per fixture, so the models are
+generated from the fixture's schema at bench time, deterministically, and are never timed or
+committed: our codegen emits the Rust types, one copy per tool carrying that tool's derive, plus
+a copy without constrained newtypes (compiled into `isolated/`; a model that does not compile is
+excluded from the build and recorded as that tool's compat failure), datamodel-code-generator emits
 the pydantic models (`--class-name Root`), and quicktype emits the zod schemas
 (`--lang typescript-zod`) and the TypeScript types for ts-json-schema-generator
 (`--lang typescript --just-types --explicit-unions`, so a root union gets a name), registering the
@@ -142,7 +153,12 @@ or emits models without the root type (quicktype names no root that is only a ma
 startup schema, and emits no root zod schema for a root union) or TypeScript that does not
 type-check, is a compat failure for that tool and fixture. Before a cell is timed its emitted
 schema must be accepted by our validator and accept every valid instance of the fixture, so a
-fast-but-wrong schema is never timed. The CLI tier times one process per run: `reverse_schema`
+fast-but-wrong schema is never timed. A generated-types cell is measured only when the types accept
+the valid instance and (`try_from_invalid`) reject the invalid one. The fixtures in
+`MODELS_NOT_BUILT` (`src/models.rs`) have no model, so no reverse-codegen or generated-types
+cell: their types take too long to build (`generated/wide-object`, #102;
+`medium/package-json`, #111).
+The CLI tier times one process per run: `reverse_schema`
 (our thin bin with every fixture's Rust models compiled in; `reverse_schema <jsonschemars|schemars>
 <fixture>`), and the thin wrappers `competitors/python/pydantic_schema.py` and
 `competitors/node/zod_schema.mjs` (pydantic and zod have no command line), each with the library's
@@ -222,14 +238,15 @@ json_schema_rs_benchmark/
   src/bin/gen_fixtures.rs  # deterministic large synthetic fixtures
   src/bin/list_fixtures.rs # fixture list for the CLI tier
   src/bin/boon_validate.rs # thin boon CLI wrapper (boon-cli cannot register documents by $id)
-  src/bin/model_build_failures.rs # cargo JSON messages -> reverse_codegen models to exclude
+  src/bin/model_build_failures.rs # cargo JSON messages -> models to exclude
   benches/cross_tool.rs    # criterion timing of every tool
-  isolated/                # corvus-json-schema, jsonschema-macros and the reverse_codegen models,
-                           #   built apart (own workspace, one build per feature); build.rs generates
-                           #   one compile-time validator per fixture; reverse_models/ holds the
-                           #   model generator (gen/) and the 8 shard crates the models are spread
-                           #   over, so they compile in parallel; src/bin/reverse_schema.rs is
-                           #   the reverse_codegen CLI-tier wrapper
+  isolated/                # corvus-json-schema, jsonschema-macros and the models (reverse_codegen,
+                           #   generated types), built apart (own workspace, one build per feature;
+                           #   the two model features build together); build.rs generates one
+                           #   compile-time validator per fixture; models/ holds the model
+                           #   generator (gen/) and the 8 shard crates the models are spread over,
+                           #   so they compile in parallel; src/bin/reverse_schema.rs is the
+                           #   reverse_codegen CLI-tier wrapper
   scripts/run_benchmark.sh # full-mode driver (`make benchmark_full`)
   scripts/quick_benchmark.sh # quick-mode driver (`make benchmark`)
   scripts/tools.sh         # CLI-tier tool definitions

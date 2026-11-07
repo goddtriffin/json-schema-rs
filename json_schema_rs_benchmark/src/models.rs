@@ -1,4 +1,4 @@
-//! Names shared by the reverse-codegen models' generator (`isolated/reverse_models/gen`), the
+//! Names shared by the reverse-codegen models' generator (`isolated/models/gen`), the
 //! build-failure triage (`src/bin/model_build_failures.rs`) and the driver.
 //!
 //! The `reverse-codegen` build of `isolated/` compiles one model per (tool, fixture): the Rust
@@ -15,11 +15,11 @@ use std::path::{Component, Path};
 
 /// Environment variable naming the exclusion file: one `tool\tfixture\treason` row per model
 /// left out of the build.
-pub const EXCLUDE_ENV: &str = "BENCH_REVERSE_EXCLUDE";
+pub const EXCLUDE_ENV: &str = "BENCH_MODEL_EXCLUDE";
 
 /// Directory (under the build script's `OUT_DIR`) holding every model, as
 /// `<tool>/<model dir name>/model.rs`.
-pub const MODELS_DIR_NAME: &str = "reverse_models";
+pub const MODELS_DIR_NAME: &str = "models";
 
 /// File name of one model's source.
 pub const MODEL_FILE_NAME: &str = "model.rs";
@@ -29,6 +29,30 @@ pub const STARTUP_FIXTURE_ID: &str = "startup";
 
 /// The startup baseline's schema (see `STARTUP_FIXTURE` in the report).
 pub const STARTUP_SCHEMA: &str = r#"{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "properties": {"name": {"type": "string"}}}"#;
+
+/// Fixtures whose models are not built, and why: our codegen's types for them take too long to
+/// build in an optimized profile. No copy of their model is written, so every reverse-codegen and
+/// generated-types cell of theirs is a compatibility failure with the reason as its detail
+/// (prefixed `no model: `). A fix removes its fixture from the list.
+pub const MODELS_NOT_BUILT: &[(&str, &str)] = &[
+    (
+        "generated/wide-object",
+        "its types take minutes to build (#102)",
+    ),
+    (
+        "medium/package-json",
+        "its types do not finish an optimized build (#111)",
+    ),
+];
+
+/// Why `fixture_id`'s models are not built (see [`MODELS_NOT_BUILT`]).
+#[must_use]
+pub fn model_not_built(fixture_id: &str) -> Option<&'static str> {
+    MODELS_NOT_BUILT
+        .iter()
+        .find(|(id, _reason): &&(&str, &str)| *id == fixture_id)
+        .map(|(_id, reason): &(&str, &str)| *reason)
+}
 
 /// The directory name of `fixture_id`'s model (`/` becomes `__`).
 #[must_use]
@@ -126,7 +150,7 @@ fn primary_file(diagnostic: &Value) -> Option<&str> {
         .and_then(|span: &Value| span["file_name"].as_str())
 }
 
-/// The (tool, fixture) of a model file: `.../reverse_models/<tool>/<model dir name>/model.rs`.
+/// The (tool, fixture) of a model file: `.../models/<tool>/<model dir name>/model.rs`.
 fn model_of(file: &Path) -> Option<(String, String)> {
     let names: Vec<&str> = file
         .components()
@@ -151,7 +175,23 @@ fn one_line(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Exclusion, build_failures, fixture_id_of, model_dir_name, parse_exclusions};
+    use super::{
+        Exclusion, build_failures, fixture_id_of, model_dir_name, model_not_built, parse_exclusions,
+    };
+
+    #[test]
+    fn model_not_built_gives_a_listed_fixtures_reason() {
+        let expected: Option<&str> = Some("its types do not finish an optimized build (#111)");
+        let actual: Option<&str> = model_not_built("medium/package-json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn model_not_built_is_none_for_other_fixtures() {
+        let expected: Option<&str> = None;
+        let actual: Option<&str> = model_not_built("small/config");
+        assert_eq!(expected, actual);
+    }
 
     /// One cargo `compiler-message` line: an error with a primary span in `file`.
     fn error_in(file: &str, message: &str) -> String {
@@ -206,15 +246,15 @@ mod tests {
         let messages: String = [
             r#"{"reason":"compiler-artifact"}"#.to_owned(),
             error_in(
-                "/t/out/reverse_models/schemars/small__config/model.rs",
+                "/t/out/models/schemars/small__config/model.rs",
                 "the trait bound `X: JsonSchema` is not satisfied",
             ),
             error_in(
-                "/t/out/reverse_models/schemars/small__config/model.rs",
+                "/t/out/models/schemars/small__config/model.rs",
                 "second error",
             ),
             error_in(
-                "/t/out/reverse_models/jsonschemars/large__api-catalog/model.rs",
+                "/t/out/models/jsonschemars/large__api-catalog/model.rs",
                 "cannot find\n  type `Y`",
             ),
             r#"{"reason":"compiler-message","message":{"level":"error","message":"aborting due to 3 previous errors","spans":[]}}"#.to_owned(),
@@ -250,7 +290,7 @@ mod tests {
         .to_string();
         let messages: String = [
             warning,
-            error_in("/t/out/reverse_models/schemars/small__config/model.rs", "e"),
+            error_in("/t/out/models/schemars/small__config/model.rs", "e"),
         ]
         .join("\n");
         let expected: Result<Vec<Exclusion>, String> = Ok(vec![exclusion(

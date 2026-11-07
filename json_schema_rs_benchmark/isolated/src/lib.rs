@@ -13,27 +13,43 @@
 //!   run time only looks the fixture's validator up.
 //! * reverse codegen (feature `reverse-codegen`): our `ToJsonSchema` derive
 //!   (`T::json_schema()`) and schemars' (`schemars::schema_for!(T)`, default settings), each on
-//!   its own copy of the fixture's model (see `reverse_models/gen`). The timed call produces the tool's
+//!   its own copy of the fixture's model (see `models/gen`). The timed call produces the tool's
 //!   in-memory schema; the correctness probe serializes it to JSON and checks it with our
 //!   validator against every valid instance of the fixture.
+//! * generated types (feature `generated-types`): the fixture's instances deserialized into our
+//!   codegen's types (the same copy of the models our derive runs on, and a copy generated with
+//!   `constrained_newtypes(false)`), through plain serde and the root type's
+//!   `TryFrom<serde_json::Value>` (see `json_schema_rs_benchmark::harness::GeneratedTypes`).
 
 #[cfg(any(
     all(feature = "corvus", feature = "jsonschema-macros"),
-    all(feature = "corvus", feature = "reverse-codegen"),
-    all(feature = "jsonschema-macros", feature = "reverse-codegen"),
+    all(
+        feature = "corvus",
+        any(feature = "reverse-codegen", feature = "generated-types")
+    ),
+    all(
+        feature = "jsonschema-macros",
+        any(feature = "reverse-codegen", feature = "generated-types")
+    ),
 ))]
 compile_error!(
-    "enable exactly one of the `corvus`, `jsonschema-macros` and `reverse-codegen` features per build"
+    "enable one of `corvus`, `jsonschema-macros` and the model features (`reverse-codegen`, \
+     `generated-types`, or both) per build"
 );
 #[cfg(not(any(
     feature = "corvus",
     feature = "jsonschema-macros",
-    feature = "reverse-codegen"
+    feature = "reverse-codegen",
+    feature = "generated-types"
 )))]
-compile_error!("enable one of the `corvus`, `jsonschema-macros` and `reverse-codegen` features");
+compile_error!(
+    "enable one of the `corvus`, `jsonschema-macros`, `reverse-codegen` and `generated-types` features"
+);
 
 use json_schema_rs_benchmark::fixtures::Fixture;
 use json_schema_rs_benchmark::harness::{Adapter, AdapterError, Operation, unsupported};
+#[cfg(feature = "generated-types")]
+use json_schema_rs_benchmark::harness::{GeneratedTypes, TypesVariant};
 use serde_json::Value;
 #[cfg(not(feature = "reverse-codegen"))]
 use std::convert::Infallible;
@@ -53,36 +69,66 @@ include!(concat!(env!("OUT_DIR"), "/macro_validators.rs"));
 
 /// One shard's table of our derive's models (fixture id to model).
 #[cfg(feature = "reverse-codegen")]
-type OurModels = &'static [(&'static str, reverse_models_shard_0::OurModel)];
+type OurModels = &'static [(&'static str, models_shard_0::OurModel)];
 
 /// One shard's table of schemars' models (fixture id to model).
 #[cfg(feature = "reverse-codegen")]
-type SchemarsModels = &'static [(&'static str, reverse_models_shard_0::SchemarsModel)];
+type SchemarsModels = &'static [(&'static str, models_shard_0::SchemarsModel)];
 
 /// Every shard's table of our derive's models.
 #[cfg(feature = "reverse-codegen")]
 static OUR_MODELS: [OurModels; 8] = [
-    reverse_models_shard_0::JSONSCHEMARS,
-    reverse_models_shard_1::JSONSCHEMARS,
-    reverse_models_shard_2::JSONSCHEMARS,
-    reverse_models_shard_3::JSONSCHEMARS,
-    reverse_models_shard_4::JSONSCHEMARS,
-    reverse_models_shard_5::JSONSCHEMARS,
-    reverse_models_shard_6::JSONSCHEMARS,
-    reverse_models_shard_7::JSONSCHEMARS,
+    models_shard_0::JSONSCHEMARS,
+    models_shard_1::JSONSCHEMARS,
+    models_shard_2::JSONSCHEMARS,
+    models_shard_3::JSONSCHEMARS,
+    models_shard_4::JSONSCHEMARS,
+    models_shard_5::JSONSCHEMARS,
+    models_shard_6::JSONSCHEMARS,
+    models_shard_7::JSONSCHEMARS,
 ];
 
 /// Every shard's table of schemars' models.
 #[cfg(feature = "reverse-codegen")]
 static SCHEMARS_MODELS: [SchemarsModels; 8] = [
-    reverse_models_shard_0::SCHEMARS,
-    reverse_models_shard_1::SCHEMARS,
-    reverse_models_shard_2::SCHEMARS,
-    reverse_models_shard_3::SCHEMARS,
-    reverse_models_shard_4::SCHEMARS,
-    reverse_models_shard_5::SCHEMARS,
-    reverse_models_shard_6::SCHEMARS,
-    reverse_models_shard_7::SCHEMARS,
+    models_shard_0::SCHEMARS,
+    models_shard_1::SCHEMARS,
+    models_shard_2::SCHEMARS,
+    models_shard_3::SCHEMARS,
+    models_shard_4::SCHEMARS,
+    models_shard_5::SCHEMARS,
+    models_shard_6::SCHEMARS,
+    models_shard_7::SCHEMARS,
+];
+
+/// One shard's table of generated types (fixture id to types).
+#[cfg(feature = "generated-types")]
+type TypesTable = &'static [(&'static str, models_shard_0::Types)];
+
+/// Every shard's table of the default settings' generated types.
+#[cfg(feature = "generated-types")]
+static TYPES: [TypesTable; 8] = [
+    models_shard_0::TYPES,
+    models_shard_1::TYPES,
+    models_shard_2::TYPES,
+    models_shard_3::TYPES,
+    models_shard_4::TYPES,
+    models_shard_5::TYPES,
+    models_shard_6::TYPES,
+    models_shard_7::TYPES,
+];
+
+/// Every shard's table of the no-newtypes generated types.
+#[cfg(feature = "generated-types")]
+static TYPES_NO_NEWTYPES: [TypesTable; 8] = [
+    models_shard_0::TYPES_NO_NEWTYPES,
+    models_shard_1::TYPES_NO_NEWTYPES,
+    models_shard_2::TYPES_NO_NEWTYPES,
+    models_shard_3::TYPES_NO_NEWTYPES,
+    models_shard_4::TYPES_NO_NEWTYPES,
+    models_shard_5::TYPES_NO_NEWTYPES,
+    models_shard_6::TYPES_NO_NEWTYPES,
+    models_shard_7::TYPES_NO_NEWTYPES,
 ];
 
 /// A benchmarked tool built in this crate.
@@ -94,8 +140,8 @@ pub enum IsolatedTool {
     /// The `jsonschema` crate's compile-time validator (`macros` feature).
     #[cfg(feature = "jsonschema-macros")]
     JsonschemaMacros,
-    /// Our reverse codegen, the `ToJsonSchema` derive.
-    #[cfg(feature = "reverse-codegen")]
+    /// Our library: reverse codegen (the `ToJsonSchema` derive) and the generated types.
+    #[cfg(any(feature = "reverse-codegen", feature = "generated-types"))]
     JsonSchemaRs,
     /// The `schemars` crate's `JsonSchema` derive.
     #[cfg(feature = "reverse-codegen")]
@@ -186,7 +232,7 @@ impl Adapter for IsolatedTool {
         IsolatedTool::Corvus,
         #[cfg(feature = "jsonschema-macros")]
         IsolatedTool::JsonschemaMacros,
-        #[cfg(feature = "reverse-codegen")]
+        #[cfg(any(feature = "reverse-codegen", feature = "generated-types"))]
         IsolatedTool::JsonSchemaRs,
         #[cfg(feature = "reverse-codegen")]
         IsolatedTool::Schemars,
@@ -198,7 +244,7 @@ impl Adapter for IsolatedTool {
             IsolatedTool::Corvus => "corvus-json-schema",
             #[cfg(feature = "jsonschema-macros")]
             IsolatedTool::JsonschemaMacros => "jsonschema-macros",
-            #[cfg(feature = "reverse-codegen")]
+            #[cfg(any(feature = "reverse-codegen", feature = "generated-types"))]
             IsolatedTool::JsonSchemaRs => "jsonschemars",
             #[cfg(feature = "reverse-codegen")]
             IsolatedTool::Schemars => "schemars",
@@ -216,10 +262,13 @@ impl Adapter for IsolatedTool {
                 operation,
                 Operation::ValidateValid | Operation::ValidateInvalid
             ),
-            #[cfg(feature = "reverse-codegen")]
-            IsolatedTool::JsonSchemaRs | IsolatedTool::Schemars => {
-                operation == Operation::ReverseCodegen
+            #[cfg(any(feature = "reverse-codegen", feature = "generated-types"))]
+            IsolatedTool::JsonSchemaRs => {
+                (cfg!(feature = "reverse-codegen") && operation == Operation::ReverseCodegen)
+                    || (cfg!(feature = "generated-types") && operation.generated_types().is_some())
             }
+            #[cfg(feature = "reverse-codegen")]
+            IsolatedTool::Schemars => operation == Operation::ReverseCodegen,
         }
     }
 
@@ -233,16 +282,18 @@ impl Adapter for IsolatedTool {
             IsolatedTool::Corvus => corvus::compile(fixture).map(IsolatedCompiled::Corvus),
             #[cfg(feature = "jsonschema-macros")]
             IsolatedTool::JsonschemaMacros => macro_validator(fixture),
-            #[cfg(feature = "reverse-codegen")]
-            IsolatedTool::JsonSchemaRs | IsolatedTool::Schemars => {
-                // Reverse codegen tools compile no schema.
+            #[cfg(any(feature = "reverse-codegen", feature = "generated-types"))]
+            IsolatedTool::JsonSchemaRs => {
+                // The model tools compile no schema.
                 let _ = fixture;
                 Err(unsupported(self, Operation::SchemaCompile))
             }
+            #[cfg(feature = "reverse-codegen")]
+            IsolatedTool::Schemars => Err(unsupported(self, Operation::SchemaCompile)),
         }
     }
 
-    #[cfg(not(feature = "reverse-codegen"))]
+    #[cfg(any(feature = "corvus", feature = "jsonschema-macros"))]
     fn validate(compiled: &IsolatedCompiled, instance: &Value) -> bool {
         match compiled {
             #[cfg(feature = "corvus")]
@@ -252,7 +303,7 @@ impl Adapter for IsolatedTool {
         }
     }
 
-    #[cfg(feature = "reverse-codegen")]
+    #[cfg(not(any(feature = "corvus", feature = "jsonschema-macros")))]
     fn validate(compiled: &IsolatedCompiled, _instance: &Value) -> bool {
         match *compiled {}
     }
@@ -285,6 +336,32 @@ impl Adapter for IsolatedTool {
     #[cfg(not(feature = "reverse-codegen"))]
     fn check_reversed(_fixture: &Fixture, reversed: &Infallible) -> Result<(), AdapterError> {
         match *reversed {}
+    }
+
+    #[cfg(feature = "generated-types")]
+    fn generated_types(
+        self,
+        fixture: &Fixture,
+        variant: TypesVariant,
+    ) -> Result<GeneratedTypes, AdapterError> {
+        if !matches!(self, IsolatedTool::JsonSchemaRs) {
+            return Err(unsupported(self, Operation::DeserializeValid));
+        }
+        let tables: &[TypesTable; 8] = match variant {
+            TypesVariant::Default => &TYPES,
+            TypesVariant::NoNewtypes => &TYPES_NO_NEWTYPES,
+        };
+        let entry: models_shard_0::Types = tables
+            .iter()
+            .flat_map(|table: &TypesTable| table.iter())
+            .find(|(id, _types)| *id == fixture.id)
+            .map(|(_id, types)| *types)
+            .ok_or_else(|| {
+                AdapterError::GeneratedTypes(
+                    "fixture was not discovered when the benchmark was built".to_owned(),
+                )
+            })?;
+        entry.map_err(|reason: &str| AdapterError::GeneratedTypes(reason.to_owned()))
     }
 }
 

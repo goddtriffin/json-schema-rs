@@ -10,8 +10,9 @@
 
 use crate::fixtures::{self, Fixture};
 use criterion::measurement::WallTime;
-use criterion::{BenchmarkGroup, BenchmarkId, Criterion, SamplingMode};
+use criterion::{BatchSize, BenchmarkGroup, BenchmarkId, Criterion, SamplingMode};
 use peak_alloc::PeakAlloc;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::any::Any;
 use std::fmt::{self, Write as _};
@@ -37,16 +38,55 @@ pub enum Operation {
     ValidateValid,
     /// Compiled schema + parsed instance -> verdict, on the fixture's invalid instance.
     ValidateInvalid,
+    /// The fixture's valid instance text -> its generated root type, through plain serde
+    /// (`serde_json::from_str`); types generated with the default settings.
+    DeserializeValid,
+    /// Parsed valid instance -> the generated root type's `TryFrom<serde_json::Value>`; default
+    /// settings.
+    TryFromValid,
+    /// Parsed invalid instance -> the generated root type's `TryFrom<serde_json::Value>`, which
+    /// must reject it; default settings.
+    TryFromInvalid,
+    /// [`Operation::DeserializeValid`] on types generated with `constrained_newtypes(false)`.
+    DeserializeValidNoNewtypes,
+    /// [`Operation::TryFromValid`] on types generated with `constrained_newtypes(false)`.
+    TryFromValidNoNewtypes,
+    /// [`Operation::TryFromInvalid`] on types generated with `constrained_newtypes(false)`.
+    TryFromInvalidNoNewtypes,
+}
+
+/// Which copy of a fixture's generated types an operation runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypesVariant {
+    /// Our codegen's default settings (constrained newtypes on).
+    Default,
+    /// Our codegen's default settings with `constrained_newtypes(false)`.
+    NoNewtypes,
+}
+
+/// The entry point of a generated-types operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypesCall {
+    /// `serde_json::from_str::<Root>` of the instance text.
+    Deserialize,
+    /// `Root::try_from(serde_json::Value)`.
+    TryFrom,
 }
 
 impl Operation {
     /// Every operation, in report order.
-    pub const ALL: [Operation; 5] = [
+    pub const ALL: [Operation; 11] = [
         Operation::Codegen,
         Operation::ReverseCodegen,
         Operation::SchemaCompile,
         Operation::ValidateValid,
         Operation::ValidateInvalid,
+        Operation::DeserializeValid,
+        Operation::TryFromValid,
+        Operation::TryFromInvalid,
+        Operation::DeserializeValidNoNewtypes,
+        Operation::TryFromValidNoNewtypes,
+        Operation::TryFromInvalidNoNewtypes,
     ];
 
     /// Stable id token used as the criterion group name and in raw capture files.
@@ -58,17 +98,65 @@ impl Operation {
             Operation::SchemaCompile => "schema_compile",
             Operation::ValidateValid => "validate_valid",
             Operation::ValidateInvalid => "validate_invalid",
+            Operation::DeserializeValid => "deserialize_valid",
+            Operation::TryFromValid => "try_from_valid",
+            Operation::TryFromInvalid => "try_from_invalid",
+            Operation::DeserializeValidNoNewtypes => "deserialize_valid_no_newtypes",
+            Operation::TryFromValidNoNewtypes => "try_from_valid_no_newtypes",
+            Operation::TryFromInvalidNoNewtypes => "try_from_invalid_no_newtypes",
         }
     }
 
-    /// The instance text a validation operation runs on (`None` for non-validation
-    /// operations, or when the fixture lacks that instance).
+    /// The instance text an operation runs on (`None` for an operation without an instance, or
+    /// when the fixture lacks that instance).
     #[must_use]
     pub fn instance(self, fixture: &Fixture) -> Option<&str> {
         match self {
             Operation::Codegen | Operation::ReverseCodegen | Operation::SchemaCompile => None,
-            Operation::ValidateValid => fixture.valid_instance.as_deref(),
-            Operation::ValidateInvalid => fixture.invalid_instance.as_deref(),
+            Operation::ValidateValid
+            | Operation::DeserializeValid
+            | Operation::TryFromValid
+            | Operation::DeserializeValidNoNewtypes
+            | Operation::TryFromValidNoNewtypes => fixture.valid_instance.as_deref(),
+            Operation::ValidateInvalid
+            | Operation::TryFromInvalid
+            | Operation::TryFromInvalidNoNewtypes => fixture.invalid_instance.as_deref(),
+        }
+    }
+
+    /// Whether the operation's instance is the fixture's valid one.
+    #[must_use]
+    pub const fn expects_valid(self) -> bool {
+        matches!(
+            self,
+            Operation::ValidateValid
+                | Operation::DeserializeValid
+                | Operation::TryFromValid
+                | Operation::DeserializeValidNoNewtypes
+                | Operation::TryFromValidNoNewtypes
+        )
+    }
+
+    /// For a generated-types operation, the types it runs on and its entry point; `None` for
+    /// every other operation.
+    #[must_use]
+    pub const fn generated_types(self) -> Option<(TypesVariant, TypesCall)> {
+        match self {
+            Operation::Codegen
+            | Operation::ReverseCodegen
+            | Operation::SchemaCompile
+            | Operation::ValidateValid
+            | Operation::ValidateInvalid => None,
+            Operation::DeserializeValid => Some((TypesVariant::Default, TypesCall::Deserialize)),
+            Operation::TryFromValid | Operation::TryFromInvalid => {
+                Some((TypesVariant::Default, TypesCall::TryFrom))
+            }
+            Operation::DeserializeValidNoNewtypes => {
+                Some((TypesVariant::NoNewtypes, TypesCall::Deserialize))
+            }
+            Operation::TryFromValidNoNewtypes | Operation::TryFromInvalidNoNewtypes => {
+                Some((TypesVariant::NoNewtypes, TypesCall::TryFrom))
+            }
         }
     }
 }
@@ -77,6 +165,66 @@ impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.id())
     }
+}
+
+/// A fixture's generated Rust types, compiled into the build: the root type's entry points.
+///
+/// Each timed function produces the root value (or the error) and drops it, so the timing covers
+/// what a caller pays. The `*_detail` functions are the correctness probe's: the same call, with
+/// the error as text.
+#[derive(Debug, Clone, Copy)]
+pub struct GeneratedTypes {
+    /// `serde_json::from_str::<Root>(text).is_ok()`.
+    pub deserialize: fn(&str) -> bool,
+    /// [`GeneratedTypes::deserialize`] with the error as text.
+    pub deserialize_detail: fn(&str) -> Result<(), String>,
+    /// `Root::try_from(value).is_ok()`, or why the root type has no `TryFrom<serde_json::Value>`
+    /// (a type alias, or self-validating types do not cover it).
+    pub try_from: Result<fn(Value) -> bool, &'static str>,
+    /// [`GeneratedTypes::try_from`] with the error as text.
+    pub try_from_detail: Result<TryFromDetail, &'static str>,
+}
+
+/// A root type's `TryFrom<serde_json::Value>`, with the error as text.
+pub type TryFromDetail = fn(Value) -> Result<(), String>;
+
+impl GeneratedTypes {
+    /// The entry points of root type `T`, which has `TryFrom<serde_json::Value>`.
+    #[must_use]
+    pub const fn with_try_from<T>() -> GeneratedTypes
+    where
+        T: DeserializeOwned + TryFrom<Value>,
+        <T as TryFrom<Value>>::Error: fmt::Display,
+    {
+        GeneratedTypes {
+            deserialize: |text: &str| serde_json::from_str::<T>(text).is_ok(),
+            deserialize_detail: deserialize_detail::<T>,
+            try_from: Ok(|value: Value| T::try_from(value).is_ok()),
+            try_from_detail: Ok(|value: Value| {
+                T::try_from(value)
+                    .map(|_root: T| ())
+                    .map_err(|e: <T as TryFrom<Value>>::Error| e.to_string())
+            }),
+        }
+    }
+
+    /// The entry points of root type `T`, which has no `TryFrom<serde_json::Value>`, for `reason`.
+    #[must_use]
+    pub const fn without_try_from<T: DeserializeOwned>(reason: &'static str) -> GeneratedTypes {
+        GeneratedTypes {
+            deserialize: |text: &str| serde_json::from_str::<T>(text).is_ok(),
+            deserialize_detail: deserialize_detail::<T>,
+            try_from: Err(reason),
+            try_from_detail: Err(reason),
+        }
+    }
+}
+
+/// `serde_json::from_str::<T>(text)`, with the error as text.
+fn deserialize_detail<T: DeserializeOwned>(text: &str) -> Result<(), String> {
+    serde_json::from_str::<T>(text)
+        .map(|_root: T| ())
+        .map_err(|e: serde_json::Error| e.to_string())
 }
 
 /// One benchmarked tool, linked as a library: the operations it implements and how it runs them.
@@ -148,6 +296,20 @@ pub trait Adapter: Copy + fmt::Display + 'static {
     ///
     /// Returns [`AdapterError::ReverseCodegen`] naming what is wrong.
     fn check_reversed(fixture: &Fixture, reversed: &Self::Reversed) -> Result<(), AdapterError>;
+
+    /// Look up `fixture`'s generated types of `variant`, compiled into the build.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AdapterError`] when the tool has no generated types, or the fixture has none
+    /// (its codegen failed, or its types were left out of the build).
+    fn generated_types(
+        self,
+        _fixture: &Fixture,
+        _variant: TypesVariant,
+    ) -> Result<GeneratedTypes, AdapterError> {
+        Err(unsupported(self, Operation::DeserializeValid))
+    }
 }
 
 /// Failure of an adapter call.
@@ -172,6 +334,8 @@ pub enum AdapterError {
     Codegen(String),
     /// The tool's reverse codegen failed, or produced a schema that fails the correctness probe.
     ReverseCodegen(String),
+    /// The fixture has no generated types to run, with why.
+    GeneratedTypes(String),
     /// The tool cannot take the fixture's resource documents.
     ResourcesUnsupported,
     /// The tool panicked.
@@ -192,6 +356,7 @@ impl fmt::Display for AdapterError {
             AdapterError::Compile(message) => write!(f, "compile error: {message}"),
             AdapterError::Codegen(message) => write!(f, "codegen error: {message}"),
             AdapterError::ReverseCodegen(message) => write!(f, "reverse codegen error: {message}"),
+            AdapterError::GeneratedTypes(message) => write!(f, "generated types: {message}"),
             AdapterError::ResourcesUnsupported => f.write_str(RESOURCES_UNSUPPORTED),
             AdapterError::Panic(message) => write!(f, "panic: {message}"),
         }
@@ -322,7 +487,7 @@ fn check_inner<A: Adapter>(tool: A, fixture: &Fixture, operation: Operation) -> 
             let instance: Value = parse_instance(text).map_err(|e: AdapterError| e.to_string())?;
             let compiled: A::Compiled =
                 guarded(|| tool.compile(fixture)).map_err(|e: AdapterError| e.to_string())?;
-            let expected_valid: bool = operation == Operation::ValidateValid;
+            let expected_valid: bool = operation.expects_valid();
             // Rejecting the invalid instance proves nothing when the tool also rejects the valid
             // one (e.g. it rejects everything), so that cell is not measured. The CLI tier
             // applies the same rule.
@@ -345,6 +510,59 @@ fn check_inner<A: Adapter>(tool: A, fixture: &Fixture, operation: Operation) -> 
                 Err("wrong verdict: invalid instance accepted".to_owned())
             }
         }
+        Operation::DeserializeValid
+        | Operation::TryFromValid
+        | Operation::TryFromInvalid
+        | Operation::DeserializeValidNoNewtypes
+        | Operation::TryFromValidNoNewtypes
+        | Operation::TryFromInvalidNoNewtypes => check_generated_types(tool, fixture, operation),
+    }
+}
+
+/// The probe of a generated-types operation: the call accepts the valid instance, and (for a
+/// `try_from_invalid` operation) rejects the invalid one. Rejecting the invalid instance proves
+/// nothing when the same types also reject the valid one, so that cell is not measured, as for
+/// validation.
+fn check_generated_types<A: Adapter>(
+    tool: A,
+    fixture: &Fixture,
+    operation: Operation,
+) -> Result<(), String> {
+    let Some((variant, call)) = operation.generated_types() else {
+        return Err(unsupported(tool, operation).to_string());
+    };
+    let text: &str = operation
+        .instance(fixture)
+        .ok_or_else(|| AdapterError::MissingInstance(operation).to_string())?;
+    let types: GeneratedTypes = guarded(|| tool.generated_types(fixture, variant))
+        .map_err(|e: AdapterError| e.to_string())?;
+    let call_once = |text: &str| -> Result<Result<(), String>, AdapterError> {
+        match call {
+            TypesCall::Deserialize => guarded(|| Ok((types.deserialize_detail)(text))),
+            TypesCall::TryFrom => {
+                let try_from: TryFromDetail = types
+                    .try_from_detail
+                    .map_err(|reason: &str| AdapterError::GeneratedTypes(reason.to_owned()))?;
+                let instance: Value = parse_instance(text)?;
+                guarded(|| Ok(try_from(instance)))
+            }
+        }
+    };
+    let run = |text: &str| -> Result<Result<(), String>, String> {
+        call_once(text).map_err(|e: AdapterError| e.to_string())
+    };
+    if operation.expects_valid() {
+        return run(text)?
+            .map_err(|error: String| format!("wrong verdict: valid instance rejected: {error}"));
+    }
+    if let Some(valid_text) = fixture.valid_instance.as_deref()
+        && run(valid_text)?.is_err()
+    {
+        return Err(VALID_REJECTED_SKIP.to_owned());
+    }
+    match run(text)? {
+        Ok(()) => Err("wrong verdict: invalid instance accepted".to_owned()),
+        Err(_error) => Ok(()),
     }
 }
 
@@ -490,6 +708,28 @@ fn measure_heap<A: Adapter>(
                 black_box(A::validate(black_box(&compiled), black_box(&instance)));
             }))
         }
+        Operation::DeserializeValid
+        | Operation::TryFromValid
+        | Operation::TryFromInvalid
+        | Operation::DeserializeValidNoNewtypes
+        | Operation::TryFromValidNoNewtypes
+        | Operation::TryFromInvalidNoNewtypes => {
+            let (variant, call) = operation.generated_types()?;
+            let text: &str = operation.instance(fixture)?;
+            let types: GeneratedTypes = tool.generated_types(fixture, variant).ok()?;
+            match call {
+                TypesCall::Deserialize => Some(peak_of(peak, || {
+                    black_box((types.deserialize)(black_box(text)));
+                })),
+                TypesCall::TryFrom => {
+                    let try_from: fn(Value) -> bool = types.try_from.ok()?;
+                    let instance: Value = parse_instance(text).ok()?;
+                    Some(peak_of_consuming(peak, &instance, |value: Value| {
+                        black_box(try_from(black_box(value)));
+                    }))
+                }
+            }
+        }
     }
 }
 
@@ -500,6 +740,18 @@ fn peak_of(peak: PeakAlloc, mut op: impl FnMut()) -> u64 {
     let start: usize = peak.current_usage();
     peak.reset_peak_usage();
     op();
+    let peak_bytes: usize = peak.peak_usage();
+    u64::try_from(peak_bytes.saturating_sub(start)).unwrap_or(u64::MAX)
+}
+
+/// [`peak_of`] for an operation that consumes its input: each run gets its own clone of `input`,
+/// made before the measured run starts, so only the operation's allocations are counted.
+fn peak_of_consuming(peak: PeakAlloc, input: &Value, mut op: impl FnMut(Value)) -> u64 {
+    op(input.clone());
+    let owned: Value = input.clone();
+    let start: usize = peak.current_usage();
+    peak.reset_peak_usage();
+    op(owned);
     let peak_bytes: usize = peak.peak_usage();
     u64::try_from(peak_bytes.saturating_sub(start)).unwrap_or(u64::MAX)
 }
@@ -712,17 +964,162 @@ fn bench_cell<A: Adapter>(
                 },
             );
         }
+        Operation::DeserializeValid
+        | Operation::TryFromValid
+        | Operation::TryFromInvalid
+        | Operation::DeserializeValidNoNewtypes
+        | Operation::TryFromValidNoNewtypes
+        | Operation::TryFromInvalidNoNewtypes => {
+            bench_generated_types(group, id, operation, tool, fixture);
+        }
+    }
+}
+
+/// Register one generated-types benchmark. `deserialize` starts from the instance text; `try_from`
+/// from a clone of the parsed instance, made outside the timing (criterion's `iter_batched`).
+fn bench_generated_types<A: Adapter>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    id: BenchmarkId,
+    operation: Operation,
+    tool: A,
+    fixture: &Fixture,
+) {
+    let prepared: Option<(TypesCall, GeneratedTypes, &str)> =
+        operation.generated_types().and_then(|(variant, call)| {
+            let text: &str = operation.instance(fixture)?;
+            let types: GeneratedTypes = tool.generated_types(fixture, variant).ok()?;
+            Some((call, types, text))
+        });
+    let Some((call, types, text)) = prepared else {
+        eprintln!("skip {operation}/{tool}/{}: preparation failed", fixture.id);
+        return;
+    };
+    match call {
+        TypesCall::Deserialize => {
+            group.bench_with_input(id, text, |b, text: &str| {
+                b.iter(|| (types.deserialize)(black_box(text)));
+            });
+        }
+        TypesCall::TryFrom => {
+            let (Ok(try_from), Ok(instance)) = (types.try_from, parse_instance(text)) else {
+                eprintln!("skip {operation}/{tool}/{}: preparation failed", fixture.id);
+                return;
+            };
+            group.bench_with_input(id, &instance, |b, instance: &Value| {
+                b.iter_batched(
+                    || instance.clone(),
+                    |value: Value| try_from(black_box(value)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AdapterError, Operation, cell_selection, guarded, machine_independent, one_line,
-        tool_selection,
+        Adapter, AdapterError, GeneratedTypes, Operation, TypesVariant, VALID_REJECTED_SKIP,
+        cell_selection, check, guarded, machine_independent, one_line, tool_selection, unsupported,
     };
     use crate::fixtures::Fixture;
+    use serde_json::Value;
+    use std::convert::Infallible;
+    use std::fmt;
     use std::path::PathBuf;
+
+    /// A generated root type for the probe tests: deserializes from any object; its
+    /// `TryFrom<Value>` accepts only `{"ok": true}`.
+    #[derive(serde::Deserialize)]
+    struct Probe {}
+
+    impl TryFrom<Value> for Probe {
+        type Error = String;
+
+        fn try_from(value: Value) -> Result<Probe, String> {
+            if value == serde_json::json!({"ok": true}) {
+                Ok(Probe {})
+            } else {
+                Err(format!("rejected {value}"))
+            }
+        }
+    }
+
+    /// A tool whose generated types are [`Probe`] (with or without its `TryFrom`), or none.
+    #[derive(Debug, Clone, Copy)]
+    enum TypesTool {
+        WithTryFrom,
+        WithoutTryFrom,
+        NoTypes,
+    }
+
+    impl fmt::Display for TypesTool {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.id())
+        }
+    }
+
+    impl Adapter for TypesTool {
+        type Compiled = Infallible;
+        type Model = Infallible;
+        type Reversed = Infallible;
+
+        const ALL: &'static [TypesTool] = &[TypesTool::WithTryFrom];
+
+        fn id(self) -> &'static str {
+            "types"
+        }
+
+        fn supports(self, operation: Operation) -> bool {
+            operation.generated_types().is_some()
+        }
+
+        fn codegen(self, _fixture: &Fixture) -> Result<String, AdapterError> {
+            Err(unsupported(self, Operation::Codegen))
+        }
+
+        fn compile(self, _fixture: &Fixture) -> Result<Infallible, AdapterError> {
+            Err(unsupported(self, Operation::SchemaCompile))
+        }
+
+        fn validate(compiled: &Infallible, _instance: &Value) -> bool {
+            match *compiled {}
+        }
+
+        fn reverse_codegen(model: Infallible) -> Infallible {
+            model
+        }
+
+        fn check_reversed(_fixture: &Fixture, reversed: &Infallible) -> Result<(), AdapterError> {
+            match *reversed {}
+        }
+
+        fn generated_types(
+            self,
+            _fixture: &Fixture,
+            _variant: TypesVariant,
+        ) -> Result<GeneratedTypes, AdapterError> {
+            match self {
+                TypesTool::WithTryFrom => Ok(GeneratedTypes::with_try_from::<Probe>()),
+                TypesTool::WithoutTryFrom => Ok(GeneratedTypes::without_try_from::<Probe>(
+                    "the root type has no TryFrom<serde_json::Value>",
+                )),
+                TypesTool::NoTypes => Err(AdapterError::GeneratedTypes("no model".to_owned())),
+            }
+        }
+    }
+
+    /// A fixture with the given valid and invalid instance texts.
+    fn instances_fixture(valid: &str, invalid: &str) -> Fixture {
+        Fixture {
+            id: "small/probe".to_owned(),
+            dir: PathBuf::new(),
+            schema_text: "{}".to_owned(),
+            valid_instance: Some(valid.to_owned()),
+            invalid_instance: Some(invalid.to_owned()),
+            resources: Vec::new(),
+        }
+    }
 
     fn fixture_in(dir: &str) -> Fixture {
         Fixture {
@@ -743,6 +1140,12 @@ mod tests {
             "schema_compile",
             "validate_valid",
             "validate_invalid",
+            "deserialize_valid",
+            "try_from_valid",
+            "try_from_invalid",
+            "deserialize_valid_no_newtypes",
+            "try_from_valid_no_newtypes",
+            "try_from_invalid_no_newtypes",
         ];
         let actual: Vec<&str> = Operation::ALL
             .iter()
@@ -842,6 +1245,144 @@ mod tests {
         let expected: Option<Vec<String>> =
             Some(vec!["jsonschemars".to_owned(), "boon".to_owned()]);
         let actual: Option<Vec<String>> = tool_selection(Some("jsonschemars, boon,"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_deserialize_valid_passes_when_the_instance_deserializes() {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = check(
+            TypesTool::WithTryFrom,
+            &instances_fixture(r#"{"ok": true}"#, r#"{"ok": false}"#),
+            Operation::DeserializeValid,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_deserialize_valid_fails_when_the_instance_does_not_deserialize() {
+        let expected: Result<(), String> = Err(
+            "wrong verdict: valid instance rejected: invalid type: integer `1`, expected struct Probe at line 1 column 1"
+                .to_owned(),
+        );
+        let actual: Result<(), String> = check(
+            TypesTool::WithTryFrom,
+            &instances_fixture("1", r#"{"ok": false}"#),
+            Operation::DeserializeValid,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_try_from_valid_passes_when_try_from_accepts() {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = check(
+            TypesTool::WithTryFrom,
+            &instances_fixture(r#"{"ok": true}"#, r#"{"ok": false}"#),
+            Operation::TryFromValidNoNewtypes,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_try_from_valid_fails_when_try_from_rejects() {
+        let expected: Result<(), String> =
+            Err(r#"wrong verdict: valid instance rejected: rejected {"ok":false}"#.to_owned());
+        let actual: Result<(), String> = check(
+            TypesTool::WithTryFrom,
+            &instances_fixture(r#"{"ok": false}"#, r#"{"ok": false}"#),
+            Operation::TryFromValid,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_try_from_invalid_passes_when_try_from_rejects() {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = check(
+            TypesTool::WithTryFrom,
+            &instances_fixture(r#"{"ok": true}"#, r#"{"ok": false}"#),
+            Operation::TryFromInvalid,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_try_from_invalid_fails_when_try_from_accepts() {
+        let expected: Result<(), String> =
+            Err("wrong verdict: invalid instance accepted".to_owned());
+        let actual: Result<(), String> = check(
+            TypesTool::WithTryFrom,
+            &instances_fixture(r#"{"ok": true}"#, r#"{"ok": true}"#),
+            Operation::TryFromInvalidNoNewtypes,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_try_from_invalid_is_not_measured_when_the_valid_instance_is_rejected() {
+        let expected: Result<(), String> = Err(VALID_REJECTED_SKIP.to_owned());
+        let actual: Result<(), String> = check(
+            TypesTool::WithTryFrom,
+            &instances_fixture(r#"{"ok": false}"#, r#"{"ok": false}"#),
+            Operation::TryFromInvalid,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_try_from_fails_when_the_root_type_has_none() {
+        let expected: Result<(), String> =
+            Err("generated types: the root type has no TryFrom<serde_json::Value>".to_owned());
+        let actual: Result<(), String> = check(
+            TypesTool::WithoutTryFrom,
+            &instances_fixture(r#"{"ok": true}"#, r#"{"ok": false}"#),
+            Operation::TryFromValid,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_deserialize_runs_when_the_root_type_has_no_try_from() {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = check(
+            TypesTool::WithoutTryFrom,
+            &instances_fixture(r#"{"ok": true}"#, r#"{"ok": false}"#),
+            Operation::DeserializeValidNoNewtypes,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_fail_when_the_fixture_has_none() {
+        let expected: Result<(), String> = Err("generated types: no model".to_owned());
+        let actual: Result<(), String> = check(
+            TypesTool::NoTypes,
+            &instances_fixture(r#"{"ok": true}"#, r#"{"ok": false}"#),
+            Operation::DeserializeValid,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn generated_types_of_each_operation() {
+        let expected: Vec<Option<(TypesVariant, super::TypesCall)>> = vec![
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((TypesVariant::Default, super::TypesCall::Deserialize)),
+            Some((TypesVariant::Default, super::TypesCall::TryFrom)),
+            Some((TypesVariant::Default, super::TypesCall::TryFrom)),
+            Some((TypesVariant::NoNewtypes, super::TypesCall::Deserialize)),
+            Some((TypesVariant::NoNewtypes, super::TypesCall::TryFrom)),
+            Some((TypesVariant::NoNewtypes, super::TypesCall::TryFrom)),
+        ];
+        let actual: Vec<Option<(TypesVariant, super::TypesCall)>> = Operation::ALL
+            .iter()
+            .map(|operation: &Operation| operation.generated_types())
+            .collect();
         assert_eq!(expected, actual);
     }
 }

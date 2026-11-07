@@ -23,7 +23,7 @@ pub mod adapters;
 pub mod compare;
 pub mod fixtures;
 pub mod harness;
-pub mod reverse_models;
+pub mod models;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -102,16 +102,37 @@ pub enum Operation {
     ValidateValid,
     /// Validating the fixture's invalid instance against the compiled schema.
     ValidateInvalid,
+    /// Deserializing the fixture's valid instance text into its generated types (plain
+    /// `serde_json::from_str` of the root type), default codegen settings.
+    DeserializeValid,
+    /// The root type's `TryFrom<serde_json::Value>` on the fixture's valid instance, default
+    /// codegen settings.
+    TryFromValid,
+    /// The root type's `TryFrom<serde_json::Value>` on the fixture's invalid instance, default
+    /// codegen settings.
+    TryFromInvalid,
+    /// [`Operation::DeserializeValid`] on types generated without constrained newtypes.
+    DeserializeValidNoNewtypes,
+    /// [`Operation::TryFromValid`] on types generated without constrained newtypes.
+    TryFromValidNoNewtypes,
+    /// [`Operation::TryFromInvalid`] on types generated without constrained newtypes.
+    TryFromInvalidNoNewtypes,
 }
 
 impl Operation {
     /// Every operation, in reporting order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 11] = [
         Self::Codegen,
         Self::ReverseCodegen,
         Self::SchemaCompile,
         Self::ValidateValid,
         Self::ValidateInvalid,
+        Self::DeserializeValid,
+        Self::TryFromValid,
+        Self::TryFromInvalid,
+        Self::DeserializeValidNoNewtypes,
+        Self::TryFromValidNoNewtypes,
+        Self::TryFromInvalidNoNewtypes,
     ];
 
     /// The `snake_case` token used in raw captures and `results.json`.
@@ -123,6 +144,12 @@ impl Operation {
             Self::SchemaCompile => "schema_compile",
             Self::ValidateValid => "validate_valid",
             Self::ValidateInvalid => "validate_invalid",
+            Self::DeserializeValid => "deserialize_valid",
+            Self::TryFromValid => "try_from_valid",
+            Self::TryFromInvalid => "try_from_invalid",
+            Self::DeserializeValidNoNewtypes => "deserialize_valid_no_newtypes",
+            Self::TryFromValidNoNewtypes => "try_from_valid_no_newtypes",
+            Self::TryFromInvalidNoNewtypes => "try_from_invalid_no_newtypes",
         }
     }
 
@@ -143,6 +170,12 @@ impl Operation {
             Self::SchemaCompile => "schema compile",
             Self::ValidateValid => "validate (valid)",
             Self::ValidateInvalid => "validate (invalid)",
+            Self::DeserializeValid => "deserialize generated types (valid)",
+            Self::TryFromValid => "generated types TryFrom (valid)",
+            Self::TryFromInvalid => "generated types TryFrom (invalid)",
+            Self::DeserializeValidNoNewtypes => "deserialize generated types (valid, no newtypes)",
+            Self::TryFromValidNoNewtypes => "generated types TryFrom (valid, no newtypes)",
+            Self::TryFromInvalidNoNewtypes => "generated types TryFrom (invalid, no newtypes)",
         }
     }
 }
@@ -1393,7 +1426,10 @@ mod tests {
     #[test]
     fn operation_serializes_as_snake_case_token() {
         let expected: String =
-            "[\"codegen\",\"reverse_codegen\",\"schema_compile\",\"validate_valid\",\"validate_invalid\"]"
+            "[\"codegen\",\"reverse_codegen\",\"schema_compile\",\"validate_valid\",\"validate_invalid\",\
+             \"deserialize_valid\",\"try_from_valid\",\"try_from_invalid\",\
+             \"deserialize_valid_no_newtypes\",\"try_from_valid_no_newtypes\",\
+             \"try_from_invalid_no_newtypes\"]"
                 .to_owned();
         let actual: String = serde_json::to_string(&Operation::ALL).expect("serializes");
         assert_eq!(expected, actual);

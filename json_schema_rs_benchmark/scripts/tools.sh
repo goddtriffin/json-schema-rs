@@ -51,6 +51,9 @@
 #   run_cmd_offline <command_line>   -> same, with network access denied where supported
 #   offline_supported                -> true when run_cmd_offline can deny network access
 #   tool_display_name <id>           -> human-friendly label (echoes the id if unknown)
+#   build_models <manifest> <features> <exclude file> <log dir> [cargo args...]
+#                                    -> build isolated/'s model features, excluding each model
+#                                       that does not compile (quick_benchmark.sh uses it too)
 #
 # Command lines are single strings of shell-quoted words (`printf %q`) with no shell syntax, so
 # they can be handed to `hyperfine -N` (which splits words itself and runs the program with no
@@ -657,4 +660,60 @@ tool_display_name() {
         ts-json-schema-generator) echo "ts-json-schema-generator" ;;
         *)              echo "$1" ;;
     esac
+}
+
+# --- isolated/'s models -------------------------------------------------------------------
+
+# build_models <manifest> <features> <exclude file> <log dir> [cargo args...]: build the isolated
+# crate at <manifest> with the model features <features> (`reverse-codegen`, `generated-types`, or
+# both, comma-separated; every bin), excluding each model that does not compile. Our codegen
+# emits every fixture's Rust types (see isolated/models/gen); a model that does not compile is
+# that cell's compat failure, not a broken build. `cargo check` finds them (no code generation, so
+# each round is fast): after each failed check, model_build_failures reads cargo's JSON messages
+# (<log dir>/model_build.jsonl) and appends one "copy \t fixture \t reason" row per failing model
+# to <exclude file>, which the model shards' build scripts read through BENCH_MODEL_EXCLUDE to
+# leave those models out (--keep-going, so every shard reports its errors in the same round). Rows
+# already in the file stay (the quick benchmark pre-excludes models it does not measure). An error
+# it cannot attribute to one model aborts the run. Once the check passes, one benchmark-profile
+# build follows. BENCH_MODEL_EXCLUDE stays exported so a later build (the criterion bench) sees the
+# same exclusions. CARGO_TARGET_DIR comes from the caller's environment; [cargo args...] go to
+# every cargo command (the quick benchmark's path remapping). Returns 1 on failure: callers run it
+# as `build_models ... || exit 1`, which suspends `set -e` inside it, so every step checks itself.
+build_models() {
+    local manifest="$1" features="$2" exclude="$3" log_dir="$4" attempt before after
+    local triage="${REPO_ROOT:?REPO_ROOT not set}/target/benchmark/model_build_failures"
+    shift 4
+    export BENCH_MODEL_EXCLUDE="${exclude}"
+    mkdir -p "${log_dir}"
+    touch "${exclude}"
+    for attempt in 1 2 3 4 5; do
+        if cargo check --manifest-path "${manifest}" --config "$(_profile_config)" \
+            --profile benchmark --features "${features}" --bins --keep-going \
+            --message-format=json "$@" > "${log_dir}/model_build.jsonl"; then
+            if [[ -s "${exclude}" ]]; then
+                echo "    excluded models:"
+                sed 's/^/      /' "${exclude}"
+            fi
+            cargo build --manifest-path "${manifest}" --config "$(_profile_config)" \
+                --profile benchmark --features "${features}" --bins "$@" || return 1
+            return 0
+        fi
+        echo "    model check ${attempt} failed; excluding the models that did not compile"
+        before="$(wc -l < "${exclude}")"
+        if ! "${triage}" < "${log_dir}/model_build.jsonl" \
+            >> "${exclude}" 2> "${log_dir}/model_build_failures.err"; then
+            echo "!! the model check failed for a reason no single model explains; aborting:" >&2
+            cat "${log_dir}/model_build_failures.err" >&2
+            return 1
+        fi
+        after="$(wc -l < "${exclude}")"
+        if [[ "${after}" -le "${before}" ]]; then
+            echo "!! the model check failed but no new model was excluded; aborting" \
+                "(see ${log_dir}/model_build.jsonl)" >&2
+            return 1
+        fi
+    done
+    echo "!! the model check still fails after 5 attempts; aborting" \
+        "(see ${log_dir}/model_build.jsonl)" >&2
+    return 1
 }
