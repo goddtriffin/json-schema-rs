@@ -25,9 +25,7 @@
 #     with its two sides back to back (base first in odd rounds), on every fixture: codegen,
 #     validate_valid, validate_invalid, and the startup baseline.
 # Reverse codegen is not measured here: its models take minutes to build per side (#102). A PR
-# that changes the derive or reverse codegen runs `make benchmark_full` instead. As in the full
-# run, the fixtures in `MODELS_NOT_BUILT` (src/models.rs) have no model, since their types take too
-# long to build (#102, #111).
+# that changes the derive or reverse codegen runs `make benchmark_full` instead.
 # A side whose isolated/ has no `generated-types` feature (a base older than it) has no
 # generated-types cells, and compare lists the head's apart.
 #

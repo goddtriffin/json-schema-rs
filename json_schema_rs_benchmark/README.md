@@ -154,10 +154,7 @@ startup schema, and emits no root zod schema for a root union) or TypeScript tha
 type-check, is a compat failure for that tool and fixture. Before a cell is timed its emitted
 schema must be accepted by our validator and accept every valid instance of the fixture, so a
 fast-but-wrong schema is never timed. A generated-types cell is measured only when the types accept
-the valid instance and (`try_from_invalid`) reject the invalid one. The fixtures in
-`MODELS_NOT_BUILT` (`src/models.rs`) have no model, so no reverse-codegen or generated-types
-cell: their types take too long to build (`generated/wide-object`, #102;
-`medium/package-json`, #111).
+the valid instance and (`try_from_invalid`) reject the invalid one.
 The CLI tier times one process per run: `reverse_schema`
 (our thin bin with every fixture's Rust models compiled in; `reverse_schema <jsonschemars|schemars>
 <fixture>`), and the thin wrappers `competitors/python/pydantic_schema.py` and

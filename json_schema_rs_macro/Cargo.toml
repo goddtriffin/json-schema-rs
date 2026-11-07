@@ -30,7 +30,7 @@ json-schema-rs.workspace = true
 proc-macro2 = "1"
 quote = "1"
 serde_json.workspace = true
-syn = { version = "2", features = ["full"] }
+syn = { version = "2", features = ["full", "visit-mut"] }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
