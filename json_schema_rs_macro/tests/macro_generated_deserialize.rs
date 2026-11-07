@@ -1,9 +1,9 @@
 //! Integration test: the `Deserialize` of generated structs with an additional-properties map
-//! (`json_schema_rs::deserialize_struct!`) and of untagged unions (`deserialize_untagged!` and
-//! the self-validating union impl). None reads through serde's `Content` buffer, so numbers
-//! deserialize with `serde_json/arbitrary_precision` on (`--features arbitrary-precision`) as
-//! well as off, and the struct keeps serde's derive semantics for missing, repeated and unknown
-//! keys.
+//! (the `json_schema_rs_macro::Deserialize` derive with `#[serde(flatten)]`) and of untagged
+//! unions (`deserialize_untagged!` and the self-validating union impl). None reads through
+//! serde's `Content` buffer, so numbers deserialize with `serde_json/arbitrary_precision` on
+//! (`--features arbitrary-precision`) as well as off, and the struct keeps serde's derive
+//! semantics for missing, repeated and unknown keys.
 
 use json_schema_rs_macro::json_schema_to_rust;
 use std::collections::BTreeMap;

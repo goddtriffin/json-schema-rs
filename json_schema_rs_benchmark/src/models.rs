@@ -30,30 +30,6 @@ pub const STARTUP_FIXTURE_ID: &str = "startup";
 /// The startup baseline's schema (see `STARTUP_FIXTURE` in the report).
 pub const STARTUP_SCHEMA: &str = r#"{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "properties": {"name": {"type": "string"}}}"#;
 
-/// Fixtures whose models are not built, and why: our codegen's types for them take too long to
-/// build in an optimized profile. No copy of their model is written, so every reverse-codegen and
-/// generated-types cell of theirs is a compatibility failure with the reason as its detail
-/// (prefixed `no model: `). A fix removes its fixture from the list.
-pub const MODELS_NOT_BUILT: &[(&str, &str)] = &[
-    (
-        "generated/wide-object",
-        "its types take minutes to build (#102)",
-    ),
-    (
-        "medium/package-json",
-        "its types do not finish an optimized build (#111)",
-    ),
-];
-
-/// Why `fixture_id`'s models are not built (see [`MODELS_NOT_BUILT`]).
-#[must_use]
-pub fn model_not_built(fixture_id: &str) -> Option<&'static str> {
-    MODELS_NOT_BUILT
-        .iter()
-        .find(|(id, _reason): &&(&str, &str)| *id == fixture_id)
-        .map(|(_id, reason): &(&str, &str)| *reason)
-}
-
 /// The directory name of `fixture_id`'s model (`/` becomes `__`).
 #[must_use]
 pub fn model_dir_name(fixture_id: &str) -> String {
@@ -175,23 +151,7 @@ fn one_line(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Exclusion, build_failures, fixture_id_of, model_dir_name, model_not_built, parse_exclusions,
-    };
-
-    #[test]
-    fn model_not_built_gives_a_listed_fixtures_reason() {
-        let expected: Option<&str> = Some("its types do not finish an optimized build (#111)");
-        let actual: Option<&str> = model_not_built("medium/package-json");
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn model_not_built_is_none_for_other_fixtures() {
-        let expected: Option<&str> = None;
-        let actual: Option<&str> = model_not_built("small/config");
-        assert_eq!(expected, actual);
-    }
+    use super::{Exclusion, build_failures, fixture_id_of, model_dir_name, parse_exclusions};
 
     /// One cargo `compiler-message` line: an error with a primary span in `file`.
     fn error_in(file: &str, message: &str) -> String {

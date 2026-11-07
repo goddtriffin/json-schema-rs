@@ -26,13 +26,18 @@
 //! Cargo rebuilds the invoking crate when any schema file the macro read changes: every path
 //! input and every file a schema `$ref`s.
 //!
+//! Generated structs derive this crate's `Deserialize`, which reads wide structs in code that
+//! grows linearly with their fields (see [`macro@Deserialize`]).
+//!
 //! For reverse codegen (Rust → JSON Schema), use `#[derive(ToJsonSchema)]` with optional
 //! `#[json_schema(title = "...")]` on the struct and `#[serde(rename = "...")]` on fields.
 
 mod derive;
+mod deserialize;
 mod settings;
 
 use derive::expand_to_json_schema;
+use deserialize::expand_deserialize;
 use json_schema_rs::sanitizers::module_name_from_path;
 use json_schema_rs::{
     CodeGenBackend, CodeGenInput, FileRetriever, JsonSchemaSettings, Retrieve, RetrieveError,
@@ -212,6 +217,22 @@ fn load_schemas(
 pub fn derive_to_json_schema(input: TokenStream) -> TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input as DeriveInput);
     match expand_to_json_schema(input) {
+        Ok(stream) => stream.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+/// `serde::Deserialize` for a struct with named fields, as generated code derives it: each field
+/// reads through one call to a shared generic reader, so an optimized build of a struct with hundreds
+/// of fields takes seconds where serde's derive takes minutes. It reads a JSON object (a map,
+/// expecting `struct Name`) with serde's derive semantics for the serde attributes codegen emits
+/// (container `deny_unknown_fields`; field `rename`, `default`, `deserialize_with`, `flatten` for
+/// the map of additional properties, and `skip_serializing_if`, which it ignores); any other
+/// serde attribute, a generic struct, an enum or a tuple struct is a compile error.
+#[proc_macro_derive(Deserialize, attributes(serde))]
+pub fn derive_deserialize(input: TokenStream) -> TokenStream {
+    let input: DeriveInput = syn::parse_macro_input!(input as DeriveInput);
+    match expand_deserialize(&input) {
         Ok(stream) => stream.into(),
         Err(e) => e.to_compile_error().into(),
     }

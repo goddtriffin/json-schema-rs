@@ -3337,3 +3337,61 @@ fn derive_newtype_fields_refer_to_their_defs_entries() {
         .map(|schema: JsonSchema| serde_json::to_string(&schema).expect("serialize"));
     assert_eq!(expected, actual);
 }
+
+#[derive(Debug, Clone, serde::Serialize, ToJsonSchema)]
+struct SelfNode {
+    pub next: Option<Box<Self>>,
+}
+
+#[test]
+fn derive_field_type_naming_self_refers_to_the_struct() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "next": { "$ref": "#/$defs/SelfNode" } },
+        "additionalProperties": false,
+        "$defs": {
+            "SelfNode": {
+                "type": "object",
+                "properties": { "next": { "$ref": "#/$defs/SelfNode" } },
+                "additionalProperties": false
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = SelfNode::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, ToJsonSchema)]
+#[serde(untagged)]
+#[expect(dead_code)]
+enum SelfUnion {
+    Leaf(bool),
+    List(Vec<Self>),
+}
+
+#[derive(Debug, Clone, serde::Serialize, ToJsonSchema)]
+struct HoldsSelfUnion {
+    pub value: SelfUnion,
+}
+
+#[test]
+fn derive_union_payload_naming_self_refers_to_the_enum() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "value": { "$ref": "#/$defs/SelfUnion" } },
+        "additionalProperties": false,
+        "required": ["value"],
+        "$defs": {
+            "SelfUnion": {
+                "anyOf": [
+                    { "type": "boolean" },
+                    { "type": "array", "items": { "$ref": "#/$defs/SelfUnion" } }
+                ]
+            }
+        }
+    })));
+    let actual: ReverseCodeGenResult = HoldsSelfUnion::json_schema();
+    assert_eq!(expected, actual);
+}
