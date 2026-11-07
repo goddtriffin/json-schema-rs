@@ -3,6 +3,7 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::punctuated::Punctuated;
+use syn::visit_mut::VisitMut;
 use syn::{
     Attribute, DeriveInput, Error, Expr, Field, Fields, Ident, Lit, LitStr, Meta,
     Result as SynResult, Token, Type, Variant,
@@ -25,19 +26,39 @@ fn doc_exprs(attrs: &[Attribute]) -> Vec<&Expr> {
         .collect()
 }
 
-/// Builds an `Option<String>` expression from doc values: each value trimmed, joined with `\n`,
-/// leading/trailing blank lines removed; `None` when no doc text remains.
+/// Path of the library's run-time support for this derive (`FieldSpec`, the builders).
+fn support() -> TokenStream2 {
+    quote! { ::json_schema_rs::reverse_code_gen::derive_support }
+}
+
+/// Builds an `Option<String>` expression from doc values through the library's non-generic
+/// `doc_description` (each value trimmed, joined with `\n`, leading/trailing blank lines
+/// removed; `None` when no doc text remains).
 fn doc_description_expr(exprs: &[&Expr]) -> TokenStream2 {
     if exprs.is_empty() {
         return quote! { None };
     }
-    quote! {
-        {
-            let lines: ::std::vec::Vec<&str> = [#(#exprs),*].iter().map(|line: &&str| line.trim()).collect();
-            let joined: ::std::string::String = lines.join("\n").trim().to_string();
-            if joined.is_empty() { None } else { Some(joined) }
+    let support: TokenStream2 = support();
+    quote! { #support::doc_description(&[#(#exprs),*]) }
+}
+
+/// `ty` with every `Self` path replaced by `name`, so the type can be named inside a `static`
+/// in the generated body fn (a nested item cannot use the outer impl's `Self`).
+fn replace_self(ty: &Type, name: &Ident) -> Type {
+    struct ReplaceSelf<'a>(&'a Ident);
+    impl VisitMut for ReplaceSelf<'_> {
+        fn visit_path_mut(&mut self, path: &mut syn::Path) {
+            if let Some(first) = path.segments.first_mut()
+                && first.ident == "Self"
+            {
+                first.ident = self.0.clone();
+            }
+            syn::visit_mut::visit_path_mut(self, path);
         }
     }
+    let mut ty: Type = ty.clone();
+    ReplaceSelf(name).visit_type_mut(&mut ty);
+    ty
 }
 
 /// Extracts `title = "..."` from `#[json_schema(...)]` container attribute.
@@ -159,30 +180,32 @@ enum NumericLiteral {
 }
 
 impl NumericLiteral {
-    /// An expression of type `Option<serde_json::Number>` for this value.
-    fn to_number_expr(self) -> TokenStream2 {
+    /// A constant expression of the library's `NumberLiteral` for this value, which converts
+    /// to a `serde_json::Number` at run time (`None` for a float that is not finite).
+    fn to_literal_tokens(self) -> TokenStream2 {
+        let support: TokenStream2 = support();
         match self {
             NumericLiteral::Unsigned(n) => {
                 let lit = proc_macro2::Literal::u64_suffixed(n);
-                quote! { Some(::serde_json::Number::from(#lit)) }
+                quote! { #support::NumberLiteral::Unsigned(#lit) }
             }
             NumericLiteral::Signed(i64::MIN) => {
-                quote! { Some(::serde_json::Number::from(i64::MIN)) }
+                quote! { #support::NumberLiteral::Signed(i64::MIN) }
             }
             NumericLiteral::Signed(n) => {
                 let lit = proc_macro2::Literal::i64_suffixed(n.abs());
                 if n < 0 {
-                    quote! { Some(::serde_json::Number::from(-#lit)) }
+                    quote! { #support::NumberLiteral::Signed(-#lit) }
                 } else {
-                    quote! { Some(::serde_json::Number::from(#lit)) }
+                    quote! { #support::NumberLiteral::Signed(#lit) }
                 }
             }
             NumericLiteral::Float(f) => {
                 let lit = proc_macro2::Literal::f64_suffixed(f.abs());
                 if f.is_sign_negative() {
-                    quote! { ::serde_json::Number::from_f64(-#lit) }
+                    quote! { #support::NumberLiteral::Float(-#lit) }
                 } else {
-                    quote! { ::serde_json::Number::from_f64(#lit) }
+                    quote! { #support::NumberLiteral::Float(#lit) }
                 }
             }
         }
@@ -259,10 +282,29 @@ fn field_numeric_attr(field: &Field, key: &str) -> SynResult<Option<NumericLiter
     Ok(None)
 }
 
-/// An `Option<serde_json::Number>` expression for the numeric attribute `key`, `None` when absent.
+/// A constant `Option<NumberLiteral>` expression for the numeric attribute `key`, `None` when
+/// absent.
+fn field_number_literal(field: &Field, key: &str) -> SynResult<TokenStream2> {
+    Ok(field_numeric_attr(field, key)?.map_or_else(
+        || quote! { None },
+        |literal: NumericLiteral| {
+            let tokens: TokenStream2 = literal.to_literal_tokens();
+            quote! { Some(#tokens) }
+        },
+    ))
+}
+
+/// An `Option<serde_json::Number>` expression for the numeric attribute `key`, `None` when
+/// absent.
 fn field_number_expr(field: &Field, key: &str) -> SynResult<TokenStream2> {
-    Ok(field_numeric_attr(field, key)?
-        .map_or_else(|| quote! { None }, NumericLiteral::to_number_expr))
+    let literal: TokenStream2 = field_number_literal(field, key)?;
+    let support: TokenStream2 = support();
+    Ok(quote! {
+        ::core::option::Option::<#support::NumberLiteral>::and_then(
+            #literal,
+            #support::NumberLiteral::to_number,
+        )
+    })
 }
 
 /// Extracts an integer value (u64) from `#[json_schema(key = N)]` on a field.
@@ -401,8 +443,8 @@ fn field_deprecated(field: &Field) -> SynResult<Option<bool>> {
     Ok(None)
 }
 
-/// Extracts `default = <literal>` from a field's `#[json_schema(...)]` attribute as an
-/// expression of type `Option<serde_json::Value>`: a string, a boolean, or an integer or float
+/// Extracts `default = <literal>` from a field's `#[json_schema(...)]` attribute as a constant
+/// expression of the library's `DefaultLiteral`: a string, a boolean, or an integer or float
 /// literal (optionally negated), kept exact (`18446744073709551615`, `-5`, `2.5`).
 fn field_default(field: &Field) -> SynResult<Option<TokenStream2>> {
     for attr in &field.attrs {
@@ -419,15 +461,14 @@ fn field_default(field: &Field) -> SynResult<Option<TokenStream2>> {
                 continue;
             }
             let expr: &Expr = &nv.value;
+            let support: TokenStream2 = support();
             if let Expr::Lit(expr_lit) = expr {
                 match &expr_lit.lit {
                     Lit::Str(lit) => {
-                        return Ok(Some(
-                            quote! { Some(::serde_json::Value::String(#lit.to_string())) },
-                        ));
+                        return Ok(Some(quote! { #support::DefaultLiteral::String(#lit) }));
                     }
                     Lit::Bool(lit) => {
-                        return Ok(Some(quote! { Some(::serde_json::Value::Bool(#lit)) }));
+                        return Ok(Some(quote! { #support::DefaultLiteral::Bool(#lit) }));
                     }
                     _ => {}
                 }
@@ -439,8 +480,8 @@ fn field_default(field: &Field) -> SynResult<Option<TokenStream2>> {
                         "json_schema(default = ...) requires a string, integer, float, or bool literal",
                     )
                 })?
-                .to_number_expr();
-            return Ok(Some(quote! { (#number).map(::serde_json::Value::Number) }));
+                .to_literal_tokens();
+            return Ok(Some(quote! { #support::DefaultLiteral::Number(#number) }));
         }
     }
     Ok(None)
@@ -681,7 +722,6 @@ fn container_exprs(attrs: &[Attribute]) -> SynResult<ContainerExprs> {
     })
 }
 
-#[expect(clippy::too_many_lines)]
 pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     let name: Ident = input.ident;
 
@@ -719,8 +759,8 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         id,
     } = container;
 
-    let mut property_inserts: Vec<TokenStream2> = Vec::new();
-    let mut required_keys: Vec<String> = Vec::new();
+    let support: TokenStream2 = support();
+    let mut field_specs: Vec<TokenStream2> = Vec::new();
     // `additionalProperties`: closed (`false`) unless a `#[serde(flatten)]` map collects the
     // keys that are not properties.
     let mut additional_properties_expr: Option<TokenStream2> = None;
@@ -742,145 +782,25 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             }
             // A map of any value (`{}`) is the same as no `additionalProperties`: leave it out.
             additional_properties_expr = Some(quote! {
-                {
-                    let value_schema: ::json_schema_rs::JsonSchema =
-                        <#value_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator);
-                    if value_schema == ::json_schema_rs::JsonSchema::default() {
-                        None
-                    } else {
-                        Some(::json_schema_rs::Schema::from(value_schema))
-                    }
-                }
+                #support::flattened_map_additional_properties(
+                    generator,
+                    <#value_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with,
+                )
             });
             continue;
         }
-        let key: String = field_property_key(field)?;
-        let span = field
-            .ident
-            .as_ref()
-            .map_or_else(proc_macro2::Span::call_site, syn::spanned::Spanned::span);
-        let key_lit: LitStr = LitStr::new(&key, span);
-        // An `Option` field is optional (one `Option` stripped) unless marked
-        // `#[json_schema(required)]`: then it is required and keeps `Option<T>`'s nullable
-        // schema.
-        let is_required: bool = json_schema_flag(&field.attrs, "required")?;
-        let is_opt: bool = is_option_type(ty) && !is_required;
-        let schema_ty: &Type = if is_opt { optional_inner_type(ty) } else { ty };
-        if !is_opt {
-            required_keys.push(key);
-        }
-        let field_desc_expr: TokenStream2 = doc_description_expr(&doc_exprs(&field.attrs));
-        let min_expr: TokenStream2 = field_number_expr(field, "minimum")?;
-        let max_expr: TokenStream2 = field_number_expr(field, "maximum")?;
-        let exclusive_min_expr: TokenStream2 = field_number_expr(field, "exclusive_minimum")?;
-        let exclusive_max_expr: TokenStream2 = field_number_expr(field, "exclusive_maximum")?;
-        let multiple_of_expr: TokenStream2 = field_number_expr(field, "multiple_of")?;
-        let field_min_items: Option<u64> = field_min_items(field)?;
-        let field_max_items: Option<u64> = field_max_items(field)?;
-        let field_min_length: Option<u64> = field_min_length(field)?;
-        let field_max_length: Option<u64> = field_max_length(field)?;
-        let field_pattern_val: Option<String> = field_pattern(field)?;
-        let field_deprecated_val: Option<bool> = field_deprecated(field)?;
-        let unique_items_expr: TokenStream2 = if json_schema_flag(&field.attrs, "unique_items")? {
-            quote! { Some(true) }
-        } else {
-            quote! { None }
-        };
-        let default_value_override: Option<TokenStream2> = field_default(field)?;
-        let set_default_value: TokenStream2 = if let Some(ref ov) = default_value_override {
-            quote! { schema.default_value = #ov; }
-        } else {
-            quote! {}
-        };
-        let min_items_expr: TokenStream2 = if let Some(n) = field_min_items {
-            let lit = proc_macro2::Literal::u64_unsuffixed(n);
-            quote! { Some(#lit) }
-        } else {
-            quote! { None }
-        };
-        let max_items_expr: TokenStream2 = if let Some(n) = field_max_items {
-            let lit = proc_macro2::Literal::u64_unsuffixed(n);
-            quote! { Some(#lit) }
-        } else {
-            quote! { None }
-        };
-        let min_length_expr: TokenStream2 = if let Some(n) = field_min_length {
-            let lit = proc_macro2::Literal::u64_unsuffixed(n);
-            quote! { Some(#lit) }
-        } else {
-            quote! { None }
-        };
-        let max_length_expr: TokenStream2 = if let Some(n) = field_max_length {
-            let lit = proc_macro2::Literal::u64_unsuffixed(n);
-            quote! { Some(#lit) }
-        } else {
-            quote! { None }
-        };
-        let pattern_expr: TokenStream2 = if let Some(ref p) = field_pattern_val {
-            let lit = LitStr::new(p, span);
-            quote! { Some(#lit.to_string()) }
-        } else {
-            quote! { None }
-        };
-
-        let deprecated_expr: TokenStream2 = if field_deprecated_val == Some(true) {
-            quote! { Some(true) }
-        } else {
-            quote! { None }
-        };
-
-        property_inserts.push(quote! {
-            {
-                let mut schema = <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator);
-                schema.description = #field_desc_expr.or(schema.description);
-                schema.minimum = #min_expr.or(schema.minimum);
-                schema.maximum = #max_expr.or(schema.maximum);
-                schema.exclusive_minimum = #exclusive_min_expr.or(schema.exclusive_minimum);
-                schema.exclusive_maximum = #exclusive_max_expr.or(schema.exclusive_maximum);
-                schema.multiple_of = #multiple_of_expr.or(schema.multiple_of);
-                schema.min_items = #min_items_expr.or(schema.min_items);
-                schema.max_items = #max_items_expr.or(schema.max_items);
-                schema.unique_items = #unique_items_expr.or(schema.unique_items);
-                schema.min_length = #min_length_expr.or(schema.min_length);
-                schema.max_length = #max_length_expr.or(schema.max_length);
-                schema.pattern = #pattern_expr.or(schema.pattern);
-                schema.deprecated = #deprecated_expr.or(schema.deprecated);
-                #set_default_value
-                properties.insert(#key_lit.to_string(), ::json_schema_rs::Schema::from(schema));
-            }
-        });
+        field_specs.push(field_spec(&name, field)?);
     }
 
-    let required_expr = if required_keys.is_empty() {
-        quote! { None }
-    } else {
-        let keys: Vec<TokenStream2> = required_keys
-            .iter()
-            .map(|k| {
-                let lit = LitStr::new(k, name.span());
-                quote! { #lit.to_string() }
-            })
-            .collect();
-        quote! { Some(vec![#(#keys),*]) }
-    };
-
-    // A struct with no fields never touches the generator or mutates `properties`.
-    let properties_mut: TokenStream2 = if property_inserts.is_empty() {
-        quote! {}
-    } else {
-        quote! { mut }
-    };
-    let generator_ident: TokenStream2 =
-        if property_inserts.is_empty() && additional_properties_expr.is_none() {
-            quote! { _generator }
-        } else {
-            quote! { generator }
-        };
     let additional_properties_expr: TokenStream2 = additional_properties_expr
         .unwrap_or_else(|| quote! { Some(::json_schema_rs::Schema::Bool(false)) });
+    // Every field is static data: the body is one builder call whatever the struct's width.
     let body: TokenStream2 = quote! {
-        let #properties_mut properties = ::std::collections::BTreeMap::new();
-        #(#property_inserts)*
+        static FIELDS: &[#support::FieldSpec] = &[#(#field_specs),*];
+        let (properties, required): (
+            ::std::collections::BTreeMap<::std::string::String, ::json_schema_rs::Schema>,
+            ::core::option::Option<::std::vec::Vec<::std::string::String>>,
+        ) = #support::object_properties(generator, FIELDS);
         let additional_properties: ::core::option::Option<::json_schema_rs::Schema> =
             #additional_properties_expr;
         ::json_schema_rs::JsonSchema {
@@ -888,7 +808,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             type_: Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::Object)),
             properties,
             additional_properties,
-            required: #required_expr,
+            required,
             title: #title_expr,
             description: #description_expr,
             comment: #comment_expr,
@@ -898,9 +818,79 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     Ok(named_type_impl(
         &name,
         id.as_deref(),
-        &generator_ident,
+        &quote! { generator },
         &body,
     ))
+}
+
+/// The constant `FieldSpec` expression of one (non-flattened) named field of struct `name`.
+///
+/// An `Option` field is optional (one `Option` stripped) unless marked
+/// `#[json_schema(required)]`: then it is required and keeps `Option<T>`'s nullable schema.
+fn field_spec(name: &Ident, field: &Field) -> SynResult<TokenStream2> {
+    let support: TokenStream2 = support();
+    let ty: &Type = &field.ty;
+    let key: String = field_property_key(field)?;
+    let span = field
+        .ident
+        .as_ref()
+        .map_or_else(proc_macro2::Span::call_site, syn::spanned::Spanned::span);
+    let key_lit: LitStr = LitStr::new(&key, span);
+    let is_required: bool = json_schema_flag(&field.attrs, "required")?;
+    let is_opt: bool = is_option_type(ty) && !is_required;
+    let schema_ty: Type = replace_self(if is_opt { optional_inner_type(ty) } else { ty }, name);
+    let required: bool = !is_opt;
+    let doc: Vec<&Expr> = doc_exprs(&field.attrs);
+    let minimum: TokenStream2 = field_number_literal(field, "minimum")?;
+    let maximum: TokenStream2 = field_number_literal(field, "maximum")?;
+    let exclusive_minimum: TokenStream2 = field_number_literal(field, "exclusive_minimum")?;
+    let exclusive_maximum: TokenStream2 = field_number_literal(field, "exclusive_maximum")?;
+    let multiple_of: TokenStream2 = field_number_literal(field, "multiple_of")?;
+    let u64_expr = |value: Option<u64>| -> TokenStream2 {
+        value.map_or_else(
+            || quote! { None },
+            |n| {
+                let lit = proc_macro2::Literal::u64_unsuffixed(n);
+                quote! { Some(#lit) }
+            },
+        )
+    };
+    let min_items: TokenStream2 = u64_expr(field_min_items(field)?);
+    let max_items: TokenStream2 = u64_expr(field_max_items(field)?);
+    let min_length: TokenStream2 = u64_expr(field_min_length(field)?);
+    let max_length: TokenStream2 = u64_expr(field_max_length(field)?);
+    let unique_items: bool = json_schema_flag(&field.attrs, "unique_items")?;
+    let pattern: TokenStream2 = field_pattern(field)?.map_or_else(
+        || quote! { None },
+        |p| {
+            let lit = LitStr::new(&p, span);
+            quote! { Some(#lit) }
+        },
+    );
+    let deprecated: bool = field_deprecated(field)? == Some(true);
+    let default: TokenStream2 =
+        field_default(field)?.map_or_else(|| quote! { None }, |d| quote! { Some(#d) });
+    Ok(quote! {
+        #support::FieldSpec {
+            key: #key_lit,
+            schema: <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with,
+            required: #required,
+            doc: &[#(#doc),*],
+            minimum: #minimum,
+            maximum: #maximum,
+            exclusive_minimum: #exclusive_minimum,
+            exclusive_maximum: #exclusive_maximum,
+            multiple_of: #multiple_of,
+            min_items: #min_items,
+            max_items: #max_items,
+            unique_items: #unique_items,
+            min_length: #min_length,
+            max_length: #max_length,
+            pattern: #pattern,
+            deprecated: #deprecated,
+            default: #default,
+        }
+    })
 }
 
 /// Expand `ToJsonSchema` for a newtype (`struct Name(T);`): `T`'s schema with the constraint
@@ -1103,20 +1093,24 @@ fn expand_enum_to_json_schema(
 /// string. When every value is a serde name the schema also has `"type": "string"`; when any
 /// variant has `value`, the values may be of any JSON type and no `type` is emitted. An enum
 /// with no variants is `{"enum": []}`, which no instance matches.
+///
+/// The values are static data (a serde name is a string, a `value` literal a fn that builds
+/// it), turned into `enum` / `const` by one library call whatever the number of variants.
 fn value_enum_body(
     container: &ContainerExprs,
     data_enum: &syn::DataEnum,
 ) -> SynResult<TokenStream2> {
+    let support: TokenStream2 = support();
     let mut values: Vec<TokenStream2> = Vec::new();
     let mut any_explicit_value: bool = false;
     for variant in &data_enum.variants {
         if let Some(tokens) = variant_value_tokens(variant)? {
             any_explicit_value = true;
-            values.push(quote! { ::serde_json::json!(#tokens) });
+            values.push(quote! { #support::EnumValue::Json(|| ::serde_json::json!(#tokens)) });
         } else {
             let external: String = variant_external_name(variant)?;
             let lit: LitStr = LitStr::new(&external, variant.ident.span());
-            values.push(quote! { ::serde_json::Value::String(#lit.to_string()) });
+            values.push(quote! { #support::EnumValue::Name(#lit) });
         }
     }
 
@@ -1125,17 +1119,6 @@ fn value_enum_body(
     } else {
         quote! { Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::String)) }
     };
-    let (enum_values_expr, const_value_expr): (TokenStream2, TokenStream2) =
-        if let [value] = values.as_slice() {
-            (quote! { None }, quote! { Some(#value) })
-        } else {
-            (
-                quote! {
-                    Some(::std::vec::Vec::<::serde_json::Value>::from([#(#values),*]))
-                },
-                quote! { None },
-            )
-        };
 
     let ContainerExprs {
         title,
@@ -1145,14 +1128,19 @@ fn value_enum_body(
         ..
     } = container;
     Ok(quote! {
+        static VALUES: &[#support::EnumValue] = &[#(#values),*];
+        let (enum_values, const_value): (
+            ::core::option::Option<::std::vec::Vec<::serde_json::Value>>,
+            ::core::option::Option<::serde_json::Value>,
+        ) = #support::value_enum_keywords(VALUES);
         ::json_schema_rs::JsonSchema {
             id: #id_expr,
             type_: #type_expr,
             title: #title,
             description: #description,
             comment: #comment,
-            enum_values: #enum_values_expr,
-            const_value: #const_value_expr,
+            enum_values,
+            const_value,
             ..::json_schema_rs::JsonSchema::default()
         }
     })
@@ -1241,17 +1229,23 @@ fn union_enum_body(
             }
         });
     }
+    // The payloads are static fn pointers built by one library call, whatever the number of
+    // variants.
+    let support: TokenStream2 = support();
+    let payload_types: Vec<Type> = payload_types
+        .into_iter()
+        .map(|ty: &Type| replace_self(ty, name))
+        .collect();
     Ok(quote! {
+        static PAYLOADS: &[#support::SchemaFn] = &[
+            #(<#payload_types as ::json_schema_rs::ToJsonSchema>::json_schema_with),*
+        ];
         ::json_schema_rs::JsonSchema {
             id: #id_expr,
             title: #title,
             description: #description,
             comment: #comment,
-            #combinator_field: Some(::std::vec::Vec::<::json_schema_rs::Schema>::from([
-                #(::json_schema_rs::Schema::from(
-                    <#payload_types as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator),
-                )),*
-            ])),
+            #combinator_field: Some(#support::payload_schemas(generator, PAYLOADS)),
             ..::json_schema_rs::JsonSchema::default()
         }
     })

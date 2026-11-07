@@ -17,9 +17,6 @@
 //! * `jsonschemars-no-newtypes` (`generated-types`): our codegen with
 //!   `constrained_newtypes(false)`, for the `*_no_newtypes` operations.
 //!
-//! A fixture in `MODELS_NOT_BUILT` (`json_schema_rs_benchmark::models`) has no model in any copy:
-//! its types take too long to build (#102, #111). Its tables' rows hold the reason.
-//!
 //! **Shards.** The models are about 400K lines of generated Rust. In one crate they compile one
 //! after another (rustc's front end is serial within a crate, and the benchmark profile has one
 //! codegen unit), so they are spread over [`SHARDS`] crates that cargo compiles in parallel, each
@@ -27,8 +24,7 @@
 //! fixture's models (our codegen is fast) and assigns the (copy, fixture) models to shards the
 //! same way: largest first, each to the shard with the fewest lines so far. A shard then writes
 //! only its own models. The build then takes about as long as its slowest model (the reverse
-//! codegen models took 43 minutes in one crate); `MODELS_NOT_BUILT` leaves out the models that
-//! take minutes or more on their own (#102, #111).
+//! codegen models took 43 minutes in one crate).
 //!
 //! Each copy is a module of its own (`$OUT_DIR/models/<copy>/<fixture>/model.rs`), so a
 //! model that does not compile fails only that model. The driver turns such a build failure
@@ -40,7 +36,7 @@ use json_schema_rs::{CodeGenInput, CodeGenSettings, GenerateRustOutput, Schema, 
 use json_schema_rs_benchmark::fixtures::{self, Fixture};
 use json_schema_rs_benchmark::models::{
     EXCLUDE_ENV, Exclusion, MODEL_FILE_NAME, MODELS_DIR_NAME, STARTUP_FIXTURE_ID, STARTUP_SCHEMA,
-    model_dir_name, model_not_built, parse_exclusions,
+    model_dir_name, parse_exclusions,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -397,11 +393,8 @@ fn exclusions() -> BTreeMap<(String, String), String> {
 }
 
 /// Our codegen of the input's schema (default settings, with `constrained_newtypes(newtypes)`):
-/// the source and its root type's name; none for a fixture in `MODELS_NOT_BUILT`.
+/// the source and its root type's name.
 fn generate(input: &Input, newtypes: bool) -> Generated {
-    if let Some(reason) = model_not_built(&input.id) {
-        return Err(reason.to_owned());
-    }
     let schema: Schema = serde_json::from_str(&input.schema_text)
         .map_err(|e: serde_json::Error| format!("schema parse error: {e}"))?;
     let settings: CodeGenSettings = CodeGenSettings::builder()

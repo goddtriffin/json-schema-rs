@@ -751,16 +751,12 @@ mod tests {
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub name: String,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
-
-json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "name" => name: String,
-});
 
 impl Root {
     /// Validates this value against its schema.
@@ -829,7 +825,7 @@ pub type Root = String;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "Name")]
 #[json_schema(id = "https://example.com/name.json")]
 pub struct Name {
@@ -837,10 +833,6 @@ pub struct Name {
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
-
-json_schema_rs::deserialize_struct!(Name, additional: BTreeMap<String, serde_json::Value>, {
-    "first" => first: String,
-});
 
 impl Name {
     /// Validates this value against its schema.
@@ -862,17 +854,13 @@ impl TryFrom<serde_json::Value> for Name {
     }
 }
 
-#[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(id = "https://example.com/root.json")]
 pub struct Root {
     pub name: Name,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
-
-json_schema_rs::deserialize_struct!(Root, additional: BTreeMap<String, serde_json::Value>, {
-    "name" => name: Name,
-});
 
 impl Root {
     /// Validates this value against its schema.

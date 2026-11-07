@@ -3,6 +3,8 @@
 //! Types implement [`ToJsonSchema`] to produce a [`JsonSchema`] value that can be
 //! serialized via [`TryFrom`] to String or `Vec<u8>`.
 
+#[doc(hidden)]
+pub mod derive_support;
 mod error;
 mod resource_uri;
 

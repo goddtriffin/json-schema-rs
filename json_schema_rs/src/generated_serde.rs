@@ -1,143 +1,27 @@
-//! The `Deserialize` impls of generated types that serde's derive would buffer.
+//! The runtime of the `Deserialize` impls of generated types.
 //!
-//! serde's derive reads a struct with a `#[serde(flatten)]` field and an `#[serde(untagged)]`
-//! enum through its private `Content` buffer. With `serde_json/arbitrary_precision` on (which
-//! Cargo feature unification turns on for the whole build when one crate enables it),
-//! `serde_json` hands a number to that buffer as a map holding the number's text, so a typed
-//! number behind a flattened map or inside an untagged enum fails to deserialize. Generated
-//! code implements those two `Deserialize`s with the macros here instead:
-//! [`deserialize_struct!`](crate::deserialize_struct) reads each known key straight into its
-//! field and every other key into the struct's map of additional properties, and
-//! [`deserialize_untagged!`](crate::deserialize_untagged) buffers the value once as a
-//! [`serde_json::Value`] and tries each variant from it. Both accept and reject exactly what the
-//! derive does, with its error messages, and neither buffers through `Content`.
-
-/// The `Deserialize` of a generated struct whose last field holds the additional properties
-/// (the keys its schema does not name), in place of serde's derive with `#[serde(flatten)]`.
-///
-/// It reads a JSON object (`deserialize_map`, expecting `struct Name`). A known key is read
-/// straight into its field, through the field's `deserialize_with` function when it has one; a
-/// repeated known key is a `duplicate field` error. Every other key goes into the additional
-/// map (a repeated one keeps its last value). A missing key is the field's default with
-/// `default`, a `missing field` error with `with`, and otherwise what the field's type makes of
-/// absence: `None` for an `Option`, else a `missing field` error (serde's rule).
-///
-/// `json_schema_rs::deserialize_struct!(Name, additional: Map, { fields })`, where `Map` is a
-/// `BTreeMap<String, V>` or `HashMap<String, V>` (`additional: Map = with(path)` reads each `V`
-/// through `path`) and each field is one of:
-/// - `"key" => field: Type`: read as `Type`.
-/// - `"key" => field: Type = with(path)`: read through `path`; absence is an error.
-/// - `"key" => field: Type = default(path)`: read through `path`; absence is
-///   `Type::default()`.
-///
-/// ```
-/// use std::collections::BTreeMap;
-///
-/// #[derive(Debug, PartialEq, serde::Serialize)]
-/// pub struct Pet {
-///     pub name: String,
-///     #[serde(rename = "age-years", skip_serializing_if = "Option::is_none")]
-///     pub age_years: Option<u8>,
-///     #[serde(flatten)]
-///     pub additional: BTreeMap<String, serde_json::Value>,
-/// }
-///
-/// json_schema_rs::deserialize_struct!(Pet, additional: BTreeMap<String, serde_json::Value>, {
-///     "name" => name: String,
-///     "age-years" => age_years: Option<u8>,
-/// });
-///
-/// let pet: Pet = serde_json::from_str(r#"{"name": "Rex", "weight": 1.5}"#).unwrap();
-/// let expected: Pet = Pet {
-///     name: "Rex".to_string(),
-///     age_years: None,
-///     additional: BTreeMap::from([("weight".to_string(), serde_json::json!(1.5))]),
-/// };
-/// assert_eq!(pet, expected);
-/// assert!(serde_json::from_str::<Pet>(r#"{"age-years": 3}"#).is_err());
-/// ```
-#[macro_export]
-macro_rules! deserialize_struct {
-    (
-        $name:ident, $additional:ident : $map:ty $( = with ( $value_with:path ) )?, {
-            $( $key:literal => $field:ident : $ty:ty $( = $mode:ident ( $with:path ) )? ),* $(,)?
-        }
-    ) => {
-        // A deprecated type or field is still read (as serde's derive does).
-        #[allow(deprecated)]
-        impl<'de> ::serde::Deserialize<'de> for $name {
-            fn deserialize<__D: ::serde::Deserializer<'de>>(deserializer: __D) -> Result<Self, __D::Error> {
-                struct __Visitor;
-
-                impl<'de> ::serde::de::Visitor<'de> for __Visitor {
-                    type Value = $name;
-
-                    fn expecting(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        formatter.write_str(concat!("struct ", stringify!($name)))
-                    }
-
-                    fn visit_map<__A: ::serde::de::MapAccess<'de>>(self, mut map: __A) -> Result<$name, __A::Error> {
-                        const KEYS: &[&str] = &[$($key),*];
-                        $( let mut $field: Option<$ty> = None; )*
-                        let mut additional: $map = Default::default();
-                        while let Some(key) = map.next_key_seed($crate::generated_serde::__private::KeySeed(KEYS))? {
-                            match key.as_str() {
-                                $(
-                                    $key => {
-                                        if $field.is_some() {
-                                            return Err(<__A::Error as ::serde::de::Error>::duplicate_field($key));
-                                        }
-                                        $field = Some($crate::deserialize_struct!(@read map, $ty $(, $with)?));
-                                    }
-                                )*
-                                _ => {
-                                    let value: <$map as $crate::generated_serde::__private::AdditionalProperties>::Value =
-                                        $crate::deserialize_struct!(@read map, <$map as $crate::generated_serde::__private::AdditionalProperties>::Value $(, $value_with)?);
-                                    $crate::generated_serde::__private::AdditionalProperties::insert(&mut additional, key.into_string(), value);
-                                }
-                            }
-                        }
-                        Ok($name {
-                            $( $field: $crate::deserialize_struct!(@missing $field, $key $(, $mode)?), )*
-                            $additional: additional,
-                        })
-                    }
-                }
-
-                deserializer.deserialize_map(__Visitor)
-            }
-        }
-    };
-    (@read $map:ident, $ty:ty) => {
-        $map.next_value::<$ty>()?
-    };
-    (@read $map:ident, $ty:ty, $with:path) => {{
-        struct __With($ty);
-
-        impl<'de> ::serde::Deserialize<'de> for __With {
-            fn deserialize<__D: ::serde::Deserializer<'de>>(deserializer: __D) -> Result<Self, __D::Error> {
-                $with(deserializer).map(__With)
-            }
-        }
-
-        $map.next_value::<__With>()?.0
-    }};
-    (@missing $field:ident, $key:literal) => {
-        match $field {
-            Some(value) => value,
-            None => $crate::generated_serde::__private::missing_field::<_, __A::Error>($key)?,
-        }
-    };
-    (@missing $field:ident, $key:literal, with) => {
-        match $field {
-            Some(value) => value,
-            None => return Err(::serde::de::Error::missing_field($key)),
-        }
-    };
-    (@missing $field:ident, $key:literal, default) => {
-        $field.unwrap_or_default()
-    };
-}
+//! Generated structs derive `json_schema_rs_macro::Deserialize` instead of serde's derive. Its
+//! expansion is a map visitor that reads each known key with one call to a shared generic reader
+//! here (`__private::read_field`), so the code of a struct grows linearly with its fields and an
+//! optimized build stays fast: serde's derive writes every field's read into one `visit_map`,
+//! which LLVM optimizes in superlinear time (an 800-field struct took 100 s to build with
+//! optimizations; through the shared reader it takes 2 s). The reader is not marked
+//! `#[inline(never)]`: LLVM inlines it into small visitors, where that pays (nested small structs
+//! read 20% slower without it), and stops as a visitor grows. The visitor also reads a `#[serde(flatten)]` map of additional properties key by key
+//! (`__private::read_additional`), where serde's derive buffers the whole object through its
+//! private `Content`.
+//!
+//! [`deserialize_untagged!`](crate::deserialize_untagged) is the `Deserialize` of a generated
+//! `type`-array union: it buffers the value once as a [`serde_json::Value`] and tries each
+//! variant from it, where serde's `#[serde(untagged)]` derive buffers through `Content`.
+//!
+//! serde's `Content` breaks numbers with `serde_json/arbitrary_precision` on (which Cargo
+//! feature unification turns on for the whole build when one crate enables it): `serde_json`
+//! hands a number to that buffer as a map holding the number's text, so a typed number behind a
+//! flattened map or inside an untagged enum fails to deserialize. Neither path here buffers
+//! through `Content`; both accept and reject what serde's derive does, with its error messages,
+//! except that a struct reads only from a JSON object (serde's derive also reads one from an
+//! array, positionally, which no object schema allows).
 
 /// The `Deserialize` of a generated untagged enum (one newtype variant per JSON shape), in
 /// place of serde's derive with `#[serde(untagged)]`: the value is read once into a
@@ -204,10 +88,12 @@ macro_rules! deserialize_untagged {
     }};
 }
 
-/// Helpers of the generated-code macros; not public API.
+/// Helpers of generated code and its `Deserialize` derive; not public API.
 #[doc(hidden)]
 pub mod __private {
-    use serde::de::{self, Deserialize, DeserializeSeed, Deserializer, Visitor};
+    use serde::de::{
+        self, Deserialize, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor,
+    };
     use std::collections::{BTreeMap, HashMap};
     use std::fmt;
     use std::hash::BuildHasher;
@@ -300,8 +186,15 @@ pub mod __private {
                 .map_or_else(|| Key::Owned(key.to_string()), Key::Known))
         }
 
+        // A known key drops its `String` before the field's value is read (as serde's derive
+        // does), so the two are never held at once.
         fn visit_string<E: de::Error>(self, key: String) -> Result<Key<'de>, E> {
-            Ok(Key::Owned(key))
+            Ok(self
+                .0
+                .iter()
+                .copied()
+                .find(|known: &&'static str| *known == key)
+                .map_or(Key::Owned(key), Key::Known))
         }
 
         fn visit_borrowed_bytes<E: de::Error>(self, key: &'de [u8]) -> Result<Key<'de>, E> {
@@ -316,6 +209,63 @@ pub mod __private {
                 Err(_) => Err(de::Error::invalid_value(de::Unexpected::Bytes(key), &self)),
             }
         }
+    }
+
+    /// Reads the value of the known key `key` into its field's `slot`; a key read before is a
+    /// `duplicate field` error.
+    ///
+    /// Every field of every struct reads through it (one copy per field type and input format),
+    /// so a struct's `visit_map` is a linear list of calls that an optimizing build compiles in
+    /// linear time; LLVM inlines it where the visitor is small.
+    ///
+    /// # Errors
+    ///
+    /// `duplicate field` when `slot` is already filled, and the value's own error.
+    pub fn read_field<'de, A: MapAccess<'de>, T: Deserialize<'de>>(
+        map: &mut A,
+        slot: &mut Option<T>,
+        key: &'static str,
+    ) -> Result<(), A::Error> {
+        if slot.is_some() {
+            return Err(de::Error::duplicate_field(key));
+        }
+        *slot = Some(map.next_value()?);
+        Ok(())
+    }
+
+    /// Reads the value of a key that is not a field into the map of additional properties, as a
+    /// `W` turned into the map's value by `value` (the identity, or the unwrapping of a
+    /// `deserialize_with` wrapper); a repeated key keeps its last value.
+    ///
+    /// # Errors
+    ///
+    /// The value's error.
+    pub fn read_additional<'de, A: MapAccess<'de>, M: AdditionalProperties, W: Deserialize<'de>>(
+        map: &mut A,
+        additional: &mut M,
+        key: Key<'de>,
+        value: fn(W) -> M::Value,
+    ) -> Result<(), A::Error> {
+        let read: W = map.next_value()?;
+        additional.insert(key.into_string(), value(read));
+        Ok(())
+    }
+
+    /// Skips the value of a key that is neither a field nor kept.
+    ///
+    /// # Errors
+    ///
+    /// The input's error.
+    #[inline(never)]
+    pub fn skip_value<'de, A: MapAccess<'de>>(map: &mut A) -> Result<(), A::Error> {
+        map.next_value::<IgnoredAny>()?;
+        Ok(())
+    }
+
+    /// The `unknown field` error for `key` (serde's message, listing the struct's `keys`).
+    #[must_use]
+    pub fn unknown_field<E: de::Error>(key: &Key<'_>, keys: &'static [&'static str]) -> E {
+        E::unknown_field(key.as_str(), keys)
     }
 
     /// What the type of a field with no `default` and no `deserialize_with` makes of its key's
@@ -349,5 +299,29 @@ pub mod __private {
             bytes byte_buf unit unit_struct newtype_struct seq tuple
             tuple_struct map struct enum identifier ignored_any
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::__private::{Key, KeySeed};
+    use serde::de::DeserializeSeed;
+    use serde::de::value::{Error, StringDeserializer};
+
+    /// The key `KeySeed(&["name"])` reads from an owned string.
+    fn owned_key(text: &str) -> Result<Key<'static>, Error> {
+        KeySeed(&["name"]).deserialize(StringDeserializer::<Error>::new(text.to_string()))
+    }
+
+    #[test]
+    fn key_seed_reads_a_known_owned_key_as_the_static_key() {
+        let actual: Result<Key<'static>, Error> = owned_key("name");
+        assert!(matches!(actual, Ok(Key::Known("name"))));
+    }
+
+    #[test]
+    fn key_seed_keeps_an_unknown_owned_key_owned() {
+        let actual: Result<Key<'static>, Error> = owned_key("other");
+        assert!(matches!(actual, Ok(Key::Owned(ref key)) if key == "other"));
     }
 }
