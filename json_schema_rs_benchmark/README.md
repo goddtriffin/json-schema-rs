@@ -58,7 +58,7 @@ The generated-types cells (see *What it measures*) come from each side's own bui
 side's library. Each side builds into `target/benchmark-quick/isolated-{base,head}` with every
 source and target path remapped (`--remap-path-prefix`), because `isolated/` is its own workspace
 and cargo compiles the library under its absolute path, which is longer on the base side.
-Reverse codegen is not measured in quick mode: its models take minutes to build per side (#102).
+Reverse codegen is not measured in quick mode: its models take minutes to build per side.
 A PR that changes the derive or reverse codegen, the harness, a competitor or a fixture runs
 `make benchmark_full` too.
 

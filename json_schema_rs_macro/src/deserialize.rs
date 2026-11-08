@@ -4,15 +4,17 @@
 //! generic `json_schema_rs::generated_serde::__private::read_field`, so its code grows
 //! linearly with the struct's fields. serde's derive writes each field's read into one
 //! `visit_map`, which LLVM optimizes in superlinear time: an optimized build of a struct with
-//! hundreds of fields takes minutes with serde's derive and seconds with this one.
+//! hundreds of fields takes minutes with serde's derive and seconds with this one. Keys are
+//! matched once, by the non-generic `__field_index` it emits, and the struct is built from
+//! values taken out of never-moved slots, so no step grows faster than the field count.
 //!
 //! It accepts the serde attributes codegen emits and rejects every other one at its span:
 //! container `deny_unknown_fields`; field `rename = "..."`, `default`, `deserialize_with =
 //! "path"`, `flatten` (the map of additional properties; with `deserialize_with`, each of its
 //! values reads through the path) and `skip_serializing_if` (serialization only, ignored).
 
-use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
+use proc_macro2::{Delimiter, Group, Span, TokenStream as TokenStream2, TokenTree, token_stream};
+use quote::{ToTokens, format_ident, quote};
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Error, ExprPath, Fields, Ident, LitStr, Result as SynResult, Type};
@@ -181,6 +183,124 @@ pub fn expand_deserialize(input: &DeriveInput) -> SynResult<TokenStream2> {
     Ok(render(name, deny, &fields, flatten))
 }
 
+/// The tokens one field contributes to the impl.
+struct FieldTokens {
+    /// Its slot's declaration.
+    slot: TokenStream2,
+    /// Its arm in `__field_index`.
+    index_arm: TokenStream2,
+    /// Its arm in the visitor's dispatch on the field index.
+    arm: TokenStream2,
+    /// The binding of its value, taken out of the slot.
+    value: TokenStream2,
+    /// Its initializer in the struct expression.
+    init: TokenStream2,
+}
+
+/// The tokens of the field at `index` of the struct `name`, `last` when it is the last field
+/// (adding its `deserialize_with` wrapper, if any, to `wrappers`).
+fn field_tokens(
+    private: &TokenStream2,
+    name: &Ident,
+    (index, field): (usize, &FieldSpec),
+    last: bool,
+    wrappers: &mut Vec<TokenStream2>,
+) -> FieldTokens {
+    let slot: Ident = format_ident!("__field{index}");
+    let ty: TokenStream2 = replace_self(field.ty.to_token_stream(), name);
+    let key: &str = &field.key;
+    let ident: &Ident = &field.ident;
+    let slot_ty: TokenStream2 = if let Some(path) = &field.with {
+        let wrapper: Ident = format_ident!("__DeserializeWith{index}");
+        wrappers.push(wrapper_type(&wrapper, &ty, path));
+        quote! { #wrapper }
+    } else {
+        ty
+    };
+    // The last field's arm is the wildcard: `KeySeed` only makes indexes of fields.
+    let pattern: TokenStream2 = if last {
+        quote! { _ }
+    } else {
+        quote! { #index }
+    };
+    let value: TokenStream2 = if field.with.is_some() {
+        quote! { __value.0 }
+    } else {
+        quote! { __value }
+    };
+    let absent: TokenStream2 = match (field.default, field.with.is_some()) {
+        (true, _) => quote! { ::core::default::Default::default() },
+        (false, true) => quote! {
+            return ::core::result::Result::Err(#private::missing_field_error(#key))
+        },
+        (false, false) => quote! { #private::missing_field::<_, __A::Error>(#key)? },
+    };
+    let bound: Ident = format_ident!("__value{index}");
+    FieldTokens {
+        slot: quote! {
+            let mut #slot: #private::Slot<#slot_ty> = #private::Slot::empty();
+        },
+        index_arm: quote! { #key => ::core::option::Option::Some(#index), },
+        arm: quote! { #pattern => #private::read_field(&mut __map, &mut #slot, #key)?, },
+        value: quote! {
+            let #bound = match #private::Slot::take(&mut #slot) {
+                ::core::option::Option::Some(__value) => #value,
+                ::core::option::Option::None => #absent,
+            };
+        },
+        init: quote! { #ident: #bound, },
+    }
+}
+
+/// `tokens` with every `Self` replaced by `name`, at any depth. Slot and wrapper types are
+/// named inside the visitor, where `Self` would be the visitor or the wrapper. Walks nested
+/// groups with an explicit stack.
+fn replace_self(tokens: TokenStream2, name: &Ident) -> TokenStream2 {
+    /// A group being rebuilt.
+    struct Frame {
+        /// Its delimiter and span; none for the outermost stream.
+        group: Option<(Delimiter, Span)>,
+        /// The tokens rebuilt so far.
+        rebuilt: Vec<TokenTree>,
+        /// The tokens still to walk.
+        rest: token_stream::IntoIter,
+    }
+    let mut stack: Vec<Frame> = vec![Frame {
+        group: None,
+        rebuilt: Vec::new(),
+        rest: tokens.into_iter(),
+    }];
+    while let Some(frame) = stack.last_mut() {
+        match frame.rest.next() {
+            Some(TokenTree::Ident(ident)) if ident == "Self" => {
+                let named: Ident = Ident::new(&name.to_string(), ident.span());
+                frame.rebuilt.push(TokenTree::Ident(named));
+            }
+            Some(TokenTree::Group(group)) => stack.push(Frame {
+                group: Some((group.delimiter(), group.span())),
+                rebuilt: Vec::new(),
+                rest: group.stream().into_iter(),
+            }),
+            Some(token) => frame.rebuilt.push(token),
+            None => {
+                let Some(done) = stack.pop() else {
+                    break;
+                };
+                let stream: TokenStream2 = done.rebuilt.into_iter().collect();
+                match (done.group, stack.last_mut()) {
+                    (Some((delimiter, span)), Some(outer)) => {
+                        let mut group: Group = Group::new(delimiter, stream);
+                        group.set_span(span);
+                        outer.rebuilt.push(TokenTree::Group(group));
+                    }
+                    _ => return stream,
+                }
+            }
+        }
+    }
+    TokenStream2::new()
+}
+
 /// The impl for the checked struct `name`.
 fn render(
     name: &Ident,
@@ -190,54 +310,35 @@ fn render(
 ) -> TokenStream2 {
     let private: TokenStream2 = quote! { ::json_schema_rs::generated_serde::__private };
     let expecting: String = format!("struct {name}");
-    let keys: Vec<&str> = fields.iter().map(|f| f.key.as_str()).collect();
     let mut wrappers: Vec<TokenStream2> = Vec::new();
-    let mut slots: Vec<TokenStream2> = Vec::new();
-    let mut arms: Vec<TokenStream2> = Vec::new();
-    let mut inits: Vec<TokenStream2> = Vec::new();
-    for (index, field) in fields.iter().enumerate() {
-        let slot: Ident = format_ident!("__field{index}");
-        let ty: &Type = &field.ty;
-        let key: &str = &field.key;
-        let ident: &Ident = &field.ident;
-        // A plain field's slot type is inferred from the field it initialises, so an `Option`
-        // field never spells out `Option<Option<T>>` (clippy's `option_option` lint in the
-        // user's crate); a `deserialize_with` slot names its wrapper, whose `.0` needs the type.
-        slots.push(if let Some(path) = &field.with {
-            let wrapper: Ident = format_ident!("__DeserializeWith{index}");
-            wrappers.push(wrapper_type(&wrapper, ty, path));
-            quote! {
-                let mut #slot: ::core::option::Option<#wrapper> = ::core::option::Option::None;
-            }
-        } else {
-            quote! {
-                let mut #slot = ::core::option::Option::None;
-            }
-        });
-        arms.push(quote! { #key => #private::read_field(&mut __map, &mut #slot, #key)?, });
-        let value: TokenStream2 = if field.with.is_some() {
-            quote! { __value.0 }
-        } else {
-            quote! { __value }
-        };
-        let absent: TokenStream2 = match (field.default, field.with.is_some()) {
-            (true, _) => quote! { ::core::default::Default::default() },
-            (false, true) => quote! {
-                return ::core::result::Result::Err(
-                    <__A::Error as ::serde::de::Error>::missing_field(#key),
-                )
-            },
-            (false, false) => quote! { #private::missing_field::<_, __A::Error>(#key)? },
-        };
-        inits.push(quote! {
-            #ident: match #slot {
-                ::core::option::Option::Some(__value) => #value,
-                ::core::option::Option::None => #absent,
-            },
-        });
-    }
-    let (additional, fallback): (TokenStream2, TokenStream2) =
-        unknown_keys(&private, deny, flatten, &mut wrappers, &mut inits);
+    let tokens: Vec<FieldTokens> = fields
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|field: (usize, &FieldSpec)| {
+            let last: bool = field.0 + 1 == fields.len();
+            field_tokens(&private, name, field, last, &mut wrappers)
+        })
+        .collect();
+    let slots: Vec<&TokenStream2> = tokens.iter().map(|t| &t.slot).collect();
+    let index_arms: Vec<&TokenStream2> = tokens.iter().map(|t| &t.index_arm).collect();
+    let arms: Vec<&TokenStream2> = tokens.iter().map(|t| &t.arm).collect();
+    let values: Vec<&TokenStream2> = tokens.iter().map(|t| &t.value).collect();
+    let mut inits: Vec<TokenStream2> = tokens.iter().map(|t| t.init.clone()).collect();
+    let (additional, unknown): (TokenStream2, TokenStream2) = unknown_keys(
+        &private,
+        name,
+        deny,
+        fields,
+        flatten,
+        &mut wrappers,
+        &mut inits,
+    );
+    let field: TokenStream2 = if arms.is_empty() {
+        quote! { #private::Key::Field(_) => {} }
+    } else {
+        quote! { #private::Key::Field(__index) => match __index { #(#arms)* } }
+    };
     quote! {
         // A deprecated type or field is still read, as serde's derive does.
         #[automatically_derived]
@@ -247,6 +348,18 @@ fn render(
                 __deserializer: __D,
             ) -> ::core::result::Result<Self, __D::Error> {
                 #(#wrappers)*
+
+                // The index of the field a key names. Not generic, so the key strings are
+                // matched in one function that every input format's visitor shares, and each
+                // visitor dispatches on an integer.
+                fn __field_index(
+                    __key: &str,
+                ) -> ::core::option::Option<::core::primitive::usize> {
+                    match __key {
+                        #(#index_arms)*
+                        _ => ::core::option::Option::None,
+                    }
+                }
 
                 struct __Visitor;
 
@@ -264,17 +377,20 @@ fn render(
                         self,
                         mut __map: __A,
                     ) -> ::core::result::Result<#name, __A::Error> {
-                        const __KEYS: &[&str] = &[#(#keys),*];
                         #(#slots)*
                         #additional
                         while let ::core::option::Option::Some(__key) =
-                            ::serde::de::MapAccess::next_key_seed(&mut __map, #private::KeySeed(__KEYS))?
+                            ::serde::de::MapAccess::next_key_seed(
+                                &mut __map,
+                                #private::KeySeed(__field_index),
+                            )?
                         {
-                            match __key.as_str() {
-                                #(#arms)*
-                                _ => #fallback,
+                            match __key {
+                                #field
+                                #unknown
                             }
                         }
+                        #(#values)*
                         ::core::result::Result::Ok(#name { #(#inits)* })
                     }
                 }
@@ -287,46 +403,60 @@ fn render(
 
 /// What the visitor does with a key that is not a field: the declaration of the flattened map
 /// it goes into (adding the map's field to `inits` and its value wrapper to `wrappers`), and the
-/// match arm's expression.
+/// match arm.
 fn unknown_keys(
     private: &TokenStream2,
+    name: &Ident,
     deny: bool,
+    fields: &[&FieldSpec],
     flatten: Option<&FieldSpec>,
     wrappers: &mut Vec<TokenStream2>,
     inits: &mut Vec<TokenStream2>,
 ) -> (TokenStream2, TokenStream2) {
     match flatten {
         Some(field) => {
-            let ty: &Type = &field.ty;
+            let ty: TokenStream2 = replace_self(field.ty.to_token_stream(), name);
             let ident: &Ident = &field.ident;
             inits.push(quote! { #ident: __additional, });
             let convert: TokenStream2 = if let Some(path) = &field.with {
                 let wrapper: Ident = format_ident!("__DeserializeWithAdditional");
                 let value_ty: TokenStream2 =
                     quote! { <#ty as #private::AdditionalProperties>::Value };
-                wrappers.push(wrapper_type(&wrapper, &syn::parse_quote!(#value_ty), path));
+                wrappers.push(wrapper_type(&wrapper, &value_ty, path));
                 quote! { |__value: #wrapper| __value.0 }
             } else {
                 quote! { ::core::convert::identity }
             };
             (
                 quote! { let mut __additional: #ty = ::core::default::Default::default(); },
-                quote! { #private::read_additional(&mut __map, &mut __additional, __key, #convert)? },
+                quote! {
+                    #private::Key::Unknown(__key) => {
+                        #private::read_additional(&mut __map, &mut __additional, __key, #convert)?
+                    }
+                },
             )
         }
-        None if deny => (
-            TokenStream2::new(),
-            quote! { return ::core::result::Result::Err(#private::unknown_field(&__key, __KEYS)) },
-        ),
+        None if deny => {
+            let keys: Vec<&str> = fields.iter().map(|f| f.key.as_str()).collect();
+            (
+                TokenStream2::new(),
+                quote! {
+                    #private::Key::Unknown(__key) => {
+                        const __KEYS: &[&str] = &[#(#keys),*];
+                        return ::core::result::Result::Err(#private::unknown_field(&__key, __KEYS));
+                    }
+                },
+            )
+        }
         None => (
             TokenStream2::new(),
-            quote! { #private::skip_value(&mut __map)? },
+            quote! { #private::Key::Unknown(_) => #private::skip_value(&mut __map)?, },
         ),
     }
 }
 
 /// A newtype around `ty` whose `Deserialize` is the `deserialize_with` function `path`.
-fn wrapper_type(wrapper: &Ident, ty: &Type, path: &ExprPath) -> TokenStream2 {
+fn wrapper_type(wrapper: &Ident, ty: &TokenStream2, path: &ExprPath) -> TokenStream2 {
     quote! {
         // The wrapper repeats the field's type: a nullable field's `Option<Option<T>>` is
         // deliberate (absent vs null), so clippy's lint on that spelling stays on the field.
@@ -348,8 +478,8 @@ fn wrapper_type(wrapper: &Ident, ty: &Type, path: &ExprPath) -> TokenStream2 {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_deserialize;
-    use proc_macro2::TokenStream;
+    use super::{expand_deserialize, replace_self};
+    use proc_macro2::{Span, TokenStream};
     use std::str::FromStr;
     use syn::DeriveInput;
 
@@ -495,18 +625,33 @@ mod tests {
     }
 
     #[test]
+    fn replace_self_names_the_struct_at_every_depth() {
+        let expected: String = "Option < Vec < (Node , [Box < Node >; 2]) >>".to_string();
+        let actual: String = replace_self(
+            TokenStream::from_str("Option<Vec<(Self, [Box<Self>; 2])>>").expect("tokens"),
+            &syn::Ident::new("Node", Span::call_site()),
+        )
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn expansion_reads_every_field_through_the_shared_reader() {
         let expected: String = concat!(
-            "# [automatically_derived] # [allow (deprecated)] ",
-            "impl < 'de > :: serde :: Deserialize < 'de > for Pet { ",
+            "# [automatically_derived] # [allow (deprecated)] impl < 'de > :: serde :: Deserialize < 'de > for Pet { ",
             "fn deserialize < __D : :: serde :: Deserializer < 'de >> (__deserializer : __D ,) ",
-            "-> :: core :: result :: Result < Self , __D :: Error > { ",
-            "# [allow (clippy :: option_option)] struct __DeserializeWith1 (Option < u8 >) ; ",
+            "-> :: core :: result :: Result < Self , __D :: Error > { # [allow (clippy :: option_option)] ",
+            "struct __DeserializeWith1 (Option < u8 >) ; ",
             "impl < 'de > :: serde :: Deserialize < 'de > for __DeserializeWith1 { ",
             "fn deserialize < __D : :: serde :: Deserializer < 'de >> (__deserializer : __D ,) ",
             "-> :: core :: result :: Result < Self , __D :: Error > { ",
             "# [allow (unused_imports)] use :: serde :: Deserialize as _ ; ",
             "Option :: deserialize (__deserializer) . map (__DeserializeWith1) } } ",
+            "fn __field_index (__key : & str ,) -> :: core :: option :: Option < :: core :: primitive :: usize > { ",
+            "match __key { ",
+            "\"name\" => :: core :: option :: Option :: Some (0usize) , ",
+            "\"age-years\" => :: core :: option :: Option :: Some (1usize) , ",
+            "_ => :: core :: option :: Option :: None , } } ",
             "struct __Visitor ; ",
             "impl < 'de > :: serde :: de :: Visitor < 'de > for __Visitor { ",
             "type Value = Pet ; ",
@@ -514,22 +659,19 @@ mod tests {
             "-> :: core :: fmt :: Result { __formatter . write_str (\"struct Pet\") } ",
             "fn visit_map < __A : :: serde :: de :: MapAccess < 'de >> (self , mut __map : __A ,) ",
             "-> :: core :: result :: Result < Pet , __A :: Error > { ",
-            "const __KEYS : & [& str] = & [\"name\" , \"age-years\"] ; ",
-            "let mut __field0 = :: core :: option :: Option :: None ; ",
-            "let mut __field1 : :: core :: option :: Option < __DeserializeWith1 > = :: core :: option :: Option :: None ; ",
+            "let mut __field0 : :: json_schema_rs :: generated_serde :: __private :: Slot < String > = :: json_schema_rs :: generated_serde :: __private :: Slot :: empty () ; ",
+            "let mut __field1 : :: json_schema_rs :: generated_serde :: __private :: Slot < __DeserializeWith1 > = :: json_schema_rs :: generated_serde :: __private :: Slot :: empty () ; ",
             "while let :: core :: option :: Option :: Some (__key) = ",
-            ":: serde :: de :: MapAccess :: next_key_seed (& mut __map , ",
-            ":: json_schema_rs :: generated_serde :: __private :: KeySeed (__KEYS)) ? { ",
-            "match __key . as_str () { ",
-            "\"name\" => :: json_schema_rs :: generated_serde :: __private :: read_field (& mut __map , & mut __field0 , \"name\") ? , ",
-            "\"age-years\" => :: json_schema_rs :: generated_serde :: __private :: read_field (& mut __map , & mut __field1 , \"age-years\") ? , ",
-            "_ => :: json_schema_rs :: generated_serde :: __private :: skip_value (& mut __map) ? , } } ",
-            ":: core :: result :: Result :: Ok (Pet { ",
-            "name : match __field0 { :: core :: option :: Option :: Some (__value) => __value , ",
-            ":: core :: option :: Option :: None => :: json_schema_rs :: generated_serde :: __private :: missing_field :: < _ , __A :: Error > (\"name\") ? , } , ",
-            "age_years : match __field1 { :: core :: option :: Option :: Some (__value) => __value . 0 , ",
-            ":: core :: option :: Option :: None => return :: core :: result :: Result :: Err (< __A :: Error as :: serde :: de :: Error > :: missing_field (\"age-years\") ,) , } , ",
-            "}) } } ",
+            ":: serde :: de :: MapAccess :: next_key_seed (& mut __map , :: json_schema_rs :: generated_serde :: __private :: KeySeed (__field_index) ,) ? { ",
+            "match __key { :: json_schema_rs :: generated_serde :: __private :: Key :: Field (__index) => match __index { ",
+            "0usize => :: json_schema_rs :: generated_serde :: __private :: read_field (& mut __map , & mut __field0 , \"name\") ? , ",
+            "_ => :: json_schema_rs :: generated_serde :: __private :: read_field (& mut __map , & mut __field1 , \"age-years\") ? , } ",
+            ":: json_schema_rs :: generated_serde :: __private :: Key :: Unknown (_) => :: json_schema_rs :: generated_serde :: __private :: skip_value (& mut __map) ? , } } ",
+            "let __value0 = match :: json_schema_rs :: generated_serde :: __private :: Slot :: take (& mut __field0) { :: core :: option :: Option :: Some (__value) => __value , ",
+            ":: core :: option :: Option :: None => :: json_schema_rs :: generated_serde :: __private :: missing_field :: < _ , __A :: Error > (\"name\") ? , } ; ",
+            "let __value1 = match :: json_schema_rs :: generated_serde :: __private :: Slot :: take (& mut __field1) { :: core :: option :: Option :: Some (__value) => __value . 0 , ",
+            ":: core :: option :: Option :: None => return :: core :: result :: Result :: Err (:: json_schema_rs :: generated_serde :: __private :: missing_field_error (\"age-years\")) , } ; ",
+            ":: core :: result :: Result :: Ok (Pet { name : __value0 , age_years : __value1 , }) } } ",
             ":: serde :: Deserializer :: deserialize_map (__deserializer , __Visitor) } }",
         )
         .to_string();
