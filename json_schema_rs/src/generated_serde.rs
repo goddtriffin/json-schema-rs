@@ -7,7 +7,10 @@
 //! which LLVM optimizes in superlinear time (an 800-field struct took 100 s to build with
 //! optimizations; through the shared reader it takes 2 s). The reader is not marked
 //! `#[inline(never)]`: LLVM inlines it into small visitors, where that pays (nested small structs
-//! read 20% slower without it), and stops as a visitor grows. The visitor also reads a `#[serde(flatten)]` map of additional properties key by key
+//! read 20% slower without it). Keys are matched once, to a field index, by a non-generic
+//! function the derive emits (`__private::KeySeed`), and the struct is built from values taken
+//! out of their slots one by one, so a struct with thousands of fields still builds in linear
+//! time (see `Slot`). The visitor also reads a `#[serde(flatten)]` map of additional properties key by key
 //! (`__private::read_additional`), where serde's derive buffers the whole object through its
 //! private `Content`.
 //!
@@ -124,24 +127,29 @@ pub mod __private {
         }
     }
 
-    /// An object key: borrowed from the input when it can be, one of the struct's own keys when
-    /// it is one, else owned. A known key is never allocated.
+    /// An object key: the index of the struct's field it names, else the key itself.
     pub enum Key<'de> {
+        /// The struct's field at this index (in declaration order).
+        Field(usize),
+        /// A key that names no field.
+        Unknown(UnknownKey<'de>),
+    }
+
+    /// A key that names no field: borrowed from the input when it can be, else owned.
+    pub enum UnknownKey<'de> {
         /// Borrowed from the input.
         Borrowed(&'de str),
-        /// One of the struct's keys.
-        Known(&'static str),
-        /// Neither.
+        /// Owned.
         Owned(String),
     }
 
-    impl Key<'_> {
+    impl UnknownKey<'_> {
         /// The key's text.
         #[must_use]
         pub fn as_str(&self) -> &str {
             match self {
-                Key::Borrowed(key) | Key::Known(key) => key,
-                Key::Owned(key) => key,
+                UnknownKey::Borrowed(key) => key,
+                UnknownKey::Owned(key) => key,
             }
         }
 
@@ -149,14 +157,32 @@ pub mod __private {
         #[must_use]
         pub fn into_string(self) -> String {
             match self {
-                Key::Borrowed(key) | Key::Known(key) => key.to_string(),
-                Key::Owned(key) => key,
+                UnknownKey::Borrowed(key) => key.to_string(),
+                UnknownKey::Owned(key) => key,
             }
         }
     }
 
-    /// Reads an object key (as an identifier, like serde's derive), knowing the struct's keys.
-    pub struct KeySeed(pub &'static [&'static str]);
+    /// Reads an object key (as an identifier, like serde's derive) through the struct's
+    /// `field_index`, which gives the index of the field a key names. The key's text is
+    /// matched once, whether the input lends the key or hands over an owned one, and a field's
+    /// key is never allocated: an owned one is dropped before the field's value is read (as
+    /// serde's derive does), so the two are never held at once.
+    pub struct KeySeed(pub fn(&str) -> Option<usize>);
+
+    impl KeySeed {
+        /// `key` as the field it names, else as the unknown key `unknown` makes of it.
+        fn key<'de, K: AsRef<str>>(
+            &self,
+            key: K,
+            unknown: impl FnOnce(K) -> UnknownKey<'de>,
+        ) -> Key<'de> {
+            match (self.0)(key.as_ref()) {
+                Some(index) => Key::Field(index),
+                None => Key::Unknown(unknown(key)),
+            }
+        }
+    }
 
     impl<'de> DeserializeSeed<'de> for KeySeed {
         type Value = Key<'de>;
@@ -174,33 +200,22 @@ pub mod __private {
         }
 
         fn visit_borrowed_str<E: de::Error>(self, key: &'de str) -> Result<Key<'de>, E> {
-            Ok(Key::Borrowed(key))
+            Ok(self.key(key, UnknownKey::Borrowed))
         }
 
         fn visit_str<E: de::Error>(self, key: &str) -> Result<Key<'de>, E> {
-            Ok(self
-                .0
-                .iter()
-                .copied()
-                .find(|known: &&'static str| *known == key)
-                .map_or_else(|| Key::Owned(key.to_string()), Key::Known))
+            Ok(self.key(key, |key: &str| UnknownKey::Owned(key.to_string())))
         }
 
-        // A known key drops its `String` before the field's value is read (as serde's derive
-        // does), so the two are never held at once.
         fn visit_string<E: de::Error>(self, key: String) -> Result<Key<'de>, E> {
-            Ok(self
-                .0
-                .iter()
-                .copied()
-                .find(|known: &&'static str| *known == key)
-                .map_or(Key::Owned(key), Key::Known))
+            Ok(self.key(key, UnknownKey::Owned))
         }
 
         fn visit_borrowed_bytes<E: de::Error>(self, key: &'de [u8]) -> Result<Key<'de>, E> {
-            std::str::from_utf8(key)
-                .map(Key::Borrowed)
-                .map_err(|_| de::Error::invalid_value(de::Unexpected::Bytes(key), &self))
+            match std::str::from_utf8(key) {
+                Ok(key) => self.visit_borrowed_str(key),
+                Err(_) => Err(de::Error::invalid_value(de::Unexpected::Bytes(key), &self)),
+            }
         }
 
         fn visit_bytes<E: de::Error>(self, key: &[u8]) -> Result<Key<'de>, E> {
@@ -208,6 +223,29 @@ pub mod __private {
                 Ok(key) => self.visit_str(key),
                 Err(_) => Err(de::Error::invalid_value(de::Unexpected::Bytes(key), &self)),
             }
+        }
+    }
+
+    /// The value of one field while its struct is read: empty until the field's key is read.
+    ///
+    /// The derive names each slot's type (`Slot<T>`): left to inference, 2,000 slots cost type
+    /// checking 26 s, and an explicit `Option<T>` would spell `Option<Option<T>>` for an
+    /// optional field (clippy's `option_option` lint in the user's crate).
+    pub struct Slot<T>(Option<T>);
+
+    impl<T> Slot<T> {
+        /// An empty slot.
+        #[must_use]
+        pub const fn empty() -> Self {
+            Self(None)
+        }
+
+        /// The value read, leaving the slot empty. Taken through `&mut`, a slot is never moved,
+        /// so every early return from the visitor drops the same set of slots; moving them
+        /// one field at a time made each `?` drop a different set, which an optimized build
+        /// compiles in quadratic time (a 2,000-field struct took 10 min).
+        pub const fn take(&mut self) -> Option<T> {
+            self.0.take()
         }
     }
 
@@ -223,13 +261,13 @@ pub mod __private {
     /// `duplicate field` when `slot` is already filled, and the value's own error.
     pub fn read_field<'de, A: MapAccess<'de>, T: Deserialize<'de>>(
         map: &mut A,
-        slot: &mut Option<T>,
+        slot: &mut Slot<T>,
         key: &'static str,
     ) -> Result<(), A::Error> {
-        if slot.is_some() {
+        if slot.0.is_some() {
             return Err(de::Error::duplicate_field(key));
         }
-        *slot = Some(map.next_value()?);
+        slot.0 = Some(map.next_value()?);
         Ok(())
     }
 
@@ -243,7 +281,7 @@ pub mod __private {
     pub fn read_additional<'de, A: MapAccess<'de>, M: AdditionalProperties, W: Deserialize<'de>>(
         map: &mut A,
         additional: &mut M,
-        key: Key<'de>,
+        key: UnknownKey<'de>,
         value: fn(W) -> M::Value,
     ) -> Result<(), A::Error> {
         let read: W = map.next_value()?;
@@ -264,7 +302,7 @@ pub mod __private {
 
     /// The `unknown field` error for `key` (serde's message, listing the struct's `keys`).
     #[must_use]
-    pub fn unknown_field<E: de::Error>(key: &Key<'_>, keys: &'static [&'static str]) -> E {
+    pub fn unknown_field<E: de::Error>(key: &UnknownKey<'_>, keys: &'static [&'static str]) -> E {
         E::unknown_field(key.as_str(), keys)
     }
 
@@ -280,6 +318,16 @@ pub mod __private {
         V::deserialize(MissingField(field, PhantomData))
     }
 
+    /// The `missing field` error for `field`. Out of line and cold: a wide struct has one
+    /// absent-field path per required field, and the error's formatting inlined into each made
+    /// the visitor several times larger.
+    #[cold]
+    #[inline(never)]
+    #[must_use]
+    pub fn missing_field_error<E: de::Error>(field: &'static str) -> E {
+        E::missing_field(field)
+    }
+
     /// The deserializer of an absent field.
     struct MissingField<E>(&'static str, PhantomData<E>);
 
@@ -287,7 +335,7 @@ pub mod __private {
         type Error = E;
 
         fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, E> {
-            Err(de::Error::missing_field(self.0))
+            Err(missing_field_error(self.0))
         }
 
         fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, E> {
@@ -304,24 +352,53 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests {
-    use super::__private::{Key, KeySeed};
+    use super::__private::{Key, KeySeed, UnknownKey};
     use serde::de::DeserializeSeed;
-    use serde::de::value::{Error, StringDeserializer};
+    use serde::de::value::{BorrowedStrDeserializer, Error, StringDeserializer};
 
-    /// The key `KeySeed(&["name"])` reads from an owned string.
+    /// The index of the field `"name"` names in a struct whose fields are `id` and `name`.
+    fn field_index(key: &str) -> Option<usize> {
+        match key {
+            "id" => Some(0),
+            "name" => Some(1),
+            _ => None,
+        }
+    }
+
+    /// The key `KeySeed` reads from an owned string.
     fn owned_key(text: &str) -> Result<Key<'static>, Error> {
-        KeySeed(&["name"]).deserialize(StringDeserializer::<Error>::new(text.to_string()))
+        KeySeed(field_index).deserialize(StringDeserializer::<Error>::new(text.to_string()))
+    }
+
+    /// The key `KeySeed` reads from a borrowed string.
+    fn borrowed_key(text: &str) -> Result<Key<'_>, Error> {
+        KeySeed(field_index).deserialize(BorrowedStrDeserializer::<Error>::new(text))
     }
 
     #[test]
-    fn key_seed_reads_a_known_owned_key_as_the_static_key() {
+    fn key_seed_reads_a_known_owned_key_as_its_field_index() {
         let actual: Result<Key<'static>, Error> = owned_key("name");
-        assert!(matches!(actual, Ok(Key::Known("name"))));
+        assert!(matches!(actual, Ok(Key::Field(1))));
     }
 
     #[test]
     fn key_seed_keeps_an_unknown_owned_key_owned() {
         let actual: Result<Key<'static>, Error> = owned_key("other");
-        assert!(matches!(actual, Ok(Key::Owned(ref key)) if key == "other"));
+        assert!(matches!(actual, Ok(Key::Unknown(UnknownKey::Owned(ref key))) if key == "other"));
+    }
+
+    #[test]
+    fn key_seed_reads_a_known_borrowed_key_as_its_field_index() {
+        let actual: Result<Key<'_>, Error> = borrowed_key("id");
+        assert!(matches!(actual, Ok(Key::Field(0))));
+    }
+
+    #[test]
+    fn key_seed_keeps_an_unknown_borrowed_key_borrowed() {
+        let actual: Result<Key<'_>, Error> = borrowed_key("other");
+        assert!(matches!(
+            actual,
+            Ok(Key::Unknown(UnknownKey::Borrowed("other")))
+        ));
     }
 }
