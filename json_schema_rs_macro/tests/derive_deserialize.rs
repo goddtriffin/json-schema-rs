@@ -1,8 +1,8 @@
 //! Integration test: `#[derive(json_schema_rs_macro::Deserialize)]` on hand-written structs, for
 //! every serde attribute it accepts and its absence: present, absent, repeated and unknown keys,
 //! `deny_unknown_fields`, `rename`, `default`, `deserialize_with` (with and without `default`),
-//! `flatten` (with and without `deserialize_with`), deprecated fields, and input that is not an
-//! object. Errors are serde's derive's, word for word.
+//! `flatten` (with and without `deserialize_with`), deprecated fields, input that is not an
+//! object, a struct wide enough for the derive's other expansion, and `Self` in a field type. Errors are serde's derive's, word for word.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -56,6 +56,87 @@ struct OpenWith {
 struct Old {
     #[deprecated]
     value: u8,
+}
+
+/// More fields than the derive builds by moving its slots (64), so it takes their values out
+/// one by one: the same semantics, another expansion.
+#[derive(Debug, Default, PartialEq, json_schema_rs_macro::Deserialize)]
+struct Wide {
+    name: String,
+    #[serde(deserialize_with = "doubled")]
+    with: i64,
+    #[serde(default)]
+    plain_default: Vec<u8>,
+    #[serde(rename = "f-03")]
+    f03: Option<u8>,
+    f04: Option<u8>,
+    f05: Option<u8>,
+    f06: Option<u8>,
+    f07: Option<u8>,
+    f08: Option<u8>,
+    f09: Option<u8>,
+    f10: Option<u8>,
+    f11: Option<u8>,
+    f12: Option<u8>,
+    f13: Option<u8>,
+    f14: Option<u8>,
+    f15: Option<u8>,
+    f16: Option<u8>,
+    f17: Option<u8>,
+    f18: Option<u8>,
+    f19: Option<u8>,
+    f20: Option<u8>,
+    f21: Option<u8>,
+    f22: Option<u8>,
+    f23: Option<u8>,
+    f24: Option<u8>,
+    f25: Option<u8>,
+    f26: Option<u8>,
+    f27: Option<u8>,
+    f28: Option<u8>,
+    f29: Option<u8>,
+    f30: Option<u8>,
+    f31: Option<u8>,
+    f32: Option<u8>,
+    f33: Option<u8>,
+    f34: Option<u8>,
+    f35: Option<u8>,
+    f36: Option<u8>,
+    f37: Option<u8>,
+    f38: Option<u8>,
+    f39: Option<u8>,
+    f40: Option<u8>,
+    f41: Option<u8>,
+    f42: Option<u8>,
+    f43: Option<u8>,
+    f44: Option<u8>,
+    f45: Option<u8>,
+    f46: Option<u8>,
+    f47: Option<u8>,
+    f48: Option<u8>,
+    f49: Option<u8>,
+    f50: Option<u8>,
+    f51: Option<u8>,
+    f52: Option<u8>,
+    f53: Option<u8>,
+    f54: Option<u8>,
+    f55: Option<u8>,
+    f56: Option<u8>,
+    f57: Option<u8>,
+    f58: Option<u8>,
+    f59: Option<u8>,
+    f60: Option<u8>,
+    f61: Option<u8>,
+    f62: Option<u8>,
+    f63: Option<u8>,
+    f64: Option<u8>,
+    f65: Option<u8>,
+}
+
+#[derive(Debug, PartialEq, json_schema_rs_macro::Deserialize)]
+struct Node {
+    value: u8,
+    next: Option<Box<Self>>,
 }
 
 /// The result of deserializing `json` into `T`, the error as text.
@@ -262,5 +343,56 @@ fn reads_from_a_value() {
     let actual: Result<Plain, String> =
         serde_json::from_value::<Plain>(serde_json::json!({"name": "Rex", "age-years": 3}))
             .map_err(|error: serde_json::Error| error.to_string());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn wide_struct_reads_present_keys_into_their_fields() {
+    let expected: Result<Wide, String> = Ok(Wide {
+        name: "Rex".to_string(),
+        with: 8,
+        f03: Some(3),
+        f65: Some(65),
+        ..Wide::default()
+    });
+    let actual: Result<Wide, String> =
+        read(r#"{"f65": 65, "name": "Rex", "with": 4, "f-03": 3, "unknown": 1}"#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn wide_struct_absent_required_key_is_missing_field() {
+    let expected: Result<Wide, String> =
+        Err("missing field `name` at line 1 column 11".to_string());
+    let actual: Result<Wide, String> = read(r#"{"with": 4}"#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn wide_struct_absent_deserialize_with_key_is_missing_field() {
+    let expected: Result<Wide, String> =
+        Err("missing field `with` at line 1 column 15".to_string());
+    let actual: Result<Wide, String> = read(r#"{"name": "Rex"}"#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn wide_struct_repeated_key_is_duplicate_field() {
+    let expected: Result<Wide, String> =
+        Err("duplicate field `f65` at line 1 column 16".to_string());
+    let actual: Result<Wide, String> = read(r#"{"f65": 1, "f65": 2}"#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn self_in_a_field_type_is_the_struct() {
+    let expected: Result<Node, String> = Ok(Node {
+        value: 1,
+        next: Some(Box::new(Node {
+            value: 2,
+            next: None,
+        })),
+    });
+    let actual: Result<Node, String> = read(r#"{"value": 1, "next": {"value": 2}}"#);
     assert_eq!(expected, actual);
 }

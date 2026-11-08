@@ -5,7 +5,7 @@
 //! linearly with the struct's fields. serde's derive writes each field's read into one
 //! `visit_map`, which LLVM optimizes in superlinear time: an optimized build of a struct with
 //! hundreds of fields takes minutes with serde's derive and seconds with this one. Keys are
-//! matched once, by the non-generic `__field_index` it emits, and the struct is built from
+//! matched once, by the non-generic `__field_index` it emits, and a wide struct is built from
 //! values taken out of never-moved slots, so no step grows faster than the field count.
 //!
 //! It accepts the serde attributes codegen emits and rejects every other one at its span:
@@ -197,13 +197,28 @@ struct FieldTokens {
     init: TokenStream2,
 }
 
+/// The field count above which a struct is built from values taken out of its slots (see
+/// `field_tokens`).
+const WIDE_STRUCT_FIELDS: usize = 64;
+
 /// The tokens of the field at `index` of the struct `name`, `last` when it is the last field
-/// (adding its `deserialize_with` wrapper, if any, to `wrappers`).
+/// and `wide` when the struct has more than [`WIDE_STRUCT_FIELDS`] fields (adding its
+/// `deserialize_with` wrapper, if any, to `wrappers`).
+///
+/// A struct is built in one of two ways. A narrow one moves each slot into the struct
+/// expression, the fastest code: small structs read 3% slower the other way
+/// (`generated/many-defs`). But then each field's `?` drops a different set of slots, which an
+/// optimized build compiles in time quadratic in the field count (a 2,000-field struct took
+/// 10 min). A wide one instead takes each value out of its slot through `&mut`
+/// (`Slot::take`) into a `let` of its own before the struct expression, so slots are never
+/// moved, every early return drops the same slots plus the values bound so far, and the
+/// cleanup code stays linear.
 fn field_tokens(
     private: &TokenStream2,
     name: &Ident,
     (index, field): (usize, &FieldSpec),
     last: bool,
+    wide: bool,
     wrappers: &mut Vec<TokenStream2>,
 ) -> FieldTokens {
     let slot: Ident = format_ident!("__field{index}");
@@ -235,20 +250,32 @@ fn field_tokens(
         },
         (false, false) => quote! { #private::missing_field::<_, __A::Error>(#key)? },
     };
+    let read = |slot: TokenStream2| -> TokenStream2 {
+        quote! {
+            match #slot {
+                ::core::option::Option::Some(__value) => #value,
+                ::core::option::Option::None => #absent,
+            }
+        }
+    };
     let bound: Ident = format_ident!("__value{index}");
+    let (value, init): (TokenStream2, TokenStream2) = if wide {
+        let read: TokenStream2 = read(quote! { #private::Slot::take(&mut #slot) });
+        (quote! { let #bound = #read; }, quote! { #ident: #bound, })
+    } else {
+        // The slot's field, matched in place: through a call returning the `Option`, many-defs
+        // read 2% slower.
+        let read: TokenStream2 = read(quote! { #slot.0 });
+        (TokenStream2::new(), quote! { #ident: #read, })
+    };
     FieldTokens {
         slot: quote! {
             let mut #slot: #private::Slot<#slot_ty> = #private::Slot::empty();
         },
         index_arm: quote! { #key => ::core::option::Option::Some(#index), },
         arm: quote! { #pattern => #private::read_field(&mut __map, &mut #slot, #key)?, },
-        value: quote! {
-            let #bound = match #private::Slot::take(&mut #slot) {
-                ::core::option::Option::Some(__value) => #value,
-                ::core::option::Option::None => #absent,
-            };
-        },
-        init: quote! { #ident: #bound, },
+        value,
+        init,
     }
 }
 
@@ -317,7 +344,8 @@ fn render(
         .enumerate()
         .map(|field: (usize, &FieldSpec)| {
             let last: bool = field.0 + 1 == fields.len();
-            field_tokens(&private, name, field, last, &mut wrappers)
+            let wide: bool = fields.len() > WIDE_STRUCT_FIELDS;
+            field_tokens(&private, name, field, last, wide, &mut wrappers)
         })
         .collect();
     let slots: Vec<&TokenStream2> = tokens.iter().map(|t| &t.slot).collect();
@@ -478,8 +506,9 @@ fn wrapper_type(wrapper: &Ident, ty: &TokenStream2, path: &ExprPath) -> TokenStr
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_deserialize, replace_self};
+    use super::{FieldSpec, FieldTokens, expand_deserialize, field_tokens, replace_self};
     use proc_macro2::{Span, TokenStream};
+    use quote::quote;
     use std::str::FromStr;
     use syn::DeriveInput;
 
@@ -625,6 +654,38 @@ mod tests {
     }
 
     #[test]
+    fn wide_struct_field_takes_its_value_out_of_its_slot() {
+        let expected: (String, String) = (
+            concat!(
+                "let __value2 = match :: json_schema_rs :: generated_serde :: __private :: Slot :: take (& mut __field2) ",
+                "{ :: core :: option :: Option :: Some (__value) => __value , ",
+                ":: core :: option :: Option :: None => :: json_schema_rs :: generated_serde :: __private :: missing_field :: < _ , __A :: Error > (\"name\") ? , } ;",
+            )
+            .to_string(),
+            "name : __value2 ,".to_string(),
+        );
+        let field: FieldSpec = FieldSpec {
+            ident: syn::Ident::new("name", Span::call_site()),
+            ty: syn::parse_quote!(String),
+            key: "name".to_string(),
+            default: false,
+            with: None,
+            flatten: false,
+            span: Span::call_site(),
+        };
+        let tokens: FieldTokens = field_tokens(
+            &quote! { ::json_schema_rs::generated_serde::__private },
+            &syn::Ident::new("Pet", Span::call_site()),
+            (2, &field),
+            false,
+            true,
+            &mut Vec::new(),
+        );
+        let actual: (String, String) = (tokens.value.to_string(), tokens.init.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn replace_self_names_the_struct_at_every_depth() {
         let expected: String = "Option < Vec < (Node , [Box < Node >; 2]) >>".to_string();
         let actual: String = replace_self(
@@ -667,11 +728,12 @@ mod tests {
             "0usize => :: json_schema_rs :: generated_serde :: __private :: read_field (& mut __map , & mut __field0 , \"name\") ? , ",
             "_ => :: json_schema_rs :: generated_serde :: __private :: read_field (& mut __map , & mut __field1 , \"age-years\") ? , } ",
             ":: json_schema_rs :: generated_serde :: __private :: Key :: Unknown (_) => :: json_schema_rs :: generated_serde :: __private :: skip_value (& mut __map) ? , } } ",
-            "let __value0 = match :: json_schema_rs :: generated_serde :: __private :: Slot :: take (& mut __field0) { :: core :: option :: Option :: Some (__value) => __value , ",
-            ":: core :: option :: Option :: None => :: json_schema_rs :: generated_serde :: __private :: missing_field :: < _ , __A :: Error > (\"name\") ? , } ; ",
-            "let __value1 = match :: json_schema_rs :: generated_serde :: __private :: Slot :: take (& mut __field1) { :: core :: option :: Option :: Some (__value) => __value . 0 , ",
-            ":: core :: option :: Option :: None => return :: core :: result :: Result :: Err (:: json_schema_rs :: generated_serde :: __private :: missing_field_error (\"age-years\")) , } ; ",
-            ":: core :: result :: Result :: Ok (Pet { name : __value0 , age_years : __value1 , }) } } ",
+            ":: core :: result :: Result :: Ok (Pet { ",
+            "name : match __field0 . 0 { :: core :: option :: Option :: Some (__value) => __value , ",
+            ":: core :: option :: Option :: None => :: json_schema_rs :: generated_serde :: __private :: missing_field :: < _ , __A :: Error > (\"name\") ? , } , ",
+            "age_years : match __field1 . 0 { :: core :: option :: Option :: Some (__value) => __value . 0 , ",
+            ":: core :: option :: Option :: None => return :: core :: result :: Result :: Err (:: json_schema_rs :: generated_serde :: __private :: missing_field_error (\"age-years\")) , } , ",
+            "}) } } ",
             ":: serde :: Deserializer :: deserialize_map (__deserializer , __Visitor) } }",
         )
         .to_string();

@@ -8,9 +8,9 @@
 //! optimizations; through the shared reader it takes 2 s). The reader is not marked
 //! `#[inline(never)]`: LLVM inlines it into small visitors, where that pays (nested small structs
 //! read 20% slower without it). Keys are matched once, to a field index, by a non-generic
-//! function the derive emits (`__private::KeySeed`), and the struct is built from values taken
-//! out of their slots one by one, so a struct with thousands of fields still builds in linear
-//! time (see `Slot`). The visitor also reads a `#[serde(flatten)]` map of additional properties key by key
+//! function the derive emits (`__private::KeySeed`), and a wide struct is built from values
+//! taken out of their slots one by one, so a struct with thousands of fields still builds in
+//! linear time (see `Slot`). The visitor also reads a `#[serde(flatten)]` map of additional properties key by key
 //! (`__private::read_additional`), where serde's derive buffers the whole object through its
 //! private `Content`.
 //!
@@ -168,9 +168,12 @@ pub mod __private {
     /// matched once, whether the input lends the key or hands over an owned one, and a field's
     /// key is never allocated: an owned one is dropped before the field's value is read (as
     /// serde's derive does), so the two are never held at once.
-    pub struct KeySeed(pub fn(&str) -> Option<usize>);
+    ///
+    /// Generic over the function, not a `fn` pointer: through a pointer, small structs read 4%
+    /// slower.
+    pub struct KeySeed<F>(pub F);
 
-    impl KeySeed {
+    impl<F: Fn(&str) -> Option<usize>> KeySeed<F> {
         /// `key` as the field it names, else as the unknown key `unknown` makes of it.
         fn key<'de, K: AsRef<str>>(
             &self,
@@ -184,7 +187,7 @@ pub mod __private {
         }
     }
 
-    impl<'de> DeserializeSeed<'de> for KeySeed {
+    impl<'de, F: Fn(&str) -> Option<usize>> DeserializeSeed<'de> for KeySeed<F> {
         type Value = Key<'de>;
 
         fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Key<'de>, D::Error> {
@@ -192,7 +195,7 @@ pub mod __private {
         }
     }
 
-    impl<'de> Visitor<'de> for KeySeed {
+    impl<'de, F: Fn(&str) -> Option<usize>> Visitor<'de> for KeySeed<F> {
         type Value = Key<'de>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -231,7 +234,7 @@ pub mod __private {
     /// The derive names each slot's type (`Slot<T>`): left to inference, 2,000 slots cost type
     /// checking 26 s, and an explicit `Option<T>` would spell `Option<Option<T>>` for an
     /// optional field (clippy's `option_option` lint in the user's crate).
-    pub struct Slot<T>(Option<T>);
+    pub struct Slot<T>(pub Option<T>);
 
     impl<T> Slot<T> {
         /// An empty slot.
@@ -240,10 +243,8 @@ pub mod __private {
             Self(None)
         }
 
-        /// The value read, leaving the slot empty. Taken through `&mut`, a slot is never moved,
-        /// so every early return from the visitor drops the same set of slots; moving them
-        /// one field at a time made each `?` drop a different set, which an optimized build
-        /// compiles in quadratic time (a 2,000-field struct took 10 min).
+        /// The value read, leaving the slot empty: how a wide struct's visitor takes its values,
+        /// so its slots are never moved (see the derive's `field_tokens`).
         pub const fn take(&mut self) -> Option<T> {
             self.0.take()
         }
