@@ -7,7 +7,9 @@
 //! 2. [`dedup`]: structurally identical nodes become one (partition refinement, so it is exact
 //!    on recursive types too).
 //! 3. [`break_cycles`]: a `Box` on each back-edge that would make a type contain itself by value.
-//! 4. [`reachable`]: which nodes each schema uses, for placement in shared or per-schema output.
+//! 4. [`box_large_values`]: a `Box` on each field or union variant holding a large struct or
+//!    union by value.
+//! 5. [`reachable`]: which nodes each schema uses, for placement in shared or per-schema output.
 //!
 //! Every pass is iterative (explicit stacks and work lists).
 
@@ -335,6 +337,147 @@ pub(crate) fn break_cycles(graph: &mut TypeGraph) {
                 stack.push((target, target_slots, 0));
             }
         }
+    }
+}
+
+/// The estimated size in bytes above which a struct or union held by value in a field or
+/// union variant is boxed instead (see [`box_large_values`]). Measured on the benchmark's
+/// generated types (#120): deserializing got faster as the limit fell to 256 (deep-nesting 29%,
+/// k8s-deployment 21-33%, many-defs 21%, nothing slower), while 128 and 64 traded a few percent
+/// between fixtures (many-defs 5% slower, k8s-deployment 3% faster) for more allocations.
+const BOX_ABOVE_BYTES: u64 = 256;
+
+/// Whether `Option<T>` is no larger than `T` for the node (Rust stores `None` in a niche of `T`).
+fn has_niche(node: &TypeNode) -> bool {
+    matches!(
+        node,
+        TypeNode::Boolean
+            | TypeNode::String { .. }
+            | TypeNode::Array { .. }
+            | TypeNode::Map { .. }
+            | TypeNode::Box(_)
+            | TypeNode::Enum(_)
+    )
+}
+
+/// The estimated size of `id` held by value, from the sizes of the named nodes it reaches by
+/// value (`sizes`, filled for every one of them). Follows `Option` chains only.
+fn value_size(graph: &TypeGraph, id: TypeId, sizes: &[Option<u64>]) -> u64 {
+    let mut extra: u64 = 0;
+    let mut id: TypeId = id;
+    while let TypeNode::Option(inner) = graph.node(id) {
+        if !has_niche(graph.node(*inner)) {
+            extra += 8;
+        }
+        id = *inner;
+    }
+    let own: u64 = match graph.node(id) {
+        TypeNode::Pending | TypeNode::Any => 32,
+        TypeNode::Null => 0,
+        TypeNode::Boolean | TypeNode::Enum(_) => 1,
+        TypeNode::Integer(..) | TypeNode::Number(_) | TypeNode::Box(_) => 8,
+        TypeNode::String { .. } | TypeNode::Map { .. } => 24,
+        TypeNode::Array { unique, .. } => {
+            if *unique {
+                56
+            } else {
+                24
+            }
+        }
+        TypeNode::Option(_) => unreachable!("Option chains are followed above"),
+        TypeNode::Object(_) | TypeNode::Union(_) => {
+            sizes[id.index()].expect("a node's by-value children are sized before it")
+        }
+    };
+    own + extra
+}
+
+/// The struct or union at the bottom of `id`'s `Option` chain, if any (not behind a `Box`).
+fn by_value_target(graph: &TypeGraph, mut id: TypeId) -> Option<TypeId> {
+    while let TypeNode::Option(inner) = graph.node(id) {
+        id = *inner;
+    }
+    matches!(graph.node(id), TypeNode::Object(_) | TypeNode::Union(_)).then_some(id)
+}
+
+/// Boxes every struct or union held by value in a field or union variant whose estimated size
+/// is above [`BOX_ABOVE_BYTES`], so no generated value is large. Codegen nests every
+/// non-recursive definition by value, so without it a type's size is the sum of everything it
+/// reaches: `generated/many-defs`'s root was 458 KB, and deserializing a valid instance
+/// overflowed a debug build's 8 MB main thread and a release build's 2 MB thread (#120); boxed,
+/// it needs 64 KB and reads 21% faster (less to move through each nested visitor). Sizes
+/// are estimated for a 64-bit target from the node kinds alone (machine-independent output),
+/// children first (after [`break_cycles`], by-value containment has no cycles), so a parent's
+/// size counts its boxed children as pointers.
+pub(crate) fn box_large_values(graph: &mut TypeGraph) {
+    let mut sizes: Vec<Option<u64>> = vec![None; graph.nodes.len()];
+    let mut entered: Vec<bool> = vec![false; graph.nodes.len()];
+    let mut stack: Vec<TypeId> = (0..graph.nodes.len())
+        .rev()
+        .filter_map(|index| {
+            let id: TypeId = TypeId(u32::try_from(index).expect("fewer than 2^32 nodes"));
+            matches!(graph.node(id), TypeNode::Object(_) | TypeNode::Union(_)).then_some(id)
+        })
+        .collect();
+    while let Some(&id) = stack.last() {
+        if sizes[id.index()].is_some() {
+            stack.pop();
+            continue;
+        }
+        let slots: Vec<TypeId> = match graph.node(id) {
+            TypeNode::Object(o) => o.fields.iter().map(|f| f.ty).collect(),
+            TypeNode::Union(u) => u.variants.iter().map(|v| v.ty).collect(),
+            _ => unreachable!("only structs and unions are stacked"),
+        };
+        if !entered[id.index()] {
+            // First visit: size every struct or union this one holds by value first.
+            entered[id.index()] = true;
+            for slot in slots.iter().rev() {
+                if let Some(target) = by_value_target(graph, *slot)
+                    && sizes[target.index()].is_none()
+                {
+                    stack.push(target);
+                }
+            }
+            continue;
+        }
+        stack.pop();
+        let mut node_value: TypeNode = graph.nodes[id.index()].clone();
+        let held: Vec<&mut TypeId> = match &mut node_value {
+            TypeNode::Object(o) => o.fields.iter_mut().map(|f| &mut f.ty).collect(),
+            TypeNode::Union(u) => u.variants.iter_mut().map(|v| &mut v.ty).collect(),
+            _ => unreachable!("only structs and unions are stacked"),
+        };
+        for slot in held {
+            if let Some(target) = by_value_target(graph, *slot)
+                && sizes[target.index()].is_some_and(|size| size > BOX_ABOVE_BYTES)
+            {
+                *slot = boxed(graph, *slot);
+            }
+        }
+        let size: u64 = match &node_value {
+            TypeNode::Object(o) => {
+                let fields: u64 = o
+                    .fields
+                    .iter()
+                    .map(|f| value_size(graph, f.ty, &sizes))
+                    .sum();
+                fields + if o.additional.is_some() { 24 } else { 0 }
+            }
+            TypeNode::Union(u) => {
+                8 + u
+                    .variants
+                    .iter()
+                    .map(|v| value_size(graph, v.ty, &sizes))
+                    .max()
+                    .unwrap_or(0)
+            }
+            _ => unreachable!("only structs and unions are stacked"),
+        };
+        graph.nodes[id.index()] = node_value;
+        sizes.resize(graph.nodes.len(), None);
+        entered.resize(graph.nodes.len(), false);
+        sizes[id.index()] = Some(size);
     }
 }
 
