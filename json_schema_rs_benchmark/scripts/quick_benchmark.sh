@@ -219,7 +219,7 @@ build_generated_types() {
     fi
     target="${QUICK_DIR}/isolated-${side}"
     exclude="${QUICK_DIR}/${side}-model-exclude.tsv"
-    : > "${exclude}"
+    clear_exclusions "${exclude}"
     remap=(--config "build.rustflags = [\"--remap-path-prefix=${root}=/src\", \"--remap-path-prefix=${target}=/target\"]")
     CARGO_TARGET_DIR="${target}" build_models "${manifest}" generated-types "${exclude}" \
         "${QUICK_DIR}/${side}/models" "${remap[@]}" >&2 || exit 1

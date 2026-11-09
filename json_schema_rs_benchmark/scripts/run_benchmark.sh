@@ -615,7 +615,7 @@ main() {
     for feature in ${ISOLATED_FEATURES}; do
         echo "==> in-process tier: peak heap + compat (isolated: ${feature})"
         if [[ "${feature}" == *reverse-codegen* ]]; then
-            : > "${RAW_DIR}/model_exclude.tsv"
+            clear_exclusions "${RAW_DIR}/model_exclude.tsv"
             CARGO_TARGET_DIR="${REPO_ROOT}/target" build_models "${ISOLATED_MANIFEST}" \
                 "${feature}" "${RAW_DIR}/model_exclude.tsv" "${RAW_DIR}" \
                 || exit 1

@@ -679,13 +679,23 @@ tool_display_name() {
 # same exclusions. CARGO_TARGET_DIR comes from the caller's environment; [cargo args...] go to
 # every cargo command (the quick benchmark's path remapping). Returns 1 on failure: callers run it
 # as `build_models ... || exit 1`, which suspends `set -e` inside it, so every step checks itself.
+# clear_exclusions <exclude file>: leave <exclude file> empty, writing it only when it is missing
+# or holds rows. The model shards' build scripts rerun whenever its modification time changes
+# (rerun-if-changed), and a rerun rewrites every model and rebuilds every shard: emptying an
+# already empty file made every run rebuild both sides' models from scratch (#112).
+clear_exclusions() {
+    if [[ ! -e "$1" || -s "$1" ]]; then
+        : > "$1"
+    fi
+}
+
 build_models() {
     local manifest="$1" features="$2" exclude="$3" log_dir="$4" attempt before after
     local triage="${REPO_ROOT:?REPO_ROOT not set}/target/benchmark/model_build_failures"
     shift 4
     export BENCH_MODEL_EXCLUDE="${exclude}"
     mkdir -p "${log_dir}"
-    touch "${exclude}"
+    [[ -e "${exclude}" ]] || : > "${exclude}"
     for attempt in 1 2 3 4 5; do
         if cargo check --manifest-path "${manifest}" --config "$(_profile_config)" \
             --profile benchmark --features "${features}" --bins --keep-going \
