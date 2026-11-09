@@ -106,14 +106,17 @@ extract_base() {
         git -C "${REPO_ROOT}" archive "${sha}" | tar -x -C "${BASE_SRC}"
         printf '%s\n' "${sha}" > "${BASE_SRC}/.quick-base-sha"
     fi
-    # Both sides build against the same dependency versions (Cargo.lock is not committed).
-    if [[ -f "${REPO_ROOT}/Cargo.lock" ]]; then
-        cp "${REPO_ROOT}/Cargo.lock" "${BASE_SRC}/Cargo.lock"
-    fi
-    local isolated_lock="json_schema_rs_benchmark/isolated/Cargo.lock"
-    if [[ -f "${REPO_ROOT}/${isolated_lock}" && -d "$(dirname "${BASE_SRC}/${isolated_lock}")" ]]; then
-        cp "${REPO_ROOT}/${isolated_lock}" "${BASE_SRC}/${isolated_lock}"
-    fi
+    # Both sides build against the same dependency versions (Cargo.lock is not committed). Each
+    # lock file is copied only when it differs: a path package's fingerprint is the newest
+    # modification time in its directory, so a fresh copy of isolated/Cargo.lock on every run
+    # rebuilt the base's isolated crate (#112).
+    local lock
+    for lock in Cargo.lock json_schema_rs_benchmark/isolated/Cargo.lock; do
+        if [[ -f "${REPO_ROOT}/${lock}" && -d "$(dirname "${BASE_SRC}/${lock}")" ]] \
+            && ! cmp -s "${REPO_ROOT}/${lock}" "${BASE_SRC}/${lock}"; then
+            cp "${REPO_ROOT}/${lock}" "${BASE_SRC}/${lock}"
+        fi
+    done
 }
 
 # build_side <source root> <target dir>: build the side's CLI, heap profiler and criterion bench,
