@@ -67,6 +67,13 @@ pub enum MacroValidator {
 
 include!(concat!(env!("OUT_DIR"), "/macro_validators.rs"));
 
+// The tables below hold references to the shards' statics, never copies of their values. A
+// static initialized from another crate's static by value gets its own copy of the data, and every
+// function pointer in it is a generic instance (each model's entry points) that this crate then
+// compiles again: one copy in this library and one in each binary, built one after another with
+// one codegen unit each. With copies, the generated-types build took 17 min per side; with
+// references, 5 min, the shards' parallel builds plus linking.
+
 /// One shard's table of our derive's models (fixture id to model).
 #[cfg(feature = "reverse-codegen")]
 type OurModels = &'static [(&'static str, models_shard_0::OurModel)];
@@ -77,28 +84,28 @@ type SchemarsModels = &'static [(&'static str, models_shard_0::SchemarsModel)];
 
 /// Every shard's table of our derive's models.
 #[cfg(feature = "reverse-codegen")]
-static OUR_MODELS: [OurModels; 8] = [
-    models_shard_0::JSONSCHEMARS,
-    models_shard_1::JSONSCHEMARS,
-    models_shard_2::JSONSCHEMARS,
-    models_shard_3::JSONSCHEMARS,
-    models_shard_4::JSONSCHEMARS,
-    models_shard_5::JSONSCHEMARS,
-    models_shard_6::JSONSCHEMARS,
-    models_shard_7::JSONSCHEMARS,
+static OUR_MODELS: [&OurModels; 8] = [
+    &models_shard_0::JSONSCHEMARS,
+    &models_shard_1::JSONSCHEMARS,
+    &models_shard_2::JSONSCHEMARS,
+    &models_shard_3::JSONSCHEMARS,
+    &models_shard_4::JSONSCHEMARS,
+    &models_shard_5::JSONSCHEMARS,
+    &models_shard_6::JSONSCHEMARS,
+    &models_shard_7::JSONSCHEMARS,
 ];
 
 /// Every shard's table of schemars' models.
 #[cfg(feature = "reverse-codegen")]
-static SCHEMARS_MODELS: [SchemarsModels; 8] = [
-    models_shard_0::SCHEMARS,
-    models_shard_1::SCHEMARS,
-    models_shard_2::SCHEMARS,
-    models_shard_3::SCHEMARS,
-    models_shard_4::SCHEMARS,
-    models_shard_5::SCHEMARS,
-    models_shard_6::SCHEMARS,
-    models_shard_7::SCHEMARS,
+static SCHEMARS_MODELS: [&SchemarsModels; 8] = [
+    &models_shard_0::SCHEMARS,
+    &models_shard_1::SCHEMARS,
+    &models_shard_2::SCHEMARS,
+    &models_shard_3::SCHEMARS,
+    &models_shard_4::SCHEMARS,
+    &models_shard_5::SCHEMARS,
+    &models_shard_6::SCHEMARS,
+    &models_shard_7::SCHEMARS,
 ];
 
 /// One shard's table of generated types (fixture id to types).
@@ -107,28 +114,28 @@ type TypesTable = &'static [(&'static str, models_shard_0::Types)];
 
 /// Every shard's table of the default settings' generated types.
 #[cfg(feature = "generated-types")]
-static TYPES: [TypesTable; 8] = [
-    models_shard_0::TYPES,
-    models_shard_1::TYPES,
-    models_shard_2::TYPES,
-    models_shard_3::TYPES,
-    models_shard_4::TYPES,
-    models_shard_5::TYPES,
-    models_shard_6::TYPES,
-    models_shard_7::TYPES,
+static TYPES: [&TypesTable; 8] = [
+    &models_shard_0::TYPES,
+    &models_shard_1::TYPES,
+    &models_shard_2::TYPES,
+    &models_shard_3::TYPES,
+    &models_shard_4::TYPES,
+    &models_shard_5::TYPES,
+    &models_shard_6::TYPES,
+    &models_shard_7::TYPES,
 ];
 
 /// Every shard's table of the no-newtypes generated types.
 #[cfg(feature = "generated-types")]
-static TYPES_NO_NEWTYPES: [TypesTable; 8] = [
-    models_shard_0::TYPES_NO_NEWTYPES,
-    models_shard_1::TYPES_NO_NEWTYPES,
-    models_shard_2::TYPES_NO_NEWTYPES,
-    models_shard_3::TYPES_NO_NEWTYPES,
-    models_shard_4::TYPES_NO_NEWTYPES,
-    models_shard_5::TYPES_NO_NEWTYPES,
-    models_shard_6::TYPES_NO_NEWTYPES,
-    models_shard_7::TYPES_NO_NEWTYPES,
+static TYPES_NO_NEWTYPES: [&TypesTable; 8] = [
+    &models_shard_0::TYPES_NO_NEWTYPES,
+    &models_shard_1::TYPES_NO_NEWTYPES,
+    &models_shard_2::TYPES_NO_NEWTYPES,
+    &models_shard_3::TYPES_NO_NEWTYPES,
+    &models_shard_4::TYPES_NO_NEWTYPES,
+    &models_shard_5::TYPES_NO_NEWTYPES,
+    &models_shard_6::TYPES_NO_NEWTYPES,
+    &models_shard_7::TYPES_NO_NEWTYPES,
 ];
 
 /// A benchmarked tool built in this crate.
@@ -347,13 +354,13 @@ impl Adapter for IsolatedTool {
         if !matches!(self, IsolatedTool::JsonSchemaRs) {
             return Err(unsupported(self, Operation::DeserializeValid));
         }
-        let tables: &[TypesTable; 8] = match variant {
+        let tables: &[&TypesTable; 8] = match variant {
             TypesVariant::Default => &TYPES,
             TypesVariant::NoNewtypes => &TYPES_NO_NEWTYPES,
         };
         let entry: models_shard_0::Types = tables
             .iter()
-            .flat_map(|table: &TypesTable| table.iter())
+            .flat_map(|table: &&TypesTable| table.iter())
             .find(|(id, _types)| *id == fixture.id)
             .map(|(_id, types)| *types)
             .ok_or_else(|| {
@@ -441,7 +448,7 @@ pub mod reverse {
     pub fn model(tool: IsolatedTool, fixture_id: &str) -> Result<IsolatedModel, AdapterError> {
         /// The entry for `fixture_id` in any shard's table.
         fn find<T: Copy>(
-            shards: &[&'static [(&'static str, Result<T, &'static str>)]],
+            shards: &[&'static &'static [(&'static str, Result<T, &'static str>)]],
             fixture_id: &str,
         ) -> Result<T, AdapterError> {
             let entry: Result<T, &'static str> = shards
