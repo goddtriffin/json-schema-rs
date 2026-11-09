@@ -51,7 +51,7 @@ Backwards compatibility is **not** a priority and **never** a justification (req
    - The benchmark harness is the **guiding star** for performance (see
      [json_schema_rs_benchmark/README.md](json_schema_rs_benchmark/README.md)). It has two
      modes:
-     - `make benchmark` (**every PR that changes the library**, about 5–10 min): our library
+     - `make benchmark` (**every PR that changes the library**, about 8–20 min): our library
        and CLI only, built from `main` and from the working tree and measured side by side in
        the same session, so run-to-run drift cancels out. It prints the PR body's *Performance* section and changes
        no committed file.
