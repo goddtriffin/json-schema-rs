@@ -10,9 +10,26 @@ member and is **not published** (`publish = false`).
 ## Run it
 
 ```sh
-make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~5-10 min)
+make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~8-20 min)
 make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
+
+### Cost
+
+What a quick run (`make benchmark`) costs, by what changed since the last run (#112). Builds are
+incremental and kept between runs (`target/` and `target/benchmark-quick/`), and the driver prints
+the split at the end (`builds …, measurement …`).
+
+| What changed since the last run | Builds | Measurement | Total |
+|---|---|---|---|
+| Nothing (a rerun) | seconds | about 8 min | about 8 min |
+| The library, codegen or macros (the working tree's side) | about 1 min (library) + 5 min (generated types) | about 8 min | about 14 min |
+| Also `main` (the base side) | the same again for the base | about 8 min | about 20 min |
+
+The measurement is about 6.5 min in-process (120 cells, three rounds per side), under a minute of
+CLI, and a minute or two confirming the cells that moved. The generated-types build is the eight
+model shards in parallel (the slowest about 2.5 min) and then the bench and heap profiler, about
+70 s each.
 
 ### Quick mode (`make benchmark`)
 
@@ -22,7 +39,8 @@ changes included. Both sides are built with the benchmark profile, the base from
 of its commit in `target/benchmark-quick/base-src` with the working tree's `Cargo.lock`, and
 measured in the same session, interleaved cell by cell: in-process peak heap once per side (it is
 exact), then criterion one cell at a time (`BENCH_CELL`), each cell's `BENCH_QUICK_ROUNDS` rounds
-(default 2) back to back in ABBA order (base, head, head, base), then the CLI tier (hyperfine:
+(default 3, of 0.1 s warm-up and 0.3 s measurement) back to back, alternating which side goes
+first (base, head, head, base, base, head), then the CLI tier (hyperfine:
 codegen, validate_valid, validate_invalid, and the startup row) in the same number of rounds, each
 running every cell's two sides back to back. Both sides' timed executables run from copies at
 paths of the same length (`target/benchmark-quick/run/{base,head}/`).
@@ -50,8 +68,22 @@ The original design (whole-tier rounds, pooled medians, unequal paths) reported 
 moved in an A/A run (up to +12%). Two A/A runs of this one reported none: 2 to 4 cells per run
 moved after the first two rounds, and their confirmation rounds cleared every one. On A/A
 captures with injected changes, the per-round rule caught 88% of cells at +4%, 93% at +5% and
-all at +10% (pooled medians: 83%, 90%, 99.5%). A run takes about 6-7.5 minutes. A cell that moved but runs only code the PR did not touch is
-still noise; the PR body counts only cells on changed code paths (see CLAUDE.md).
+all at +10% (pooled medians: 83%, 90%, 99.5%).
+
+Round length (#112): three rounds of 0.3 s per side are as accurate as two of 1 s and take half
+the time. Measured on one day's A/A captures of the same 120 in-process cells, judged after the
+first rounds (before confirmation), with injected slowdowns:
+
+| Rounds per side | Warm-up / measurement | In-process time | False moves before confirmation (after) | Caught at +4% / +5% / +10% |
+|---|---|---|---|---|
+| 2 | 0.3 s / 1 s (the previous default) | 795 s | 8 (0) | 88% / 95% / 100% |
+| 2 | 0.1 s / 0.3 s | 271 s | 7 (0) | 88% / 92% / 99% |
+| 2 | 0.05 s / 0.15 s | 154 s | 6 (0) | 81% / 92% / 99% |
+| **3** | **0.1 s / 0.3 s** | **386 s** | **3 (0)** | **89% / 96% / 99%** |
+
+A cell's process costs about 0.15 s beyond its warm-up and measurement time. A cell that moved
+but runs only code the PR did not touch is still noise; the PR body counts only cells on changed
+code paths (see CLAUDE.md).
 
 The generated-types cells (see *What it measures*) come from each side's own build of
 `isolated/`'s `generated-types` feature: that side's codegen generates the types, which link that
@@ -211,12 +243,12 @@ Defaults are given as full mode / quick mode.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` / `--warm-up-time 0.3 --measurement-time 1 --sample-size 20 --noplot` | criterion arguments (per cell and round in quick mode) |
+| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` / `--warm-up-time 0.1 --measurement-time 0.3 --sample-size 20 --noplot` | criterion arguments (per cell and round in quick mode) |
 | `BENCH_SKIP_CRITERION=1` | unset (full mode only) | skip in-process timing |
 | `BENCH_CLI_WARMUP` | `3` / `2` | hyperfine warmup runs per CLI cell (and round) |
 | `BENCH_CLI_RUNS` | `15` / `10` | hyperfine timed runs per CLI cell (and round) |
 | `BENCH_BASE` | — / `main` | quick mode: the ref whose merge base with `HEAD` is the base side |
-| `BENCH_QUICK_ROUNDS` | — / `2` | quick mode: interleaved rounds per side |
+| `BENCH_QUICK_ROUNDS` | — / `3` | quick mode: interleaved rounds per side |
 | `BENCH_QUICK_CONFIRM_ROUNDS` | — / `4` | quick mode: further rounds per side for each cell that moved (`0` skips) |
 | `BENCH_TOOLS` | unset | comma-separated tool ids the in-process harness measures (quick mode sets `jsonschemars`) |
 | `BENCH_CELL` | unset | one in-process cell the criterion bench checks and times, `<operation>/<fixture id>` (quick mode sets it per cell) |
