@@ -10,10 +10,11 @@
 # minutes and load arrives in bursts of seconds. Results from another day differ by up to 10%
 # in-process, and whole-tier rounds a minute apart disagreed on 44 of 48 in-process cells in an
 # A/A run (both sides the same commit). So every cell runs its rounds back to back, alternating
-# the sides (base, head, head, base for two rounds), and `compare` summarizes each round by its
-# lowest sample (the one no burst reached) and each side by the median of its rounds. Both
-# sides' executables run from copies at paths of the same length: the path sits on the process's
-# stack, and a longer one slowed an identical binary's sub-microsecond cells by up to 5.5%.
+# the sides (base, head, head, base, base, head for three rounds), and `compare` summarizes each
+# round by its lowest sample (the one no burst reached) and each side by the median of its
+# rounds. Both sides' executables run from copies at paths of the same length: the path sits on
+# the process's stack, and a longer one slowed an identical binary's sub-microsecond cells by up
+# to 5.5%.
 #
 # What it measures, for `jsonschemars` only (BENCH_TOOLS restricts the harness to it):
 #   - in-process peak heap (heap_profile, isolated_heap_profile), once per side: it is exact;
@@ -56,10 +57,10 @@
 #   BENCH_BASE            the base ref (default: main); the base commit is its merge base with
 #                         HEAD, so changes that landed on it since the branch left are not
 #                         counted. BENCH_BASE=HEAD with a clean tree is an A/A control.
-#   BENCH_QUICK_ROUNDS    rounds per side (default 2)
+#   BENCH_QUICK_ROUNDS    rounds per side (default 3)
 #   BENCH_QUICK_CONFIRM_ROUNDS  further rounds per side for each cell that moved (default 4; 0
 #                         skips confirmation)
-#   BENCH_CRITERION_ARGS  criterion args (default: --warm-up-time 0.3 --measurement-time 1
+#   BENCH_CRITERION_ARGS  criterion args (default: --warm-up-time 0.1 --measurement-time 0.3
 #                         --sample-size 20 --noplot), per cell and round
 #   BENCH_CLI_WARMUP      hyperfine warmup runs per cell and round (default 2)
 #   BENCH_CLI_RUNS        hyperfine timed runs per cell and round (default 10)
@@ -81,7 +82,7 @@ BASE_TARGET="${QUICK_DIR}/base-target"
 BASE_BUILD_DIR="${BASE_TARGET}/benchmark"
 RUN_DIR="${QUICK_DIR}/run"
 TOOL="jsonschemars"
-ROUNDS="${BENCH_QUICK_ROUNDS:-2}"
+ROUNDS="${BENCH_QUICK_ROUNDS:-3}"
 CONFIRM_ROUNDS="${BENCH_QUICK_CONFIRM_ROUNDS:-4}"
 export REPO_ROOT
 
@@ -170,7 +171,7 @@ run_criterion_cell() {
     local -a criterion_args
     # Word-split the knob on purpose: it is a list of criterion flags.
     # shellcheck disable=SC2206
-    criterion_args=(${BENCH_CRITERION_ARGS:---warm-up-time 0.3 --measurement-time 1 --sample-size 20 --noplot})
+    criterion_args=(${BENCH_CRITERION_ARGS:---warm-up-time 0.1 --measurement-time 0.3 --sample-size 20 --noplot})
     filter="${cell%%/*}/${TOOL}/${cell#*/}"
     filter="^$(printf '%s' "${filter}" | sed 's/[][\.*^$+?(){}|]/\\&/g')\$"
     BENCH_CELL="${cell}" CRITERION_HOME="${QUICK_DIR}/${side}/criterion/${round}" "${exe}" \
@@ -332,6 +333,11 @@ _write_startup() {
     printf '%s\n' "${dir}"
 }
 
+# _minutes <seconds>: the duration as minutes and seconds.
+_minutes() {
+    printf '%dm%02ds' $(( $1 / 60 )) $(( $1 % 60 ))
+}
+
 main() {
     local base_ref base_sha base_exe head_exe base_types_exe head_types_exe round side
     base_ref="${BENCH_BASE:-main}"
@@ -367,6 +373,8 @@ main() {
     head_types_exe="$(build_generated_types head "${REPO_ROOT}")"
     echo "==> building the generated types: ${base_ref} (${base_sha:0:9})"
     base_types_exe="$(build_generated_types base "${BASE_SRC}")"
+
+    local built_at="${SECONDS}"
 
     # Time both sides from paths of the same length (see RUN_DIR in the layout above).
     rm -rf "${RUN_DIR}"
@@ -422,7 +430,7 @@ main() {
     fi
     rm -rf "${QUICK_DIR}/work"
 
-    echo "==> report (${QUICK_DIR}/report.md)"
+    echo "==> report (${QUICK_DIR}/report.md); builds $(_minutes "${built_at}"), measurement $(_minutes $(( SECONDS - built_at )))"
     echo
     "${BUILD_DIR}/compare" --base "${QUICK_DIR}/base" --head "${QUICK_DIR}/head" \
         --tool "${TOOL}" --base-label "${base_ref}" --output "${QUICK_DIR}/report.md"
