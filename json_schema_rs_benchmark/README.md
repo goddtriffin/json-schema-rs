@@ -10,9 +10,25 @@ member and is **not published** (`publish = false`).
 ## Run it
 
 ```sh
+make benchmark_smoke    # correctness only, no timing: every cell of our library + CLI probed once (~25 s warm, ~1 min cold)
 make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~8-20 min)
 make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
+
+### Smoke mode (`make benchmark_smoke`)
+
+Checks that every cell still works, without timing anything, so it can run as often as a test
+(#112). It builds the working tree in debug (`target/benchmark-smoke`, no debug info, kept between
+runs), builds every fixture's generated types, and probes every cell of our library and CLI once,
+as the timed modes do before measuring:
+- every in-process cell, through the heap profilers' correctness checks;
+- every CLI cell on every fixture, for every valid and invalid instance (stricter than the timed
+  modes, which run each fixture's first).
+
+Any failing cell fails the run, listed with its reason: every cell of our tool passes, so there is
+no baseline. A debug build also runs the generated code with debug assertions and debug-sized stack
+frames, which is how #120 was found. It takes about 25 s when nothing changed and about a minute
+from cold.
 
 ### Cost
 
