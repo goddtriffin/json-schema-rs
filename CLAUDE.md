@@ -50,7 +50,8 @@ Backwards compatibility is **not** a priority and **never** a justification (req
      the PR. Each takes several minutes: never run them mid-work or repeatedly.
    - The benchmark harness is the **guiding star** for performance (see
      [json_schema_rs_benchmark/README.md](json_schema_rs_benchmark/README.md)). It has two
-     modes:
+     timed modes, and `make benchmark_smoke` (about 25 s) checks every cell without timing,
+     safe to run mid-work whenever a change could break a cell:
      - `make benchmark` (**every PR that changes the library**, about 8–20 min): our library
        and CLI only, built from `main` and from the working tree and measured side by side in
        the same session, so run-to-run drift cancels out. It prints the PR body's *Performance* section and changes
