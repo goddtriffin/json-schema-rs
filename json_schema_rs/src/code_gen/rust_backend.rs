@@ -10963,21 +10963,17 @@ pub enum RootAnyOf {
 
 impl<'de> Deserialize<'de> for RootAnyOf {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
-        let candidates: Vec<usize> = TYPE_VALIDATORS
-            .union_candidates(json_schema_rs::UnionMatch::AnyOf, Some(0), &[1, 2], &value)
-            .map_err(serde::de::Error::custom)?;
-        for candidate in candidates {
-            let variant: Result<Self, serde_json::Error> = match candidate {
-                0 => json_schema_rs::integer::deserialize::<_, i64>(&value).map(Self::Small),
-                1 => json_schema_rs::integer::deserialize::<_, i64>(&value).map(Self::Large),
-                _ => continue,
-            };
-            if let Ok(variant) = variant {
-                return Ok(variant);
-            }
-        }
-        Err(serde::de::Error::custom(format!("{value} does not deserialize into a RootAnyOf variant whose schema it satisfies")))
+        TYPE_VALIDATORS.deserialize_union(
+            deserializer,
+            "RootAnyOf",
+            json_schema_rs::UnionMatch::AnyOf,
+            Some(0),
+            &[1, 2],
+            |variant: usize, value: &serde_json::Value| match variant {
+                0 => json_schema_rs::integer::deserialize::<_, i64>(value).map(Self::Small),
+                _ => json_schema_rs::integer::deserialize::<_, i64>(value).map(Self::Large),
+            },
+        )
     }
 }
 
@@ -11100,22 +11096,18 @@ pub enum XOneOf {
 
 impl<'de> Deserialize<'de> for XOneOf {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
-        let candidates: Vec<usize> = TYPE_VALIDATORS
-            .union_candidates(json_schema_rs::UnionMatch::OneOf, Some(2), &[0, 1, 3], &value)
-            .map_err(serde::de::Error::custom)?;
-        for candidate in candidates {
-            let variant: Result<Self, serde_json::Error> = match candidate {
-                0 => <XVariant0 as Deserialize>::deserialize(&value).map(Self::Variant0),
-                1 => <XVariant1 as Deserialize>::deserialize(&value).map(Self::Variant1),
-                2 => json_schema_rs::integer::deserialize::<_, i64>(&value).map(Self::Integer),
-                _ => continue,
-            };
-            if let Ok(variant) = variant {
-                return Ok(variant);
-            }
-        }
-        Err(serde::de::Error::custom(format!("{value} does not deserialize into a XOneOf variant whose schema it satisfies")))
+        TYPE_VALIDATORS.deserialize_union(
+            deserializer,
+            "XOneOf",
+            json_schema_rs::UnionMatch::OneOf,
+            Some(2),
+            &[0, 1, 3],
+            |variant: usize, value: &serde_json::Value| match variant {
+                0 => <XVariant0 as Deserialize>::deserialize(value).map(Self::Variant0),
+                1 => <XVariant1 as Deserialize>::deserialize(value).map(Self::Variant1),
+                _ => json_schema_rs::integer::deserialize::<_, i64>(value).map(Self::Integer),
+            },
+        )
     }
 }
 
