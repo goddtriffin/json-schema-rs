@@ -11,7 +11,7 @@ member and is **not published** (`publish = false`).
 
 ```sh
 make benchmark_smoke    # correctness only, no timing: every cell of our library + CLI probed once (~25 s warm, ~1 min cold)
-make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~4-16 min)
+make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~4-14 min)
 make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
 
@@ -39,14 +39,17 @@ the split at the end (`builds …, measurement …`).
 | What changed since the last run | Builds | Measurement | Total |
 |---|---|---|---|
 | Nothing (a rerun) | seconds | about 4 min | about 4 min |
-| The library, codegen or macros (the working tree's side) | about 1 min (library) + 5 min (generated types) | about 4 min | about 10 min |
-| Also `main` (the base side) | the same again for the base | about 4 min | about 16 min |
+| The library, codegen or macros (the working tree's side) | about 1 min (library) + 4 min (generated types) | about 4 min | about 9 min |
+| Also `main` (the base side) | the same again for the base | about 4 min | about 14 min |
 
 The measurement is about 1.5 min screening the in-process cells (120 cells, three short rounds per
 side), about 2 min confirming the 20 to 30 cells screening passes on (more when the PR moves many
 cells: #121's comparison confirmed 47), and under a minute of CLI. The generated-types build is the eight
-model shards in parallel (the slowest about 2.5 min) and then the bench and heap profiler, about
-70 s each.
+model shards in parallel (the slowest, the data-warehouse model with constrained newtypes, about
+2.5 min) and then the bench and heap profiler, linked in parallel in about 100 s. Each side's
+benches build in the same cargo command as its other executables, so their links overlap, and
+the model check (`cargo check`, which finds a model that does not compile) runs only when that
+build fails: as separate steps they cost about 1.5 min more per rebuilt side (#112).
 
 ### Quick mode (`make benchmark`)
 

@@ -142,11 +142,15 @@ extract_base() {
 }
 
 # build_side <source root> <target dir>: build the side's CLI, heap profiler and criterion bench,
-# and print the bench executable's path.
+# and print the bench executable's path. The heap profiler and the bench build in one cargo
+# command, so their links run in parallel (#112); `cargo bench --no-run` then finds the bench
+# built and only reports its path. The CLI builds on its own, as a user builds it: built with the
+# benchmark package, it would get the features cargo unifies across both.
 build_side() {
     local root="$1" target="$2" exe
     _profile_cargo "${root}" "${target}" build -p json-schema-rs --bin jsonschemars >&2
-    _profile_cargo "${root}" "${target}" build -p json-schema-rs-benchmark --bin heap_profile >&2
+    _profile_cargo "${root}" "${target}" build -p json-schema-rs-benchmark --bin heap_profile \
+        --bench cross_tool >&2
     exe="$(_profile_cargo "${root}" "${target}" bench -p json-schema-rs-benchmark \
         --bench cross_tool --no-run --message-format=json \
         | grep -o '"executable":"[^"]*"' | grep cross_tool | tail -n 1 | cut -d '"' -f 4)"
