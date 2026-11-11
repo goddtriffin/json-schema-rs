@@ -154,4 +154,7 @@ blocks (the Performance tables), and nothing the PR did not cause appears at all
   **Memory** and **Time**, each collapsed by default in its own `<details>` block, listing
   **every** counted cell: tier, fixture, operation, `main`, this PR, change (%), sorted by
   change. Leave a blank line after `<summary>` so the Markdown table renders. If nothing moved
-  beyond noise, say so in one line and omit the tables.
+  beyond noise, say so in one line and omit the tables. Then the report's **Generated code**
+  part (#113): the generated code's size per fixture is exact, so every change counts. Give its
+  summary line (total lines and bytes, before → after) and why the output changed, with its
+  table collapsed in a `<details>` block; if nothing changed, its one line.

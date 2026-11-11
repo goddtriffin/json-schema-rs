@@ -11,7 +11,9 @@
 //!   on; a cell's confirmation rounds replace its screening rounds (see
 //!   `json_schema_rs_benchmark::compare`, *two stages*);
 //! - `cli/index.tsv` and the hyperfine exports it lists (paths relative to the side's
-//!   directory), one export per cell and round.
+//!   directory), one export per cell and round;
+//! - `code_size.tsv`: the generated code's size per fixture and settings (exact, so every change
+//!   counts; see `json_schema_rs_benchmark::code_size`).
 //!
 //! Rows of other tools are ignored, so a side whose harness measured every tool still compares.
 //! Malformed lines and unreadable files are skipped with a warning on stderr; a head side with no
@@ -21,6 +23,9 @@
 //! and clap's derive macro emits internal `#[allow(...)]` attributes.
 
 use clap::{Arg, Command};
+use json_schema_rs_benchmark::code_size::{
+    CodeSizeComparison, CodeSizeRow, CodeSizes, code_sizes, compare_code_sizes, parse_code_size_tsv,
+};
 use json_schema_rs_benchmark::compare::{
     Comparison, Samples, add_round, compare, screened_cells, with_screening,
 };
@@ -136,7 +141,14 @@ fn run(
         ));
     }
     let comparison: Comparison = compare(&base_samples, &head_samples);
-    let report: String = comparison.to_markdown(base_label);
+    let mut report: String = comparison.to_markdown(base_label);
+    let base_sizes: CodeSizes = read_code_size(base)?;
+    let head_sizes: CodeSizes = read_code_size(head)?;
+    if !base_sizes.is_empty() || !head_sizes.is_empty() {
+        let sizes: CodeSizeComparison = compare_code_sizes(&base_sizes, &head_sizes);
+        report.push('\n');
+        report.push_str(&sizes.to_markdown(&base_sizes, &head_sizes, base_label));
+    }
     let write = |path: &Path, text: &str| -> Result<(), String> {
         std::fs::write(path, text).map_err(|e| format!("writing {}: {e}", path.display()))
     };
@@ -157,6 +169,16 @@ fn run(
     }
     print!("{report}");
     Ok(())
+}
+
+/// One side's generated code size (`code_size.tsv`), empty when not captured.
+fn read_code_size(dir: &Path) -> Result<CodeSizes, String> {
+    let path: PathBuf = dir.join("code_size.tsv");
+    let rows: Vec<CodeSizeRow> = match read_optional(&path)? {
+        Some(text) => report_skipped(&path, parse_code_size_tsv(&text)),
+        None => Vec::new(),
+    };
+    Ok(code_sizes(&rows))
 }
 
 /// Every sample of `tool` one side captured, by cell and round.
