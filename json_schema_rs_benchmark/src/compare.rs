@@ -27,6 +27,9 @@
 //! rounds, and their confirmation rounds replace their screening rounds
 //! ([`with_screening`]), so a cell is reported as moved only on full-length measurement. A
 //! cell that screening did not pass on stays within the threshold, so it is steady.
+//! Confirmation stops a cell early ([`settled_cell`]) once its first three rounds per side
+//! (`EARLY_ROUNDS` in `scripts/quick_benchmark.sh`) leave no doubt: back within [`SCREEN_THRESHOLD`], or beyond noise by more than
+//! [`CLEAR_THRESHOLD`]. Every other cell gets all its confirmation rounds.
 
 use crate::{CellKey, Metric, Stats, TIE_THRESHOLD, Tier, format_memory, format_time};
 use std::collections::BTreeMap;
@@ -139,6 +142,47 @@ pub fn screened_cells(base: &Samples, head: &Samples, tier: Tier) -> Vec<String>
     cells.sort();
     cells.dedup();
     cells
+}
+
+/// The relative gap beyond which a cell that moved beyond noise after its first confirmation
+/// rounds counts as moved without more rounds ([`settled_early`]).
+pub const CLEAR_THRESHOLD: f64 = 0.10;
+
+/// Whether a cell's confirmation rounds so far settle it, so the driver stops measuring it:
+/// the two sides' estimates are back within [`SCREEN_THRESHOLD`] (steady, since that is below
+/// [`TIE_THRESHOLD`]), or they moved beyond noise and by more than [`CLEAR_THRESHOLD`] (moved).
+/// Anything in between, or a side with no samples, is not settled. Either way the report
+/// judges the cell on the rounds it has, with the same rule ([`moved_beyond_noise`]), so a
+/// settled cell's verdict is the one this decision expects. Replayed on one evening's captures
+/// of all 120 in-process cells (A/A with injected slowdowns, and A/B across #121), stopping after
+/// three of five rounds on this rule caught the same changes as all five (82% / 92% / 99% at
+/// +4% / +5% / +10%, all 19 A/B moves, no false move) with 28-32% fewer confirmation rounds
+/// (#112).
+#[must_use]
+pub fn settled_early(base_rounds: &[Vec<f64>], head_rounds: &[Vec<f64>]) -> bool {
+    let (Some(base), Some(head)) = (
+        Estimate::from_rounds(base_rounds),
+        Estimate::from_rounds(head_rounds),
+    ) else {
+        return false;
+    };
+    let gap: f64 = (head.value - base.value).abs();
+    gap < SCREEN_THRESHOLD * base.value
+        || (moved_beyond_noise(&base, &head) && gap > CLEAR_THRESHOLD * base.value)
+}
+
+/// Whether the in-process time cell `cell` (`<operation>/<fixture id>`) is settled by its
+/// rounds in `base` and `head` ([`settled_early`]); not settled when either side lacks it.
+#[must_use]
+pub fn settled_cell(base: &Samples, head: &Samples, cell: &str) -> bool {
+    base.iter()
+        .find(|(key, _)| {
+            key.tier == Tier::InProcess && key.metric == Metric::TimeSecs && cell_id(key) == cell
+        })
+        .is_some_and(|(key, base_rounds)| {
+            head.get(key)
+                .is_some_and(|head_rounds| settled_early(base_rounds, head_rounds))
+        })
 }
 
 /// One side's samples for the comparison: every cell of `confirmed`, plus each cell of
@@ -313,7 +357,7 @@ fn render(metric: Metric, estimate: &Estimate) -> String {
 mod tests {
     use super::{
         CellChange, Comparison, Estimate, Samples, compare, moved_beyond_noise, screened_cells,
-        with_screening,
+        settled_cell, settled_early, with_screening,
     };
     use crate::{CellKey, Metric, Operation, Tier};
 
@@ -544,6 +588,99 @@ mod tests {
         )]);
         let expected: Vec<String> = vec!["codegen/small/config".to_owned()];
         let actual: Vec<String> = screened_cells(&base, &head, Tier::InProcess);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_early_when_back_within_the_screening_gate() {
+        let base: Vec<Vec<f64>> = vec![vec![100.0], vec![101.0], vec![99.0]];
+        let head: Vec<Vec<f64>> = vec![vec![101.0], vec![100.0], vec![102.0]];
+        let expected: bool = true;
+        let actual: bool = settled_early(&base, &head);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_early_when_moved_beyond_noise_by_more_than_the_clear_threshold() {
+        let base: Vec<Vec<f64>> = vec![vec![100.0], vec![101.0], vec![99.0]];
+        let head: Vec<Vec<f64>> = vec![vec![115.0], vec![116.0], vec![114.0]];
+        let expected: bool = true;
+        let actual: bool = settled_early(&base, &head);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_early_counts_an_improvement_beyond_the_clear_threshold() {
+        let base: Vec<Vec<f64>> = vec![vec![100.0], vec![101.0], vec![99.0]];
+        let head: Vec<Vec<f64>> = vec![vec![85.0], vec![86.0], vec![84.0]];
+        let expected: bool = true;
+        let actual: bool = settled_early(&base, &head);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_early_is_false_between_the_gate_and_the_clear_threshold() {
+        let base: Vec<Vec<f64>> = vec![vec![100.0], vec![101.0], vec![99.0]];
+        let head: Vec<Vec<f64>> = vec![vec![105.0], vec![106.0], vec![104.0]];
+        let expected: bool = false;
+        let actual: bool = settled_early(&base, &head);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_early_is_false_beyond_the_clear_threshold_but_within_the_spread() {
+        let base: Vec<Vec<f64>> = vec![vec![80.0], vec![100.0], vec![120.0]];
+        let head: Vec<Vec<f64>> = vec![vec![95.0], vec![115.0], vec![135.0]];
+        let expected: bool = false;
+        let actual: bool = settled_early(&base, &head);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_early_is_false_without_samples_on_a_side() {
+        let base: Vec<Vec<f64>> = vec![vec![100.0], vec![101.0], vec![99.0]];
+        let head: Vec<Vec<f64>> = vec![vec![]];
+        let expected: bool = false;
+        let actual: bool = settled_early(&base, &head);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_cell_finds_the_cell_by_its_id() {
+        let base: Samples = samples(&[(
+            key("small/config", Metric::TimeSecs),
+            vec![vec![100.0], vec![101.0], vec![99.0]],
+        )]);
+        let head: Samples = samples(&[(
+            key("small/config", Metric::TimeSecs),
+            vec![vec![100.0], vec![100.0], vec![101.0]],
+        )]);
+        let expected: bool = true;
+        let actual: bool = settled_cell(&base, &head, "codegen/small/config");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_cell_is_false_for_a_cell_neither_side_measured() {
+        let base: Samples = samples(&[(
+            key("small/config", Metric::TimeSecs),
+            vec![vec![100.0], vec![101.0], vec![99.0]],
+        )]);
+        let head: Samples = base.clone();
+        let expected: bool = false;
+        let actual: bool = settled_cell(&base, &head, "codegen/large/circleci");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn settled_cell_is_false_for_a_cell_only_the_base_measured() {
+        let base: Samples = samples(&[(
+            key("small/config", Metric::TimeSecs),
+            vec![vec![100.0], vec![101.0], vec![99.0]],
+        )]);
+        let head: Samples = Samples::new();
+        let expected: bool = false;
+        let actual: bool = settled_cell(&base, &head, "codegen/small/config");
         assert_eq!(expected, actual);
     }
 
