@@ -9,6 +9,7 @@
 //! - `RAW_DIR/inprocess_compat.tsv`, `RAW_DIR/cli/compat.tsv`: compatibility matrices.
 //! - `RAW_DIR/cli/index.tsv`: one hyperfine export per CLI cell (time and peak RSS).
 //! - `RAW_DIR/tools.tsv`: version and language/runtime of each tool.
+//! - `RAW_DIR/code_size.tsv`: our codegen's generated code size per fixture (`code_size`).
 //!
 //! Malformed lines and unreadable per-cell files are skipped with a warning on stderr naming
 //! the file (and line); they never fail the run silently. All parsing and rendering logic is
@@ -18,6 +19,7 @@
 //! and clap's derive macro emits internal `#[allow(...)]` attributes.
 
 use clap::{Arg, Command};
+use json_schema_rs_benchmark::code_size::parse_code_size_tsv;
 use json_schema_rs_benchmark::{
     BenchmarkResults, CriterionId, IndexEntry, Measurement, Stats, Tier, TsvParse,
     criterion_benchmark_files, parse_compat_tsv, parse_criterion_benchmark, parse_criterion_stats,
@@ -106,6 +108,13 @@ fn run(input: &Path, criterion: Option<&Path>, output: &Path) -> Result<(), Stri
         results
             .measurements
             .extend(hyperfine_measurements(input, &entries)?);
+    }
+
+    let code_size_path: PathBuf = input.join("code_size.tsv");
+    if let Some(text) = read_optional(&code_size_path)? {
+        results
+            .code_size
+            .extend(report_skipped(&code_size_path, parse_code_size_tsv(&text)));
     }
 
     let tools_path: PathBuf = input.join("tools.tsv");

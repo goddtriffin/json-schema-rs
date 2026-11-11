@@ -638,6 +638,43 @@ run_cmd_offline() {
     esac
 }
 
+# --- generated code size ---------------------------------------------------------------
+
+# measure_code_size <jsonschemars> <list_fixtures> <code_size> <work dir> <output tsv>: generate
+# every fixture with the given `jsonschemars`, with default settings and with constrained
+# newtypes off, into <work dir>/<settings>/<fixture id, '/' as "__">/, and measure the generated
+# code with <code_size> into <output tsv> (#113). A fixture whose codegen fails is reported and
+# left out; one with unresolved references is skipped, as in the CLI tier.
+measure_code_size() {
+    local bin="$1" list_fixtures="$2" code_size="$3" work="$4" output="$5"
+    local fid fdir resource_count unresolved resource settings out cmd
+    local -a resources
+    rm -rf "${work}"
+    while IFS="$(printf '\t')" read -r fid fdir resource_count unresolved; do
+        [[ -n "${fid}" && -z "${unresolved}" ]] || continue
+        resources=()
+        if [[ "${resource_count:-0}" -gt 0 ]]; then
+            while IFS= read -r resource; do
+                [[ -n "${resource}" ]] && resources+=("${resource}")
+            done <<< "$(find "${fdir}/resources" -mindepth 1 -maxdepth 1 -name '*.json' | LC_ALL=C sort)"
+        fi
+        for settings in default no-newtypes; do
+            out="${work}/${settings}/${fid//\//__}"
+            mkdir -p "${out}"
+            cmd="$(_quote_argv "${bin}" generate rust -o "${out}" "${fdir}/schema.json" \
+                ${resources[@]+"${resources[@]}"})"
+            if [[ "${settings}" == no-newtypes ]]; then
+                cmd="${cmd} --cgs-constrained-newtypes false"
+            fi
+            if ! run_cmd_offline "${cmd}" > /dev/null 2>&1; then
+                echo "    ${fid} (${settings}): codegen failed; its generated code is not measured" >&2
+                rm -rf "${out}"
+            fi
+        done
+    done <<< "$("${list_fixtures}")"
+    "${code_size}" --generated "${work}" --output "${output}"
+}
+
 # --- display names ---------------------------------------------------------------------
 
 tool_display_name() {

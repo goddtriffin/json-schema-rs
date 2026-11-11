@@ -60,7 +60,9 @@ cell's `BENCH_QUICK_ROUNDS` short rounds (default 3, of 0.02 s warm-up and 0.03 
 back to back, alternating which side goes first (base, head, head, base, base, head), and
 **confirmation** runs each cell whose two sides differ by more than 1.5% there in
 `BENCH_QUICK_CONFIRM_ROUNDS` full-length rounds (default 5, of 0.1 s warm-up and 0.3 s
-measurement), in the same order. Then the CLI tier (hyperfine:
+measurement), in the same order. Before timing anything, it generates every fixture with each
+side's CLI and reports the generated code's size (see *Generated code*, about 2 s for both
+sides). Then the CLI tier (hyperfine:
 codegen, validate_valid, validate_invalid, and the startup row) in the same number of rounds, each
 running every cell's two sides back to back. Both sides' timed executables run from copies at
 paths of the same length (`target/benchmark-quick/run/{base,head}/`).
@@ -246,6 +248,41 @@ ajv, python-jsonschema, fastjsonschema, pydantic and zod have no usable CLI, so 
 `competitors/` call them the way `boon_validate` calls boon (see design.md for why each exists and
 the options they set).
 
+### Generated code
+
+How much Rust our codegen generates for each fixture (#113), next to the schema it came from.
+Generated size drives the user's compile time and binary size. It is deterministic (the same
+schema and codegen give the same output), so there is no noise to filter, and every change counts.
+
+The driver generates each fixture with `jsonschemars generate rust` twice: with default settings
+and with `--cgs-constrained-newtypes false`. The `code_size` binary then measures every generated
+`.rs` file (`src/code_size.rs`):
+
+- lines and bytes;
+- types, by kind: structs, newtypes (tuple structs: the constrained newtypes), enums and aliases;
+- lines and bytes by category:
+  - **type definitions**: `pub struct`, `pub enum` and `pub type` items, with their fields and
+    variants;
+  - **serde impls**: `impl Serialize` / `impl Deserialize`, `deserialize_untagged!` and serde
+    helper functions;
+  - **validation impls**: `impl TryFrom<serde_json::Value>` and `constrained_newtype!`;
+  - **inherent impls**: `impl Type { … }`, holding `validate()` and default accessors;
+  - **embedded schema**: the `TYPE_VALIDATORS` static that self-validation reads;
+  - **docs** and **attributes**: doc comments and `#[…]` lines, wherever they appear;
+  - **other**: `use` and `mod` lines, blank lines, and any other item;
+- the schema's size, including its resources: lines pretty-printed (so formatting does not count)
+  and bytes as stored. The reports give generated size as a multiple of these.
+
+A doc comment or attribute line is classified by its own syntax. Every other line takes the
+category of the top-level item it belongs to: a line starting in column 0 opens an item, and
+indented lines and closing brackets continue it.
+
+The quick mode generates each fixture with both sides' CLIs and measures both with the working
+tree's `code_size`, so a change to this classification never shows up as a change in generated
+size. Its report gives the totals over every fixture (default settings) and lists every metric
+that changed. The full mode commits each fixture's numbers in `results.{json,md}` (*Generated
+code*), so the trend is visible in the history.
+
 ## Rules baked into the harness
 
 - A cell is measured only when the tool is **correct** on it (codegen succeeds, schema compiles,
@@ -305,6 +342,8 @@ json_schema_rs_benchmark/
   src/bin/aggregate.rs     # raw captures -> results.{json,md}
   src/bin/heap_profile.rs  # per-operation peak heap + in-process compatibility
   src/bin/compare.rs       # quick mode: main vs the working tree, cells moved beyond noise
+  src/code_size.rs         # generated code size: line classifier, metrics, reports
+  src/bin/code_size.rs     # generated code -> code_size.tsv
   src/bin/gen_fixtures.rs  # deterministic large synthetic fixtures
   src/bin/list_fixtures.rs # fixture list for the CLI tier
   src/bin/boon_validate.rs # thin boon CLI wrapper (boon-cli cannot register documents by $id)
