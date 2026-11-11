@@ -46,11 +46,14 @@
 #                   the working tree's Cargo.lock so both sides build the same dependencies
 #   base-target/    its CARGO_TARGET_DIR (kept between runs, so later builds are incremental)
 #   isolated-{base,head}/  each side's CARGO_TARGET_DIR for isolated/'s generated-types build (its
-#                   own workspace). Both build with every source and target path remapped
-#                   (--remap-path-prefix: the side's root to /src, this directory to /target):
-#                   isolated/ reaches the library through path dependencies outside its
-#                   workspace, which cargo compiles under their absolute paths, and the base's
-#                   are longer (base-src/...), a compiled-in path difference (#100)
+#                   own workspace). Both sides build through the same two symbolic links,
+#                   isolated-src (the side's root) and isolated-target (its isolated-<side>/),
+#                   pointed at the side before its build, with every source and target path
+#                   remapped (--remap-path-prefix: isolated-src to /src, isolated-target to
+#                   /target): isolated/ reaches the library through path dependencies outside its
+#                   workspace, which cargo compiles under their absolute paths (a compiled-in path
+#                   difference, #100) and hashes into every symbol (#129); see
+#                   build_generated_types
 #   {base,head}-model-exclude.tsv  each side's model exclusions (see build_models in tools.sh)
 #   run/{base,head}/ each side's timed executables (the criterion benches and jsonschemars), copied
 #                   to paths of the same length: the executable's path sits on the process's
@@ -240,25 +243,41 @@ run_inprocess() {
 # and heap profiler (see isolated-{base,head}/ in the layout above) and print the bench
 # executable's path; print nothing when the side's isolated/ has no such feature. Needs the
 # fixture roots (the model shards generate their types from them at build time).
+#
+# Both sides build through the same two paths, symbolic links pointed at the side before its
+# build: isolated-src (its source root) and isolated-target (its target directory) (#129).
+# isolated/ is its own workspace and reaches the library through path dependencies outside it,
+# and cargo hashes such a package's absolute path into its `-C metadata`, the disambiguator in
+# every symbol of it and of every crate that depends on it. Built from each side's own path, the
+# two sides of an A/A run got different symbols, their benches 2.86 MB of differently laid out
+# code, and three generated-types cells moved 3.5-5.8%. Cargo does not resolve the links, and
+# each side keeps its own target directory, so a side whose sources did not change stays built.
 build_generated_types() {
-    local side="$1" root="$2" manifest target exclude exe
+    local side="$1" root="$2" src_link target_link manifest target exclude exe
     local -a remap
-    manifest="${root}/json_schema_rs_benchmark/isolated/Cargo.toml"
-    if ! grep -q '^generated-types = ' "${manifest}"; then
+    if ! grep -q '^generated-types = ' "${root}/json_schema_rs_benchmark/isolated/Cargo.toml"; then
         echo "    ${side}: isolated/ has no generated-types feature; no generated-types cells" >&2
         return 0
     fi
+    src_link="${QUICK_DIR}/isolated-src"
+    target_link="${QUICK_DIR}/isolated-target"
     target="${QUICK_DIR}/isolated-${side}"
+    mkdir -p "${target}"
+    ln -sfn "${root}" "${src_link}"
+    ln -sfn "${target}" "${target_link}"
+    manifest="${src_link}/json_schema_rs_benchmark/isolated/Cargo.toml"
     exclude="${QUICK_DIR}/${side}-model-exclude.tsv"
     clear_exclusions "${exclude}"
-    remap=(--config "build.rustflags = [\"--remap-path-prefix=${root}=/src\", \"--remap-path-prefix=${target}=/target\"]")
-    CARGO_TARGET_DIR="${target}" build_models "${manifest}" generated-types "${exclude}" \
+    remap=(--config "build.rustflags = [\"--remap-path-prefix=${src_link}=/src\", \"--remap-path-prefix=${target_link}=/target\"]")
+    CARGO_TARGET_DIR="${target_link}" build_models "${manifest}" generated-types "${exclude}" \
         "${QUICK_DIR}/${side}/models" "${remap[@]}" >&2 || exit 1
-    exe="$(CARGO_TARGET_DIR="${target}" cargo bench --manifest-path "${manifest}" \
+    exe="$(CARGO_TARGET_DIR="${target_link}" cargo bench --manifest-path "${manifest}" \
         --config "${PROFILE_CONFIG}" --profile benchmark --features generated-types "${remap[@]}" \
         --bench isolated --no-run --message-format=json \
         | grep -o '"executable":"[^"]*"' | grep '/deps/isolated-' | tail -n 1 | cut -d '"' -f 4)"
-    if [[ -z "${exe}" || ! -x "${exe}" ]]; then
+    # The path cargo reports runs through the link, which the other side's build moves.
+    exe="${target}${exe#"${target_link}"}"
+    if [[ -z "${exe#"${target}"}" || ! -x "${exe}" ]]; then
         echo "!! no isolated bench executable built under ${target}" >&2
         exit 1
     fi
