@@ -134,18 +134,6 @@
     }
   },
   "draft7": {
-    "optional/content.json": {
-      "validation of binary string-encoding": [
-        "an invalid base64 string (% is not a valid character)"
-      ],
-      "validation of binary-encoded media type documents": [
-        "a validly-encoded invalid JSON document",
-        "an invalid base64 string that is valid JSON"
-      ],
-      "validation of string-encoded content based on media type": [
-        "an invalid JSON document"
-      ]
-    },
     "optional/unknownKeyword.json": {
       "$id inside an unknown keyword is not a real identifier": [
         "type matches non-schema in first anyOf",

@@ -312,6 +312,23 @@ pub enum ValidationErrorKind {
         /// The invalid string value (for user-facing context).
         value: String,
     },
+    /// The string instance is not in the encoding `contentEncoding` names (only where the
+    /// content keywords are asserted: see `ContentMode`).
+    InvalidContentEncoding {
+        /// The encoding name (`"base64"`).
+        encoding: String,
+        /// The invalid string value (for user-facing context).
+        value: String,
+    },
+    /// The string instance (decoded by `contentEncoding`, when present) is not a document of
+    /// the media type `contentMediaType` names (only where the content keywords are asserted:
+    /// see `ContentMode`).
+    InvalidContentMediaType {
+        /// The media type (`"application/json"`).
+        media_type: String,
+        /// The invalid string value (for user-facing context).
+        value: String,
+    },
     /// The instance matched the schema of `not`.
     NotSchemaMatched,
     /// The object had fewer members than `minProperties`.
@@ -535,6 +552,19 @@ impl fmt::Display for ValidationErrorKind {
             }
             ValidationErrorKind::InvalidFormat { format, value, .. } => {
                 write!(f, "string \"{value}\" is not a valid {format}")
+            }
+            ValidationErrorKind::InvalidContentEncoding {
+                encoding, value, ..
+            } => {
+                write!(f, "string \"{value}\" is not valid {encoding}")
+            }
+            ValidationErrorKind::InvalidContentMediaType {
+                media_type, value, ..
+            } => {
+                write!(
+                    f,
+                    "content of string \"{value}\" is not a valid {media_type} document"
+                )
             }
             ValidationErrorKind::NotSchemaMatched => {
                 write!(f, "instance matches the schema of not")

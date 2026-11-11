@@ -1,8 +1,8 @@
 //! JSON Schema ingestion settings.
 
 use super::dialect::{
-    Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, RefSiblings,
-    ResolvedDialect,
+    ContentMode, Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics,
+    RefSiblings, ResolvedDialect,
 };
 use super::error::JsonSchemaParseError;
 use super::json_schema::JsonSchema;
@@ -49,6 +49,13 @@ pub struct JsonSchemaSettings {
     /// 2019-09 and 2020-12 treat it as an annotation.
     pub format_mode: Option<FormatMode>,
 
+    /// Whether `contentEncoding` and `contentMediaType` are checked. `None` follows the draft:
+    /// draft 7 checks them, 2019-09 and 2020-12 treat them as annotations (drafts 4 and 6 have
+    /// no content keywords). Asserting them under 2019-09 or 2020-12 goes beyond those drafts'
+    /// default, which must not decode content; their failures are then ordinary validation
+    /// errors.
+    pub content_mode: Option<ContentMode>,
+
     /// Which numbers `"type": "integer"` accepts. `None` follows the draft: draft 4 is lexical
     /// (`1.0` is not an integer), draft 6 and later numeric (`1.0` is an integer).
     pub integer_semantics: Option<IntegerSemantics>,
@@ -72,6 +79,7 @@ pub struct JsonSchemaSettingsBuilder {
     forced_spec_version: Option<SpecVersion>,
     default_spec_version: Option<SpecVersion>,
     format_mode: Option<FormatMode>,
+    content_mode: Option<ContentMode>,
     integer_semantics: Option<IntegerSemantics>,
     exclusive_bounds: Option<ExclusiveBounds>,
     ref_siblings: Option<RefSiblings>,
@@ -108,6 +116,15 @@ impl JsonSchemaSettingsBuilder {
     #[must_use]
     pub fn format_mode(mut self, value: FormatMode) -> Self {
         self.format_mode = Some(value);
+        self
+    }
+
+    /// Check `contentEncoding` and `contentMediaType` ([`ContentMode::Assertion`]) or only
+    /// record them ([`ContentMode::Annotation`]), whatever the draft's default (see
+    /// [`JsonSchemaSettings::content_mode`]).
+    #[must_use]
+    pub fn content_mode(mut self, value: ContentMode) -> Self {
+        self.content_mode = Some(value);
         self
     }
 
@@ -153,6 +170,7 @@ impl JsonSchemaSettingsBuilder {
             forced_spec_version: self.forced_spec_version,
             default_spec_version: self.default_spec_version,
             format_mode: self.format_mode,
+            content_mode: self.content_mode,
             integer_semantics: self.integer_semantics,
             exclusive_bounds: self.exclusive_bounds,
             ref_siblings: self.ref_siblings,
@@ -173,6 +191,8 @@ pub struct DialectSettings {
     pub default_spec_version: Option<SpecVersion>,
     /// See [`JsonSchemaSettings::format_mode`].
     pub format_mode: Option<FormatMode>,
+    /// See [`JsonSchemaSettings::content_mode`].
+    pub content_mode: Option<ContentMode>,
     /// See [`JsonSchemaSettings::integer_semantics`].
     pub integer_semantics: Option<IntegerSemantics>,
     /// See [`JsonSchemaSettings::exclusive_bounds`].
@@ -187,6 +207,9 @@ impl DialectSettings {
     pub fn apply_overrides(&self, mut dialect: Dialect) -> Dialect {
         if let Some(format_mode) = self.format_mode {
             dialect.format_mode = format_mode;
+        }
+        if let Some(content_mode) = self.content_mode {
+            dialect.content_mode = content_mode;
         }
         if let Some(integer_semantics) = self.integer_semantics {
             dialect.integer_semantics = integer_semantics;
@@ -209,6 +232,7 @@ impl JsonSchemaSettings {
             forced_spec_version: self.forced_spec_version,
             default_spec_version: self.default_spec_version,
             format_mode: self.format_mode,
+            content_mode: self.content_mode,
             integer_semantics: self.integer_semantics,
             exclusive_bounds: self.exclusive_bounds,
             ref_siblings: self.ref_siblings,
@@ -223,6 +247,7 @@ impl JsonSchemaSettings {
             forced_spec_version: dialect.forced_spec_version,
             default_spec_version: dialect.default_spec_version,
             format_mode: dialect.format_mode,
+            content_mode: dialect.content_mode,
             integer_semantics: dialect.integer_semantics,
             exclusive_bounds: dialect.exclusive_bounds,
             ref_siblings: dialect.ref_siblings,
@@ -304,8 +329,8 @@ mod tests {
     use super::{JsonSchemaSettings, UnknownSchemaUri, resolve_dialect};
     use crate::json_schema::SpecVersion;
     use crate::json_schema::dialect::{
-        Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, RefSiblings,
-        ResolvedDialect,
+        ContentMode, Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics,
+        RefSiblings, ResolvedDialect,
     };
     use crate::json_schema::error::JsonSchemaParseError;
     use crate::json_schema::json_schema::JsonSchema;
@@ -361,6 +386,7 @@ mod tests {
             forced_spec_version: Some(SpecVersion::Draft06),
             default_spec_version: Some(SpecVersion::Draft04),
             format_mode: Some(FormatMode::Annotation),
+            content_mode: Some(ContentMode::Annotation),
             integer_semantics: Some(IntegerSemantics::Lexical),
             exclusive_bounds: Some(ExclusiveBounds::BooleanModifier),
             ref_siblings: Some(RefSiblings::Ignored),
@@ -371,6 +397,7 @@ mod tests {
             .forced_spec_version(SpecVersion::Draft06)
             .default_spec_version(SpecVersion::Draft04)
             .format_mode(FormatMode::Annotation)
+            .content_mode(ContentMode::Annotation)
             .integer_semantics(IntegerSemantics::Lexical)
             .exclusive_bounds(ExclusiveBounds::BooleanModifier)
             .ref_siblings(RefSiblings::Ignored)
@@ -557,6 +584,31 @@ mod tests {
             .expect("resolve")
             .dialect
             .format_mode;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_content_mode_override_beats_draft_default() {
+        let schema: JsonSchema = schema_with_uri("https://json-schema.org/draft/2020-12/schema");
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .content_mode(ContentMode::Assertion)
+            .build();
+        let expected: ContentMode = ContentMode::Assertion;
+        let actual: ContentMode = resolve_dialect(&schema, &settings)
+            .expect("resolve")
+            .dialect
+            .content_mode;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resolve_dialect_without_override_uses_draft_content_mode() {
+        let schema: JsonSchema = schema_with_uri("http://json-schema.org/draft-07/schema#");
+        let expected: ContentMode = ContentMode::Assertion;
+        let actual: ContentMode = resolve_dialect(&schema, &JsonSchemaSettings::default())
+            .expect("resolve")
+            .dialect
+            .content_mode;
         assert_eq!(expected, actual);
     }
 

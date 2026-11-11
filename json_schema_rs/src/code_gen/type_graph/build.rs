@@ -22,10 +22,11 @@ use crate::code_gen::settings::{CodeGenSettings, FormatTypes, ModelNameSource, U
 use crate::code_gen::{CodeGenError, CodeGenResult};
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    Dialect, FormatMode, IntegerSemantics, JsonSchema, JsonSchemaSettings, JsonType, RefSiblings,
-    Registry, Schema, SchemaRef, Scope, TypeSet,
+    ContentMode, Dialect, FormatMode, IntegerSemantics, JsonSchema, JsonSchemaSettings, JsonType,
+    RefSiblings, Registry, Schema, SchemaRef, Scope, TypeSet,
 };
 use crate::number;
+use crate::validator::content::Content;
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1327,20 +1328,40 @@ fn contributes_besides_type(s: &JsonSchema, skip_bits: u8) -> bool {
 fn asserts_beyond_shape(s: &JsonSchema, dialect: Dialect) -> bool {
     s.multiple_of.is_some()
         || s.extensions.keys().any(|key| {
-            dialect.keyword(key).is_some() && !ANNOTATION_KEYWORDS.contains(&key.as_str())
+            dialect.keyword(key).is_some()
+                && !ANNOTATION_KEYWORDS.contains(&key.as_str())
+                && !CONTENT_KEYWORDS.contains(&key.as_str())
         })
+        || asserts_content(s, dialect)
 }
 
 /// Keywords kept in `extensions` that never decide whether an instance is valid.
-const ANNOTATION_KEYWORDS: [&str; 7] = [
+const ANNOTATION_KEYWORDS: [&str; 5] = [
     "$anchor",
     "$vocabulary",
     "readOnly",
     "writeOnly",
-    "contentEncoding",
-    "contentMediaType",
     "contentSchema",
 ];
+
+/// The content keywords that decide validity where the dialect asserts them
+/// ([`asserts_content`]).
+const CONTENT_KEYWORDS: [&str; 2] = ["contentEncoding", "contentMediaType"];
+
+/// Whether `s`'s `contentEncoding` / `contentMediaType` check its strings: the dialect asserts
+/// and defines them, and they name an encoding or media type the validator checks.
+fn asserts_content(s: &JsonSchema, dialect: Dialect) -> bool {
+    if dialect.content_mode != ContentMode::Assertion {
+        return false;
+    }
+    let read = |name: &str| -> Option<&str> {
+        dialect
+            .keyword(name)
+            .and_then(|_| s.extensions.get(name))
+            .and_then(Value::as_str)
+    };
+    Content::lower(read("contentEncoding"), read("contentMediaType")).is_some()
+}
 
 /// Whether `s` has `keyword` (one the model keeps raw, such as `patternProperties` or
 /// `prefixItems`) with at least one entry, and its dialect defines it.

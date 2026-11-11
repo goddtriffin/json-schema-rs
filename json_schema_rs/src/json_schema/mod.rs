@@ -11,8 +11,8 @@ pub mod spec_version;
 pub mod type_set;
 
 pub use dialect::{
-    Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, Keyword, RefSiblings,
-    ResolvedDialect, SubschemaPosition, Vocabulary, VocabularyKind, VocabularySet,
+    ContentMode, Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics, Keyword,
+    RefSiblings, ResolvedDialect, SubschemaPosition, Vocabulary, VocabularyKind, VocabularySet,
 };
 pub use error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
 pub use json_schema::{JsonSchema, Schema, SchemaRef};

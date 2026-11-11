@@ -6309,6 +6309,43 @@ fn cli_validate_format_mode_assertion_flag_checks_uuid() {
 }
 
 #[test]
+fn cli_validate_content_is_annotation_by_default_in_2020_12() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"type":"string","contentEncoding":"base64"}"#,
+        r#""%%%%""#,
+        &[],
+    );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_content_mode_assertion_flag_checks_base64() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"type":"string","contentEncoding":"base64"}"#,
+        r#""%%%%""#,
+        &["--jss-content-mode", "assertion"],
+    );
+    let expected: (i32, String) = (
+        1,
+        "root: string \"%%%%\" is not valid base64\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_content_mode_annotation_flag_ignores_draft7_content() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"string","contentMediaType":"application/json"}"#,
+        r#""{:}""#,
+        &["--jss-content-mode", "annotation"],
+    );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
     let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,

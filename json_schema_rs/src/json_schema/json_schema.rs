@@ -1176,16 +1176,8 @@ impl JsonSchema {
     /// `$vocabulary` and embedded resources' `$schema` are the [`Registry`](super::Registry)'s.
     #[must_use]
     pub fn dialect(&self) -> Dialect {
-        let dialect_settings: DialectSettings = self.dialect_settings.unwrap_or_default();
-        let settings: JsonSchemaSettings = JsonSchemaSettings {
-            forced_spec_version: dialect_settings.forced_spec_version,
-            default_spec_version: dialect_settings.default_spec_version,
-            format_mode: dialect_settings.format_mode,
-            integer_semantics: dialect_settings.integer_semantics,
-            exclusive_bounds: dialect_settings.exclusive_bounds,
-            ref_siblings: dialect_settings.ref_siblings,
-            ..JsonSchemaSettings::default()
-        };
+        let settings: JsonSchemaSettings =
+            JsonSchemaSettings::from_dialect_settings(self.dialect_settings.unwrap_or_default());
         resolve_dialect_for_uri(self.schema.as_deref(), &settings)
             .map(|resolved| resolved.dialect)
             .unwrap_or_default()

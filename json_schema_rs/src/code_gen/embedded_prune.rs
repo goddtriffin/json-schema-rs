@@ -30,8 +30,10 @@ const DRAFTS: [SpecVersion; 10] = [
 ];
 
 /// Keywords no draft's validation reads (annotations), and the definition containers, whose
-/// entries the compiler reaches through `$ref` positions instead.
-const NEVER_ASSERTED: [&str; 13] = [
+/// entries the compiler reaches through `$ref` positions instead. `contentEncoding` and
+/// `contentMediaType` are not among them: draft 7 asserts them, and any draft does under
+/// `ContentMode::Assertion`.
+const NEVER_ASSERTED: [&str; 11] = [
     "title",
     "description",
     "$comment",
@@ -40,8 +42,6 @@ const NEVER_ASSERTED: [&str; 13] = [
     "deprecated",
     "readOnly",
     "writeOnly",
-    "contentEncoding",
-    "contentMediaType",
     "contentSchema",
     "$defs",
     "definitions",
