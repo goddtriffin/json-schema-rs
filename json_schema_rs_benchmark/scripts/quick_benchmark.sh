@@ -55,7 +55,8 @@
 #   run/{base,head}/ each side's timed executables (the criterion benches and jsonschemars), copied
 #                   to paths of the same length: the executable's path sits on the process's
 #                   stack, and a longer one shifted an identical binary's sub-microsecond cells by
-#                   up to 5.5% (#100)
+#                   up to 5.5% (#100). cli/<round>/jsonschemars is the variant of jsonschemars
+#                   each CLI round runs (see make_cli_variants, #123)
 #   {base,head}/    each side's captures: generated/ and code_size.tsv (generated code and its
 #                   size), heap/, screen/<round>/ and criterion/<round>/ (the
 #                   screening and confirmation rounds), cli/, models/ (the model
@@ -332,7 +333,7 @@ $("${BUILD_DIR}/list_fixtures")"
                     cmd="$(validate_cmd "${TOOL}" "${schema}" "${payload}" ${resources[@]+"${resources[@]}"})" ;;
             esac
             for side in "${sides[@]}"; do
-                local side_cmd="${cmd//"${build_bin}"/"${RUN_DIR}/${side}/jsonschemars"}"
+                local side_cmd="${cmd//"${build_bin}"/"$(cli_variant "${side}" "${round}")"}"
                 if _cli_probe "${side_cmd}" "${expect}"; then
                     _cli_time "${side}" "${fid}" "${op}" "${expect}" "${side_cmd}" "${round}"
                 elif [[ "${round}" == 1 ]]; then
@@ -341,6 +342,35 @@ $("${BUILD_DIR}/list_fixtures")"
             done
         done
     done <<< "${fixtures}"
+}
+
+# make_cli_variants <side> <count>: one variant of the side's jsonschemars per CLI round, at
+# RUN_DIR/<side>/cli/<round, two digits>/jsonschemars (#123). On macOS a process's peak RSS
+# depends on the executable's identity (its code signature), not only on its code: two builds of
+# one commit peaked 3.2-3.4% apart on many-defs codegen in every round. Each variant is a copy
+# with its own Mach-O UUID, re-signed, so that effect varies from round to round and lands in the
+# spread. Without a Mach-O executable (Linux), each variant is a plain copy.
+make_cli_variants() {
+    local side="$1" count="$2" round variant rc
+    for round in $(seq 1 "${count}"); do
+        variant="$(cli_variant "${side}" "${round}")"
+        mkdir -p "$(dirname "${variant}")"
+        rc=0
+        "${BUILD_DIR}/binary_variant" "${RUN_DIR}/${side}/jsonschemars" "${variant}" "${round}" \
+            2>/dev/null || rc=$?
+        case "${rc}" in
+            0) chmod +x "${variant}"
+               codesign -f -s - "${variant}" 2>/dev/null \
+                   || { echo "!! codesign failed on ${variant}" >&2; exit 1; } ;;
+            2) cp "${RUN_DIR}/${side}/jsonschemars" "${variant}" ;;
+            *) echo "!! binary_variant failed on ${RUN_DIR}/${side}/jsonschemars" >&2; exit 1 ;;
+        esac
+    done
+}
+
+# cli_variant <side> <round>: the side's jsonschemars variant for the round (make_cli_variants).
+cli_variant() {
+    printf '%s/%s/cli/%02d/jsonschemars' "${RUN_DIR}" "$1" "$2"
 }
 
 # _write_startup <work dir>: write the startup baseline fixture (the full run's, see
@@ -374,7 +404,7 @@ main() {
     head_exe="$(build_side "${REPO_ROOT}" "${REPO_ROOT}/target")"
     _profile_cargo "${REPO_ROOT}" "${REPO_ROOT}/target" build -p json-schema-rs-benchmark \
         --bin gen_fixtures --bin list_fixtures --bin compare --bin model_build_failures \
-        --bin code_size
+        --bin code_size --bin binary_variant
     echo "==> building ${base_ref} (${base_sha:0:9})"
     extract_base "${base_sha}"
     base_exe="$(build_side "${BASE_SRC}" "${BASE_TARGET}")"
@@ -412,6 +442,9 @@ main() {
     if [[ -n "${head_types_exe}" ]]; then
         cp "${head_types_exe}" "${RUN_DIR}/head/isolated"
     fi
+    for side in base head; do
+        make_cli_variants "${side}" $(( ROUNDS + CLI_CONFIRM_ROUNDS ))
+    done
 
     echo "==> generated code size"
     for side in base head; do

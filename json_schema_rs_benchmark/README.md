@@ -86,6 +86,7 @@ moved cells with no code change (#100), each measured with A/A runs (both sides 
 | Drift: speed changes over minutes, load arrives in bursts of seconds | results from another day differ by up to 10% in-process; whole-tier rounds a minute apart disagreed on 44 of 48 in-process cells | interleaving per cell (5 of 48), the lowest sample per round |
 | Paths: the executable's path sits on the process's stack; a path compiled into the binary shifts its layout | the same binary from a longer path ran a sub-microsecond cell 5.5% slower in all 8 processes; builds of one commit from two checkouts differed by up to 8% on one cell | equal-length executable paths; no absolute path compiled into the bench (the default fixture directory is read at run time) |
 | Per-process layout: each process gets its own memory layout | some sub-microsecond cells run about 4% faster in some processes | the median across rounds, with their spread as the noise; confirmation rounds for every cell that moved |
+| Build identity (#123): on macOS a process's peak RSS depends on the executable's identity (its code signature), not only its code | copies of one build differing only in their UUID peaked from 21.6 to 22.4 MiB on many-defs codegen, each copy consistently; two builds of one commit peaked 3.2–3.4% apart in every round of two A/A runs | each CLI round runs its own variant of each side's `jsonschemars` (a copy with its own Mach-O UUID, re-signed; `src/bin/binary_variant.rs`), so the effect lands in the spread. In-process time showed no such effect |
 
 The original design (whole-tier rounds, pooled medians, unequal paths) reported 3 of 174 cells
 moved in an A/A run (up to +12%). Two A/A runs of this one reported none: 2 to 4 cells per run
@@ -344,6 +345,7 @@ json_schema_rs_benchmark/
   src/bin/compare.rs       # quick mode: main vs the working tree, cells moved beyond noise
   src/code_size.rs         # generated code size: line classifier, metrics, reports
   src/bin/code_size.rs     # generated code -> code_size.tsv
+  src/bin/binary_variant.rs # an executable copy with its own Mach-O UUID (quick mode's CLI rounds)
   src/bin/gen_fixtures.rs  # deterministic large synthetic fixtures
   src/bin/list_fixtures.rs # fixture list for the CLI tier
   src/bin/boon_validate.rs # thin boon CLI wrapper (boon-cli cannot register documents by $id)

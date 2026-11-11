@@ -20,6 +20,7 @@
 
 #[cfg(feature = "tools")]
 pub mod adapters;
+pub mod binary_variant;
 pub mod code_size;
 pub mod compare;
 pub mod fixtures;
