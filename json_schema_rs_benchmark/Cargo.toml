@@ -29,6 +29,17 @@ required-features = ["tools"]
 name = "compare"
 path = "src/bin/compare.rs"
 
+# Our codegen's generated code size per fixture (lines, bytes, types, categories): code_size.tsv.
+[[bin]]
+name = "code_size"
+path = "src/bin/code_size.rs"
+
+# A copy of an executable whose identity differs (a rewritten Mach-O UUID), so the quick mode's
+# CLI rounds each run their own build identity (#123).
+[[bin]]
+name = "binary_variant"
+path = "src/bin/binary_variant.rs"
+
 # Deterministic generator for the large synthetic fixtures (written under target/, never committed).
 [[bin]]
 name = "gen_fixtures"
