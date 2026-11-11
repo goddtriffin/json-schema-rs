@@ -18,10 +18,15 @@
 #
 # What it measures, for `jsonschemars` only (BENCH_TOOLS restricts the harness to it):
 #   - in-process peak heap (heap_profile, isolated_heap_profile), once per side: it is exact;
-#   - in-process time (criterion), cell by cell (BENCH_CELL), BENCH_QUICK_ROUNDS rounds per side
-#     in ABBA order: the main crate's cells (cross_tool) and the generated-types cells (isolated/'s
-#     `generated-types` build: every fixture's instances deserialized into our codegen's types,
-#     built from that side's codegen and library);
+#   - in-process time (criterion), cell by cell (BENCH_CELL), each cell's rounds in ABBA order: the
+#     main crate's cells (cross_tool) and the generated-types cells (isolated/'s `generated-types`
+#     build: every fixture's instances deserialized into our codegen's types, built from that
+#     side's codegen and library). In two stages (#112): screening times every cell in
+#     BENCH_QUICK_ROUNDS short rounds per side, and confirmation times each cell whose sides
+#     differ by more than 1.5% there in BENCH_QUICK_CONFIRM_ROUNDS full-length rounds per side,
+#     which replace its screening rounds in the report. Most cells only need screening, so this
+#     takes about half the time of measuring every cell at full length, and on captures of the
+#     same binary with injected slowdowns it caught more 4% slowdowns (see design.md);
 #   - CLI time and peak RSS (hyperfine), BENCH_QUICK_ROUNDS rounds, each running every cell
 #     with its two sides back to back (base first in odd rounds), on every fixture: codegen,
 #     validate_valid, validate_invalid, and the startup baseline.
@@ -48,7 +53,8 @@
 #                   to paths of the same length: the executable's path sits on the process's
 #                   stack, and a longer one shifted an identical binary's sub-microsecond cells by
 #                   up to 5.5% (#100)
-#   {base,head}/    each side's captures: heap/, criterion/<round>/, cli/, models/ (the model
+#   {base,head}/    each side's captures: heap/, screen/<round>/ and criterion/<round>/ (the
+#                   screening and confirmation rounds), cli/, models/ (the model
 #                   build's cargo messages), cells-{cross_tool,isolated}.txt (each bench's cells)
 #   report.md       the comparison (also printed)
 # The head side builds in the workspace's own target directory, like the full run.
@@ -57,11 +63,18 @@
 #   BENCH_BASE            the base ref (default: main); the base commit is its merge base with
 #                         HEAD, so changes that landed on it since the branch left are not
 #                         counted. BENCH_BASE=HEAD with a clean tree is an A/A control.
-#   BENCH_QUICK_ROUNDS    rounds per side (default 3)
-#   BENCH_QUICK_CONFIRM_ROUNDS  further rounds per side for each cell that moved (default 4; 0
-#                         skips confirmation)
-#   BENCH_CRITERION_ARGS  criterion args (default: --warm-up-time 0.1 --measurement-time 0.3
-#                         --sample-size 20 --noplot), per cell and round
+#   BENCH_QUICK_ROUNDS    screening rounds per side of every in-process cell, and rounds per side
+#                         of every CLI cell (default 3)
+#   BENCH_QUICK_CONFIRM_ROUNDS  confirmation rounds per side of each in-process cell screening
+#                         passes on (default 5)
+#   BENCH_CLI_CONFIRM_ROUNDS  further rounds per side of each CLI cell that moved (default 4; 0
+#                         skips its confirmation)
+#   BENCH_QUICK_SCREEN_ARGS  criterion args per screening round (default: --warm-up-time 0.02
+#                         --measurement-time 0.03 --sample-size 10 --noplot --nresamples 1)
+#   BENCH_CRITERION_ARGS  criterion args per confirmation round (default: --warm-up-time 0.1
+#                         --measurement-time 0.3 --sample-size 20 --noplot --nresamples 1).
+#                         `compare` reads only the raw samples, so criterion's own bootstrap
+#                         analysis is cut to one resample
 #   BENCH_CLI_WARMUP      hyperfine warmup runs per cell and round (default 2)
 #   BENCH_CLI_RUNS        hyperfine timed runs per cell and round (default 10)
 #
@@ -83,7 +96,10 @@ BASE_BUILD_DIR="${BASE_TARGET}/benchmark"
 RUN_DIR="${QUICK_DIR}/run"
 TOOL="jsonschemars"
 ROUNDS="${BENCH_QUICK_ROUNDS:-3}"
-CONFIRM_ROUNDS="${BENCH_QUICK_CONFIRM_ROUNDS:-4}"
+CONFIRM_ROUNDS="${BENCH_QUICK_CONFIRM_ROUNDS:-5}"
+CLI_CONFIRM_ROUNDS="${BENCH_CLI_CONFIRM_ROUNDS:-4}"
+SCREEN_ARGS="${BENCH_QUICK_SCREEN_ARGS:---warm-up-time 0.02 --measurement-time 0.03 --sample-size 10 --noplot --nresamples 1}"
+CONFIRM_ARGS="${BENCH_CRITERION_ARGS:---warm-up-time 0.1 --measurement-time 0.3 --sample-size 20 --noplot --nresamples 1}"
 export REPO_ROOT
 
 # shellcheck source=tools.sh
@@ -163,29 +179,31 @@ cell_bench() {
     done
 }
 
-# run_criterion_cell <side> <bench exe> <round> <operation/fixture id>: one criterion round of
-# one cell. BENCH_CELL restricts the harness to it (the base side's harness may predate it, so
-# the exact criterion filter restricts the timing too).
+# run_criterion_cell <stage: screen|criterion> <side> <bench exe> <round> <operation/fixture id>:
+# one criterion round of one cell, with the stage's criterion args, into the side's
+# <stage>/<round>. BENCH_CELL restricts the harness to it (the base side's harness may predate
+# it, so the exact criterion filter restricts the timing too).
 run_criterion_cell() {
-    local side="$1" exe="$2" round="$3" cell="$4" filter
+    local stage="$1" side="$2" exe="$3" round="$4" cell="$5" filter
     local -a criterion_args
-    # Word-split the knob on purpose: it is a list of criterion flags.
+    # Word-split the args on purpose: they are a list of criterion flags.
     # shellcheck disable=SC2206
-    criterion_args=(${BENCH_CRITERION_ARGS:---warm-up-time 0.1 --measurement-time 0.3 --sample-size 20 --noplot})
+    if [[ "${stage}" == screen ]]; then criterion_args=(${SCREEN_ARGS}); else criterion_args=(${CONFIRM_ARGS}); fi
     filter="${cell%%/*}/${TOOL}/${cell#*/}"
     filter="^$(printf '%s' "${filter}" | sed 's/[][\.*^$+?(){}|]/\\&/g')\$"
-    BENCH_CELL="${cell}" CRITERION_HOME="${QUICK_DIR}/${side}/criterion/${round}" "${exe}" \
+    BENCH_CELL="${cell}" CRITERION_HOME="${QUICK_DIR}/${side}/${stage}/${round}" "${exe}" \
         --bench "${filter}" ${criterion_args[@]+"${criterion_args[@]}"} \
         >> "${QUICK_DIR}/${side}/criterion.log" 2>&1 \
         || { echo "!! criterion failed on ${cell} (see ${QUICK_DIR}/${side}/criterion.log)" >&2; exit 1; }
 }
 
-# run_inprocess <first round> <last round> [cells file]: every cell's criterion rounds back to
-# back, the sides alternating per round (base first in odd rounds), each side on the bench that
-# lists the cell (record_cells); only the cells the file lists, when given. A cell one side does
-# not list (its check fails there) is measured on the other side only, and compare lists it apart.
+# run_inprocess <stage: screen|criterion> <rounds> [cells file]: every cell's criterion rounds of
+# the stage back to back, the sides alternating per round (base first in odd rounds), each side
+# on the bench that lists the cell (record_cells); only the cells the file lists, when given. A
+# cell one side does not list (its check fails there) is measured on the other side only, and
+# compare lists it apart.
 run_inprocess() {
-    local first="$1" last="$2" only="${3:-}"
+    local stage="$1" rounds="$2" only="${3:-}"
     local cells cell round side bench count
     local -a sides
     cells="$(cat "${QUICK_DIR}"/base/cells-*.txt "${QUICK_DIR}"/head/cells-*.txt \
@@ -194,15 +212,15 @@ run_inprocess() {
         cells="$(printf '%s\n' "${cells}" | grep -xF -f "${only}" || true)"
     fi
     count="$(printf '%s\n' "${cells}" | sed '/^$/d' | wc -l | tr -d ' ')"
-    echo "==> in-process time: ${count} cells, rounds ${first}-${last} per side, interleaved per cell"
+    echo "==> in-process time, ${stage/criterion/confirmation}: ${count} cells, ${rounds} rounds per side, interleaved per cell"
     while IFS= read -r cell; do
         [[ -n "${cell}" ]] || continue
-        for round in $(seq "${first}" "${last}"); do
+        for round in $(seq 1 "${rounds}"); do
             if (( round % 2 == 1 )); then sides=(base head); else sides=(head base); fi
             for side in "${sides[@]}"; do
                 bench="$(cell_bench "${side}" "${cell}")"
                 if [[ -n "${bench}" ]]; then
-                    run_criterion_cell "${side}" "${RUN_DIR}/${side}/${bench}" "${round}" "${cell}"
+                    run_criterion_cell "${stage}" "${side}" "${RUN_DIR}/${side}/${bench}" "${round}" "${cell}"
                 fi
             done
         done
@@ -404,29 +422,27 @@ main() {
         record_cells "${side}"
     done
 
-    run_inprocess 1 "${ROUNDS}"
+    run_inprocess screen "${ROUNDS}"
     for round in $(seq 1 "${ROUNDS}"); do
         run_cli "${round}"
     done
 
-    # Confirmation: re-measure every cell that moved in CONFIRM_ROUNDS further rounds, so the
-    # final comparison of those cells rests on more processes per side (see design.md).
-    if (( CONFIRM_ROUNDS > 0 )); then
-        "${BUILD_DIR}/compare" --base "${QUICK_DIR}/base" --head "${QUICK_DIR}/head" \
-            --tool "${TOOL}" --base-label "${base_ref}" \
-            --moved-in-process "${QUICK_DIR}/moved-in-process.txt" \
-            --moved-cli "${QUICK_DIR}/moved-cli.txt" > /dev/null
-        local first=$(( ROUNDS + 1 )) last=$(( ROUNDS + CONFIRM_ROUNDS ))
-        if [[ -s "${QUICK_DIR}/moved-in-process.txt" ]]; then
-            echo "==> confirming the moved in-process cells"
-            run_inprocess "${first}" "${last}" "${QUICK_DIR}/moved-in-process.txt"
-        fi
-        if [[ -s "${QUICK_DIR}/moved-cli.txt" ]]; then
-            echo "==> confirming the moved CLI cells"
-            for round in $(seq "${first}" "${last}"); do
-                run_cli "${round}" "${QUICK_DIR}/moved-cli.txt"
-            done
-        fi
+    # Confirmation (see design.md): time each in-process cell screening passed on in
+    # CONFIRM_ROUNDS full-length rounds, which replace its screening rounds, and each CLI cell
+    # that moved in CLI_CONFIRM_ROUNDS further rounds, so the final comparison of those cells
+    # rests on more and longer measurement.
+    "${BUILD_DIR}/compare" --base "${QUICK_DIR}/base" --head "${QUICK_DIR}/head" \
+        --tool "${TOOL}" --base-label "${base_ref}" \
+        --screened-in-process "${QUICK_DIR}/screened-in-process.txt" \
+        --moved-cli "${QUICK_DIR}/moved-cli.txt" > /dev/null
+    if [[ -s "${QUICK_DIR}/screened-in-process.txt" ]]; then
+        run_inprocess criterion "${CONFIRM_ROUNDS}" "${QUICK_DIR}/screened-in-process.txt"
+    fi
+    if (( CLI_CONFIRM_ROUNDS > 0 )) && [[ -s "${QUICK_DIR}/moved-cli.txt" ]]; then
+        echo "==> confirming the moved CLI cells"
+        for round in $(seq $(( ROUNDS + 1 )) $(( ROUNDS + CLI_CONFIRM_ROUNDS ))); do
+            run_cli "${round}" "${QUICK_DIR}/moved-cli.txt"
+        done
     fi
     rm -rf "${QUICK_DIR}/work"
 

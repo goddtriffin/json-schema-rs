@@ -5,8 +5,11 @@
 //! Each side's directory holds what `scripts/quick_benchmark.sh` captured for it:
 //!
 //! - `heap/inprocess_heap.tsv`: in-process peak heap (one exact value per cell, one round);
-//! - `criterion/<round>/...`: one criterion output directory per round, whose `sample.json`
-//!   is that cell's round;
+//! - `screen/<round>/...`: one criterion output directory per screening round of the
+//!   in-process cells, whose `sample.json` is that cell's round;
+//! - `criterion/<round>/...`: the same per confirmation round, for the cells screening passed
+//!   on; a cell's confirmation rounds replace its screening rounds (see
+//!   `json_schema_rs_benchmark::compare`, *two stages*);
 //! - `cli/index.tsv` and the hyperfine exports it lists (paths relative to the side's
 //!   directory), one export per cell and round.
 //!
@@ -18,7 +21,9 @@
 //! and clap's derive macro emits internal `#[allow(...)]` attributes.
 
 use clap::{Arg, Command};
-use json_schema_rs_benchmark::compare::{Comparison, Samples, add_round, compare};
+use json_schema_rs_benchmark::compare::{
+    Comparison, Samples, add_round, compare, screened_cells, with_screening,
+};
 use json_schema_rs_benchmark::{
     CellKey, CriterionId, HyperfineSamples, IndexEntry, Measurement, Metric, Tier, TsvParse,
     criterion_benchmark_files, parse_criterion_benchmark, parse_criterion_samples, parse_heap_tsv,
@@ -65,10 +70,10 @@ fn main() -> ExitCode {
                 .help("Also write the report to FILE"),
         )
         .arg(
-            Arg::new("moved-in-process")
-                .long("moved-in-process")
+            Arg::new("screened-in-process")
+                .long("screened-in-process")
                 .value_name("FILE")
-                .help("Write the moved in-process cells to FILE, one <operation>/<fixture id> per line"),
+                .help("Write the in-process cells screening passes on to FILE, one <operation>/<fixture id> per line"),
         )
         .arg(
             Arg::new("moved-cli")
@@ -91,7 +96,7 @@ fn main() -> ExitCode {
         |name: &str| -> Option<PathBuf> { matches.get_one::<String>(name).map(PathBuf::from) };
     let outputs: Outputs = Outputs {
         report: path_arg("output"),
-        moved_in_process: path_arg("moved-in-process"),
+        screened_in_process: path_arg("screened-in-process"),
         moved_cli: path_arg("moved-cli"),
     };
 
@@ -104,10 +109,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// Where to write the report and the moved-cell lists, besides printing the report.
+/// Where to write the report and the cell lists, besides printing the report.
 struct Outputs {
     report: Option<PathBuf>,
-    moved_in_process: Option<PathBuf>,
+    screened_in_process: Option<PathBuf>,
     moved_cli: Option<PathBuf>,
 }
 
@@ -118,8 +123,12 @@ fn run(
     base_label: &str,
     outputs: &Outputs,
 ) -> Result<(), String> {
-    let base_samples: Samples = read_side(base, tool)?;
-    let head_samples: Samples = read_side(head, tool)?;
+    let base_side: Side = read_side(base, tool)?;
+    let head_side: Side = read_side(head, tool)?;
+    let screened: Vec<String> =
+        screened_cells(&base_side.screened, &head_side.screened, Tier::InProcess);
+    let base_samples: Samples = with_screening(base_side.measured, base_side.screened);
+    let head_samples: Samples = with_screening(head_side.measured, head_side.screened);
     if head_samples.is_empty() {
         return Err(format!(
             "{}: no sample of {tool} was captured; nothing to compare",
@@ -134,12 +143,12 @@ fn run(
     if let Some(path) = &outputs.report {
         write(path, &report)?;
     }
-    for (path, tier) in [
-        (&outputs.moved_in_process, Tier::InProcess),
-        (&outputs.moved_cli, Tier::Cli),
+    for (path, cells) in [
+        (&outputs.screened_in_process, screened),
+        (&outputs.moved_cli, comparison.moved_cells(Tier::Cli)),
     ] {
         if let Some(path) = path {
-            let mut lines: String = comparison.moved_cells(tier).join("\n");
+            let mut lines: String = cells.join("\n");
             if !lines.is_empty() {
                 lines.push('\n');
             }
@@ -151,8 +160,18 @@ fn run(
 }
 
 /// Every sample of `tool` one side captured, by cell and round.
-fn read_side(dir: &Path, tool: &str) -> Result<Samples, String> {
+struct Side {
+    /// Heap, confirmation rounds (`criterion/`) and CLI rounds.
+    measured: Samples,
+    /// The in-process screening rounds (`screen/`).
+    screened: Samples,
+}
+
+/// Read one side's captures.
+fn read_side(dir: &Path, tool: &str) -> Result<Side, String> {
     let mut samples: Samples = Samples::new();
+    let mut screened: Samples = Samples::new();
+    read_criterion(&dir.join("screen"), tool, &mut screened)?;
 
     let heap_path: PathBuf = dir.join("heap").join("inprocess_heap.tsv");
     if let Some(text) = read_optional(&heap_path)? {
@@ -167,44 +186,7 @@ fn read_side(dir: &Path, tool: &str) -> Result<Samples, String> {
         }
     }
 
-    for benchmark_path in criterion_benchmark_files(&dir.join("criterion"))? {
-        let text: String = std::fs::read_to_string(&benchmark_path)
-            .map_err(|e| format!("reading {}: {e}", benchmark_path.display()))?;
-        let id: CriterionId = match parse_criterion_benchmark(&text) {
-            Ok(Some(id)) if id.tool == tool => id,
-            Ok(_) => continue,
-            Err(reason) => {
-                eprintln!(
-                    "compare: warning: {}: skipped: {reason}",
-                    benchmark_path.display()
-                );
-                continue;
-            }
-        };
-        let sample_path: PathBuf = benchmark_path.with_file_name("sample.json");
-        let Some(sample) = read_optional(&sample_path)? else {
-            eprintln!("compare: warning: {}: missing", sample_path.display());
-            continue;
-        };
-        match parse_criterion_samples(&sample) {
-            Ok(values) => add_round(
-                &mut samples,
-                CellKey {
-                    tier: Tier::InProcess,
-                    operation: id.operation,
-                    metric: Metric::TimeSecs,
-                    fixture: id.fixture,
-                },
-                values,
-            ),
-            Err(reason) => {
-                eprintln!(
-                    "compare: warning: {}: skipped: {reason}",
-                    sample_path.display()
-                );
-            }
-        }
-    }
+    read_criterion(&dir.join("criterion"), tool, &mut samples)?;
 
     let index_path: PathBuf = dir.join("cli").join("index.tsv");
     if let Some(text) = read_optional(&index_path)? {
@@ -246,7 +228,55 @@ fn read_side(dir: &Path, tool: &str) -> Result<Samples, String> {
             }
         }
     }
-    Ok(samples)
+    Ok(Side {
+        measured: samples,
+        screened,
+    })
+}
+
+/// Add every criterion round under `dir` (one output directory per round) of `tool` to
+/// `samples`.
+fn read_criterion(dir: &Path, tool: &str, samples: &mut Samples) -> Result<(), String> {
+    for benchmark_path in criterion_benchmark_files(dir)? {
+        let text: String = std::fs::read_to_string(&benchmark_path)
+            .map_err(|e| format!("reading {}: {e}", benchmark_path.display()))?;
+        let id: CriterionId = match parse_criterion_benchmark(&text) {
+            Ok(Some(id)) if id.tool == tool => id,
+            Ok(_) => continue,
+            Err(reason) => {
+                eprintln!(
+                    "compare: warning: {}: skipped: {reason}",
+                    benchmark_path.display()
+                );
+                continue;
+            }
+        };
+        let sample_path: PathBuf = benchmark_path.with_file_name("sample.json");
+        let Some(sample) = read_optional(&sample_path)? else {
+            eprintln!("compare: warning: {}: missing", sample_path.display());
+            continue;
+        };
+        match parse_criterion_samples(&sample) {
+            Ok(values) => add_round(
+                samples,
+                CellKey {
+                    tier: Tier::InProcess,
+                    operation: id.operation,
+                    metric: Metric::TimeSecs,
+                    fixture: id.fixture,
+                },
+                values,
+            ),
+            Err(reason) => {
+                eprintln!(
+                    "compare: warning: {}: skipped: {reason}",
+                    sample_path.display()
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// The cell a measurement belongs to.
