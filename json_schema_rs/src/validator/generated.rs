@@ -782,6 +782,65 @@ impl<'a> TypeValidators<'a> {
     }
 }
 
+/// The self-validation of a struct, enum or union that generated code defines, through a
+/// [`TypeValidators`] static: `validate(&self)` (the value as it serializes) and
+/// `TryFrom<serde_json::Value>` (validates, then deserializes). Both report every error the
+/// schema's validator reports. One implementation for every generated type, so the generated
+/// code holds the type and one line.
+///
+/// `self_validating!(Point, VALIDATORS, 0)`: `VALIDATORS` is the static, `0` the type's entry.
+///
+/// ```
+/// use json_schema_rs::{EmbeddedDocument, EmbeddedDocumentKind, TypeValidators};
+///
+/// static VALIDATORS: TypeValidators<'static> = TypeValidators::new(
+///     None,
+///     &[EmbeddedDocument {
+///         uri: "json-schema:///",
+///         json: r#"{"type":"object","properties":{"x":{"minimum":0}}}"#,
+///         kind: EmbeddedDocumentKind::Parsed(None),
+///     }],
+///     &[&["json-schema:///#"]],
+/// );
+///
+/// #[derive(Debug, serde::Serialize, serde::Deserialize)]
+/// pub struct Point {
+///     x: i64,
+/// }
+///
+/// json_schema_rs::self_validating!(Point, VALIDATORS, 0);
+///
+/// assert!(Point::try_from(serde_json::json!({"x": 1})).is_ok());
+/// assert!(Point::try_from(serde_json::json!({"x": -1})).is_err());
+/// assert!(Point { x: -1 }.validate().is_err());
+/// ```
+#[macro_export]
+macro_rules! self_validating {
+    ($name:ident, $validators:ident, $index:expr) => {
+        impl $name {
+            /// Validates this value against its schema.
+            ///
+            /// # Errors
+            ///
+            /// Every error the schema's validator reports, when this value does not satisfy the
+            /// schema.
+            pub fn validate(&self) -> Result<(), $crate::TypeValidationError> {
+                $validators.validate_serialized($index, self)
+            }
+        }
+
+        impl TryFrom<::serde_json::Value> for $name {
+            type Error = $crate::TypeValidationError;
+
+            /// Validates `value` against the schema, then deserializes it.
+            // Not `Self::Error`: an enum with a variant named `Error` makes it ambiguous.
+            fn try_from(value: ::serde_json::Value) -> Result<Self, $crate::TypeValidationError> {
+                $validators.deserialize($index, value)
+            }
+        }
+    };
+}
+
 /// The constructors and readers of a constrained newtype that generated code defines
 /// (`pub struct Name(String);`), validated through a [`TypeValidators`] static: `into_inner`,
 /// `TryFrom` the scalar (validates), `From<Name>` for the scalar, `Deref`, `AsRef`, `Display`

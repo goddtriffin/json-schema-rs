@@ -70,9 +70,11 @@ pub enum Category {
     /// Serde implementations: `impl Serialize` / `impl Deserialize` blocks,
     /// `deserialize_untagged!`, and serde helper functions.
     SerdeImpls,
-    /// Validation implementations: `impl TryFrom<serde_json::Value>` and `constrained_newtype!`.
+    /// Validation implementations: `impl TryFrom<serde_json::Value>`, `self_validating!` and
+    /// `constrained_newtype!`.
     ValidationImpls,
-    /// Inherent `impl Type { … }` blocks: `validate()` and default accessors.
+    /// Inherent `impl Type { … }` blocks: default accessors (and `validate()`, before
+    /// `self_validating!`).
     InherentImpls,
     /// The schema embedded for self-validation (the `TYPE_VALIDATORS` static).
     EmbeddedSchema,
@@ -336,7 +338,9 @@ fn classify_item(line: &str) -> (Category, Option<TypeKind>) {
         } else {
             Category::InherentImpls
         }
-    } else if line.starts_with("json_schema_rs::constrained_newtype!") {
+    } else if line.starts_with("json_schema_rs::constrained_newtype!")
+        || line.starts_with("json_schema_rs::self_validating!")
+    {
         Category::ValidationImpls
     } else if line.starts_with("json_schema_rs::deserialize_untagged!")
         || line.starts_with("fn deserialize")
@@ -795,6 +799,15 @@ mod tests {
         expected.extend(lines_in(Category::ValidationImpls, 2, 42));
         expected.extend(lines_in(Category::SerdeImpls, 4, 62));
         expected.extend(lines_in(Category::Other, 2, 23));
+        let actual: CodeSize = measured(source);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn measure_source_classifies_self_validating_as_validation_impls() {
+        let source: &str = "json_schema_rs::self_validating!(A, V, 0);\n";
+        let mut expected: CodeSize = size(&[(SizeMetric::Lines, 1), (SizeMetric::Bytes, 43)]);
+        expected.extend(lines_in(Category::ValidationImpls, 1, 43));
         let actual: CodeSize = measured(source);
         assert_eq!(expected, actual);
     }

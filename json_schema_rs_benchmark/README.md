@@ -299,8 +299,9 @@ and with `--cgs-constrained-newtypes false`. The `code_size` binary then measure
     variants;
   - **serde impls**: `impl Serialize` / `impl Deserialize`, `deserialize_untagged!` and serde
     helper functions;
-  - **validation impls**: `impl TryFrom<serde_json::Value>` and `constrained_newtype!`;
-  - **inherent impls**: `impl Type { … }`, holding `validate()` and default accessors;
+  - **validation impls**: `impl TryFrom<serde_json::Value>`, `self_validating!` and
+    `constrained_newtype!`;
+  - **inherent impls**: `impl Type { … }`, holding default accessors;
   - **embedded schema**: the `TYPE_VALIDATORS` static that self-validation reads;
   - **docs** and **attributes**: doc comments and `#[…]` lines, wherever they appear;
   - **other**: `use` and `mod` lines, blank lines, and any other item;

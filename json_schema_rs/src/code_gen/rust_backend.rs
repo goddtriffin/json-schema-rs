@@ -10843,25 +10843,7 @@ pub enum Level {
     Error,
 }
 
-impl Level {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(0, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Level {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(0, value)
-    }
-}
+json_schema_rs::self_validating!(Level, TYPE_VALIDATORS, 0);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
@@ -10902,25 +10884,7 @@ pub struct Root {
     pub name: String,
 }
 
-impl Root {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(0, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Root {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(0, value)
-    }
-}
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 0);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
@@ -10977,25 +10941,7 @@ impl<'de> Deserialize<'de> for RootAnyOf {
     }
 }
 
-impl RootAnyOf {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(0, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for RootAnyOf {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(0, value)
-    }
-}
+json_schema_rs::self_validating!(RootAnyOf, TYPE_VALIDATORS, 0);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
@@ -11018,7 +10964,6 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
     }
 
     #[test]
-    #[expect(clippy::too_many_lines)]
     fn self_validating_one_of_string_branches_stay_separate_variants_golden() {
         let actual: String = self_validating_buffers(&[serde_json::json!({
             "type": "object",
@@ -11039,25 +10984,7 @@ pub enum XVariant0 {
     B,
 }
 
-impl XVariant0 {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(0, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for XVariant0 {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(0, value)
-    }
-}
+json_schema_rs::self_validating!(XVariant0, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub enum XVariant1 {
@@ -11065,25 +10992,7 @@ pub enum XVariant1 {
     B,
 }
 
-impl XVariant1 {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(1, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for XVariant1 {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(1, value)
-    }
-}
+json_schema_rs::self_validating!(XVariant1, TYPE_VALIDATORS, 1);
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
@@ -11111,25 +11020,7 @@ impl<'de> Deserialize<'de> for XOneOf {
     }
 }
 
-impl XOneOf {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(2, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for XOneOf {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(2, value)
-    }
-}
+json_schema_rs::self_validating!(XOneOf, TYPE_VALIDATORS, 2);
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -11139,25 +11030,7 @@ pub struct Root {
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-impl Root {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(4, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Root {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(4, value)
-    }
-}
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 4);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
@@ -11205,25 +11078,7 @@ pub struct Item {
     pub z: Option<String>,
 }
 
-impl Item {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(0, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Item {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(0, value)
-    }
-}
+json_schema_rs::self_validating!(Item, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -11232,25 +11087,7 @@ pub struct B {
     pub z: Option<String>,
 }
 
-impl B {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(1, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for B {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(1, value)
-    }
-}
+json_schema_rs::self_validating!(B, TYPE_VALIDATORS, 1);
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -11262,25 +11099,7 @@ pub struct Root {
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
-impl Root {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(2, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Root {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(2, value)
-    }
-}
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 2);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
@@ -11363,25 +11182,7 @@ pub struct Thing {
     pub n: Option<i64>,
 }
 
-impl Thing {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(0, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Thing {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(0, value)
-    }
-}
+json_schema_rs::self_validating!(Thing, TYPE_VALIDATORS, 0);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
@@ -12108,25 +11909,7 @@ pub struct Root {
     pub name: Name,
 }
 
-impl Root {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(1, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Root {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(1, value)
-    }
-}
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 1);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
