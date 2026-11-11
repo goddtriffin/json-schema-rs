@@ -15,6 +15,11 @@
 //! - `code_size.tsv`: the generated code's size per fixture and settings (exact, so every change
 //!   counts; see `json_schema_rs_benchmark::code_size`).
 //!
+//! With `--settled <cell>`, it prints only whether that in-process cell's confirmation rounds so
+//! far settle it (`settled` or `unsettled`; see `json_schema_rs_benchmark::compare::settled_early`),
+//! reading only the confirmation captures: the driver asks after a cell's first `EARLY_ROUNDS`
+//! confirmation rounds (three) and skips the rest when it is settled.
+//!
 //! Rows of other tools are ignored, so a side whose harness measured every tool still compares.
 //! Malformed lines and unreadable files are skipped with a warning on stderr; a head side with no
 //! samples at all is an error, because the run measured nothing.
@@ -27,7 +32,7 @@ use json_schema_rs_benchmark::code_size::{
     CodeSizeComparison, CodeSizeRow, CodeSizes, code_sizes, compare_code_sizes, parse_code_size_tsv,
 };
 use json_schema_rs_benchmark::compare::{
-    Comparison, Samples, add_round, compare, screened_cells, with_screening,
+    Comparison, Samples, add_round, compare, screened_cells, settled_cell, with_screening,
 };
 use json_schema_rs_benchmark::{
     CellKey, CriterionId, HyperfineSamples, IndexEntry, Measurement, Metric, Tier, TsvParse,
@@ -86,6 +91,12 @@ fn main() -> ExitCode {
                 .value_name("FILE")
                 .help("Write the moved CLI cells to FILE, one <operation>/<fixture id> per line"),
         )
+        .arg(
+            Arg::new("settled")
+                .long("settled")
+                .value_name("CELL")
+                .help("Print only whether the in-process cell <operation>/<fixture id> is settled by its confirmation rounds so far (settled or unsettled)"),
+        )
         .get_matches();
     let arg = |name: &str| -> String {
         matches
@@ -96,6 +107,22 @@ fn main() -> ExitCode {
     let base: PathBuf = PathBuf::from(arg("base"));
     let head: PathBuf = PathBuf::from(arg("head"));
     let tool: String = arg("tool");
+    if let Some(cell) = matches.get_one::<String>("settled") {
+        return match settled(&base, &head, &tool, cell) {
+            Ok(true) => {
+                println!("settled");
+                ExitCode::SUCCESS
+            }
+            Ok(false) => {
+                println!("unsettled");
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("compare: error: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let base_label: String = arg("base-label");
     let path_arg =
         |name: &str| -> Option<PathBuf> { matches.get_one::<String>(name).map(PathBuf::from) };
@@ -169,6 +196,16 @@ fn run(
     }
     print!("{report}");
     Ok(())
+}
+
+/// Whether the in-process cell `cell` is settled by both sides' confirmation rounds so far
+/// (`criterion/`).
+fn settled(base: &Path, head: &Path, tool: &str, cell: &str) -> Result<bool, String> {
+    let mut base_samples: Samples = Samples::new();
+    let mut head_samples: Samples = Samples::new();
+    read_criterion(&base.join("criterion"), tool, &mut base_samples)?;
+    read_criterion(&head.join("criterion"), tool, &mut head_samples)?;
+    Ok(settled_cell(&base_samples, &head_samples, cell))
 }
 
 /// One side's generated code size (`code_size.tsv`), empty when not captured.
