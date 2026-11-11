@@ -454,8 +454,10 @@ pub(crate) struct UnionVariant {
     pub(crate) integers: bool,
 }
 
-/// The `Deserialize` of an `anyOf` / `oneOf` union: buffer the value once, then take the first
-/// variant whose branch the value satisfies (for `oneOf`, the one) and that deserializes.
+/// The `Deserialize` of an `anyOf` / `oneOf` union: one call to the runtime's
+/// `deserialize_union`, which buffers the value once and takes the first variant whose branch the
+/// value satisfies (for `oneOf`, the one) and that deserializes; the closure reads the variant at
+/// a position.
 pub(crate) fn render_union_deserialize(
     name: &str,
     kind: UnionKind,
@@ -470,46 +472,48 @@ pub(crate) fn render_union_deserialize(
         .union
         .map_or_else(|| "None".to_string(), |i| format!("Some({i})"));
     let indexes: Vec<String> = entries.variants.iter().map(usize::to_string).collect();
+    let read = |UnionVariant {
+                    name: variant,
+                    ty,
+                    integers,
+                }: &UnionVariant|
+     -> String {
+        if *integers {
+            format!("json_schema_rs::integer::deserialize::<_, {ty}>(value).map(Self::{variant})")
+        } else {
+            format!("<{ty} as Deserialize>::deserialize(value).map(Self::{variant})")
+        }
+    };
     let mut out: String = String::new();
     let _ = writeln!(out, "impl<'de> Deserialize<'de> for {name} {{");
     out.push_str(
         "    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {\n",
     );
-    out.push_str(
-        "        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;\n",
-    );
     let _ = writeln!(
         out,
-        "        let candidates: Vec<usize> = {}
-            .union_candidates(json_schema_rs::UnionMatch::{mode}, {union}, &[{}], &value)
-            .map_err(serde::de::Error::custom)?;",
+        "        {}.deserialize_union(\n            deserializer,\n            \"{name}\",\n            json_schema_rs::UnionMatch::{mode},\n            {union},\n            &[{}],",
         entries.validators,
         indexes.join(", ")
     );
-    out.push_str("        for candidate in candidates {\n");
-    out.push_str("            let variant: Result<Self, serde_json::Error> = match candidate {\n");
-    for (
-        i,
-        UnionVariant {
-            name: variant,
-            ty,
-            integers,
-        },
-    ) in variants.iter().enumerate()
-    {
-        let read: String = if *integers {
-            format!("json_schema_rs::integer::deserialize::<_, {ty}>(&value)")
-        } else {
-            format!("<{ty} as Deserialize>::deserialize(&value)")
-        };
-        let _ = writeln!(out, "                {i} => {read}.map(Self::{variant}),");
+    if let [only] = variants {
+        let _ = writeln!(
+            out,
+            "            |_: usize, value: &serde_json::Value| {},",
+            read(only)
+        );
+    } else {
+        out.push_str("            |variant: usize, value: &serde_json::Value| match variant {\n");
+        for (i, variant) in variants.iter().enumerate() {
+            let arm: String = if i + 1 == variants.len() {
+                "_".to_string()
+            } else {
+                i.to_string()
+            };
+            let _ = writeln!(out, "                {arm} => {},", read(variant));
+        }
+        out.push_str("            },\n");
     }
-    out.push_str("                _ => continue,\n            };\n");
-    out.push_str("            if let Ok(variant) = variant {\n                return Ok(variant);\n            }\n        }\n");
-    let _ = writeln!(
-        out,
-        "        Err(serde::de::Error::custom(format!(\"{{value}} does not deserialize into a {name} variant whose schema it satisfies\")))\n    }}\n}}\n"
-    );
+    out.push_str("        )\n    }\n}\n\n");
     out
 }
 

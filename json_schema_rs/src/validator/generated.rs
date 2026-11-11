@@ -8,6 +8,19 @@
 //! and compiles one [`CompiledSchema`] that shares the nodes the types have in common; then each
 //! type validates at its own nodes, with the errors [`CompiledSchema::validate`] gives for that
 //! schema.
+//!
+//! # Trusted deserialization
+//!
+//! Each value is validated once per entry point (#86). Deserialization that runs right after its
+//! value passed validation is *trusted*: the deserialization in [`TypeValidators::deserialize`]
+//! (a type's `TryFrom<serde_json::Value>`, after the whole instance is validated) and a union
+//! variant's in [`TypeValidators::deserialize_union`] (after the value satisfied the variant's
+//! schema). Inside it, a constrained newtype's `Deserialize` skips its check
+//! ([`TypeValidators::read_newtype`]) and a union takes the first variant its value satisfies:
+//! a valid parent guarantees both, since codegen never gives a child type a narrower schema than
+//! a valid parent allows at its position (#107). The scope is a thread-local depth, entered and
+//! left around those deserializations only, so a plain `serde_json::from_str` of a generated type
+//! still checks every newtype and union it reads.
 
 use super::compiled::{CompiledEntries, LocatedEntries};
 use super::{CompileErrors, CompiledSchema, SchemaError, ValidationError};
@@ -16,11 +29,39 @@ use crate::json_schema::{
     DialectSettings, JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaSettings, Registry,
     RegistryBuilder, Schema,
 };
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use std::cell::Cell;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
+
+thread_local! {
+    /// How many trusted scopes the current thread is in (see the module docs, *Trusted
+    /// deserialization*).
+    static TRUSTED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Whether the current thread deserializes inside a trusted scope.
+fn trusted() -> bool {
+    TRUSTED.with(Cell::get) > 0
+}
+
+/// Runs `read` inside a trusted scope: the deserialization of a value that passed validation.
+fn read_trusted<R>(read: impl FnOnce() -> R) -> R {
+    /// Leaves the scope when dropped, also when `read` panics.
+    struct Scope;
+
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            TRUSTED.with(|depth: &Cell<usize>| depth.set(depth.get() - 1));
+        }
+    }
+
+    TRUSTED.with(|depth: &Cell<usize>| depth.set(depth.get() + 1));
+    let _scope: Scope = Scope;
+    read()
+}
 
 /// How an embedded document enters the registry of a [`TypeValidators`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +152,7 @@ impl From<SchemaError> for EmbeddedSchemaError {
     }
 }
 
-/// Which variants of a union must match (see [`TypeValidators::union_candidates`]).
+/// Which variants of a union must match (see [`TypeValidators::deserialize_union`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnionMatch {
     /// `anyOf`: at least one.
@@ -141,7 +182,7 @@ pub enum TypeValidationError {
     /// this means the embedded documents were changed).
     Schema(Arc<EmbeddedSchemaError>),
     /// A union's variants did not match as its keyword requires, and no union schema was given
-    /// to explain it (see [`TypeValidators::union_candidates`]).
+    /// to explain it (see [`TypeValidators::deserialize_union`]).
     UnionMismatch {
         /// The union's keyword.
         kind: UnionMatch,
@@ -400,7 +441,8 @@ impl<'a> TypeValidators<'a> {
         self.validate(index, &instance)
     }
 
-    /// Validates `instance` as type `index`, then deserializes it.
+    /// Validates `instance` as type `index`, then deserializes it trusted: the newtypes and
+    /// unions it holds are not checked again (see the module docs, *Trusted deserialization*).
     ///
     /// # Errors
     ///
@@ -415,7 +457,7 @@ impl<'a> TypeValidators<'a> {
         instance: Value,
     ) -> Result<T, TypeValidationError> {
         self.validate(index, &instance)?;
-        Ok(serde_json::from_value(instance)?)
+        Ok(read_trusted(|| serde_json::from_value(instance))?)
     }
 
     /// For a generated constrained newtype: validates `value` as type `index` and gives it back
@@ -476,6 +518,130 @@ impl<'a> TypeValidators<'a> {
         T::from_instance(instance)
     }
 
+    /// For a generated constrained newtype's `Deserialize`: `value` when the deserialization is
+    /// trusted (see the module docs, *Trusted deserialization*), else
+    /// [`TypeValidators::validate_newtype`].
+    ///
+    /// # Errors
+    ///
+    /// See [`TypeValidators::validate_newtype`] (never when trusted).
+    ///
+    /// # Panics
+    ///
+    /// When `index` is not a type of these validators.
+    pub fn read_newtype<T: NewtypeValue>(
+        &self,
+        index: usize,
+        value: T,
+    ) -> Result<T, TypeValidationError> {
+        if trusted() {
+            return Ok(value);
+        }
+        self.validate_newtype(index, value)
+    }
+
+    /// [`TypeValidators::read_newtype`] for a value read as another type: converts it to `T`
+    /// when the deserialization is trusted, else [`TypeValidators::validate_newtype_as`].
+    ///
+    /// # Errors
+    ///
+    /// See [`TypeValidators::validate_newtype_as`].
+    ///
+    /// # Panics
+    ///
+    /// When `index` is not a type of these validators.
+    pub fn read_newtype_as<T: NewtypeValue, U: NewtypeValue>(
+        &self,
+        index: usize,
+        value: U,
+    ) -> Result<T, TypeValidationError> {
+        if trusted() {
+            return T::from_instance(value.into_instance()?);
+        }
+        self.validate_newtype_as(index, value)
+    }
+
+    /// The `Deserialize` of a generated `anyOf` / `oneOf` union: reads the value once (buffered
+    /// as a [`Value`]) and returns the first variant, in order, whose schema the value satisfies
+    /// (for `oneOf`, the one) and that `read` deserializes; `read(position, value)` deserializes
+    /// the variant at `position` in `variants` (type indexes). Each variant is read trusted, since
+    /// its schema just accepted the value; a union read trusted takes the first variant that
+    /// matches without checking that no other does (see the module docs, *Trusted
+    /// deserialization*). An `anyOf` evaluates its variants in order and stops at the first that
+    /// matches and reads.
+    ///
+    /// # Errors
+    ///
+    /// When the variants do not match as the keyword requires (none, or for `oneOf` more than
+    /// one): the errors of validating the value as type `union` (the union's own schema, which
+    /// reports why), or [`TypeValidationError::UnionMismatch`] when `union` is `None`; `<value> does not deserialize into a <name> variant whose schema it
+    /// satisfies` when variants match but none deserializes.
+    ///
+    /// # Panics
+    ///
+    /// When `union` or an entry of `variants` is not a type of these validators.
+    pub fn deserialize_union<'de, D: Deserializer<'de>, T>(
+        &self,
+        deserializer: D,
+        name: &str,
+        kind: UnionMatch,
+        union: Option<usize>,
+        variants: &[usize],
+        read: impl Fn(usize, &Value) -> Result<T, serde_json::Error>,
+    ) -> Result<T, D::Error> {
+        let value: Value = Value::deserialize(deserializer)?;
+        self.read_union(kind, union, variants, &value, read)
+            .map_err(|error: Option<TypeValidationError>| match error {
+                Some(error) => D::Error::custom(error),
+                None => D::Error::custom(format!(
+                    "{value} does not deserialize into a {name} variant whose schema it satisfies"
+                )),
+            })
+    }
+
+    /// [`TypeValidators::deserialize_union`] on the buffered value. `Err(None)`: variants match
+    /// but none reads.
+    fn read_union<T>(
+        &self,
+        kind: UnionMatch,
+        union: Option<usize>,
+        variants: &[usize],
+        value: &Value,
+        read: impl Fn(usize, &Value) -> Result<T, serde_json::Error>,
+    ) -> Result<T, Option<TypeValidationError>> {
+        if kind == UnionMatch::OneOf && !trusted() {
+            // Which variant is the one is only known once every variant is evaluated.
+            let candidates: Vec<usize> = self
+                .union_candidates(kind, union, variants, value)
+                .map_err(Some)?;
+            return candidates
+                .into_iter()
+                .find_map(|position: usize| read_trusted(|| read(position, value)).ok())
+                .ok_or(None);
+        }
+        let (schema, types) = self
+            .compiled()
+            .map_err(|error| Some(TypeValidationError::from(error)))?;
+        let mut matched: bool = false;
+        for (position, variant) in variants.iter().enumerate() {
+            if schema.is_valid_at(&types[*variant], value) {
+                matched = true;
+                if let Ok(variant) = read_trusted(|| read(position, value)) {
+                    return Ok(variant);
+                }
+            }
+        }
+        if matched {
+            return Err(None);
+        }
+        // No variant matched: explain why as the union's schema does.
+        Err(Some(
+            self.union_candidates(kind, union, variants, value)
+                .err()
+                .unwrap_or(TypeValidationError::UnionMismatch { kind, matched: 0 }),
+        ))
+    }
+
     /// For a generated `anyOf` / `oneOf` union: the positions in `variants` (type indexes) of
     /// the variants `instance` conforms to, in order. `AnyOf` returns every matching variant
     /// (at least one); `OneOf` returns the one matching variant, and stops evaluating at a
@@ -492,7 +658,7 @@ impl<'a> TypeValidators<'a> {
     /// # Panics
     ///
     /// When `union` or an entry of `variants` is not a type of these validators.
-    pub fn union_candidates(
+    fn union_candidates(
         &self,
         kind: UnionMatch,
         union: Option<usize>,
@@ -696,7 +862,9 @@ macro_rules! constrained_newtype {
 
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                Self::try_from(<String as ::serde::Deserialize>::deserialize(deserializer)?)
+                $validators
+                    .read_newtype($index, <String as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .map(Self)
                     .map_err(::serde::de::Error::custom)
             }
         }
@@ -715,7 +883,9 @@ macro_rules! constrained_newtype {
 
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                Self::try_from(<$inner as ::serde::Deserialize>::deserialize(deserializer)?)
+                $validators
+                    .read_newtype($index, <$inner as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .map(Self)
                     .map_err(::serde::de::Error::custom)
             }
         }
@@ -735,7 +905,9 @@ macro_rules! constrained_newtype {
 
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                Self::try_from(<$inner as $crate::integer::DeserializeInteger>::deserialize_integer(deserializer)?)
+                $validators
+                    .read_newtype($index, <$inner as $crate::integer::DeserializeInteger>::deserialize_integer(deserializer)?)
+                    .map(Self)
                     .map_err(::serde::de::Error::custom)
             }
         }
@@ -758,7 +930,7 @@ macro_rules! constrained_newtype {
                 // The number as read, before it is narrowed: a value just outside a bound must
                 // not round into it.
                 $validators
-                    .validate_newtype_as($index, <f64 as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .read_newtype_as($index, <f64 as ::serde::Deserialize>::deserialize(deserializer)?)
                     .map(Self)
                     .map_err(::serde::de::Error::custom)
             }
@@ -783,7 +955,7 @@ macro_rules! constrained_newtype {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 // The string as read, before it is parsed.
                 let text: String = $validators
-                    .validate_newtype($index, <String as ::serde::Deserialize>::deserialize(deserializer)?)
+                    .read_newtype($index, <String as ::serde::Deserialize>::deserialize(deserializer)?)
                     .map_err(::serde::de::Error::custom)?;
                 ::uuid::Uuid::parse_str(&text).map(Self).map_err(::serde::de::Error::custom)
             }
@@ -834,6 +1006,7 @@ macro_rules! constrained_newtype {
 mod tests {
     use super::{
         EmbeddedDocument, EmbeddedDocumentKind, TypeValidationError, TypeValidators, UnionMatch,
+        read_trusted, trusted,
     };
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::{DialectSettings, FormatMode, Registry, Schema, SpecVersion};
@@ -1467,6 +1640,167 @@ mod tests {
         });
         let actual: Result<Vec<usize>, Outcome> =
             outcome(validators.union_candidates(UnionMatch::AnyOf, None, &[2, 3, 4], &json!(null)));
+        assert_eq!(expected, actual);
+    }
+
+    /// [`TypeValidators::deserialize_union`] over the `anyOf` (`kind` `AnyOf`, union type 0) or
+    /// `oneOf` (type 1) of [`UNION`], reading each variant as its position.
+    fn union_position(kind: UnionMatch, instance: &Value) -> Result<usize, String> {
+        let union: usize = match kind {
+            UnionMatch::AnyOf => 0,
+            UnionMatch::OneOf => 1,
+        };
+        union_validators()
+            .deserialize_union(
+                instance,
+                "Number",
+                kind,
+                Some(union),
+                &[2, 3, 4],
+                |variant, _| Ok(variant),
+            )
+            .map_err(|error: serde_json::Error| error.to_string())
+    }
+
+    #[test]
+    fn deserialize_union_any_of_takes_the_first_matching_variant() {
+        let expected: Result<usize, String> = Ok(0);
+        let actual: Result<usize, String> = union_position(UnionMatch::AnyOf, &json!(1));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deserialize_union_any_of_tries_the_next_matching_variant_when_one_does_not_read() {
+        let expected: Result<usize, String> = Ok(1);
+        let actual: Result<usize, String> = union_validators()
+            .deserialize_union(
+                &json!(1),
+                "Number",
+                UnionMatch::AnyOf,
+                Some(0),
+                &[2, 3, 4],
+                |variant: usize, value: &Value| match variant {
+                    0 => Err(serde::de::Error::custom("not this one")),
+                    _ => serde_json::from_value::<f64>(value.clone()).map(|_| variant),
+                },
+            )
+            .map_err(|error: serde_json::Error| error.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deserialize_union_one_of_with_two_matches_gives_the_union_errors() {
+        let instance: Value = json!(1);
+        let expected: Result<usize, String> =
+            Err(TypeValidationError::Invalid(union_errors("One", &instance)).to_string());
+        let actual: Result<usize, String> = union_position(UnionMatch::OneOf, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deserialize_union_one_of_read_trusted_takes_the_first_matching_variant() {
+        let expected: Result<usize, String> = Ok(0);
+        let actual: Result<usize, String> =
+            read_trusted(|| union_position(UnionMatch::OneOf, &json!(1)));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deserialize_union_without_match_gives_the_union_errors() {
+        let instance: Value = json!(null);
+        let expected: Result<usize, String> =
+            Err(TypeValidationError::Invalid(union_errors("Any", &instance)).to_string());
+        let actual: Result<usize, String> = union_position(UnionMatch::AnyOf, &instance);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deserialize_union_whose_matching_variants_do_not_read_says_so() {
+        let expected: Result<usize, String> = Err(
+            "1 does not deserialize into a Number variant whose schema it satisfies".to_string(),
+        );
+        let actual: Result<usize, String> = union_validators()
+            .deserialize_union(
+                &json!(1),
+                "Number",
+                UnionMatch::AnyOf,
+                Some(0),
+                &[2, 3, 4],
+                |_: usize, _: &Value| Err(serde::de::Error::custom("no")),
+            )
+            .map_err(|error: serde_json::Error| error.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deserialize_union_reads_the_variant_trusted() {
+        let expected: Result<bool, String> = Ok(true);
+        let actual: Result<bool, String> = union_validators()
+            .deserialize_union(
+                &json!(1),
+                "Number",
+                UnionMatch::OneOf,
+                Some(1),
+                &[3, 4],
+                |_: usize, _: &Value| Ok(trusted()),
+            )
+            .map_err(|error: serde_json::Error| error.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    /// A parent whose schema allows any string name, and a `Name` newtype that needs five
+    /// characters: narrower than its position, which codegen never generates, so trusting the
+    /// parent's validation is observable.
+    const TRUST: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"$defs":{"Name":{"type":"string","minLength":5}}}"#;
+
+    static TRUST_VALIDATORS: TypeValidators<'static> = TypeValidators::new(
+        None,
+        &[EmbeddedDocument {
+            uri: "json-schema:///",
+            json: TRUST,
+            kind: EmbeddedDocumentKind::Parsed(None),
+        }],
+        &[&["json-schema:///#"], &["json-schema:///#/$defs/Name"]],
+    );
+
+    #[derive(Debug, PartialEq, Serialize)]
+    #[serde(transparent)]
+    struct Name(String);
+
+    crate::constrained_newtype!(string, Name, TRUST_VALIDATORS, 1);
+
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Named {
+        name: Name,
+    }
+
+    #[test]
+    fn deserialize_reads_newtypes_trusted_after_validating_the_instance() {
+        let expected: Result<String, Outcome> = Ok("ab".to_string());
+        let actual: Result<String, Outcome> = outcome(
+            TRUST_VALIDATORS
+                .deserialize::<Named>(0, json!({"name": "ab"}))
+                .map(|named: Named| named.name.into_inner()),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn plain_deserialize_checks_each_newtype() {
+        let name_errors: Vec<ValidationError> =
+            library_errors(r#"{"type":"string","minLength":5}"#, &json!("ab")).unwrap_err();
+        let expected: Result<Named, String> =
+            Err(TypeValidationError::Invalid(name_errors).to_string());
+        let actual: Result<Named, String> = serde_json::from_value::<Named>(json!({"name": "ab"}))
+            .map_err(|error: serde_json::Error| error.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn trusted_scope_ends_with_its_deserialization() {
+        let _ = TRUST_VALIDATORS.deserialize::<Named>(0, json!({"name": "ab"}));
+        let expected: bool = false;
+        let actual: bool = trusted();
         assert_eq!(expected, actual);
     }
 
