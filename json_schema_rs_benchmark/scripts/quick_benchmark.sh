@@ -122,13 +122,17 @@ _profile_cargo() {
         --config "${PROFILE_CONFIG}" --profile benchmark "$@"
 }
 
-# extract_base <sha>: put the base commit's tree in BASE_SRC, unless it is already there.
+# extract_base <sha>: put the base commit's tree in BASE_SRC, unless it is already there. tar
+# stamps every file with the time of extraction (-m), not the commit's time that git archive
+# records: cargo rebuilds a path package only when a source file is newer than its last build, so
+# with the commit's time a base moved to an older commit looked built already, and the run
+# measured the previous base's binaries as this one (#131).
 extract_base() {
     local sha="$1"
     if [[ "$(cat "${BASE_SRC}/.quick-base-sha" 2>/dev/null || true)" != "${sha}" ]]; then
         rm -rf "${BASE_SRC}"
         mkdir -p "${BASE_SRC}"
-        git -C "${REPO_ROOT}" archive "${sha}" | tar -x -C "${BASE_SRC}"
+        git -C "${REPO_ROOT}" archive "${sha}" | tar -x -m -C "${BASE_SRC}"
         printf '%s\n' "${sha}" > "${BASE_SRC}/.quick-base-sha"
     fi
     # Both sides build against the same dependency versions (Cargo.lock is not committed). Each

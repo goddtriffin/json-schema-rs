@@ -146,7 +146,10 @@ A PR that changes the derive or reverse codegen, the harness, a competitor or a 
 `make benchmark_full` too.
 
 The first quick run builds the base side's dependencies from scratch into
-`target/benchmark-quick/base-target`; later runs only rebuild what changed.
+`target/benchmark-quick/base-target`; later runs only rebuild what changed. When the base moves
+(to any commit, older or newer), its tree is extracted again with every file stamped with the time
+of extraction, so cargo rebuilds the base's crates: with the commit's own time, a base moved to an
+older commit looked built already and the run measured the previous base (#131).
 
 ### Full mode (`make benchmark_full`)
 
