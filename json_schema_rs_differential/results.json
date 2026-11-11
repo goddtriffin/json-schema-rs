@@ -436,16 +436,16 @@
       "localhost/json-schema-rs": {
         "tally": {
           "total": 2666,
-          "passed": 2114,
-          "failed": 515,
+          "passed": 2118,
+          "failed": 511,
           "skipped": 37,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 2114,
+          "numerator": 2118,
           "denominator": 2666,
-          "percent": "79.29%"
+          "percent": "79.44%"
         }
       },
       "python-jsonschema": {
@@ -1769,16 +1769,16 @@
           "localhost/json-schema-rs": {
             "tally": {
               "total": 621,
-              "passed": 612,
-              "failed": 4,
+              "passed": 616,
+              "failed": 0,
               "skipped": 5,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 612,
+              "numerator": 616,
               "denominator": 621,
-              "percent": "98.55%"
+              "percent": "99.19%"
             }
           },
           "python-jsonschema": {
@@ -1830,16 +1830,16 @@
         "ours": {
           "tally": {
             "total": 621,
-            "passed": 612,
-            "failed": 4,
+            "passed": 616,
+            "failed": 0,
             "skipped": 5,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 612,
+            "numerator": 616,
             "denominator": 621,
-            "percent": "98.55%"
+            "percent": "99.19%"
           },
           "coverage": {
             "numerator": 616,
@@ -1847,16 +1847,75 @@
             "percent": "99.19%"
           },
           "correctness": {
-            "numerator": 612,
+            "numerator": 616,
             "denominator": 616,
-            "percent": "99.35%"
+            "percent": "100.00%"
           },
-          "disagreements_with_majority": 79,
-          "wrong_vs_expected": 4
+          "disagreements_with_majority": 83,
+          "wrong_vs_expected": 0
         }
       },
       "findings": {
         "disagreements_with_majority": [
+          {
+            "group": "draft7",
+            "file": "optional/content.json",
+            "optional": true,
+            "case_description": "validation of string-encoded content based on media type",
+            "triage": "competitors_differ_from_expected",
+            "tests": [
+              {
+                "test_description": "an invalid JSON document",
+                "expected": false,
+                "ours": false,
+                "majority": true,
+                "agreeing": 6,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft7",
+            "file": "optional/content.json",
+            "optional": true,
+            "case_description": "validation of binary string-encoding",
+            "triage": "competitors_differ_from_expected",
+            "tests": [
+              {
+                "test_description": "an invalid base64 string (% is not a valid character)",
+                "expected": false,
+                "ours": false,
+                "majority": true,
+                "agreeing": 6,
+                "voters": 8
+              }
+            ]
+          },
+          {
+            "group": "draft7",
+            "file": "optional/content.json",
+            "optional": true,
+            "case_description": "validation of binary-encoded media type documents",
+            "triage": "competitors_differ_from_expected",
+            "tests": [
+              {
+                "test_description": "a validly-encoded invalid JSON document",
+                "expected": false,
+                "ours": false,
+                "majority": true,
+                "agreeing": 6,
+                "voters": 8
+              },
+              {
+                "test_description": "an invalid base64 string that is valid JSON",
+                "expected": false,
+                "ours": false,
+                "majority": true,
+                "agreeing": 6,
+                "voters": 8
+              }
+            ]
+          },
           {
             "group": "draft7",
             "file": "optional/format/hostname.json",
@@ -2554,17 +2613,7 @@
           }
         ],
         "wrong_without_consensus": [],
-        "wrong_with_majority": [
-          {
-            "group": "draft7",
-            "file": "optional/content.json",
-            "optional": true,
-            "tests": 4,
-            "majority": {
-              "6/8": 4
-            }
-          }
-        ],
+        "wrong_with_majority": [],
         "errored": []
       }
     },

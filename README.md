@@ -158,11 +158,14 @@ define (`date-time`, `date`, `time`, `duration`, `email`, `idn-email`, `hostname
 `uri-template`, `json-pointer`, `relative-json-pointer`, `regex`, `uuid`), asserted
 by default in drafts 4/6/7 and annotation-only in 2019-09/2020-12 (override with
 `--jss-format-mode`); user-defined formats are registered with
-`CompiledSchema::builder().format(name, check)`. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+`CompiledSchema::builder().format(name, check)`. `contentEncoding` (`base64`) and
+`contentMediaType` (`application/json` and any `+json` type) are asserted by default in
+draft 7, which allows it, and annotation-only in 2019-09/2020-12, which must not decode
+content by default (override with `--jss-content-mode`); other encodings and media types,
+and `contentSchema`, are annotations. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with strict parsing; the cases it still fails
-(schemas using a key their draft does not define, numbers beyond 64 bits, draft-7
-content assertion) are listed in `json_schema_rs/tests/suite_xfail.json`
+(schemas using a key their draft does not define, numbers beyond 64 bits) are listed in `json_schema_rs/tests/suite_xfail.json`
 (`suite_xfail_arbitrary_precision.json` with the `arbitrary-precision` feature).
 
 **Numbers** are compared exactly, never with an epsilon. By default every integer
@@ -354,6 +357,9 @@ resources included, as that draft whatever its `$schema` says; documents a `$ref
 loads still follow their own),
 `.format_mode(FormatMode::Assertion)` (check `format` whatever the draft: drafts 4,
 6 and 7 check it by default, 2019-09 and 2020-12 only record it),
+`.content_mode(ContentMode::Assertion)` (check `contentEncoding` and
+`contentMediaType` whatever the draft: draft 7 checks them by default, 2019-09 and
+2020-12 only record them),
 `.integer_semantics(IntegerSemantics::Numeric)` (whether `1.0` is an integer:
 draft 4 says no, draft 6 and later yes),
 `.exclusive_bounds(ExclusiveBounds::BooleanModifier)` (read `exclusiveMinimum` /
@@ -367,6 +373,7 @@ drafts 4, 6 and 7 ignore them, 2019-09 and 2020-12 evaluate them), and
 logs warnings at `debug` level through the `log` crate; the CLI prints them to
 stderr. CLI: `--jss-default-spec-version` and `--jss-forced-spec-version`
 (`draft-04|draft-06|draft-07|2019-09|2020-12`, and `draft-00` to `draft-05`), `--jss-format-mode annotation|assertion`,
+`--jss-content-mode annotation|assertion`,
 `--jss-integer-semantics lexical|numeric`,
 `--jss-exclusive-bounds boolean-modifier|numeric`,
 `--jss-ref-siblings ignored|evaluated`,
@@ -423,7 +430,7 @@ json_schema_to_rust!(
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,
-  `integer_semantics = Lexical|Numeric`,
+  `content_mode = Annotation|Assertion`, `integer_semantics = Lexical|Numeric`,
   `exclusive_bounds = BooleanModifier|Numeric`, `ref_siblings = Ignored|Evaluated`,
   `unknown_schema_uri = Fallback|Reject`. They apply to the input schemas and to
   every file a `$ref` reads.

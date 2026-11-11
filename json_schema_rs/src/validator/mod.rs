@@ -5,6 +5,7 @@
 //! instances. [`validate`] builds the registry, compiles and validates in one call.
 
 mod compiled;
+pub(crate) mod content;
 mod ecma_regex;
 mod error;
 mod eval;

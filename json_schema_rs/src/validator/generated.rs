@@ -1009,7 +1009,9 @@ mod tests {
         read_trusted, trusted,
     };
     use crate::json_pointer::JsonPointer;
-    use crate::json_schema::{DialectSettings, FormatMode, Registry, Schema, SpecVersion};
+    use crate::json_schema::{
+        ContentMode, DialectSettings, FormatMode, Registry, Schema, SpecVersion,
+    };
     use crate::validator::{
         CompiledSchema, ValidationError, ValidationErrorKind, ValidationResult,
     };
@@ -1440,6 +1442,37 @@ mod tests {
         let validators: TypeValidators<'_> = TypeValidators::new(None, &documents, &types);
         let expected: bool = true;
         let actual: bool = validators.is_valid(0, &json!("not an address"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn content_is_asserted_in_draft_7() {
+        let documents: [EmbeddedDocument<'_>; 1] = [parsed(
+            "json-schema:///",
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","contentEncoding":"base64"}"#,
+        )];
+        let types: [&[&str]; 1] = [&["json-schema:///#"]];
+        let validators: TypeValidators<'_> = TypeValidators::new(None, &documents, &types);
+        let expected: bool = false;
+        let actual: bool = validators.is_valid(0, &json!("not base64!"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn content_assertion_setting_asserts_content() {
+        let dialect: DialectSettings = DialectSettings {
+            content_mode: Some(ContentMode::Assertion),
+            ..DialectSettings::default()
+        };
+        let documents: [EmbeddedDocument<'_>; 1] = [EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"contentMediaType":"application/json"}"#,
+            kind: EmbeddedDocumentKind::Parsed(Some(dialect)),
+        }];
+        let types: [&[&str]; 1] = [&["json-schema:///#"]];
+        let validators: TypeValidators<'_> = TypeValidators::new(None, &documents, &types);
+        let expected: bool = false;
+        let actual: bool = validators.is_valid(0, &json!("{not json"));
         assert_eq!(expected, actual);
     }
 

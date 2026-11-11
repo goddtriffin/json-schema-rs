@@ -21,6 +21,7 @@ use super::compiled::{
     CompiledSchema, Contains, DynamicRef, EnumId, Keyword, KnownProperties, Kw, Node, NodeId,
     PrefixItems, RegexId, Required,
 };
+use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
 use crate::json_pointer::{self, JsonPointer};
 use crate::json_schema::{JsonType, Scope, TypeSet};
@@ -607,7 +608,8 @@ impl CompiledSchema {
                 | Keyword::MaxLength(_)
                 | Keyword::Pattern(_)
                 | Keyword::Format(_)
-                | Keyword::UserFormat(_),
+                | Keyword::UserFormat(_)
+                | Keyword::Content(_),
                 Value::String(s),
             ) => self.string::<COLLECT>(keyword, s, at, cx),
             (
@@ -727,6 +729,7 @@ impl CompiledSchema {
                 | Keyword::Pattern(_)
                 | Keyword::Format(_)
                 | Keyword::UserFormat(_)
+                | Keyword::Content(_)
                 | Keyword::MinItems(_)
                 | Keyword::MaxItems(_)
                 | Keyword::UniqueItems
@@ -1103,6 +1106,7 @@ impl CompiledSchema {
                         }
                     )
             }
+            Keyword::Content(content) => self.content::<COLLECT>(content, s, at, cx),
             Keyword::UserFormat(id) => {
                 let format = self.user_format(*id);
                 (format.check)(s)
@@ -1119,6 +1123,42 @@ impl CompiledSchema {
                     )
             }
             _ => true,
+        }
+    }
+
+    /// `contentEncoding` / `contentMediaType` on string `s`: a string that does not decode fails
+    /// its encoding; a decoded one that is not of the media type fails the media type.
+    fn content<const COLLECT: bool>(
+        &self,
+        content: &Content,
+        s: &str,
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
+        match content.check(s) {
+            None => true,
+            Some(ContentFailure::Encoding(encoding)) => fail!(
+                COLLECT,
+                self,
+                cx,
+                at.location,
+                Kw::ContentEncoding,
+                ValidationErrorKind::InvalidContentEncoding {
+                    encoding: encoding.to_string(),
+                    value: s.to_string(),
+                }
+            ),
+            Some(ContentFailure::MediaType(media_type)) => fail!(
+                COLLECT,
+                self,
+                cx,
+                at.location,
+                Kw::ContentMediaType,
+                ValidationErrorKind::InvalidContentMediaType {
+                    media_type: media_type.to_string(),
+                    value: s.to_string(),
+                }
+            ),
         }
     }
 
