@@ -11,7 +11,7 @@ member and is **not published** (`publish = false`).
 
 ```sh
 make benchmark_smoke    # correctness only, no timing: every cell of our library + CLI probed once (~25 s warm, ~1 min cold)
-make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~8-20 min)
+make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~4-16 min)
 make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
 
@@ -38,12 +38,13 @@ the split at the end (`builds …, measurement …`).
 
 | What changed since the last run | Builds | Measurement | Total |
 |---|---|---|---|
-| Nothing (a rerun) | seconds | about 8 min | about 8 min |
-| The library, codegen or macros (the working tree's side) | about 1 min (library) + 5 min (generated types) | about 8 min | about 14 min |
-| Also `main` (the base side) | the same again for the base | about 8 min | about 20 min |
+| Nothing (a rerun) | seconds | about 4 min | about 4 min |
+| The library, codegen or macros (the working tree's side) | about 1 min (library) + 5 min (generated types) | about 4 min | about 10 min |
+| Also `main` (the base side) | the same again for the base | about 4 min | about 16 min |
 
-The measurement is about 6.5 min in-process (120 cells, three rounds per side), under a minute of
-CLI, and a minute or two confirming the cells that moved. The generated-types build is the eight
+The measurement is about 1.5 min screening the in-process cells (120 cells, three short rounds per
+side), about 2 min confirming the 20 to 30 cells screening passes on (more when the PR moves many
+cells: #121's comparison confirmed 47), and under a minute of CLI. The generated-types build is the eight
 model shards in parallel (the slowest about 2.5 min) and then the bench and heap profiler, about
 70 s each.
 
@@ -54,9 +55,12 @@ base of `main` and `HEAD`; set `BENCH_BASE` for another ref) and the working tre
 changes included. Both sides are built with the benchmark profile, the base from a `git archive`
 of its commit in `target/benchmark-quick/base-src` with the working tree's `Cargo.lock`, and
 measured in the same session, interleaved cell by cell: in-process peak heap once per side (it is
-exact), then criterion one cell at a time (`BENCH_CELL`), each cell's `BENCH_QUICK_ROUNDS` rounds
-(default 3, of 0.1 s warm-up and 0.3 s measurement) back to back, alternating which side goes
-first (base, head, head, base, base, head), then the CLI tier (hyperfine:
+exact), then criterion one cell at a time (`BENCH_CELL`), in two stages: **screening** runs each
+cell's `BENCH_QUICK_ROUNDS` short rounds (default 3, of 0.02 s warm-up and 0.03 s measurement)
+back to back, alternating which side goes first (base, head, head, base, base, head), and
+**confirmation** runs each cell whose two sides differ by more than 1.5% there in
+`BENCH_QUICK_CONFIRM_ROUNDS` full-length rounds (default 5, of 0.1 s warm-up and 0.3 s
+measurement), in the same order. Then the CLI tier (hyperfine:
 codegen, validate_valid, validate_invalid, and the startup row) in the same number of rounds, each
 running every cell's two sides back to back. Both sides' timed executables run from copies at
 paths of the same length (`target/benchmark-quick/run/{base,head}/`).
@@ -65,10 +69,11 @@ The `compare` binary then prints which cells moved beyond noise as the PR body's
 section, and writes it to `target/benchmark-quick/report.md`. Each round (one process) of a cell
 is summarized by its **lowest sample**; each side by the **median of its rounds' lowest samples**,
 with their standard deviation as the spread. A cell moved when the two sides differ by more than
-3% of `main`'s value and by more than the sum of both spreads. Every cell that moved is then
-measured again in `BENCH_QUICK_CONFIRM_ROUNDS` further rounds per side (default 4), in the same
-order, and the report judges it on all its rounds: a real change moves every process, while a
-false move comes from two rounds whose spread happened to be small. A cell that passes its
+3% of `main`'s value and by more than the sum of both spreads. An in-process cell that screening
+passed on is judged on its confirmation rounds only; every other in-process cell stayed within
+1.5%, so it is steady. A CLI cell that moved is measured again in `BENCH_CLI_CONFIRM_ROUNDS`
+further rounds per side (default 4) and judged on all its rounds: a real change moves every
+process, while a false move comes from rounds whose spread happened to be small. A cell that passes its
 correctness probe on one side only is listed apart. Nothing committed changes.
 
 Why this design: the machine is shared (other builds, benchmarks, sessions), and three effects
@@ -97,7 +102,25 @@ first rounds (before confirmation), with injected slowdowns:
 | 2 | 0.05 s / 0.15 s | 154 s | 6 (0) | 81% / 92% / 99% |
 | **3** | **0.1 s / 0.3 s** | **386 s** | **3 (0)** | **89% / 96% / 99%** |
 
-A cell's process costs about 0.15 s beyond its warm-up and measurement time. A cell that moved
+Two stages (#112): most cells do not move, and a short round is enough to tell a cell that might
+have moved from one that did not; only those are worth full-length rounds. The gate is 1.5%, below
+the 3% rule and ignoring the spread, because a cell screening misses is never measured again.
+Measured on one evening's captures of all 120 in-process cells, every scheme replayed on the same
+rounds: A/A (one binary against a copy of itself) with injected slowdowns, and A/B (`main` before
+and after #121, whose 19 cells moved on five full-length rounds):
+
+| Scheme | In-process time: A/A / A/B | False moves (A/A) | Caught at +4% / +5% / +10% | A/B moves found |
+|---|---|---|---|---|
+| Every cell 3 full-length rounds, then 2 more for each that moved (about the previous default) | 381 s / 416 s | 0 | 77% / 87% / 99% | 18 of 19 |
+| Every cell 5 full-length rounds | 624 s / 624 s | 0 | 85% / 92% / 99% | 19 of 19 |
+| Screening at 0.01 s per round, 1.5% gate, then 5 full-length rounds | 149 s / 253 s | 0 | 84% / 92% / 99% | 18 of 19 |
+| **Screening at 0.03 s per round, 1.5% gate, then 5 full-length rounds** | **181 s / 332 s** | **0** | **82% / 92% / 99%** | **19 of 19** |
+| Screening at 0.03 s per round, 2% gate, then 5 full-length rounds | 150 s / 275 s | 0 | 81% / 91% / 99% | 19 of 19 |
+
+Screening at 0.01 s missed a +5.6% A/B cell in two of four choices of screening rounds; at 0.03 s
+with the 1.5% gate it found every A/B cell in three of four. A process costs about 0.07 s beyond
+its warm-up and measurement time (`--nresamples 1` saves about 0.015 s of it: `compare` reads only
+the raw samples, so criterion's bootstrap is unused). A cell that moved
 but runs only code the PR did not touch is still noise; the PR body counts only cells on changed
 code paths (see CLAUDE.md).
 
@@ -259,13 +282,15 @@ Defaults are given as full mode / quick mode.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` / `--warm-up-time 0.1 --measurement-time 0.3 --sample-size 20 --noplot` | criterion arguments (per cell and round in quick mode) |
+| `BENCH_CRITERION_ARGS` | `--warm-up-time 0.5 --measurement-time 2 --sample-size 20` / `--warm-up-time 0.1 --measurement-time 0.3 --sample-size 20 --noplot --nresamples 1` | criterion arguments (per cell; in quick mode per confirmation round) |
+| `BENCH_QUICK_SCREEN_ARGS` | — / `--warm-up-time 0.02 --measurement-time 0.03 --sample-size 10 --noplot --nresamples 1` | quick mode: criterion arguments per screening round |
 | `BENCH_SKIP_CRITERION=1` | unset (full mode only) | skip in-process timing |
 | `BENCH_CLI_WARMUP` | `3` / `2` | hyperfine warmup runs per CLI cell (and round) |
 | `BENCH_CLI_RUNS` | `15` / `10` | hyperfine timed runs per CLI cell (and round) |
 | `BENCH_BASE` | — / `main` | quick mode: the ref whose merge base with `HEAD` is the base side |
-| `BENCH_QUICK_ROUNDS` | — / `3` | quick mode: interleaved rounds per side |
-| `BENCH_QUICK_CONFIRM_ROUNDS` | — / `4` | quick mode: further rounds per side for each cell that moved (`0` skips) |
+| `BENCH_QUICK_ROUNDS` | — / `3` | quick mode: screening rounds per side of every in-process cell, and rounds per side of every CLI cell |
+| `BENCH_QUICK_CONFIRM_ROUNDS` | — / `5` | quick mode: confirmation rounds per side of each in-process cell screening passed on |
+| `BENCH_CLI_CONFIRM_ROUNDS` | — / `4` | quick mode: further rounds per side of each CLI cell that moved (`0` skips) |
 | `BENCH_TOOLS` | unset | comma-separated tool ids the in-process harness measures (quick mode sets `jsonschemars`) |
 | `BENCH_CELL` | unset | one in-process cell the criterion bench checks and times, `<operation>/<fixture id>` (quick mode sets it per cell) |
 

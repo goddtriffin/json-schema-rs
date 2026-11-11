@@ -20,6 +20,13 @@
 //!
 //! A cell moved when the two sides' estimates differ by more than [`TIE_THRESHOLD`] of the
 //! base's **and** by more than the sum of both spreads.
+//!
+//! In-process cells are measured in two stages (#112). **Screening** times every cell in short
+//! rounds and passes on each cell whose estimates differ by more than [`SCREEN_THRESHOLD`]
+//! ([`screened_cells`]). **Confirmation** times only those cells again, in more and longer
+//! rounds, and their confirmation rounds replace their screening rounds
+//! ([`with_screening`]), so a cell is reported as moved only on full-length measurement. A
+//! cell that screening did not pass on stays within the threshold, so it is steady.
 
 use crate::{CellKey, Metric, Stats, TIE_THRESHOLD, Tier, format_memory, format_time};
 use std::collections::BTreeMap;
@@ -108,6 +115,48 @@ pub fn moved_beyond_noise(base: &Estimate, head: &Estimate) -> bool {
     gap > (TIE_THRESHOLD * base.value).max(base.spread + head.spread)
 }
 
+/// The relative gap above which screening passes a cell on to confirmation. It sits below
+/// [`TIE_THRESHOLD`] and ignores the spread, because a cell screening misses is never measured
+/// again: on captures of the same binary with injected slowdowns, a 1.5% gate after three short
+/// rounds caught as many 4% slowdowns as confirming every cell (#112).
+pub const SCREEN_THRESHOLD: f64 = 0.015;
+
+/// The cells of `tier` whose screening estimates differ by more than [`SCREEN_THRESHOLD`] of
+/// the base's, as `<operation>/<fixture id>`, each once whatever metrics differ, sorted. A cell
+/// measured on one side only is not passed on: `compare` lists it apart.
+#[must_use]
+pub fn screened_cells(base: &Samples, head: &Samples, tier: Tier) -> Vec<String> {
+    let mut cells: Vec<String> = base
+        .iter()
+        .filter(|(key, _)| key.tier == tier)
+        .filter_map(|(key, base_rounds)| {
+            let base_estimate: Estimate = Estimate::from_rounds(base_rounds)?;
+            let head_estimate: Estimate = Estimate::from_rounds(head.get(key)?)?;
+            let gap: f64 = (head_estimate.value - base_estimate.value).abs();
+            (gap > SCREEN_THRESHOLD * base_estimate.value).then(|| cell_id(key))
+        })
+        .collect();
+    cells.sort();
+    cells.dedup();
+    cells
+}
+
+/// One side's samples for the comparison: every cell of `confirmed`, plus each cell of
+/// `screened` that `confirmed` does not have, so a confirmed cell rests on its confirmation
+/// rounds only.
+#[must_use]
+pub fn with_screening(mut confirmed: Samples, screened: Samples) -> Samples {
+    for (key, rounds) in screened {
+        confirmed.entry(key).or_insert(rounds);
+    }
+    confirmed
+}
+
+/// A cell as the driver names it: `<operation>/<fixture id>` (the operation's token).
+fn cell_id(key: &CellKey) -> String {
+    format!("{}/{}", key.operation.token(), key.fixture)
+}
+
 /// Compare every cell of both sides. A cell with no samples on a side counts as not measured
 /// there.
 #[must_use]
@@ -151,16 +200,15 @@ pub fn compare(base: &Samples, head: &Samples) -> Comparison {
 
 impl Comparison {
     /// The moved cells of `tier`, as `<operation>/<fixture id>` (the operation's token), each
-    /// once whatever metrics moved, sorted. The driver re-measures these in confirmation rounds.
+    /// once whatever metrics moved, sorted. The driver re-measures the CLI's in confirmation
+    /// rounds.
     #[must_use]
     pub fn moved_cells(&self, tier: Tier) -> Vec<String> {
         let mut cells: Vec<String> = self
             .moved
             .iter()
             .filter(|change: &&CellChange| change.key.tier == tier)
-            .map(|change: &CellChange| {
-                format!("{}/{}", change.key.operation.token(), change.key.fixture)
-            })
+            .map(|change: &CellChange| cell_id(&change.key))
             .collect();
         cells.sort();
         cells.dedup();
@@ -263,7 +311,10 @@ fn render(metric: Metric, estimate: &Estimate) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CellChange, Comparison, Estimate, Samples, compare, moved_beyond_noise};
+    use super::{
+        CellChange, Comparison, Estimate, Samples, compare, moved_beyond_noise, screened_cells,
+        with_screening,
+    };
     use crate::{CellKey, Metric, Operation, Tier};
 
     fn key(fixture: &str, metric: Metric) -> CellKey {
@@ -478,6 +529,79 @@ mod tests {
             "codegen/small/config".to_owned(),
         ];
         let actual: Vec<String> = comparison.moved_cells(Tier::InProcess);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn screened_cells_passes_a_gap_beyond_the_gate_even_within_the_spread() {
+        let base: Samples = samples(&[(
+            key("small/config", Metric::TimeSecs),
+            vec![vec![90.0], vec![100.0], vec![110.0]],
+        )]);
+        let head: Samples = samples(&[(
+            key("small/config", Metric::TimeSecs),
+            vec![vec![92.0], vec![102.0], vec![112.0]],
+        )]);
+        let expected: Vec<String> = vec!["codegen/small/config".to_owned()];
+        let actual: Vec<String> = screened_cells(&base, &head, Tier::InProcess);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn screened_cells_skips_a_gap_within_the_gate() {
+        let base: Samples = samples(&[(key("small/config", Metric::TimeSecs), vec![vec![100.0]])]);
+        let head: Samples = samples(&[(key("small/config", Metric::TimeSecs), vec![vec![101.0]])]);
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = screened_cells(&base, &head, Tier::InProcess);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn screened_cells_lists_each_cell_of_the_tier_measured_on_both_sides_once() {
+        let cli_key: CellKey = CellKey {
+            tier: Tier::Cli,
+            ..key("small/config", Metric::TimeSecs)
+        };
+        let base: Samples = samples(&[
+            (key("small/config", Metric::TimeSecs), vec![vec![1.0]]),
+            (
+                key("small/config", Metric::PeakMemoryBytes),
+                vec![vec![1.0]],
+            ),
+            (key("large/api-catalog", Metric::TimeSecs), vec![vec![1.0]]),
+            (cli_key.clone(), vec![vec![1.0]]),
+        ]);
+        let head: Samples = samples(&[
+            (key("small/config", Metric::TimeSecs), vec![vec![2.0]]),
+            (
+                key("small/config", Metric::PeakMemoryBytes),
+                vec![vec![2.0]],
+            ),
+            (cli_key, vec![vec![2.0]]),
+        ]);
+        let expected: Vec<String> = vec!["codegen/small/config".to_owned()];
+        let actual: Vec<String> = screened_cells(&base, &head, Tier::InProcess);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn with_screening_keeps_confirmation_rounds_and_adds_unconfirmed_cells() {
+        let confirmed: Samples = samples(&[(
+            key("small/config", Metric::TimeSecs),
+            vec![vec![5.0], vec![6.0]],
+        )]);
+        let screened: Samples = samples(&[
+            (key("small/config", Metric::TimeSecs), vec![vec![1.0]]),
+            (key("large/api-catalog", Metric::TimeSecs), vec![vec![2.0]]),
+        ]);
+        let expected: Samples = samples(&[
+            (
+                key("small/config", Metric::TimeSecs),
+                vec![vec![5.0], vec![6.0]],
+            ),
+            (key("large/api-catalog", Metric::TimeSecs), vec![vec![2.0]]),
+        ]);
+        let actual: Samples = with_screening(confirmed, screened);
         assert_eq!(expected, actual);
     }
 
