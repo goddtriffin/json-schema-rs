@@ -74,7 +74,7 @@
 #   BENCH_QUICK_ROUNDS    screening rounds per side of every in-process cell, and rounds per side
 #                         of every CLI cell (default 3)
 #   BENCH_QUICK_CONFIRM_ROUNDS  confirmation rounds per side of each in-process cell screening
-#                         passes on (default 5)
+#                         passes on (default 5); a cell its first three rounds settle stops there
 #   BENCH_CLI_CONFIRM_ROUNDS  further rounds per side of each CLI cell that moved (default 4; 0
 #                         skips its confirmation)
 #   BENCH_QUICK_SCREEN_ARGS  criterion args per screening round (default: --warm-up-time 0.02
@@ -105,6 +105,8 @@ RUN_DIR="${QUICK_DIR}/run"
 TOOL="jsonschemars"
 ROUNDS="${BENCH_QUICK_ROUNDS:-3}"
 CONFIRM_ROUNDS="${BENCH_QUICK_CONFIRM_ROUNDS:-5}"
+# Confirmation rounds per side after which a settled cell stops (EARLY_ROUNDS in src/compare.rs).
+EARLY_ROUNDS=3
 CLI_CONFIRM_ROUNDS="${BENCH_CLI_CONFIRM_ROUNDS:-4}"
 SCREEN_ARGS="${BENCH_QUICK_SCREEN_ARGS:---warm-up-time 0.02 --measurement-time 0.03 --sample-size 10 --noplot --nresamples 1}"
 CONFIRM_ARGS="${BENCH_CRITERION_ARGS:---warm-up-time 0.1 --measurement-time 0.3 --sample-size 20 --noplot --nresamples 1}"
@@ -183,64 +185,105 @@ record_cells() {
     done
 }
 
-# cell_bench <side> <operation/fixture id>: the side's bench that measures the cell (cross_tool or
-# isolated); nothing when neither does (its check fails on that side).
-cell_bench() {
-    local side="$1" cell="$2" bench
-    for bench in cross_tool isolated; do
-        if grep -qxF "${cell}" "${QUICK_DIR}/${side}/cells-${bench}.txt"; then
-            printf '%s\n' "${bench}"
-            return 0
-        fi
+# cell_plan [cells file]: one line per in-process cell to time (only the cells the file lists,
+# when given): `<operation/fixture id> \t <base bench> \t <head bench> \t <criterion filter>`. A
+# side's bench is the one whose cells-<bench>.txt lists the cell (record_cells), or `-` when
+# neither does (its check fails on that side). The filter is the cell's exact criterion id as an
+# anchored regex. Worked out once for every cell in one awk process (sorted in byte order), so the
+# timing loop starts nothing but the timed processes: per round, a lookup and an escape in grep
+# and sed processes cost about 40 ms, a third of each screening round (#112).
+cell_plan() {
+    local only="${1:-}" side bench
+    local -a lists=()
+    for side in base head; do
+        for bench in cross_tool isolated; do
+            lists+=("${side}" "${bench}" "${QUICK_DIR}/${side}/cells-${bench}.txt")
+        done
     done
+    {
+        printf '%s\t%s\t%s\n' "${lists[@]}"
+        echo '--'
+        if [[ -n "${only}" ]]; then cat "${only}"; fi
+    } | awk -v tool="${TOOL}" -v filtered="$([[ -n "${only}" ]] && echo 1 || echo 0)" '
+        BEGIN { FS = "\t" }
+        !done_lists && $0 == "--" { done_lists = 1; next }
+        !done_lists {
+            while ((getline cell < $3) > 0) {
+                if (cell == "") continue
+                # cross_tool comes first in the list, so it wins when both benches list the cell.
+                if (!(($1, cell) in bench)) bench[$1, cell] = $2
+                cells[cell] = 1
+            }
+            close($3)
+            next
+        }
+        { wanted[$0] = 1 }
+        END {
+            for (cell in cells) {
+                if (filtered && !(cell in wanted)) continue
+                op = cell; sub(/\/.*/, "", op)
+                fid = cell; sub(/^[^\/]*\//, "", fid)
+                filter = op "/" tool "/" fid
+                gsub(/[][\\.*^$+?(){}|]/, "\\\\&", filter)
+                b = (("base", cell) in bench) ? bench["base", cell] : "-"
+                h = (("head", cell) in bench) ? bench["head", cell] : "-"
+                printf "%s\t%s\t%s\t^%s$\n", cell, b, h, filter
+            }
+        }' | LC_ALL=C sort
 }
 
-# run_criterion_cell <stage: screen|criterion> <side> <bench exe> <round> <operation/fixture id>:
-# one criterion round of one cell, with the stage's criterion args, into the side's
-# <stage>/<round>. BENCH_CELL restricts the harness to it (the base side's harness may predate
-# it, so the exact criterion filter restricts the timing too).
+# run_criterion_cell <stage: screen|criterion> <side> <bench exe> <round> <operation/fixture id>
+# <filter>: one criterion round of one cell, with the stage's criterion args (CRITERION_ARGS, set
+# by run_inprocess), into the side's <stage>/<round>. BENCH_CELL restricts the harness to it (the
+# base side's harness may predate it, so the exact criterion filter restricts the timing too).
 run_criterion_cell() {
-    local stage="$1" side="$2" exe="$3" round="$4" cell="$5" filter
-    local -a criterion_args
-    # Word-split the args on purpose: they are a list of criterion flags.
-    # shellcheck disable=SC2206
-    if [[ "${stage}" == screen ]]; then criterion_args=(${SCREEN_ARGS}); else criterion_args=(${CONFIRM_ARGS}); fi
-    filter="${cell%%/*}/${TOOL}/${cell#*/}"
-    filter="^$(printf '%s' "${filter}" | sed 's/[][\.*^$+?(){}|]/\\&/g')\$"
+    local stage="$1" side="$2" exe="$3" round="$4" cell="$5" filter="$6"
     BENCH_CELL="${cell}" CRITERION_HOME="${QUICK_DIR}/${side}/${stage}/${round}" "${exe}" \
-        --bench "${filter}" ${criterion_args[@]+"${criterion_args[@]}"} \
+        --bench "${filter}" ${CRITERION_ARGS[@]+"${CRITERION_ARGS[@]}"} \
         >> "${QUICK_DIR}/${side}/criterion.log" 2>&1 \
         || { echo "!! criterion failed on ${cell} (see ${QUICK_DIR}/${side}/criterion.log)" >&2; exit 1; }
 }
 
 # run_inprocess <stage: screen|criterion> <rounds> [cells file]: every cell's criterion rounds of
 # the stage back to back, the sides alternating per round (base first in odd rounds), each side
-# on the bench that lists the cell (record_cells); only the cells the file lists, when given. A
+# on the bench that lists the cell (cell_plan); only the cells the file lists, when given. A
 # cell one side does not list (its check fails there) is measured on the other side only, and
-# compare lists it apart.
+# compare lists it apart. In confirmation, a cell stops after EARLY_ROUNDS rounds when compare
+# says they settle it (`compare --settled`: back within the screening gate, or beyond noise by
+# more than 10%; see settled_early in src/compare.rs), so only a cell still in doubt gets every
+# round (#112).
 run_inprocess() {
     local stage="$1" rounds="$2" only="${3:-}"
-    local cells cell round side bench count
+    local plan cell base_bench head_bench filter round side bench count settled=0
     local -a sides
-    cells="$(cat "${QUICK_DIR}"/base/cells-*.txt "${QUICK_DIR}"/head/cells-*.txt \
-        | sed '/^$/d' | LC_ALL=C sort -u)"
-    if [[ -n "${only}" ]]; then
-        cells="$(printf '%s\n' "${cells}" | grep -xF -f "${only}" || true)"
-    fi
-    count="$(printf '%s\n' "${cells}" | sed '/^$/d' | wc -l | tr -d ' ')"
+    # Word-split the args on purpose: they are a list of criterion flags.
+    # shellcheck disable=SC2206
+    if [[ "${stage}" == screen ]]; then CRITERION_ARGS=(${SCREEN_ARGS}); else CRITERION_ARGS=(${CONFIRM_ARGS}); fi
+    plan="$(cell_plan "${only}")"
+    count="$(printf '%s\n' "${plan}" | sed '/^$/d' | wc -l | tr -d ' ')"
     echo "==> in-process time, ${stage/criterion/confirmation}: ${count} cells, ${rounds} rounds per side, interleaved per cell"
-    while IFS= read -r cell; do
+    while IFS="$(printf '\t')" read -r cell base_bench head_bench filter; do
         [[ -n "${cell}" ]] || continue
-        for round in $(seq 1 "${rounds}"); do
+        for (( round = 1; round <= rounds; round++ )); do
             if (( round % 2 == 1 )); then sides=(base head); else sides=(head base); fi
             for side in "${sides[@]}"; do
-                bench="$(cell_bench "${side}" "${cell}")"
-                if [[ -n "${bench}" ]]; then
-                    run_criterion_cell "${stage}" "${side}" "${RUN_DIR}/${side}/${bench}" "${round}" "${cell}"
+                if [[ "${side}" == base ]]; then bench="${base_bench}"; else bench="${head_bench}"; fi
+                if [[ "${bench}" != - ]]; then
+                    run_criterion_cell "${stage}" "${side}" "${RUN_DIR}/${side}/${bench}" "${round}" \
+                        "${cell}" "${filter}"
                 fi
             done
+            if [[ "${stage}" == criterion ]] && (( round == EARLY_ROUNDS && rounds > EARLY_ROUNDS )) \
+                && [[ "$("${BUILD_DIR}/compare" --base "${QUICK_DIR}/base" --head "${QUICK_DIR}/head" \
+                    --tool "${TOOL}" --settled "${cell}")" == settled ]]; then
+                settled=$(( settled + 1 ))
+                break
+            fi
         done
-    done <<< "${cells}"
+    done <<< "${plan}"
+    if [[ "${stage}" == criterion ]] && (( rounds > EARLY_ROUNDS )); then
+        echo "    ${settled} of ${count} cells settled after ${EARLY_ROUNDS} rounds"
+    fi
 }
 
 # build_generated_types <side> <source root>: build the side's isolated/ `generated-types` bench

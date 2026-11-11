@@ -11,7 +11,7 @@ member and is **not published** (`publish = false`).
 
 ```sh
 make benchmark_smoke    # correctness only, no timing: every cell of our library + CLI probed once (~25 s warm, ~1 min cold)
-make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~4-14 min)
+make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~3-13 min)
 make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
 
@@ -38,13 +38,16 @@ the split at the end (`builds …, measurement …`).
 
 | What changed since the last run | Builds | Measurement | Total |
 |---|---|---|---|
-| Nothing (a rerun) | seconds | about 4 min | about 4 min |
-| The library, codegen or macros (the working tree's side) | about 1 min (library) + 4 min (generated types) | about 4 min | about 9 min |
-| Also `main` (the base side) | the same again for the base | about 4 min | about 14 min |
+| Nothing (a rerun) | seconds | about 3 min | about 3 min |
+| The library, codegen or macros (the working tree's side) | about 1 min (library) + 4 min (generated types) | about 3 min | about 8 min |
+| Also `main` (the base side) | the same again for the base | about 3 min | about 13 min |
 
-The measurement is about 1.5 min screening the in-process cells (120 cells, three short rounds per
-side), about 2 min confirming the 20 to 30 cells screening passes on (more when the PR moves many
-cells: #121's comparison confirmed 47), and under a minute of CLI. The generated-types build is the eight
+The measurement is about 1.2 min screening the in-process cells (120 cells, three short rounds per
+side), about a minute confirming the 20 to 36 cells screening passes on (more when the PR moves
+many cells: #121's comparison confirmed 47), most of which settle after three of their five rounds,
+and under a minute of CLI. Screening is near its floor: per side and round, the 83 fastest cells
+take about 0.07 s each, and the rest up to 0.6 s, because criterion takes at least 10 samples and
+their calls take milliseconds. The generated-types build is the eight
 model shards in parallel (the slowest, the data-warehouse model with constrained newtypes, about
 2.5 min) and then the bench and heap profiler, linked in parallel in about 100 s. Each side's
 benches build in the same cargo command as its other executables, so their links overlap, and
@@ -61,9 +64,10 @@ measured in the same session, interleaved cell by cell: in-process peak heap onc
 exact), then criterion one cell at a time (`BENCH_CELL`), in two stages: **screening** runs each
 cell's `BENCH_QUICK_ROUNDS` short rounds (default 3, of 0.02 s warm-up and 0.03 s measurement)
 back to back, alternating which side goes first (base, head, head, base, base, head), and
-**confirmation** runs each cell whose two sides differ by more than 1.5% there in
+**confirmation** runs each cell whose two sides differ by more than 1.5% there in up to
 `BENCH_QUICK_CONFIRM_ROUNDS` full-length rounds (default 5, of 0.1 s warm-up and 0.3 s
-measurement), in the same order. Before timing anything, it generates every fixture with each
+measurement), in the same order, stopping a cell after three rounds when they settle it (see
+*Early stop* below). Before timing anything, it generates every fixture with each
 side's CLI and reports the generated code's size (see *Generated code*, about 2 s for both
 sides). Then the CLI tier (hyperfine:
 codegen, validate_valid, validate_invalid, and the startup row) in the same number of rounds, each
@@ -122,6 +126,23 @@ and after #121, whose 19 cells moved on five full-length rounds):
 | Screening at 0.01 s per round, 1.5% gate, then 5 full-length rounds | 149 s / 253 s | 0 | 84% / 92% / 99% | 18 of 19 |
 | **Screening at 0.03 s per round, 1.5% gate, then 5 full-length rounds** | **181 s / 332 s** | **0** | **82% / 92% / 99%** | **19 of 19** |
 | Screening at 0.03 s per round, 2% gate, then 5 full-length rounds | 150 s / 275 s | 0 | 81% / 91% / 99% | 19 of 19 |
+
+Early stop (#112): after a cell's third confirmation round, `compare --settled` decides whether
+it needs the other two (`settled_early` in `src/compare.rs`). It does not when the sides are back
+within the 1.5% screening gate (steady: below the 3% rule) or moved beyond noise by more than 10%
+(moved): either way the report reaches the same verdict on three rounds. Replayed on the same
+captures, over five orderings of each cell's rounds:
+
+| Confirmation | False moves (A/A) | Caught at +4% / +5% / +10% | A/B moves found | Confirmation rounds: A/A / A/B |
+|---|---|---|---|---|
+| Always 5 rounds (the previous default) | 0 | 82% / 92% / 99% | 19 of 19 | 170 / 460 |
+| Always 3 rounds | 0.6 | 81% / 92% / 99% | 18.4 of 19 | 102 / 276 |
+| **3 rounds, then 2 more unless settled (steady within 1.5%, moved by over 10%)** | **0** | **82% / 92% / 99%** | **19 of 19** | **115 / 330** |
+| 3 rounds, then 2 more unless settled (steady within 1%, never stopped as moved) | 0 | 82% / 92% / 99% | 19 of 19 | 127 / 402 |
+| 3 rounds, then 2 more unless settled (steady within 1.5%, moved by over 6%) | 0.2 | 82% / 93% / 100% | 19 of 19 | 114 / 324 |
+
+An A/A run (both sides the same commit) settled 14 of its 20 confirmed cells after three rounds,
+moved nothing, and measured in 3m06s.
 
 Screening at 0.01 s missed a +5.6% A/B cell in two of four choices of screening rounds; at 0.03 s
 with the 1.5% gate it found every A/B cell in three of four. A process costs about 0.07 s beyond
