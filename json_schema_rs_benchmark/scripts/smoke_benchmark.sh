@@ -3,7 +3,7 @@
 # smoke_benchmark.sh — the benchmark's correctness check without timing (`make benchmark_smoke`,
 # #112): every cell of our library and CLI (`jsonschemars`) is probed once, as the timed modes
 # probe it before measuring, from a quick debug build of the working tree. It answers "does every
-# cell still work?" in about a minute, where `make benchmark` answers "how fast?" in 8 to 20.
+# cell still work?" in about a minute, where `make benchmark` answers "how fast?" in 4 to 16.
 #
 # What it checks, for `jsonschemars` only (BENCH_TOOLS restricts the harness to it):
 #   - every in-process cell (codegen, schema_compile, both validations, and the generated-types
