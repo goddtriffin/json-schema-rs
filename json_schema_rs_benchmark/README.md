@@ -132,9 +132,15 @@ code paths (see CLAUDE.md).
 
 The generated-types cells (see *What it measures*) come from each side's own build of
 `isolated/`'s `generated-types` feature: that side's codegen generates the types, which link that
-side's library. Each side builds into `target/benchmark-quick/isolated-{base,head}` with every
-source and target path remapped (`--remap-path-prefix`), because `isolated/` is its own workspace
-and cargo compiles the library under its absolute path, which is longer on the base side.
+side's library. Each side builds into `target/benchmark-quick/isolated-{base,head}`, and both
+build through the same two paths: symbolic links (`isolated-src`, `isolated-target`) pointed at
+the side's root and target directory before its build, with every source and target path
+remapped (`--remap-path-prefix`). `isolated/` is its own workspace and reaches the library through
+path dependencies outside it, which cargo compiles under their absolute paths and hashes into
+every symbol of the library and its dependents (`-C metadata`). Built from each side's own path,
+the two benches of an A/A run had different symbols and 2.86 MB of their code laid out
+differently, and three generated-types cells moved 3.5–5.8% (#129). Through the links the A/A
+benches are byte-identical.
 Reverse codegen is not measured in quick mode: its models take minutes to build per side.
 A PR that changes the derive or reverse codegen, the harness, a competitor or a fixture runs
 `make benchmark_full` too.
