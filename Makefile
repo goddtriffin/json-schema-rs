@@ -74,7 +74,7 @@ research_clone: ## clone or update competitor repos into research/repos/<lang>/<
 	@./research/scripts/clone-competitors.sh
 
 .PHONY: benchmark
-benchmark: ## quick benchmark for every PR that changes the library (~4-16 min): our lib + CLI on main vs the working tree, same session; prints the PR's Performance section
+benchmark: ## quick benchmark for every PR that changes the library (~4-14 min): our lib + CLI on main vs the working tree, same session; prints the PR's Performance section
 	@./json_schema_rs_benchmark/scripts/quick_benchmark.sh
 
 .PHONY: benchmark_smoke

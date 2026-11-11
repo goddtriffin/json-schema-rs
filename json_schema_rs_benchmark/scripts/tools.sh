@@ -701,21 +701,6 @@ tool_display_name() {
 
 # --- isolated/'s models -------------------------------------------------------------------
 
-# build_models <manifest> <features> <exclude file> <log dir> [cargo args...]: build the isolated
-# crate at <manifest> with the model features <features> (`reverse-codegen`, `generated-types`, or
-# both, comma-separated; every bin), excluding each model that does not compile. Our codegen
-# emits every fixture's Rust types (see isolated/models/gen); a model that does not compile is
-# that cell's compat failure, not a broken build. `cargo check` finds them (no code generation, so
-# each round is fast): after each failed check, model_build_failures reads cargo's JSON messages
-# (<log dir>/model_build.jsonl) and appends one "copy \t fixture \t reason" row per failing model
-# to <exclude file>, which the model shards' build scripts read through BENCH_MODEL_EXCLUDE to
-# leave those models out (--keep-going, so every shard reports its errors in the same round). Rows
-# already in the file stay (the quick benchmark pre-excludes models it does not measure). An error
-# it cannot attribute to one model aborts the run. Once the check passes, one benchmark-profile
-# build follows. BENCH_MODEL_EXCLUDE stays exported so a later build (the criterion bench) sees the
-# same exclusions. CARGO_TARGET_DIR comes from the caller's environment; [cargo args...] go to
-# every cargo command (the quick benchmark's path remapping). Returns 1 on failure: callers run it
-# as `build_models ... || exit 1`, which suspends `set -e` inside it, so every step checks itself.
 # clear_exclusions <exclude file>: leave <exclude file> empty, writing it only when it is missing
 # or holds rows. The model shards' build scripts rerun whenever its modification time changes
 # (rerun-if-changed), and a rerun rewrites every model and rebuilds every shard: emptying an
@@ -726,6 +711,25 @@ clear_exclusions() {
     fi
 }
 
+# build_models <manifest> <features> <exclude file> <log dir> [cargo args...]: build the isolated
+# crate at <manifest> with the model features <features> (`reverse-codegen`, `generated-types`, or
+# both, comma-separated; every bin and bench, in one cargo command so their links run in parallel:
+# a separate `cargo bench --no-run` linked the bench after the bins, about 80 s more per build of
+# the generated types, #112), excluding each model that does not compile. Our codegen emits every
+# fixture's Rust types (see isolated/models/gen); a model that does not compile is that cell's
+# compat failure, not a broken build. The build runs first, since a model that does not compile is
+# rare; only when it fails does `cargo check` find the failing models (no code generation, so each
+# round is fast): after each failed check, model_build_failures reads cargo's JSON messages
+# (<log dir>/model_build.jsonl) and appends one "copy \t fixture \t reason" row per failing model
+# to <exclude file>, which the model shards' build scripts read through BENCH_MODEL_EXCLUDE to
+# leave those models out (--keep-going, so every shard reports its errors in the same round). Rows
+# already in the file stay (the quick benchmark pre-excludes models it does not measure). An error
+# it cannot attribute to one model aborts the run. Once the check passes, the build runs again.
+# BENCH_MODEL_EXCLUDE stays exported so a later cargo command (`cargo bench`, which finds the
+# bench already built) sees the same exclusions. CARGO_TARGET_DIR comes from the caller's
+# environment; [cargo args...] go to every cargo command (the quick benchmark's path remapping).
+# Returns 1 on failure: callers run it as `build_models ... || exit 1`, which suspends `set -e`
+# inside it, so every step checks itself.
 build_models() {
     local manifest="$1" features="$2" exclude="$3" log_dir="$4" attempt before after
     local triage="${REPO_ROOT:?REPO_ROOT not set}/target/benchmark/model_build_failures"
@@ -733,16 +737,19 @@ build_models() {
     export BENCH_MODEL_EXCLUDE="${exclude}"
     mkdir -p "${log_dir}"
     [[ -e "${exclude}" ]] || : > "${exclude}"
+    if _build_models_once "${manifest}" "${features}" "$@"; then
+        return 0
+    fi
+    echo "    model build failed; checking which models do not compile"
     for attempt in 1 2 3 4 5; do
         if cargo check --manifest-path "${manifest}" --config "$(_profile_config)" \
-            --profile benchmark --features "${features}" --bins --keep-going \
+            --profile benchmark --features "${features}" --bins --benches --keep-going \
             --message-format=json "$@" > "${log_dir}/model_build.jsonl"; then
             if [[ -s "${exclude}" ]]; then
                 echo "    excluded models:"
                 sed 's/^/      /' "${exclude}"
             fi
-            cargo build --manifest-path "${manifest}" --config "$(_profile_config)" \
-                --profile benchmark --features "${features}" --bins "$@" || return 1
+            _build_models_once "${manifest}" "${features}" "$@" || return 1
             return 0
         fi
         echo "    model check ${attempt} failed; excluding the models that did not compile"
@@ -763,4 +770,13 @@ build_models() {
     echo "!! the model check still fails after 5 attempts; aborting" \
         "(see ${log_dir}/model_build.jsonl)" >&2
     return 1
+}
+
+# _build_models_once <manifest> <features> [cargo args...]: one benchmark-profile build of the
+# isolated crate's bins and benches with <features> (see build_models).
+_build_models_once() {
+    local manifest="$1" features="$2"
+    shift 2
+    cargo build --manifest-path "${manifest}" --config "$(_profile_config)" \
+        --profile benchmark --features "${features}" --bins --benches "$@"
 }
