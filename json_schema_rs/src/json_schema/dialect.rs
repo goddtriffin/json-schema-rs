@@ -38,6 +38,21 @@ pub enum FormatMode {
     Assertion,
 }
 
+/// Whether `contentEncoding` and `contentMediaType` are checked or only recorded.
+///
+/// Asserted, a string under `contentEncoding: "base64"` must be base64 (RFC 4648, section 4),
+/// and one under `contentMediaType: "application/json"` (or any `+json` type) must be JSON
+/// once decoded. Other encodings and media types, and `contentSchema`, are always annotations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContentMode {
+    /// The content keywords are annotations and never fail validation (drafts 2019-09 and
+    /// 2020-12 default, which must not decode by default).
+    Annotation,
+    /// The content keywords this library implements are checked (draft 7 default, which allows
+    /// it).
+    Assertion,
+}
+
 /// The shape of `exclusiveMinimum` / `exclusiveMaximum`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExclusiveBounds {
@@ -206,6 +221,8 @@ pub struct Dialect {
     pub integer_semantics: IntegerSemantics,
     /// Whether `format` is checked.
     pub format_mode: FormatMode,
+    /// Whether `contentEncoding` and `contentMediaType` are checked.
+    pub content_mode: ContentMode,
     /// The shape of `exclusiveMinimum` / `exclusiveMaximum`.
     pub exclusive_bounds: ExclusiveBounds,
     /// The vocabularies in force: [`VocabularySet::standard`] for every draft, or the ones a
@@ -441,11 +458,21 @@ impl Dialect {
                     ExclusiveBounds::Numeric,
                 ),
             };
+        // Draft 7 lets an implementation assert the content keywords (validation 8.2), and its
+        // optional suite expects it; 2019-09 and later must not decode by default. Drafts 4 and
+        // 6 have no content keywords.
+        let content_mode: ContentMode = match Draft::of(spec_version) {
+            Draft::Draft7 => ContentMode::Assertion,
+            Draft::Draft4 | Draft::Draft6 | Draft::Draft201909 | Draft::Draft202012 => {
+                ContentMode::Annotation
+            }
+        };
         Dialect {
             spec_version,
             ref_siblings,
             integer_semantics,
             format_mode,
+            content_mode,
             exclusive_bounds,
             active_vocabularies: VocabularySet::standard(),
         }
@@ -578,10 +605,26 @@ pub struct ResolvedDialect {
 #[cfg(test)]
 mod tests {
     use super::{
-        Dialect, ExclusiveBounds, FormatMode, IntegerSemantics, Keyword, RefSiblings,
+        ContentMode, Dialect, ExclusiveBounds, FormatMode, IntegerSemantics, Keyword, RefSiblings,
         SubschemaPosition, Vocabulary,
     };
     use crate::json_schema::SpecVersion;
+
+    #[test]
+    fn content_mode_asserts_only_in_draft7() {
+        let expected: Vec<(SpecVersion, ContentMode)> = vec![
+            (SpecVersion::Draft04, ContentMode::Annotation),
+            (SpecVersion::Draft06, ContentMode::Annotation),
+            (SpecVersion::Draft07, ContentMode::Assertion),
+            (SpecVersion::Draft201909, ContentMode::Annotation),
+            (SpecVersion::Draft202012, ContentMode::Annotation),
+        ];
+        let actual: Vec<(SpecVersion, ContentMode)> = expected
+            .iter()
+            .map(|(v, _)| (*v, Dialect::for_spec_version(*v).content_mode))
+            .collect();
+        assert_eq!(expected, actual);
+    }
 
     fn names(dialect: Dialect) -> Vec<&'static str> {
         dialect.keywords().iter().map(|k| k.name).collect()

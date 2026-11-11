@@ -50,7 +50,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 79.29% | 2114 | 515 | 37 | 0 | 2666 |
+| `localhost/json-schema-rs` (ours) | 79.44% | 2118 | 511 | 37 | 0 | 2666 |
 | `dotnet-jsonschema-net` | 60.11% | 1439 | 917 | 0 | 38 | 2394 |
 | `go-jsonschema` | 74.08% | 1975 | 661 | 0 | 30 | 2666 |
 | `java-networknt-json-schema-validator` | 77.72% | 2072 | 584 | 0 | 10 | 2666 |
@@ -219,7 +219,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 98.55% | 612 | 4 | 5 | 0 | 621 |
+| `localhost/json-schema-rs` (ours) | 99.19% | 616 | 0 | 5 | 0 | 621 |
 | `dotnet-jsonschema-net` | 58.62% | 364 | 248 | 0 | 9 | 621 |
 | `go-jsonschema` | 84.22% | 523 | 92 | 0 | 6 | 621 |
 | `java-networknt-json-schema-validator` | 93.08% | 578 | 41 | 0 | 2 | 621 |
@@ -229,14 +229,17 @@ Optional suite:
 | `rust-boon` | 95.01% | 590 | 29 | 0 | 2 | 621 |
 | `rust-jsonschema` | 99.68% | 619 | 0 | 0 | 2 | 621 |
 
-**Disagreements with the competitor majority: 79**
+**Disagreements with the competitor majority: 83**
 
-<details><summary>Disagreements with the competitor majority (79)</summary>
+<details><summary>Disagreements with the competitor majority (83)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
 | File | Case | Tests (expected) | Majority | Triage |
 |---|---|---|---|---|
+| `optional/content.json` | validation of string-encoded content based on media type | an invalid JSON document (invalid) | 6/8 | competitors differ from expected |
+| `optional/content.json` | validation of binary string-encoding | an invalid base64 string (% is not a valid character) (invalid) | 6/8 | competitors differ from expected |
+| `optional/content.json` | validation of binary-encoded media type documents | a validly-encoded invalid JSON document (invalid); an invalid base64 string that is valid JSON (invalid) | 6/8 | competitors differ from expected |
 | `optional/format/hostname.json` | validation of host names | trailing dot (invalid); contains "--" in the 3rd and 4th position (invalid); exceeds maximum overall length (256) (invalid) | 4/7, 5/7, 6/7 | competitors differ from expected |
 | `optional/format/hostname.json` | validation of A-label (punycode) host names | invalid Punycode (invalid); contains illegal char U+302E Hangul single dot tone mark (invalid); Begins with a Spacing Combining Mark (invalid); Begins with a Nonspacing Mark (invalid); Begins with an Enclosing Mark (invalid); Exceptions that are DISALLOWED, right-to-left chars (invalid); Exceptions that are DISALLOWED, left-to-right chars (invalid); MIDDLE DOT with no preceding 'l' (invalid); MIDDLE DOT with nothing preceding (invalid); MIDDLE DOT with no following 'l' (invalid); MIDDLE DOT with nothing following (invalid); Greek KERAIA not followed by Greek (invalid); Greek KERAIA not followed by anything (invalid); Hebrew GERESH not preceded by Hebrew (invalid); Hebrew GERESH not preceded by anything (invalid); Hebrew GERSHAYIM not preceded by Hebrew (invalid); Hebrew GERSHAYIM not preceded by anything (invalid); KATAKANA MIDDLE DOT with no Hiragana, Katakana, or Han (invalid); KATAKANA MIDDLE DOT with no other characters (invalid); Arabic-Indic digits mixed with Extended Arabic-Indic digits (invalid); ZERO WIDTH JOINER not preceded by Virama (invalid); ZERO WIDTH JOINER not preceded by anything (invalid) | 6/7 | competitors differ from expected |
 | `optional/format/idn-email.json` | validation of an internationalized e-mail addresses | an invalid idn e-mail address (invalid); an invalid e-mail address (invalid) | 4/7 | competitors differ from expected |
@@ -249,15 +252,7 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 
 **Wrong vs. expected with no competitor consensus: 0**
 
-**Wrong vs. expected but agreeing with the competitor majority: 4**
-
-<details><summary>Wrong vs. expected, majority agrees with us (aggregated per file)</summary>
-
-| File | Tests | Majority (agreeing/voters: tests) |
-|---|---|---|
-| `optional/content.json` | 4 | 6/8: 4 |
-
-</details>
+**Wrong vs. expected but agreeing with the competitor majority: 0**
 
 **Tests our harness errored on: 0**
 

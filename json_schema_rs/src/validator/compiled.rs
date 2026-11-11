@@ -7,14 +7,15 @@
 //! definition, a recursive schema) is compiled once. Regular expressions are compiled once per
 //! distinct pattern.
 
+use super::content::Content;
 use super::ecma_regex;
 use super::format::Format;
 use super::simple_pattern::SimplePattern;
 use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    Dialect, FormatMode, IntegerSemantics, JsonSchema, Keyword as DialectKeyword, RefSiblings,
-    Registry, Schema, SchemaRef, Scope, TypeSet, VocabularyKind,
+    ContentMode, Dialect, FormatMode, IntegerSemantics, JsonSchema, Keyword as DialectKeyword,
+    RefSiblings, Registry, Schema, SchemaRef, Scope, TypeSet, VocabularyKind,
 };
 use crate::number;
 use serde::Deserialize;
@@ -155,6 +156,8 @@ pub(crate) enum Kw {
     MaxLength,
     Pattern,
     Format,
+    ContentEncoding,
+    ContentMediaType,
     MinItems,
     MaxItems,
     UniqueItems,
@@ -204,6 +207,8 @@ impl Kw {
             Kw::MaxLength => "maxLength",
             Kw::Pattern => "pattern",
             Kw::Format => "format",
+            Kw::ContentEncoding => "contentEncoding",
+            Kw::ContentMediaType => "contentMediaType",
             Kw::MinItems => "minItems",
             Kw::MaxItems => "maxItems",
             Kw::UniqueItems => "uniqueItems",
@@ -377,6 +382,8 @@ pub(crate) enum Keyword {
     Format(Format),
     /// A format the user registered.
     UserFormat(UserFormatId),
+    /// `contentEncoding` / `contentMediaType`, where the dialect asserts them.
+    Content(Box<Content>),
     MinItems(u64),
     MaxItems(u64),
     UniqueItems,
@@ -907,6 +914,8 @@ struct Parts<'r> {
     max_length: Option<u64>,
     pattern: Option<&'r str>,
     format: Option<&'r str>,
+    content_encoding: Option<&'r str>,
+    content_media_type: Option<&'r str>,
     min_items: Option<u64>,
     max_items: Option<u64>,
     unique_items: bool,
@@ -1414,6 +1423,10 @@ impl<'r, 'a> Compiler<'r, 'a> {
             parts.ref_ = string_at("$ref", &mut errors);
             parts.format = string_at("format", &mut errors);
         }
+        if dialect.content_mode == ContentMode::Assertion {
+            parts.content_encoding = string_at("contentEncoding", &mut errors);
+            parts.content_media_type = string_at("contentMediaType", &mut errors);
+        }
         if assertions {
             parts.min_properties = count_at("minProperties", &mut errors);
             parts.max_properties = count_at("maxProperties", &mut errors);
@@ -1713,6 +1726,9 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
         if let Some(name) = parts.format {
             self.lower_format(name, dialect, location, &mut out);
+        }
+        if let Some(content) = Content::lower(parts.content_encoding, parts.content_media_type) {
+            out.push(Keyword::Content(Box::new(content)));
         }
         out.extend(parts.min_items.map(Keyword::MinItems));
         out.extend(parts.max_items.map(Keyword::MaxItems));

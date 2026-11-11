@@ -1,6 +1,6 @@
 //! Keyword-by-keyword tests of the compiled validator: sibling keywords, typeless assertions,
 //! `$ref` siblings per draft, in-place loops, the depth guard, every applicator and assertion,
-//! `format` modes, error `Display` text and compile errors.
+//! `format` and content modes, error `Display` text and compile errors.
 
 use super::ValidationErrorKind;
 use super::eval::DEPTH_LIMIT;
@@ -10,7 +10,8 @@ use super::{
 };
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    FormatMode, JsonSchema, JsonSchemaSettings, RefSiblings, Registry, Schema, SpecVersion,
+    ContentMode, FormatMode, JsonSchema, JsonSchemaSettings, RefSiblings, Registry, Schema,
+    SpecVersion,
 };
 use serde_json::{Number, Value, json};
 
@@ -2449,6 +2450,182 @@ fn format_in_raw_subschema_is_asserted_in_draft_7() {
     assert_eq!(expected, actual);
 }
 
+// --- contentEncoding / contentMediaType ---
+
+fn invalid_encoding(value: &str) -> ValidationResult {
+    Err(vec![ValidationError::new(
+        ValidationErrorKind::InvalidContentEncoding {
+            encoding: "base64".to_string(),
+            value: value.to_string(),
+        },
+        root(),
+        kl("/contentEncoding"),
+    )])
+}
+
+fn invalid_media_type(value: &str) -> ValidationResult {
+    Err(vec![ValidationError::new(
+        ValidationErrorKind::InvalidContentMediaType {
+            media_type: "application/json".to_string(),
+            value: value.to_string(),
+        },
+        root(),
+        kl("/contentMediaType"),
+    )])
+}
+
+#[test]
+fn content_encoding_is_asserted_in_draft_7() {
+    let schema: JsonSchema = schema_in(r#"{"contentEncoding":"base64"}"#, SpecVersion::Draft07);
+    let actual: ValidationResult = validate_usable(&schema, &json!("eyJmb28i%iJiYXIifQ=="));
+    let expected: ValidationResult = invalid_encoding("eyJmb28i%iJiYXIifQ==");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_encoding_accepts_base64_in_draft_7() {
+    let schema: JsonSchema = schema_in(r#"{"contentEncoding":"base64"}"#, SpecVersion::Draft07);
+    let actual: ValidationResult = validate_usable(&schema, &json!("eyJmb28iOiAiYmFyIn0K"));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_media_type_is_asserted_in_draft_7() {
+    let schema: JsonSchema = schema_in(
+        r#"{"contentMediaType":"application/json"}"#,
+        SpecVersion::Draft07,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!("{:}"));
+    let expected: ValidationResult = invalid_media_type("{:}");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_media_type_accepts_json_in_draft_7() {
+    let schema: JsonSchema = schema_in(
+        r#"{"contentMediaType":"application/json"}"#,
+        SpecVersion::Draft07,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!("{\"foo\": \"bar\"}"));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_media_type_checks_the_decoded_content_in_draft_7() {
+    let schema: JsonSchema = schema_in(
+        r#"{"contentEncoding":"base64","contentMediaType":"application/json"}"#,
+        SpecVersion::Draft07,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!("ezp9Cg=="));
+    let expected: ValidationResult = invalid_media_type("ezp9Cg==");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_that_does_not_decode_fails_only_its_encoding_in_draft_7() {
+    let schema: JsonSchema = schema_in(
+        r#"{"contentEncoding":"base64","contentMediaType":"application/json"}"#,
+        SpecVersion::Draft07,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!("{}"));
+    let expected: ValidationResult = invalid_encoding("{}");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_keywords_ignore_non_strings_in_draft_7() {
+    let schema: JsonSchema = schema_in(
+        r#"{"contentEncoding":"base64","contentMediaType":"application/json"}"#,
+        SpecVersion::Draft07,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!(100));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_media_type_under_an_unknown_encoding_is_an_annotation_in_draft_7() {
+    let schema: JsonSchema = schema_in(
+        r#"{"contentEncoding":"base32","contentMediaType":"application/json"}"#,
+        SpecVersion::Draft07,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!("not json"));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_keywords_are_annotations_in_2020_12() {
+    let schema: JsonSchema =
+        schema(r#"{"contentEncoding":"base64","contentMediaType":"application/json"}"#);
+    let actual: ValidationResult = validate_usable(&schema, &json!("{:}"));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_keywords_are_annotations_in_2019_09() {
+    let schema: JsonSchema = schema_in(
+        r#"{"contentEncoding":"base64","contentMediaType":"application/json"}"#,
+        SpecVersion::Draft201909,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!("{:}"));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_assertion_setting_asserts_in_2020_12() {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .content_mode(ContentMode::Assertion)
+        .build();
+    let schema: JsonSchema = schema_with(r#"{"contentEncoding":"base64"}"#, &settings);
+    let actual: ValidationResult = validate_usable(&schema, &json!("%%%%"));
+    let expected: ValidationResult = invalid_encoding("%%%%");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_annotation_setting_ignores_in_draft_7() {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .default_spec_version(SpecVersion::Draft07)
+        .content_mode(ContentMode::Annotation)
+        .build();
+    let schema: JsonSchema = schema_with(r#"{"contentEncoding":"base64"}"#, &settings);
+    let actual: ValidationResult = validate_usable(&schema, &json!("%%%%"));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_keywords_are_not_keywords_in_draft_6() {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .default_spec_version(SpecVersion::Draft06)
+        .content_mode(ContentMode::Assertion)
+        .build();
+    let schema: JsonSchema = schema_with(r#"{"contentEncoding":"base64"}"#, &settings);
+    let actual: ValidationResult = validate_usable(&schema, &json!("%%%%"));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn content_encoding_in_raw_subschema_is_asserted_in_draft_7() {
+    let schema: JsonSchema = schema_in(
+        r#"{"not":{"not":{"contentEncoding":"base64"}}}"#,
+        SpecVersion::Draft07,
+    );
+    let actual: ValidationResult = validate_usable(&schema, &json!("%%%%"));
+    let expected: ValidationResult = Err(vec![ValidationError::new(
+        ValidationErrorKind::NotSchemaMatched,
+        root(),
+        kl("/not"),
+    )]);
+    assert_eq!(expected, actual);
+}
+
 // --- Display of the validation errors ---
 
 #[test]
@@ -2463,6 +2640,37 @@ fn display_invalid_format() {
     );
     let actual: String = error.to_string();
     let expected: String = "/d: string \"nope\" is not a valid date".to_string();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn display_invalid_content_encoding() {
+    let error: ValidationError = ValidationError::new(
+        ValidationErrorKind::InvalidContentEncoding {
+            encoding: "base64".to_string(),
+            value: "%%".to_string(),
+        },
+        root(),
+        kl("/contentEncoding"),
+    );
+    let actual: String = error.to_string();
+    let expected: String = "root: string \"%%\" is not valid base64".to_string();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn display_invalid_content_media_type() {
+    let error: ValidationError = ValidationError::new(
+        ValidationErrorKind::InvalidContentMediaType {
+            media_type: "application/json".to_string(),
+            value: "{:}".to_string(),
+        },
+        root(),
+        kl("/contentMediaType"),
+    );
+    let actual: String = error.to_string();
+    let expected: String =
+        "root: content of string \"{:}\" is not a valid application/json document".to_string();
     assert_eq!(expected, actual);
 }
 

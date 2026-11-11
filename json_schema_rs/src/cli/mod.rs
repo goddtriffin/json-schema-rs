@@ -7,8 +7,8 @@ mod validate;
 
 use clap::{Arg, ArgMatches, Command};
 use json_schema_rs::{
-    ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings, RefSiblings, SpecVersion,
-    UnknownSchemaUri,
+    ContentMode, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings, RefSiblings,
+    SpecVersion, UnknownSchemaUri,
 };
 use retrieval::RefRetrieval;
 use std::path::PathBuf;
@@ -45,7 +45,7 @@ const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
 ];
 
 /// JSON Schema Settings (`jss-`) arguments shared by every subcommand that reads a schema.
-fn jss_args() -> [Arg; 8] {
+fn jss_args() -> [Arg; 9] {
     [
         Arg::new("jss-disallow-unknown-fields")
             .long("jss-disallow-unknown-fields")
@@ -68,6 +68,11 @@ fn jss_args() -> [Arg; 8] {
             .value_name("MODE")
             .value_parser(["annotation", "assertion"])
             .help("JSON Schema Settings: check `format` (assertion) or only record it (annotation) (default: the draft's rule)"),
+        Arg::new("jss-content-mode")
+            .long("jss-content-mode")
+            .value_name("MODE")
+            .value_parser(["annotation", "assertion"])
+            .help("JSON Schema Settings: check `contentEncoding` (base64) and `contentMediaType` (JSON) (assertion) or only record them (annotation) (default: the draft's rule, assertion only in draft 7)"),
         Arg::new("jss-integer-semantics")
             .long("jss-integer-semantics")
             .value_name("RULE")
@@ -113,6 +118,12 @@ fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
         builder = builder.format_mode(match mode.as_str() {
             "assertion" => FormatMode::Assertion,
             _ => FormatMode::Annotation,
+        });
+    }
+    if let Some(mode) = matches.get_one::<String>("jss-content-mode") {
+        builder = builder.content_mode(match mode.as_str() {
+            "assertion" => ContentMode::Assertion,
+            _ => ContentMode::Annotation,
         });
     }
     if let Some(rule) = matches.get_one::<String>("jss-integer-semantics") {
