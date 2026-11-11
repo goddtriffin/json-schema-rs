@@ -61,7 +61,8 @@
 #   5. In-process peak heap + compat matrix (heap_profile, then isolated_heap_profile per feature).
 #   6. In-process timing (criterion: cross_tool, then the isolated bench per feature).
 #   7. CLI timing (hyperfine) + CLI compat matrix.
-#   8. Aggregate everything into the committed results.json + results.md.
+#   8. Our codegen's generated code size per fixture (code_size, #113).
+#   9. Aggregate everything into the committed results.json + results.md.
 #
 # Raw captures (RAW_DIR = json_schema_rs_benchmark/target/benchmark-raw):
 #   tools.tsv                         tool \t version \t language/runtime
@@ -650,7 +651,12 @@ main() {
     echo "==> CLI tier: hyperfine (warmup ${BENCH_CLI_WARMUP:-3}, runs ${BENCH_CLI_RUNS:-15})"
     run_cli_tier "${RAW_DIR}"
 
-    # 8. Aggregate.
+    # 8. Generated code size.
+    echo "==> generated code size"
+    measure_code_size "$(_jsonschemars_bin)" "${BUILD_DIR}/list_fixtures" "${BUILD_DIR}/code_size" \
+        "${RAW_DIR}/generated" "${RAW_DIR}/code_size.tsv"
+
+    # 9. Aggregate.
     echo "==> aggregating results"
     "${BUILD_DIR}/aggregate" \
         --input "${RAW_DIR}" \

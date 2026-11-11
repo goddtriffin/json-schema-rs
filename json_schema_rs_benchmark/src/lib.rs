@@ -20,6 +20,7 @@
 
 #[cfg(feature = "tools")]
 pub mod adapters;
+pub mod code_size;
 pub mod compare;
 pub mod fixtures;
 pub mod harness;
@@ -353,6 +354,8 @@ pub struct BenchmarkResults {
     pub measurements: Vec<Measurement>,
     /// Every compatibility entry, in both tiers.
     pub compat: Vec<CompatEntry>,
+    /// Our codegen's generated code size per fixture and settings (see [`code_size`]).
+    pub code_size: Vec<code_size::CodeSizeRow>,
 }
 
 /// Identifies one comparison cell: every tool measured for this key competes.
@@ -484,6 +487,8 @@ impl BenchmarkResults {
     /// Returns one message per dropped duplicate so the caller can report it.
     pub fn normalize(&mut self) -> Vec<String> {
         let mut warnings: Vec<String> = Vec::new();
+        self.code_size.sort();
+        self.code_size.dedup();
 
         self.measurements
             .sort_by(|a, b| measurement_order(a).cmp(&measurement_order(b)));
@@ -640,6 +645,15 @@ impl BenchmarkResults {
 
         out.push_str("\n## Compatibility\n\n");
         out.push_str(&self.render_compat());
+
+        out.push_str(
+            "\n## Generated code\n\nOur codegen's output per fixture (`jsonschemars generate rust`), \
+             against the schema and its resources (pretty-printed lines, stored bytes); see \
+             json_schema_rs_benchmark/README.md, *Generated code*.\n",
+        );
+        out.push_str(&code_size::code_size_markdown(&code_size::code_sizes(
+            &self.code_size,
+        )));
         out
     }
 
@@ -945,7 +959,7 @@ pub fn format_memory(median_bytes: f64, stddev_bytes: f64) -> String {
 }
 
 /// Escape a value for a Markdown table cell (`|` would split the cell).
-fn escape_cell(text: &str) -> String {
+pub(crate) fn escape_cell(text: &str) -> String {
     text.replace('|', "\\|")
 }
 
@@ -964,7 +978,7 @@ fn tsv_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 /// Split a TSV line into exactly `count` non-empty fields.
-fn exact_fields(line: &str, count: usize) -> Result<Vec<&str>, String> {
+pub(crate) fn exact_fields(line: &str, count: usize) -> Result<Vec<&str>, String> {
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() != count {
         return Err(format!(
@@ -984,7 +998,10 @@ fn operation_field(token: &str) -> Result<Operation, String> {
 }
 
 /// Run `parse_row` on every meaningful line, collecting rows and skipped lines.
-fn parse_tsv<T>(text: &str, parse_row: impl Fn(&str) -> Result<T, String>) -> TsvParse<T> {
+pub(crate) fn parse_tsv<T>(
+    text: &str,
+    parse_row: impl Fn(&str) -> Result<T, String>,
+) -> TsvParse<T> {
     let mut parsed: TsvParse<T> = TsvParse::default();
     for (line_number, line) in tsv_lines(text) {
         match parse_row(line) {
@@ -2223,7 +2240,10 @@ mod tests {
             "# Benchmark results\n\n{}\n## Category winners\n\nNo measurements.\n\n\
              ## In-process (library calls)\n\nNo measurements.\n\n\
              ## CLI (end to end)\n\nNo measurements.\n\n\
-             ## Compatibility\n\nNo compatibility entries.\n",
+             ## Compatibility\n\nNo compatibility entries.\n\n\
+             ## Generated code\n\nOur codegen's output per fixture (`jsonschemars generate \
+             rust`), against the schema and its resources (pretty-printed lines, stored bytes); \
+             see json_schema_rs_benchmark/README.md, *Generated code*.\n\nNot measured.\n",
             methodology()
         );
         let actual: String = results.to_markdown();
@@ -2235,6 +2255,25 @@ mod tests {
             version: version.to_owned(),
             runtime: "Rust (native)".to_owned(),
         }
+    }
+
+    /// The generated code size of the small run's golden: one fixture, default settings.
+    fn golden_code_size() -> Vec<code_size::CodeSizeRow> {
+        [
+            (code_size::SizeMetric::Lines, 10),
+            (code_size::SizeMetric::Bytes, 2048),
+            (code_size::SizeMetric::Types(code_size::TypeKind::Struct), 1),
+            (code_size::SizeMetric::SchemaLines, 5),
+            (code_size::SizeMetric::SchemaBytes, 512),
+        ]
+        .into_iter()
+        .map(|(metric, value)| code_size::CodeSizeRow {
+            fixture: "small/a".to_owned(),
+            settings: code_size::Settings::Default,
+            metric,
+            value,
+        })
+        .collect()
     }
 
     #[test]
@@ -2325,6 +2364,7 @@ mod tests {
                     CompatStatus::Fail("panicked | oneOf".to_owned()),
                 ),
             ],
+            code_size: golden_code_size(),
         };
         let expected: String = format!(
             "# Benchmark results\n\n{}{}",
@@ -2389,5 +2429,21 @@ mod tests {
 | Tier | Operation | Fixture | boon | jsonschemars | typify |
 |---|---|---|---|---|---|
 | CLI | validate (valid) | small/b | — | — | FAIL: panicked \| oneOf |
+
+## Generated code
+
+Our codegen's output per fixture (`jsonschemars generate rust`), against the schema and its resources (pretty-printed lines, stored bytes); see json_schema_rs_benchmark/README.md, *Generated code*.
+
+### Size, default settings
+
+| Fixture | Schema lines | Lines | × schema | KiB | × schema | Structs | Newtypes | Enums | Aliases |
+|---|---|---|---|---|---|---|---|---|---|
+| small/a | 5 | 10 | 2.0× | 2.0 | 4.0× | 1 | 0 | 0 | 0 |
+
+### Lines (KiB) by category, default settings
+
+| Fixture | Type definitions | Serde impls | Validation impls | Inherent impls | Embedded schema | Docs | Attributes | Other |
+|---|---|---|---|---|---|---|---|---|
+| small/a | 0 (0.0) | 0 (0.0) | 0 (0.0) | 0 (0.0) | 0 (0.0) | 0 (0.0) | 0 (0.0) | 0 (0.0) |
 ";
 }

@@ -24,3 +24,12 @@ Time and memory changes of our library versus `main`, from `make benchmark`'s re
 |---|---|---|---|---|---|
 
 </details>
+
+Generated code (exact, so every change counts): the report's summary line and why the output changed, or its one line if nothing changed.
+
+<details><summary>Generated code (N changes)</summary>
+
+| Fixture | Settings | Metric | `main` | This PR | Change |
+|---|---|---|---|---|---|
+
+</details>
