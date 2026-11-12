@@ -184,9 +184,52 @@ impl Evaluated {
     }
 }
 
+/// The branch each `anyOf` / `oneOf` chose for an object or array, keyed by the value's address
+/// and the union's: recorded under [`CompiledSchema::validate_recording_at`] so the trusted
+/// deserialization of generated types reads each union's variant without evaluating it again
+/// (#128). An entry is the union's own verdict, true wherever the union was evaluated.
+#[derive(Debug, Default)]
+pub(crate) struct UnionChoices(Vec<((usize, usize), u32)>);
+
+impl UnionChoices {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Sorts the entries by key for [`UnionChoices::get`], keeping each key's last entry: an
+    /// outer evaluation ends after an inner one at the same value.
+    fn finish(&mut self) {
+        // Stable, so equal keys stay in recording order and the last is kept.
+        self.0.sort_by_key(|(key, _)| *key);
+        self.0.reverse();
+        self.0.dedup_by_key(|(key, _)| *key);
+        self.0.reverse();
+    }
+
+    /// The branch recorded for `key`.
+    pub(crate) fn get(&self, key: (usize, usize)) -> Option<u32> {
+        self.0
+            .binary_search_by_key(&key, |(key, _)| *key)
+            .ok()
+            .map(|at| self.0[at].1)
+    }
+}
+
+/// The key of `union`'s choice for `instance` in [`UnionChoices`]: their addresses.
+pub(crate) fn choice_key(instance: &Value, union: &Union) -> (usize, usize) {
+    (std::ptr::from_ref(instance) as usize, union_address(union))
+}
+
+/// `union`'s half of a [`UnionChoices`] key.
+pub(crate) fn union_address(union: &Union) -> usize {
+    std::ptr::from_ref(union) as usize
+}
+
 /// Per-evaluation state.
 #[derive(Default)]
 struct Context {
+    /// Where union choices are recorded, when they are.
+    choices: Option<UnionChoices>,
     errors: Vec<ValidationError>,
     depth: usize,
     /// Schema resources entered, outermost first (only when a dynamic reference needs them).
@@ -382,6 +425,27 @@ impl CompiledSchema {
     /// [`CompiledSchema::with_entries`]): the errors of each node in order, each with keyword
     /// locations relative to its node, exactly as when it is the root. When the depth guard fires, the result is that
     /// one error.
+    /// [`CompiledSchema::validate_at`], also giving the branch each `anyOf` / `oneOf` chose for
+    /// each value it was evaluated on. Nothing is recorded when a dynamic reference is in play:
+    /// the same union at the same value can then decide differently in different scopes.
+    pub(crate) fn validate_recording_at(
+        &self,
+        nodes: &[NodeId],
+        instance: &Value,
+    ) -> (ValidationResult, UnionChoices) {
+        let mut cx: Context = Context {
+            choices: (!self.uses_dynamic_scope).then(UnionChoices::default),
+            ..Context::default()
+        };
+        let mut valid: bool = true;
+        for id in nodes {
+            valid &= self.eval::<true>(*id, instance, &Location::ROOT, &mut cx, None);
+        }
+        let mut choices: UnionChoices = cx.choices.take().unwrap_or_default();
+        choices.finish();
+        (Self::collected(valid, cx), choices)
+    }
+
     pub(crate) fn validate_at(&self, nodes: &[NodeId], instance: &Value) -> ValidationResult {
         let mut cx: Context = Context::default();
         let mut valid: bool = true;
@@ -1725,6 +1789,21 @@ impl CompiledSchema {
         })
     }
 
+    /// Records that `union` chose `branch` for `instance`, when choices are recorded. The last
+    /// evaluation wins: an outer one ends after any inner one at the same value.
+    /// Only objects and arrays: a generated union reads a recorded choice for no other value
+    /// (see `ValueRef`).
+    #[inline]
+    fn record_choice(union: &Union, instance: &Value, branch: usize, cx: &mut Context) {
+        if let Some(choices) = cx.choices.as_mut()
+            && matches!(instance, Value::Object(_) | Value::Array(_))
+        {
+            choices
+                .0
+                .push((choice_key(instance, union), index_u32(branch)));
+        }
+    }
+
     /// The one branch of `union` that `instance` can pass, when its discriminator decides it.
     fn pick(union: &Union, instance: &Value) -> Pick {
         match (&union.discriminator, instance) {
@@ -1755,6 +1834,7 @@ impl CompiledSchema {
                     cx,
                     evaluated.as_deref_mut(),
                 ) {
+                    Self::record_choice(union, at.instance, i, cx);
                     return true;
                 }
             }
@@ -1766,6 +1846,9 @@ impl CompiledSchema {
         for (i, node) in nodes.iter().enumerate() {
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
             if self.in_place::<false>(*node, at.instance, &branch, cx, evaluated.as_deref_mut()) {
+                if !matched {
+                    Self::record_choice(union, at.instance, i, cx);
+                }
                 matched = true;
                 // Every passing branch annotates, so keep going only when annotations are
                 // collected.
@@ -1800,6 +1883,7 @@ impl CompiledSchema {
                     if let Some(parent) = evaluated.as_deref_mut() {
                         parent.merge(&sub);
                     }
+                    Self::record_choice(union, at.instance, i, cx);
                     return true;
                 }
             }
@@ -1808,7 +1892,7 @@ impl CompiledSchema {
             }
         }
         let mut match_count: usize = 0;
-        let mut first: Option<Evaluated> = None;
+        let mut first: Option<(usize, Evaluated)> = None;
         for (i, node) in nodes.iter().enumerate() {
             let mut sub: Evaluated = Evaluated::default();
             let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
@@ -1816,7 +1900,7 @@ impl CompiledSchema {
             if self.eval::<false>(*node, at.instance, &branch, cx, wants) {
                 match_count += 1;
                 if first.is_none() {
-                    first = Some(sub);
+                    first = Some((i, sub));
                 }
                 // A second match decides the verdict; the error counts every match.
                 if match_count > 1 && !COLLECT {
@@ -1826,8 +1910,11 @@ impl CompiledSchema {
         }
         match match_count {
             1 => {
-                if let (Some(parent), Some(sub)) = (evaluated, first) {
-                    parent.merge(&sub);
+                if let Some((i, sub)) = first {
+                    if let Some(parent) = evaluated {
+                        parent.merge(&sub);
+                    }
+                    Self::record_choice(union, at.instance, i, cx);
                 }
                 true
             }

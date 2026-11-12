@@ -41,6 +41,6 @@ pub use validator::{
     BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder,
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError, FlagOutput,
     FormatCheck, NewtypeValue, Output, OutputFormat, OutputUnit, SchemaError, TypeValidationError,
-    TypeValidators, UnionMatch, ValidateError, ValidationError, ValidationErrorKind,
+    TypeValidators, UnionMatch, UnionVariants, ValidateError, ValidationError, ValidationErrorKind,
     ValidationResult, validate,
 };
