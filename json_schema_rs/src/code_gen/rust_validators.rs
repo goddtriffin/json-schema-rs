@@ -22,7 +22,7 @@ use super::embedded_prune::prune;
 use super::type_graph::{TypeGraph, TypeId, TypeNode, UnionKind, ValidationTarget};
 use super::{CodeGenError, CodeGenResult};
 use crate::json_schema::{
-    DialectSettings, JsonSchemaSettings, Registry, RegistryDocumentKind, SchemaRef,
+    DialectSettings, JsonSchemaSettings, Registry, RegistryDocumentKind, SchemaRef, Scope,
 };
 use crate::validator::{EmbeddedDocument, EmbeddedDocumentKind, TypeValidators};
 use serde_json::Value;
@@ -47,6 +47,10 @@ pub(crate) struct EmbeddedSet {
     documents: Vec<OwnedDocument>,
     /// How the URIs of documents read from files are made machine-independent.
     rebase: Arc<FileRebase>,
+    /// The root document's URI and, when the root declares `$id`, its resource's URI, without
+    /// fragment: entries resolve like a `$ref` written in the root, so an entry under either is
+    /// embedded as its fragment alone (`#/$defs/a`).
+    root_bases: Vec<String>,
 }
 
 /// Maps the `file:` URIs of documents (and of the schemas in them) to their path relative to the
@@ -143,10 +147,25 @@ pub(crate) fn embedded_sets(
                     })
                 })
                 .collect::<CodeGenResult<Vec<OwnedDocument>>>()?;
+            let document_scope: Scope = registry.root_scope();
+            let resource_scope: Scope = match registry.root() {
+                SchemaRef::Object(root) => registry.enter(document_scope, root),
+                SchemaRef::Bool(_) => document_scope,
+            };
+            let mut root_bases: Vec<String> = Vec::new();
+            for scope in [resource_scope, document_scope] {
+                if let Some(uri) = registry.location_uri(scope, &[]) {
+                    let base: String = uri.trim_end_matches('#').to_string();
+                    if !base.is_empty() && !root_bases.contains(&base) {
+                        root_bases.push(base);
+                    }
+                }
+            }
             Ok(EmbeddedSet {
                 settings,
                 documents,
                 rebase: Arc::clone(&rebase),
+                root_bases,
             })
         })
         .collect()
@@ -325,7 +344,8 @@ impl BufferValidators {
 /// `set` exactly as the generated static will (an error is a schema the validator cannot use),
 /// then makes the URIs machine-independent and prunes the documents to what the compiled schemas
 /// sit in. The first candidate that compiles to the same validator as the documents read is
-/// embedded: rebased and pruned, else rebased, else as read.
+/// embedded: rebased and pruned, else rebased, else as read; the first two each with the entries
+/// under the root resource written as their fragment alone, else in full.
 fn embedding(
     set: &EmbeddedSet,
     entries: &[Vec<String>],
@@ -370,22 +390,45 @@ fn embedding(
         clippy::redundant_closure_for_method_calls,
         reason = "the method path is bound to one `TypeValidators` lifetime; the closure is not"
     )]
-    let same = |documents: &[OwnedDocument]| -> bool {
-        compile(set.settings, documents, &rebased_entries, |v| v.compile()).is_ok_and(
+    let same = |documents: &[OwnedDocument], entries: &[Vec<String>]| -> bool {
+        compile(set.settings, documents, entries, |v| v.compile()).is_ok_and(
             |(compiled, compiled_entries)| {
                 compiled_entries == reference_entries
                     && reference.same_validation(&compiled, |uri| rebase(uri))
             },
         )
     };
-    if let Some(pruned) = pruned.filter(|pruned| same(pruned)) {
-        return Ok((pruned, rebased_entries));
+    let root_bases: Vec<String> = set.root_bases.iter().map(|base| rebase(base)).collect();
+    let short = |uri: &String| -> String {
+        root_bases
+            .iter()
+            .find_map(|base| {
+                uri.strip_prefix(base.as_str())
+                    .filter(|fragment| fragment.starts_with('#'))
+            })
+            .map_or_else(|| uri.clone(), str::to_string)
+    };
+    let short_entries: Vec<Vec<String>> = rebased_entries
+        .iter()
+        .map(|uris| uris.iter().map(short).collect())
+        .collect();
+    let with_entries = |documents: Vec<OwnedDocument>| {
+        if same(&documents, &short_entries) {
+            return Some((documents, short_entries.clone()));
+        }
+        log::debug!(
+            "json-schema-rs: the embedded entries resolve differently as fragments; embedding them in full"
+        );
+        same(&documents, &rebased_entries).then(|| (documents, rebased_entries.clone()))
+    };
+    if let Some(embedded) = pruned.and_then(with_entries) {
+        return Ok(embedded);
     }
     log::debug!(
         "json-schema-rs: the pruned embedded documents validate differently; embedding them whole"
     );
-    if same(&rebased) {
-        return Ok((rebased, rebased_entries));
+    if let Some(embedded) = with_entries(rebased) {
+        return Ok(embedded);
     }
     log::debug!(
         "json-schema-rs: the embedded documents validate differently under machine-independent URIs; embedding their URIs as read"
@@ -625,6 +668,11 @@ mod tests {
                 })
                 .collect(),
             rebase: Arc::new(FileRebase::new(documents.iter().map(|(uri, _)| *uri))),
+            root_bases: documents
+                .first()
+                .map(|(uri, _)| (*uri).to_string())
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -658,9 +706,34 @@ mod tests {
                 "https://example.com/root.json".to_string(),
                 json.to_string(),
             )],
-            vec![vec![
-                "https://example.com/root.json#/definitions/A/definitions/C".to_string(),
-            ]],
+            vec![vec!["#/definitions/A/definitions/C".to_string()]],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn entries_outside_the_root_resource_keep_their_full_uri() {
+        let a: &str = r#"{"$ref":"b.json"}"#;
+        let b: &str = r#"{"type":"string"}"#;
+        let actual = embedded(
+            &set(&[
+                ("https://example.com/a.json", a),
+                ("https://example.com/b.json", b),
+            ]),
+            &[
+                &["https://example.com/a.json#"],
+                &["https://example.com/b.json#"],
+            ],
+        );
+        let expected = (
+            vec![
+                ("https://example.com/a.json".to_string(), a.to_string()),
+                ("https://example.com/b.json".to_string(), b.to_string()),
+            ],
+            vec![
+                vec!["#".to_string()],
+                vec!["https://example.com/b.json#".to_string()],
+            ],
         );
         assert_eq!(expected, actual);
     }
@@ -705,7 +778,7 @@ mod tests {
                     r#"{"type":"string"}"#.to_string(),
                 ),
             ],
-            vec![vec!["file:///a.json#".to_string()]],
+            vec![vec!["#".to_string()]],
         );
         assert_eq!(expected, actual);
     }
