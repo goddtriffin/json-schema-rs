@@ -3395,3 +3395,115 @@ fn derive_union_payload_naming_self_refers_to_the_enum() {
     let actual: ReverseCodeGenResult = HoldsSelfUnion::json_schema();
     assert_eq!(expected, actual);
 }
+
+// --- Serde names: `rename_all` and raw identifiers ---
+
+#[derive(Debug, Clone, serde::Serialize, ToJsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CamelCaseFields {
+    pub log_level: String,
+    pub r#type: String,
+    #[serde(rename = "max-retries")]
+    pub max_retries: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_delay_ms: Option<u8>,
+}
+
+#[test]
+fn derive_struct_names_properties_by_rename_all_and_member_rename() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "logLevel": { "type": "string" },
+            "type": { "type": "string" },
+            "max-retries": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "retryDelayMs": { "type": "integer", "minimum": 0, "maximum": 255 }
+        },
+        "additionalProperties": false,
+        "required": ["logLevel", "type", "max-retries"]
+    })));
+    let actual: ReverseCodeGenResult = CamelCaseFields::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derived_rename_all_schema_accepts_the_serialized_value() {
+    let value: CamelCaseFields = CamelCaseFields {
+        log_level: "info".to_string(),
+        r#type: "batch".to_string(),
+        max_retries: 3,
+        retry_delay_ms: Some(10),
+    };
+    let schema: Schema = Schema::from(CamelCaseFields::json_schema().expect("schema"));
+    let instance: serde_json::Value = serde_json::to_value(&value).expect("serialize");
+    let expected: bool = true;
+    let actual: bool = json_schema_rs::validate(&schema, &instance).is_ok();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, ToJsonSchema)]
+struct RawIdentifierField {
+    pub r#type: String,
+}
+
+#[test]
+fn derive_raw_identifier_field_is_named_without_r_hash() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "type": { "type": "string" } },
+        "additionalProperties": false,
+        "required": ["type"]
+    })));
+    let actual: ReverseCodeGenResult = RawIdentifierField::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, ToJsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[expect(dead_code)]
+enum ScreamingLevel {
+    LogLevel,
+    Info,
+    #[serde(rename = "warn")]
+    Warn,
+}
+
+#[test]
+fn derive_enum_names_values_by_rename_all_and_member_rename() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "string",
+        "enum": ["LOG_LEVEL", "INFO", "warn"]
+    })));
+    let actual: ReverseCodeGenResult = ScreamingLevel::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, ToJsonSchema)]
+#[serde(rename_all = "kebab-case")]
+enum KebabSingle {
+    OnlyValue,
+}
+
+#[test]
+fn derive_single_variant_const_is_named_by_rename_all() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "string",
+        "const": "only-value"
+    })));
+    let actual: ReverseCodeGenResult = KebabSingle::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derived_enum_rename_all_schema_accepts_the_serialized_value() {
+    let schema: Schema = Schema::from(KebabSingle::json_schema().expect("schema"));
+    let instance: serde_json::Value =
+        serde_json::to_value(KebabSingle::OnlyValue).expect("serialize");
+    let expected: bool = true;
+    let actual: bool = json_schema_rs::validate(&schema, &instance).is_ok();
+    assert_eq!(expected, actual);
+}

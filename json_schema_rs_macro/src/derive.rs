@@ -1,7 +1,9 @@
 //! Derive macro for `ToJsonSchema`: builds JSON Schema from struct type and attributes.
 
+use crate::rename_rule::RenameRule;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::visit_mut::VisitMut;
 use syn::{
@@ -567,8 +569,9 @@ fn json_schema_flag(attrs: &[Attribute], flag: &str) -> SynResult<bool> {
     Ok(false)
 }
 
-/// Returns the JSON property key for a field: serde rename or field name.
-fn field_property_key(field: &Field) -> SynResult<String> {
+/// Returns the JSON property key for a field, as serde names it: its `rename`, else its name
+/// (without `r#`) under the container's `rename_all` rule.
+fn field_property_key(field: &Field, rule: Option<RenameRule>) -> SynResult<String> {
     if let Some(renamed) = serde_str(&field.attrs, "rename")? {
         return Ok(renamed);
     }
@@ -578,7 +581,8 @@ fn field_property_key(field: &Field) -> SynResult<String> {
             "ToJsonSchema derive only supports named struct fields",
         )
     })?;
-    Ok(ident.to_string())
+    let name: String = ident.unraw().to_string();
+    Ok(rule.map_or(name.clone(), |rule: RenameRule| rule.apply_to_field(&name)))
 }
 
 /// Returns true if the type is `Option<T>` (path is `Option` or `std::option::Option`).
@@ -622,9 +626,16 @@ fn btree_map_value_type(ty: &Type) -> Option<&Type> {
         .then_some(value)
 }
 
-/// Returns the serde name of an enum variant: serde rename or variant name.
-fn variant_external_name(variant: &Variant) -> SynResult<String> {
-    Ok(serde_str(&variant.attrs, "rename")?.unwrap_or_else(|| variant.ident.to_string()))
+/// Returns the serde name of an enum variant: its `rename`, else its name under the
+/// container's `rename_all` rule.
+fn variant_external_name(variant: &Variant, rule: Option<RenameRule>) -> SynResult<String> {
+    if let Some(renamed) = serde_str(&variant.attrs, "rename")? {
+        return Ok(renamed);
+    }
+    let name: String = variant.ident.unraw().to_string();
+    Ok(rule.map_or(name.clone(), |rule: RenameRule| {
+        rule.apply_to_variant(&name)
+    }))
 }
 
 /// The tokens of `#[json_schema(value = <JSON literal>)]` on an enum variant, if present.
@@ -751,6 +762,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     };
 
     let container: ContainerExprs = container_exprs(&input.attrs)?;
+    let rename_rule: Option<RenameRule> = RenameRule::from_attrs(&input.attrs)?;
     let ContainerExprs {
         title: title_expr,
         description: description_expr,
@@ -789,7 +801,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
             });
             continue;
         }
-        field_specs.push(field_spec(&name, field)?);
+        field_specs.push(field_spec(&name, field, rename_rule)?);
     }
 
     let additional_properties_expr: TokenStream2 = additional_properties_expr
@@ -827,10 +839,10 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
 ///
 /// An `Option` field is optional (one `Option` stripped) unless marked
 /// `#[json_schema(required)]`: then it is required and keeps `Option<T>`'s nullable schema.
-fn field_spec(name: &Ident, field: &Field) -> SynResult<TokenStream2> {
+fn field_spec(name: &Ident, field: &Field, rule: Option<RenameRule>) -> SynResult<TokenStream2> {
     let support: TokenStream2 = support();
     let ty: &Type = &field.ty;
-    let key: String = field_property_key(field)?;
+    let key: String = field_property_key(field, rule)?;
     let span = field
         .ident
         .as_ref()
@@ -1069,7 +1081,7 @@ fn expand_enum_to_json_schema(
         .all(|variant| matches!(variant.fields, Fields::Unit));
     let (body, generator_ident): (TokenStream2, TokenStream2) = if all_unit {
         (
-            value_enum_body(&container, data_enum)?,
+            value_enum_body(&container, data_enum, RenameRule::from_attrs(attrs)?)?,
             quote! { _generator },
         )
     } else {
@@ -1099,6 +1111,7 @@ fn expand_enum_to_json_schema(
 fn value_enum_body(
     container: &ContainerExprs,
     data_enum: &syn::DataEnum,
+    rule: Option<RenameRule>,
 ) -> SynResult<TokenStream2> {
     let support: TokenStream2 = support();
     let mut values: Vec<TokenStream2> = Vec::new();
@@ -1108,7 +1121,7 @@ fn value_enum_body(
             any_explicit_value = true;
             values.push(quote! { #support::EnumValue::Json(|| ::serde_json::json!(#tokens)) });
         } else {
-            let external: String = variant_external_name(variant)?;
+            let external: String = variant_external_name(variant, rule)?;
             let lit: LitStr = LitStr::new(&external, variant.ident.span());
             values.push(quote! { #support::EnumValue::Name(#lit) });
         }
