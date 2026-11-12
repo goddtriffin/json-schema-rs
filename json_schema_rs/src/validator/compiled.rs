@@ -10,6 +10,7 @@
 use super::content::Content;
 use super::ecma_regex;
 use super::format::Format;
+use super::property_table::PropertyTable;
 use super::simple_pattern::SimplePattern;
 use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
@@ -121,6 +122,11 @@ pub(crate) struct NodeId(u32);
 impl NodeId {
     pub(crate) const fn index(self) -> usize {
         self.0 as usize
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_index(index: usize) -> NodeId {
+        NodeId(u32::try_from(index).unwrap_or(u32::MAX))
     }
 }
 
@@ -313,9 +319,6 @@ pub(crate) struct KnownProperties {
     pub(crate) names: Option<PropertiesId>,
     pub(crate) patterns: Box<[RegexId]>,
 }
-
-/// A `properties` list: each name and its schema, sorted by name.
-pub(crate) type PropertyList = Box<[(Box<str>, NodeId)]>;
 
 /// A `dependentRequired` entry: a property and the names it requires when present.
 pub(crate) type Dependency = (Box<str>, Box<[Box<str>]>);
@@ -520,7 +523,7 @@ pub struct CompiledSchema {
     /// that needs them (a failing combinator's causes can report one list many times).
     pub(crate) enum_display: Box<[OnceLock<Box<[String]>>]>,
     /// `properties` lists, each sorted by name.
-    pub(crate) properties: Box<[PropertyList]>,
+    pub(crate) properties: Box<[PropertyTable]>,
     /// `$dynamicAnchor` targets: resource → (anchor name, node) for every anchor name a dynamic
     /// `$dynamicRef` uses.
     pub(crate) dynamic_anchors: HashMap<Scope, Vec<(Box<str>, NodeId)>>,
@@ -773,7 +776,7 @@ impl CompiledSchema {
         })
     }
 
-    pub(crate) fn property_list(&self, id: PropertiesId) -> &[(Box<str>, NodeId)] {
+    pub(crate) fn property_table(&self, id: PropertiesId) -> &PropertyTable {
         &self.properties[id.0 as usize]
     }
 
@@ -823,8 +826,8 @@ impl CompiledSchema {
         self.in_place_closure(*first, |node| {
             for keyword in &self.node(node).keywords {
                 if let Keyword::Properties(id) = keyword {
-                    for (name, child) in self.property_list(*id) {
-                        if self.pinned_strings(*child).is_some() {
+                    for (name, child) in self.property_table(*id).iter() {
+                        if self.pinned_strings(child).is_some() {
                             candidates.push(name);
                         }
                     }
@@ -902,10 +905,7 @@ impl CompiledSchema {
         self.in_place_closure(node, |node| {
             for keyword in &self.node(node).keywords {
                 if let Keyword::Properties(id) = keyword {
-                    let list: &[(Box<str>, NodeId)] = self.property_list(*id);
-                    if let Ok(at) = list.binary_search_by(|(name, _)| (**name).cmp(property)) {
-                        found.push(list[at].1);
-                    }
+                    found.extend(self.property_table(*id).get(property));
                 }
             }
         });
@@ -1093,7 +1093,7 @@ struct Compiler<'r, 'a> {
     enums: Vec<Box<[Value]>>,
     /// Interned `enum` lists by the hash of their values.
     enum_ids: IntMap<u64, Vec<EnumId>>,
-    properties: Vec<PropertyList>,
+    properties: Vec<PropertyTable>,
     /// [`DialectFacts`] of each dialect met so far.
     facts: Vec<(Dialect, DialectFacts)>,
     /// See [`maps_are_sorted`].
@@ -2066,7 +2066,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 reason = "fewer than u32::MAX lists fit in memory"
             )]
             let id: PropertiesId = PropertiesId(self.properties.len() as u32);
-            self.properties.push(properties.into_boxed_slice());
+            self.properties.push(PropertyTable::new(properties));
             id
         });
         if let Some(Source::Bool(false)) = parts.additional_properties {
