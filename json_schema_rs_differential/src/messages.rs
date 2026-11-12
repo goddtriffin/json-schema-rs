@@ -70,15 +70,6 @@ pub struct MessageCase {
 /// Largest fixture instance (compact JSON bytes) embedded in a message case.
 pub const MAX_EMBEDDED_INSTANCE_BYTES: usize = 2048;
 
-/// The strict parse settings used for our library (unknown keywords are parse errors), the
-/// same settings the suite integration test uses.
-#[must_use]
-pub fn strict_settings() -> JsonSchemaSettings {
-    JsonSchemaSettings::builder()
-        .disallow_unknown_fields(true)
-        .build()
-}
-
 fn guarded<F>(tool: &str, run: F) -> ToolOutput
 where
     F: FnOnce() -> ToolOutput,
@@ -98,20 +89,21 @@ fn output(tool: &str, outcome: ToolOutcome, messages: Vec<String>) -> ToolOutput
     }
 }
 
-/// Validate with our library (strict parse), capturing the `Display` of every error.
+/// Validate with our library (default settings), capturing the `Display` of every error.
 #[must_use]
 pub fn run_ours(schema: &Value, instance: &Value) -> ToolOutput {
     guarded(OURS_TOOL, || {
-        let parsed: Schema = match Schema::new_from_serde_value(schema, &strict_settings()) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                return output(
-                    OURS_TOOL,
-                    ToolOutcome::Error,
-                    vec![format!("schema rejected: {e}")],
-                );
-            }
-        };
+        let parsed: Schema =
+            match Schema::new_from_serde_value(schema, &JsonSchemaSettings::default()) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    return output(
+                        OURS_TOOL,
+                        ToolOutcome::Error,
+                        vec![format!("schema rejected: {e}")],
+                    );
+                }
+            };
         match validate(&parsed, instance) {
             Ok(()) => output(OURS_TOOL, ToolOutcome::Valid, Vec::new()),
             Err(ValidateError::Instance(errors)) => output(
@@ -233,14 +225,14 @@ pub fn run_all(schema: &Value, instance: &Value) -> Vec<ToolOutput> {
 }
 
 /// The curated suite case for one suite file: the first `valid: false` test whose schema our
-/// library strict-parses and whose instance we correctly reject. Optional-suite files and
+/// library parses and whose instance we correctly reject. Optional-suite files and
 /// files with no such test yield `None`.
 #[must_use]
 pub fn select_suite_case(draft: &str, file: &SuiteFile) -> Option<MessageCase> {
     if is_optional_path(&file.path) {
         return None;
     }
-    let settings: JsonSchemaSettings = strict_settings();
+    let settings: JsonSchemaSettings = JsonSchemaSettings::default();
     for case in &file.cases {
         let Ok(parsed) = Schema::new_from_serde_value(&case.schema, &settings) else {
             continue;
@@ -364,9 +356,16 @@ mod tests {
     }
 
     #[test]
-    fn ours_rejects_unknown_keyword() {
-        let expected: ToolOutcome = ToolOutcome::Error;
+    fn ours_ignores_unknown_keyword() {
+        let expected: ToolOutcome = ToolOutcome::Valid;
         let actual: ToolOutcome = run_ours(&json!({"notAKeyword": 1}), &json!(1)).outcome;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ours_errors_on_an_invalid_schema() {
+        let expected: ToolOutcome = ToolOutcome::Error;
+        let actual: ToolOutcome = run_ours(&json!({"minLength": -1}), &json!("a")).outcome;
         assert_eq!(expected, actual);
     }
 
