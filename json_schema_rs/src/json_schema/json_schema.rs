@@ -170,6 +170,15 @@ impl Schema {
         parse_value(Cow::Borrowed(value), settings)
     }
 
+    /// [`Schema::new_from_serde_value`] for a value the caller no longer needs: its strings move
+    /// into the model and its maps are freed as they are read, so the two are never both whole.
+    pub(crate) fn new_from_owned_serde_value(
+        value: serde_json::Value,
+        settings: &JsonSchemaSettings,
+    ) -> JsonSchemaParseResult<Self> {
+        parse_value(Cow::Owned(value), settings)
+    }
+
     /// Parses a JSON Schema document from a reader with the given settings.
     ///
     /// # Errors
