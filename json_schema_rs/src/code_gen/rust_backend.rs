@@ -10855,7 +10855,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#"],
+        &["#"],
     ],
 );
 
@@ -10896,7 +10896,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#"],
+        &["#"],
     ],
 );
 
@@ -10953,9 +10953,9 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#"],
-        &["json-schema:///#/anyOf/0"],
-        &["json-schema:///#/anyOf/1"],
+        &["#"],
+        &["#/anyOf/0"],
+        &["#/anyOf/1"],
     ],
 );
 
@@ -11042,11 +11042,11 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/x/oneOf/0"],
-        &["json-schema:///#/properties/x/oneOf/1"],
-        &["json-schema:///#/properties/x"],
-        &["json-schema:///#/properties/x/oneOf/2"],
-        &["json-schema:///#"],
+        &["#/properties/x/oneOf/0"],
+        &["#/properties/x/oneOf/1"],
+        &["#/properties/x"],
+        &["#/properties/x/oneOf/2"],
+        &["#"],
     ],
 );
 
@@ -11111,9 +11111,9 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/$defs/Item"],
-        &["json-schema:///#/properties/b"],
-        &["json-schema:///#"],
+        &["#/$defs/Item"],
+        &["#/properties/b"],
+        &["#"],
     ],
 );
 
@@ -11331,7 +11331,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/name"],
+        &["#/properties/name"],
     ],
 );
 
@@ -11393,8 +11393,8 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/billing"],
-        &["json-schema:///#/properties/shipping"],
+        &["#/properties/billing"],
+        &["#/properties/shipping"],
     ],
 );
 
@@ -11439,7 +11439,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/percent"],
+        &["#/properties/percent"],
     ],
 );
 
@@ -11487,7 +11487,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/ratio"],
+        &["#/properties/ratio"],
     ],
 );
 
@@ -11572,7 +11572,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/$defs/PostalCode"],
+        &["#/$defs/PostalCode"],
     ],
 );
 
@@ -11614,7 +11614,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#"],
+        &["#"],
     ],
 );
 
@@ -11690,8 +11690,8 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/label"],
-        &["json-schema:///#/properties/level"],
+        &["#/properties/label"],
+        &["#/properties/level"],
     ],
 );
 
@@ -11738,7 +11738,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/word"],
+        &["#/properties/word"],
     ],
 );
 
@@ -11790,7 +11790,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/email"],
+        &["#/properties/email"],
     ],
 );
 
@@ -11842,7 +11842,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/doc"],
+        &["#/properties/doc"],
     ],
 );
 
@@ -11921,8 +11921,8 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/name"],
-        &["json-schema:///#"],
+        &["#/properties/name"],
+        &["#"],
     ],
 );
 
@@ -11969,7 +11969,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#/properties/id"],
+        &["#/properties/id"],
     ],
 );
 

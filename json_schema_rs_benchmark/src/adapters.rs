@@ -770,7 +770,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["json-schema:///#"],
+        &["#"],
     ],
 );
 
@@ -844,7 +844,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
     ],
     &[
         &["https://example.com/name.json#"],
-        &["https://example.com/root.json#"],
+        &["#"],
     ],
 );
 

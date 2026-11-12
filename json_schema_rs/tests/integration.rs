@@ -1015,7 +1015,7 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["file:///schema.json#/properties/code"],
+        &["#/properties/code"],
     ],
 );
 
@@ -1082,8 +1082,8 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         },
     ],
     &[
-        &["file:///schema.json#/properties/name"],
-        &["file:///schema.json#"],
+        &["#/properties/name"],
+        &["#"],
     ],
 );
 
