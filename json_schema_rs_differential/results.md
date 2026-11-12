@@ -64,15 +64,15 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 39 | 0 | 0 | 0 | 39 |
-| `dotnet-jsonschema-net` | 87.18% | 34 | 0 | 0 | 5 | 39 |
-| `go-jsonschema` | 51.28% | 20 | 0 | 0 | 19 | 39 |
-| `java-networknt-json-schema-validator` | 87.18% | 34 | 0 | 0 | 5 | 39 |
-| `js-ajv` | 38.46% | 15 | 0 | 0 | 24 | 39 |
-| `js-hyperjump` | 87.18% | 34 | 0 | 0 | 5 | 39 |
-| `python-jsonschema` | 100.00% | 39 | 0 | 0 | 0 | 39 |
-| `rust-boon` | 100.00% | 39 | 0 | 0 | 0 | 39 |
-| `rust-jsonschema` | 100.00% | 39 | 0 | 0 | 0 | 39 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 43 | 0 | 0 | 0 | 43 |
+| `dotnet-jsonschema-net` | 88.37% | 38 | 0 | 0 | 5 | 43 |
+| `go-jsonschema` | 46.51% | 20 | 0 | 0 | 23 | 43 |
+| `java-networknt-json-schema-validator` | 88.37% | 38 | 0 | 0 | 5 | 43 |
+| `js-ajv` | 44.19% | 19 | 0 | 0 | 24 | 43 |
+| `js-hyperjump` | 88.37% | 38 | 0 | 0 | 5 | 43 |
+| `python-jsonschema` | 100.00% | 43 | 0 | 0 | 0 | 43 |
+| `rust-boon` | 100.00% | 43 | 0 | 0 | 0 | 43 |
+| `rust-jsonschema` | 100.00% | 43 | 0 | 0 | 0 | 43 |
 
 ## Unsupported features (suite)
 
@@ -515,6 +515,39 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 | `medium/package-json/instances/valid/minimal.json` | valid | valid | valid | errored | valid | errored | valid | valid | valid | valid |
 | `medium/package-json/instances/invalid/name-wrong-type.json` | invalid | invalid | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
 | `medium/package-json/instances/invalid/scripts-wrong-type.json` | invalid | invalid | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
+
+</details>
+
+**Disagreements with the competitor majority: 0**
+
+**Wrong vs. expected with no competitor consensus: 0**
+
+**Wrong vs. expected but agreeing with the competitor majority: 0**
+
+**Tests our harness errored on: 0**
+
+### medium/geojson
+
+| Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
+|---|---|---|---|---|---|---|
+| `localhost/json-schema-rs` (ours) | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `dotnet-jsonschema-net` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `go-jsonschema` | 0.00% | 0 | 0 | 0 | 4 | 4 |
+| `java-networknt-json-schema-validator` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `js-ajv` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `js-hyperjump` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `python-jsonschema` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `rust-boon` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+| `rust-jsonschema` | 100.00% | 4 | 0 | 0 | 0 | 4 |
+
+<details><summary>Verdict per instance</summary>
+
+| Instance | Expected | `localhost/json-schema-rs` (ours) | `dotnet-jsonschema-net` | `go-jsonschema` | `java-networknt-json-schema-validator` | `js-ajv` | `js-hyperjump` | `python-jsonschema` | `rust-boon` | `rust-jsonschema` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `medium/geojson/instances/valid/collection.json` | valid | valid | valid | errored | valid | valid | valid | valid | valid | valid |
+| `medium/geojson/instances/valid/empty.json` | valid | valid | valid | errored | valid | valid | valid | valid | valid | valid |
+| `medium/geojson/instances/invalid/bad-geometries.json` | invalid | invalid | invalid | errored | invalid | invalid | invalid | invalid | invalid | invalid |
+| `medium/geojson/instances/invalid/missing-geometry.json` | invalid | invalid | invalid | errored | invalid | invalid | invalid | invalid | invalid | invalid |
 
 </details>
 
@@ -2858,7 +2891,112 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading https://json.schemastore.org/ava.json
 ```
 
-### 55. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
+### 55. fixture medium/geojson — medium/geojson/instances/invalid/bad-geometries.json
+
+Schema: `medium/geojson/schema.json` (relative to the fixtures directory; not embedded).
+
+Instance: `medium/geojson/instances/invalid/bad-geometries.json` (relative to the fixtures directory; not embedded).
+
+**json-schema-rs**: invalid (3 message line(s))
+
+```text
+/features/7/geometry: instance does not match any of the 8 subschema(s)
+/features/30/geometry: instance does not match any of the 8 subschema(s)
+/features/57/geometry: instance does not match any of the 8 subschema(s)
+```
+
+**jsonschema**: invalid (3 message line(s))
+
+```text
+/features/7/geometry: {"coordinates":[0,0],"type":"Circle"} is not valid under any of the schemas listed in the 'oneOf' keyword
+/features/30/geometry: {"coordinates":[1.0],"type":"LineString"} is not valid under any of the schemas listed in the 'oneOf' keyword
+/features/57/geometry: {"coordinates":[[[0,0],[1,1],[0,0]]],"type":"Polygon"} is not valid under any of the schemas listed in the 'oneOf' keyword
+```
+
+**boon**: invalid (96 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '/features/7/geometry': oneOf failed, none matched
+  - at '/features/7/geometry': want null, but got object
+  - at '/features/7/geometry/type': value must be 'Point'
+  - at '/features/7/geometry': validation failed
+    - at '/features/7/geometry/coordinates': validation failed
+      - at '/features/7/geometry/coordinates/0': want array, but got number
+      - at '/features/7/geometry/coordinates/1': want array, but got number
+    - at '/features/7/geometry/type': value must be 'LineString'
+  - at '/features/7/geometry': validation failed
+    - at '/features/7/geometry/coordinates': validation failed
+      - at '/features/7/geometry/coordinates/0': want array, but got number
+      - at '/features/7/geometry/coordinates/1': want array, but got number
+    - at '/features/7/geometry/type': value must be 'Polygon'
+  - at '/features/7/geometry': validation failed
+    - at '/features/7/geometry/coordinates': validation failed
+      - at '/features/7/geometry/coordinates/0': want array, but got number
+      - at '/features/7/geometry/coordinates/1': want array, but got number
+    - at '/features/7/geometry/type': value must be 'MultiPoint'
+  - at '/features/7/geometry': validation failed
+    - at '/features/7/geometry/coordinates': validation failed
+      - at '/features/7/geometry/coordinates/0': want array, but got number
+      - at '/features/7/geometry/coordinates/1': want array, but got number
+    - at '/features/7/geometry/type': value must be 'MultiLineString'
+  - at '/features/7/geometry': validation failed
+    - at '/features/7/geometry/coordinates': validation failed
+      - at '/features/7/geometry/coordinates/0': want array, but got number
+      - at '/features/7/geometry/coordinates/1': want array, but got number
+    - at '/features/7/geometry/type': value must be 'MultiPolygon'
+  - at '/features/7/geometry': validation failed
+    - at '/features/7/geometry': missing properties 'geometries'
+    - at '/features/7/geometry/type': value must be 'GeometryCollection'
+- at '/features/30/geometry': oneOf failed, none matched
+  - at '/features/30/geometry': want null, but got object
+  - at '/features/30/geometry': validation failed
+    - at '/features/30/geometry/coordinates': minimum 2 items required, but got 1 items
+    - at '/features/30/geometry/type': value must be 'Point'
+  - at '/features/30/geometry/coordinates': validation failed
+    - at '/features/30/geometry/coordinates': minimum 2 items required, but got 1 items
+    - at '/features/30/geometry/coordinates/0': want array, but got number
+```
+_(56 more lines in results.json)_
+
+### 56. fixture medium/geojson — medium/geojson/instances/invalid/missing-geometry.json
+
+Schema: `medium/geojson/schema.json` (relative to the fixtures directory; not embedded).
+
+Instance (`medium/geojson/instances/invalid/missing-geometry.json`):
+
+```json
+{
+  "features": [
+    {
+      "properties": null,
+      "type": "Feature"
+    }
+  ],
+  "type": "FeatureCollection"
+}
+```
+
+**json-schema-rs**: invalid (1 message line(s))
+
+```text
+/features/0: missing required property "geometry"
+```
+
+**jsonschema**: invalid (1 message line(s))
+
+```text
+/features/0: "geometry" is a required property
+```
+
+**boon**: invalid (2 message line(s))
+
+```text
+jsonschema validation failed with mem://differential/schema.json#
+- at '/features/0': missing properties 'geometry'
+```
+
+### 57. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2902,7 +3040,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '/services/0/language': value must be one of 'rust', 'go', 'python', 'typescript', 'java', 'csharp'
 ```
 
-### 56. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
+### 58. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2950,7 +3088,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0': additionalProperties 'unexpectedField' not allowed
 ```
 
-### 57. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
+### 59. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2999,7 +3137,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0/resources/cpuMillicores': must be >=10, but got 5
 ```
 
-### 58. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
+### 60. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3030,7 +3168,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/version': value must be one of '2.1', 2.1
 ```
 
-### 59. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
+### 61. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3061,7 +3199,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'version'
 ```
 
-### 60. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
+### 62. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3093,7 +3231,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/workflows': want object, but got string
 ```
 
-### 61. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
+### 63. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3176,7 +3314,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 62. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
+### 64. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3261,7 +3399,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(183 more lines in results.json)_
 
-### 63. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
+### 65. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3338,7 +3476,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 64. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
+### 66. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3371,7 +3509,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': additionalProperties 'bogusTopLevel' not allowed
 ```
 
-### 65. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
+### 67. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3421,7 +3559,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/spec/replicas': want null or integer, but got string
 ```
 
-### 66. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
+### 68. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
