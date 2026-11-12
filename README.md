@@ -290,7 +290,8 @@ the spec either way.
 **Self-validating types (on by default).** Generated types enforce their whole schema
 through this library's validator, with the same errors (`ValidationError`s) it gives:
 every generated struct, enum and union gets `validate(&self)` and
-`TryFrom<serde_json::Value>` (validate, then deserialize), and an `anyOf` / `oneOf` union
+`TryFrom<serde_json::Value>` (validate, then deserialize), from one
+`json_schema_rs::self_validating!` line per type, and an `anyOf` / `oneOf` union
 deserializes into a variant whose branch the value satisfies (`oneOf`: exactly one branch,
 so a value two branches accept is an error), not the first variant serde can fill.
 Constraints the Rust type cannot express (`minLength`, `pattern`, `maximum`,

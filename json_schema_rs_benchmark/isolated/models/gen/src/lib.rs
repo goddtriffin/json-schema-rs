@@ -461,12 +461,30 @@ fn write_model(
 }
 
 /// Why root type `root` of `generated` has no `TryFrom<serde_json::Value>` (self-validating types
-/// give one to every struct, enum and union with a validation target; a root type alias or a
-/// constrained newtype has none), or `None` when it has one.
+/// give one to every struct, enum and union with a validation target, through
+/// `json_schema_rs::self_validating!` or, in older output, a written `impl`; a root type alias or
+/// a constrained newtype has none), or `None` when it has one.
 fn root_try_from(generated: &str, root: &str) -> Result<Option<&'static str>, String> {
     let file: syn::File = syn::parse_file(generated)
         .map_err(|e| format!("no model: generated source is not Rust: {e}"))?;
     let has_try_from: bool = file.items.iter().any(|item: &syn::Item| {
+        if let syn::Item::Macro(item) = item {
+            // `json_schema_rs::self_validating!(Root, VALIDATORS, 0);` implements it.
+            let first_argument: Option<String> = item
+                .mac
+                .tokens
+                .clone()
+                .into_iter()
+                .next()
+                .map(|token| token.to_string());
+            return item
+                .mac
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "self_validating")
+                && first_argument.as_deref() == Some(root);
+        }
         let syn::Item::Impl(item) = item else {
             return false;
         };

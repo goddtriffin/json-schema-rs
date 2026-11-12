@@ -417,32 +417,11 @@ fn compile<T>(
     compile(&TypeValidators::new(settings, &documents, &types)).map_err(Arc::new)
 }
 
-/// `validate` and `TryFrom<serde_json::Value>` for the item `name`.
+/// `validate` and `TryFrom<serde_json::Value>` for the item `name`: one
+/// `json_schema_rs::self_validating!` line.
 pub(crate) fn render_item_impls(name: &str, entry: &Entry) -> String {
     let Entry { validators, index } = entry;
-    format!(
-        "impl {name} {{
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {{
-        {validators}.validate_serialized({index}, self)
-    }}
-}}
-
-impl TryFrom<serde_json::Value> for {name} {{
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {{
-        {validators}.deserialize({index}, value)
-    }}
-}}
-
-"
-    )
+    format!("json_schema_rs::self_validating!({name}, {validators}, {index});\n\n")
 }
 
 /// One variant of a generated union.
