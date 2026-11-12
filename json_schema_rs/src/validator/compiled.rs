@@ -21,7 +21,7 @@ use crate::number;
 use serde::Deserialize;
 use serde_json::{Map, Number, Value};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, OnceLock};
@@ -359,6 +359,60 @@ pub(crate) struct Contains {
     pub(crate) min_keyword: Kw,
 }
 
+/// An `anyOf` / `oneOf`: its branches, and the property that tells them apart when there is one.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Union {
+    pub(crate) nodes: Box<[NodeId]>,
+    pub(crate) discriminator: Option<Discriminator>,
+}
+
+/// A property every branch of a union pins to its own strings (`const`, or an `enum` of
+/// strings), with no string shared by two branches. An object whose value there is one of those
+/// strings can pass only the branch that pins it: every other branch fails its `properties`.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Discriminator {
+    pub(crate) property: Box<str>,
+    /// Each pinned string and its branch, sorted by string.
+    pub(crate) values: Box<[(Box<str>, u32)]>,
+}
+
+impl Union {
+    fn boxed(nodes: Box<[NodeId]>) -> Box<Union> {
+        Box::new(Union {
+            nodes,
+            discriminator: None,
+        })
+    }
+}
+
+impl Discriminator {
+    /// The branch `object` can pass, by its value of the discriminator's property.
+    pub(crate) fn pick(&self, object: &Map<String, Value>) -> Pick {
+        let Some(Value::String(value)) = object.get(&*self.property) else {
+            return Pick::Undecided;
+        };
+        match self
+            .values
+            .binary_search_by(|(pinned, _)| (**pinned).cmp(value.as_str()))
+        {
+            Ok(at) => Pick::Branch(self.values[at].1 as usize),
+            Err(_) => Pick::NoBranch,
+        }
+    }
+}
+
+/// What a union's [`Discriminator`] says about an instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pick {
+    /// Only this branch can pass.
+    Branch(usize),
+    /// No branch can pass: the value is a string no branch pins.
+    NoBranch,
+    /// Every branch can: the instance is not an object, or the property is absent or not a
+    /// string.
+    Undecided,
+}
+
 /// One keyword, compiled. Rare or large payloads are boxed (or kept in a side table of the
 /// [`CompiledSchema`]), so the common keywords stay small.
 #[derive(Debug, PartialEq)]
@@ -438,8 +492,8 @@ pub(crate) enum Keyword {
     PrefixItems(Box<PrefixItems>),
     Contains(Box<Contains>),
     AllOf(Box<[NodeId]>),
-    AnyOf(Box<[NodeId]>),
-    OneOf(Box<[NodeId]>),
+    AnyOf(Box<Union>),
+    OneOf(Box<Union>),
     Not(NodeId),
     IfThenElse {
         condition: NodeId,
@@ -720,6 +774,145 @@ impl CompiledSchema {
 
     pub(crate) fn user_format(&self, id: UserFormatId) -> &UserFormat {
         &self.user_formats[id.0 as usize]
+    }
+
+    /// Gives every `anyOf` / `oneOf` of the nodes `unions` whose branches are told apart by
+    /// one property its [`Discriminator`].
+    fn add_discriminators(&mut self, unions: &[NodeId]) {
+        let mut found: Vec<(usize, usize, Discriminator)> = Vec::new();
+        for node in unions {
+            let node: usize = node.index();
+            for (at, keyword) in self.nodes[node].keywords.iter().enumerate() {
+                if let Keyword::AnyOf(union) | Keyword::OneOf(union) = keyword
+                    && let Some(discriminator) = self.discriminator(&union.nodes)
+                {
+                    found.push((node, at, discriminator));
+                }
+            }
+        }
+        for (node, at, discriminator) in found {
+            if let Keyword::AnyOf(union) | Keyword::OneOf(union) =
+                &mut self.nodes[node].keywords[at]
+            {
+                union.discriminator = Some(discriminator);
+            }
+        }
+    }
+
+    /// The property that tells `branches` apart, if one does: the first by name that every
+    /// branch pins to strings no other branch pins. Candidates come from the first branch; each
+    /// is dropped at the first branch that does not pin it or pins a string an earlier branch
+    /// pins, so a union no property tells apart is rejected after a few branches.
+    fn discriminator(&self, branches: &[NodeId]) -> Option<Discriminator> {
+        let (first, rest) = branches.split_first()?;
+        if rest.is_empty() {
+            return None;
+        }
+        let mut candidates: Vec<&str> = Vec::new();
+        self.in_place_closure(*first, |node| {
+            for keyword in &self.node(node).keywords {
+                if let Keyword::Properties(id) = keyword {
+                    for (name, child) in self.property_list(*id) {
+                        if self.pinned_strings(*child).is_some() {
+                            candidates.push(name);
+                        }
+                    }
+                }
+            }
+        });
+        candidates.sort_unstable();
+        candidates.dedup();
+        'candidates: for property in candidates {
+            let mut values: BTreeMap<&str, u32> = BTreeMap::new();
+            for (branch, node) in branches.iter().enumerate() {
+                let Some(strings) = self.pinned_values(*node, property) else {
+                    continue 'candidates;
+                };
+                let branch: u32 = u32::try_from(branch).ok()?;
+                for string in strings {
+                    if values.insert(string, branch).is_some() {
+                        continue 'candidates;
+                    }
+                }
+            }
+            let values: Box<[(Box<str>, u32)]> = values
+                .into_iter()
+                .map(|(string, branch)| (Box::from(string), branch))
+                .collect();
+            return Some(Discriminator {
+                property: property.into(),
+                values,
+            });
+        }
+        None
+    }
+
+    /// Calls `visit` on `node` and every schema it applies in place to the same instance
+    /// through `$ref` and `allOf`, each once.
+    fn in_place_closure(&self, node: NodeId, mut visit: impl FnMut(NodeId)) {
+        let applies_more =
+            |keyword: &Keyword| matches!(keyword, Keyword::Ref { .. } | Keyword::AllOf(_));
+        if !self.node(node).keywords.iter().any(applies_more) {
+            visit(node);
+            return;
+        }
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        let mut stack: Vec<NodeId> = vec![node];
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            visit(node);
+            for keyword in &self.node(node).keywords {
+                match keyword {
+                    Keyword::Ref { target, .. } => stack.push(*target),
+                    Keyword::AllOf(nodes) => stack.extend(nodes.iter().copied()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// The schemas `node`'s `properties` (and those it applies in place) give `property`.
+    fn property_schemas(&self, node: NodeId, property: &str) -> Vec<NodeId> {
+        let mut found: Vec<NodeId> = Vec::new();
+        self.in_place_closure(node, |node| {
+            for keyword in &self.node(node).keywords {
+                if let Keyword::Properties(id) = keyword {
+                    let list: &[(Box<str>, NodeId)] = self.property_list(*id);
+                    if let Ok(at) = list.binary_search_by(|(name, _)| (**name).cmp(property)) {
+                        found.push(list[at].1);
+                    }
+                }
+            }
+        });
+        found
+    }
+
+    /// The strings an object's value of `property` must be one of for `node` to pass, when
+    /// `node` pins it (every pin must hold, so they intersect).
+    fn pinned_values(&self, node: NodeId, property: &str) -> Option<BTreeSet<&str>> {
+        self.property_schemas(node, property)
+            .into_iter()
+            .filter_map(|child| self.pinned_strings(child))
+            .reduce(|known, strings| known.intersection(&strings).copied().collect())
+    }
+
+    /// The strings `node` accepts when it accepts only strings it lists: a `const` string or an
+    /// `enum` of strings, on the node itself.
+    fn pinned_strings(&self, node: NodeId) -> Option<BTreeSet<&str>> {
+        self.node(node)
+            .keywords
+            .iter()
+            .find_map(|keyword| match keyword {
+                Keyword::Const(value) => value.as_str().map(|s| BTreeSet::from([s])),
+                Keyword::Enum(id) => self
+                    .enum_values(*id)
+                    .iter()
+                    .map(Value::as_str)
+                    .collect::<Option<BTreeSet<&str>>>(),
+                _ => None,
+            })
     }
 }
 
@@ -1068,9 +1261,18 @@ impl<'r, 'a> Compiler<'r, 'a> {
     ) -> Result<CompiledSchema, CompileErrors> {
         let mut dynamic_anchors: HashMap<Scope, Vec<(Box<str>, NodeId)>> = HashMap::new();
         let mut recursive_anchors: HashMap<Scope, NodeId> = HashMap::new();
+        // Nodes with an `anyOf` / `oneOf`, found while each is fresh, for the discriminators.
+        let mut unions: Vec<NodeId> = Vec::new();
         loop {
             while let Some(pending) = self.queue.pop() {
                 let node: Node = self.compile_node(&pending);
+                if node
+                    .keywords
+                    .iter()
+                    .any(|k| matches!(k, Keyword::AnyOf(_) | Keyword::OneOf(_)))
+                {
+                    unions.push(pending.id);
+                }
                 self.nodes[pending.id.index()] = Some(node);
             }
             // Dynamic targets in every resource the compiled nodes sit in; compiling them can
@@ -1086,7 +1288,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
         inspect(&self);
         let nodes: Box<[Node]> = self.nodes.into_iter().flatten().collect();
-        Ok(CompiledSchema {
+        let mut compiled: CompiledSchema = CompiledSchema {
             nodes,
             root,
             patterns: self.patterns,
@@ -1099,7 +1301,9 @@ impl<'r, 'a> Compiler<'r, 'a> {
             sorted_maps: self.sorted_maps,
             target_uris: self.target_uris,
             user_formats: self.user_formats.into_boxed_slice(),
-        })
+        };
+        compiled.add_discriminators(&unions);
+        Ok(compiled)
     }
 
     /// Queues the dynamic-anchor and recursive-anchor targets of every resource compiled so far
@@ -1947,8 +2151,12 @@ impl<'r, 'a> Compiler<'r, 'a> {
         // In-place applicators.
         let lists: [ListKeyword<'_, 'r>; 3] = [
             ("allOf", &parts.all_of, Keyword::AllOf),
-            ("anyOf", &parts.any_of, Keyword::AnyOf),
-            ("oneOf", &parts.one_of, Keyword::OneOf),
+            ("anyOf", &parts.any_of, |nodes| {
+                Keyword::AnyOf(Union::boxed(nodes))
+            }),
+            ("oneOf", &parts.one_of, |nodes| {
+                Keyword::OneOf(Union::boxed(nodes))
+            }),
         ];
         for (keyword, list, make) in lists {
             if let Some(list) = list {
@@ -2144,6 +2352,90 @@ mod tests {
             position(&["$defs", "A", "properties", "b"]),
             position(&["$defs", "B"]),
         ];
+        assert_eq!(expected, actual);
+    }
+
+    /// The discriminator of the first `anyOf` / `oneOf` in `schema`'s root: its property and
+    /// each pinned string with its branch.
+    fn discriminator_of(schema: &Value) -> Option<(String, Vec<(String, u32)>)> {
+        let compiled: CompiledSchema = compile(schema);
+        compiled
+            .node(compiled.root)
+            .keywords
+            .iter()
+            .find_map(|keyword| match keyword {
+                Keyword::AnyOf(union) | Keyword::OneOf(union) => {
+                    union.discriminator.as_ref().map(|d| {
+                        (
+                            d.property.to_string(),
+                            d.values.iter().map(|(s, b)| (s.to_string(), *b)).collect(),
+                        )
+                    })
+                }
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn union_of_const_tags_has_a_discriminator() {
+        let expected: Option<(String, Vec<(String, u32)>)> = Some((
+            "kind".to_string(),
+            vec![("circle".to_string(), 1), ("square".to_string(), 0)],
+        ));
+        let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({"oneOf": [
+            {"properties": {"kind": {"const": "square"}, "side": {"type": "number"}}},
+            {"properties": {"kind": {"const": "circle"}}}
+        ]}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn union_discriminator_reads_enums_refs_and_all_of() {
+        let expected: Option<(String, Vec<(String, u32)>)> = Some((
+            "kind".to_string(),
+            vec![
+                ("a1".to_string(), 0),
+                ("a2".to_string(), 0),
+                ("b".to_string(), 1),
+            ],
+        ));
+        let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({
+            "anyOf": [{"$ref": "#/$defs/A"}, {"allOf": [{"properties": {"kind": {"const": "b"}}}]}],
+            "$defs": {"A": {"properties": {"kind": {"enum": ["a1", "a2"]}}}}
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn union_discriminator_skips_a_property_two_branches_share_a_value_of() {
+        let expected: Option<(String, Vec<(String, u32)>)> = Some((
+            "tag".to_string(),
+            vec![("x".to_string(), 0), ("y".to_string(), 1)],
+        ));
+        let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({"oneOf": [
+            {"properties": {"kind": {"const": "a"}, "tag": {"const": "x"}}},
+            {"properties": {"kind": {"const": "a"}, "tag": {"const": "y"}}}
+        ]}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn union_with_a_branch_that_pins_nothing_has_no_discriminator() {
+        let expected: Option<(String, Vec<(String, u32)>)> = None;
+        let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({"oneOf": [
+            {"properties": {"kind": {"const": "a"}}},
+            {"type": "string"}
+        ]}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn union_of_non_string_tags_has_no_discriminator() {
+        let expected: Option<(String, Vec<(String, u32)>)> = None;
+        let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({"oneOf": [
+            {"properties": {"kind": {"const": 1}}},
+            {"properties": {"kind": {"const": 2}}}
+        ]}));
         assert_eq!(expected, actual);
     }
 
