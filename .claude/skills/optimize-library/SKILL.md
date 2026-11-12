@@ -30,6 +30,8 @@ Follow the `contribution-guide` skill and CLAUDE.md as for any change. This skil
    - `make benchmark` and `make differential`, once, last.
 5. **Open the PR** with the *Performance* section from `target/benchmark-quick/report.md` (CLAUDE.md, *Pull request body*), then stop until it is merged.
 
+**When an idea does not pan out, try hard before abandoning it.** Find out why it failed (measure where the cost actually went), then try alternatives: the same idea in another layer, another data layout, the lenses below. Often the first attempt targets the wrong layer or carries one fixable mistake. Abandon the effort only when no alternative moves the needles; then close its issue with the measurements and record in design.md why the idea was rejected.
+
 Where what you learn goes (CLAUDE.md, *Where knowledge goes*):
 - **A finding that will not land in this PR** (it needs a design decision, is too big, or is another target): a GitHub issue with its numbers. Never tracker issues.
 - **Why the PR chose its design, or why an idea was rejected:** design.md, in the same PR.
