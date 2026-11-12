@@ -604,98 +604,6 @@ fn references(node: Node<'_>, dialect: Dialect) -> impl Iterator<Item = &str> {
     .flatten()
 }
 
-/// The node `value` is as a schema, if it is a schema object.
-fn raw_node(value: &Value) -> Option<Node<'_>> {
-    value.as_object().map(Node::Raw)
-}
-
-/// Pushes the subschemas of `value`, the value of a keyword at `position`.
-fn push_raw_children<'r>(
-    value: &'r Value,
-    position: SubschemaPosition,
-    out: &mut Vec<(Node<'r>, Vec<Segment<'r>>)>,
-) {
-    match (position, value) {
-        (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, Value::Object(_)) => {
-            out.extend(raw_node(value).map(|n| (n, vec![])));
-        }
-        (SubschemaPosition::Array | SubschemaPosition::SingleOrArray, Value::Array(items)) => {
-            for (i, item) in items.iter().enumerate() {
-                out.extend(raw_node(item).map(|n| (n, vec![Segment::Index(i)])));
-            }
-        }
-        (SubschemaPosition::Map, Value::Object(map)) => {
-            for (key, item) in map {
-                out.extend(raw_node(item).map(|n| (n, vec![Segment::Key(key)])));
-            }
-        }
-        _ => {}
-    }
-}
-
-/// The child schema nodes of `node`, each with the pointer segments from `node` to it.
-fn children<'r>(node: Node<'r>, dialect: Dialect) -> Vec<(Node<'r>, Vec<Segment<'r>>)> {
-    let mut out: Vec<(Node<'r>, Vec<Segment<'r>>)> = Vec::new();
-    let keywords: Vec<(&'r String, &'r Value)> = match node {
-        Node::Typed(schema) => {
-            let single = |key: &'r str, s: Option<&'r Schema>| {
-                s.and_then(Schema::as_object)
-                    .map(|o| (Node::Typed(o), vec![Segment::Key(key)]))
-            };
-            out.extend(single("items", schema.items.as_ref()));
-            out.extend(single(
-                "additionalProperties",
-                schema.additional_properties.as_ref(),
-            ));
-            let maps: [(&'r str, Option<&'r BTreeMap<String, Schema>>); 3] = [
-                ("properties", Some(&schema.properties)),
-                ("$defs", schema.defs.as_ref()),
-                ("definitions", schema.definitions.as_ref()),
-            ];
-            for (keyword, map) in maps {
-                for (key, s) in map.into_iter().flatten() {
-                    if let Some(o) = s.as_object() {
-                        out.push((
-                            Node::Typed(o),
-                            vec![Segment::Key(keyword), Segment::Key(key)],
-                        ));
-                    }
-                }
-            }
-            let lists: [(&'r str, Option<&'r Vec<Schema>>); 3] = [
-                ("allOf", schema.all_of.as_ref()),
-                ("anyOf", schema.any_of.as_ref()),
-                ("oneOf", schema.one_of.as_ref()),
-            ];
-            for (keyword, list) in lists {
-                for (i, s) in list.into_iter().flatten().enumerate() {
-                    if let Some(o) = s.as_object() {
-                        out.push((
-                            Node::Typed(o),
-                            vec![Segment::Key(keyword), Segment::Index(i)],
-                        ));
-                    }
-                }
-            }
-            schema.extensions.iter().collect()
-        }
-        Node::Raw(obj) => obj.iter().collect(),
-    };
-    // Raw values: only the keywords whose value holds subschemas in this dialect.
-    let mut raw: Vec<(Node<'r>, Vec<Segment<'r>>)> = Vec::new();
-    for (key, value) in keywords {
-        if let Some(position) = dialect.keyword(key).and_then(|k| k.subschemas) {
-            push_raw_children(value, position, &mut raw);
-            for (child, rest) in raw.drain(..) {
-                let mut segments: Vec<Segment<'r>> = vec![Segment::Key(key)];
-                segments.extend(rest);
-                out.push((child, segments));
-            }
-        }
-    }
-    out
-}
-
 /// What a walk along a JSON Pointer is looking at.
 #[derive(Debug, Clone, Copy)]
 enum Step<'r> {
@@ -1296,7 +1204,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
     ) {
         // Path arena: each entry is (parent entry, segment); materialised only when needed.
         let mut paths: Vec<(usize, Segment<'_>)> = Vec::new();
-        let mut stack: Vec<(Node<'_>, Option<usize>, Scope)> = vec![(node, None, parent_scope)];
+        let mut stack: DiscoveryStack<'_> = vec![(node, None, parent_scope)];
         let materialise = |paths: &Vec<(usize, Segment<'_>)>, at: Option<usize>| -> Vec<String> {
             let mut rev: Vec<String> = Vec::new();
             let mut cursor: Option<usize> = at;
@@ -1438,7 +1346,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
         let mut out: Vec<(usize, String)> = Vec::new();
         let mut changes = scope_changes.iter().peekable();
         let mut paths: Vec<(usize, Segment<'_>)> = Vec::new();
-        let mut stack: Vec<(Node<'_>, Option<usize>, Scope)> = vec![(node, None, document.scope)];
+        let mut stack: DiscoveryStack<'_> = vec![(node, None, document.scope)];
         let mut visit: usize = 0;
         while let Some((node, path, parent_scope)) = stack.pop() {
             visit += 1;
@@ -1716,25 +1624,147 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
     }
 }
 
-/// Pushes `node`'s children (in `dialect`, at `path` in the arena) onto a discovery stack, in
-/// reverse so they are visited in schema order.
+/// A discovery work stack: a node, its path-arena entry, and the scope of its parent.
+type DiscoveryStack<'r> = Vec<(Node<'r>, Option<usize>, Scope)>;
+
+/// Pushes `node`'s children (in `dialect`, at `path` in the arena) onto a discovery stack, so
+/// they are popped in schema order. Children go straight onto the stack, and the children of one
+/// keyword share that keyword's arena entry, so a node costs no allocation of its own (#56).
 fn push_children<'r>(
-    stack: &mut Vec<(Node<'r>, Option<usize>, Scope)>,
+    stack: &mut DiscoveryStack<'r>,
     paths: &mut Vec<(usize, Segment<'r>)>,
     node: Node<'r>,
     path: Option<usize>,
     scope: Scope,
     dialect: Dialect,
 ) {
-    let mut kids: Vec<(Node<'r>, Vec<Segment<'r>>)> = children(node, dialect);
-    kids.reverse();
-    for (child, segments) in kids {
-        let mut at: usize = path.unwrap_or(usize::MAX);
-        for segment in segments {
-            paths.push((at, segment));
-            at = paths.len() - 1;
+    let start: usize = stack.len();
+    let mut children: Children<'_, 'r> = Children {
+        stack,
+        paths,
+        scope,
+        parent: path.unwrap_or(usize::MAX),
+    };
+    match node {
+        Node::Typed(schema) => {
+            let singles: [(&'r str, Option<&'r Schema>); 2] = [
+                ("items", schema.items.as_ref()),
+                (
+                    "additionalProperties",
+                    schema.additional_properties.as_ref(),
+                ),
+            ];
+            for (keyword, single) in singles {
+                if let Some(o) = single.and_then(Schema::as_object) {
+                    children.single(keyword, Node::Typed(o));
+                }
+            }
+            let maps: [(&'r str, Option<&'r BTreeMap<String, Schema>>); 3] = [
+                ("properties", Some(&schema.properties)),
+                ("$defs", schema.defs.as_ref()),
+                ("definitions", schema.definitions.as_ref()),
+            ];
+            for (keyword, map) in maps {
+                children.nested(
+                    keyword,
+                    map.into_iter().flatten().filter_map(|(key, s)| {
+                        s.as_object().map(|o| (Segment::Key(key), Node::Typed(o)))
+                    }),
+                );
+            }
+            let lists: [(&'r str, Option<&'r Vec<Schema>>); 3] = [
+                ("allOf", schema.all_of.as_ref()),
+                ("anyOf", schema.any_of.as_ref()),
+                ("oneOf", schema.one_of.as_ref()),
+            ];
+            for (keyword, list) in lists {
+                children.nested(
+                    keyword,
+                    list.into_iter().flatten().enumerate().filter_map(|(i, s)| {
+                        s.as_object().map(|o| (Segment::Index(i), Node::Typed(o)))
+                    }),
+                );
+            }
+            children.keywords(&schema.extensions, dialect);
         }
-        stack.push((child, Some(at), scope));
+        Node::Raw(obj) => children.keywords(obj, dialect),
+    }
+    stack[start..].reverse();
+}
+
+/// The children [`push_children`] is pushing.
+struct Children<'s, 'r> {
+    stack: &'s mut DiscoveryStack<'r>,
+    paths: &'s mut Vec<(usize, Segment<'r>)>,
+    scope: Scope,
+    /// The node's arena entry (`usize::MAX` = the walk's root).
+    parent: usize,
+}
+
+impl<'r> Children<'_, 'r> {
+    fn entry(&mut self, parent: usize, segment: Segment<'r>) -> usize {
+        self.paths.push((parent, segment));
+        self.paths.len() - 1
+    }
+
+    /// The subschema that is the value of `keyword`.
+    fn single(&mut self, keyword: &'r str, child: Node<'r>) {
+        let at: usize = self.entry(self.parent, Segment::Key(keyword));
+        self.stack.push((child, Some(at), self.scope));
+    }
+
+    /// The subschemas in the value of `keyword`, each with its segment under it. The keyword's
+    /// entry is pushed once, and only when it has a child.
+    fn nested(&mut self, keyword: &'r str, items: impl Iterator<Item = (Segment<'r>, Node<'r>)>) {
+        let mut keyword_at: Option<usize> = None;
+        for (segment, child) in items {
+            let parent: usize = match keyword_at {
+                Some(at) => at,
+                None => *keyword_at.insert(self.entry(self.parent, Segment::Key(keyword))),
+            };
+            let at: usize = self.entry(parent, segment);
+            self.stack.push((child, Some(at), self.scope));
+        }
+    }
+
+    /// The subschemas in raw `keywords`: only the keywords whose value holds subschemas in
+    /// `dialect`.
+    fn keywords(
+        &mut self,
+        keywords: impl IntoIterator<Item = (&'r String, &'r Value)>,
+        dialect: Dialect,
+    ) {
+        for (key, value) in keywords {
+            if let Some(position) = dialect.keyword(key).and_then(|k| k.subschemas) {
+                self.raw(key, value, position);
+            }
+        }
+    }
+
+    /// The subschemas of `value`, the value of a keyword at `position`.
+    fn raw(&mut self, keyword: &'r str, value: &'r Value, position: SubschemaPosition) {
+        match (position, value) {
+            (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, Value::Object(o)) => {
+                self.single(keyword, Node::Raw(o));
+            }
+            (SubschemaPosition::Array | SubschemaPosition::SingleOrArray, Value::Array(items)) => {
+                self.nested(
+                    keyword,
+                    items.iter().enumerate().filter_map(|(i, item)| {
+                        item.as_object().map(|o| (Segment::Index(i), Node::Raw(o)))
+                    }),
+                );
+            }
+            (SubschemaPosition::Map, Value::Object(map)) => {
+                self.nested(
+                    keyword,
+                    map.iter().filter_map(|(key, item)| {
+                        item.as_object().map(|o| (Segment::Key(key), Node::Raw(o)))
+                    }),
+                );
+            }
+            _ => {}
+        }
     }
 }
 
