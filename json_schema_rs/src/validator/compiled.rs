@@ -14,8 +14,9 @@ use super::simple_pattern::SimplePattern;
 use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    ContentMode, Dialect, FormatMode, IntegerSemantics, JsonSchema, Keyword as DialectKeyword,
-    RefSiblings, Registry, Schema, SchemaRef, Scope, TypeSet, VocabularyKind,
+    ContentMode, Dialect, FormatMode, IntegerSemantics, JsonSchema, JsonType,
+    Keyword as DialectKeyword, RefSiblings, Registry, Schema, SchemaRef, Scope, TypeSet,
+    VocabularyKind,
 };
 use crate::number;
 use serde::Deserialize;
@@ -366,9 +367,10 @@ pub(crate) struct Union {
     pub(crate) discriminator: Option<Discriminator>,
 }
 
-/// A property every branch of a union pins to its own strings (`const`, or an `enum` of
-/// strings), with no string shared by two branches. An object whose value there is one of those
-/// strings can pass only the branch that pins it: every other branch fails its `properties`.
+/// A property every branch of a union that can accept an object pins to its own strings
+/// (`const`, or an `enum` of strings), with no string shared by two branches. An object whose
+/// value there is one of those strings can pass only the branch that pins it: every other branch
+/// fails its `properties` or its `type` (a `{"type": "null"}` branch of a nullable union).
 #[derive(Debug, PartialEq)]
 pub(crate) struct Discriminator {
     pub(crate) property: Box<str>,
@@ -804,10 +806,16 @@ impl CompiledSchema {
     /// is dropped at the first branch that does not pin it or pins a string an earlier branch
     /// pins, so a union no property tells apart is rejected after a few branches.
     fn discriminator(&self, branches: &[NodeId]) -> Option<Discriminator> {
-        let (first, rest) = branches.split_first()?;
-        if rest.is_empty() {
+        // Branches that reject every object need no pin: an object never passes them.
+        let open: Vec<(usize, NodeId)> = branches
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, node)| !self.rejects_objects(*node))
+            .collect();
+        let [(_, first), _, ..] = open.as_slice() else {
             return None;
-        }
+        };
         let mut candidates: Vec<&str> = Vec::new();
         self.in_place_closure(*first, |node| {
             for keyword in &self.node(node).keywords {
@@ -824,11 +832,11 @@ impl CompiledSchema {
         candidates.dedup();
         'candidates: for property in candidates {
             let mut values: BTreeMap<&str, u32> = BTreeMap::new();
-            for (branch, node) in branches.iter().enumerate() {
+            for (branch, node) in &open {
                 let Some(strings) = self.pinned_values(*node, property) else {
                     continue 'candidates;
                 };
-                let branch: u32 = u32::try_from(branch).ok()?;
+                let branch: u32 = u32::try_from(*branch).ok()?;
                 for string in strings {
                     if values.insert(string, branch).is_some() {
                         continue 'candidates;
@@ -845,6 +853,18 @@ impl CompiledSchema {
             });
         }
         None
+    }
+
+    /// Whether `node` rejects every object by its own `type` (or is `false`).
+    fn rejects_objects(&self, node: NodeId) -> bool {
+        self.node(node)
+            .keywords
+            .iter()
+            .any(|keyword| match keyword {
+                Keyword::False => true,
+                Keyword::Type { types, .. } => !types.contains(JsonType::Object),
+                _ => false,
+            })
     }
 
     /// Calls `visit` on `node` and every schema it applies in place to the same instance
@@ -2425,6 +2445,30 @@ mod tests {
         let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({"oneOf": [
             {"properties": {"kind": {"const": "a"}}},
             {"type": "string"}
+        ]}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn union_discriminator_skips_branches_that_reject_objects() {
+        let expected: Option<(String, Vec<(String, u32)>)> = Some((
+            "type".to_string(),
+            vec![("LineString".to_string(), 2), ("Point".to_string(), 1)],
+        ));
+        let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({"oneOf": [
+            {"type": "null"},
+            {"type": "object", "properties": {"type": {"enum": ["Point"]}}},
+            {"type": "object", "properties": {"type": {"enum": ["LineString"]}}}
+        ]}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn nullable_union_of_one_object_has_no_discriminator() {
+        let expected: Option<(String, Vec<(String, u32)>)> = None;
+        let actual: Option<(String, Vec<(String, u32)>)> = discriminator_of(&json!({"oneOf": [
+            {"type": "null"},
+            {"properties": {"kind": {"const": "a"}}}
         ]}));
         assert_eq!(expected, actual);
     }

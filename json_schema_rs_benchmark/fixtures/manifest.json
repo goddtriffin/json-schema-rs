@@ -136,6 +136,23 @@
     ]
   },
   {
+    "id": "medium/geojson",
+    "size": "medium",
+    "schema": "medium/geojson/schema.json",
+    "valid_instances": [
+      "medium/geojson/instances/valid/collection.json",
+      "medium/geojson/instances/valid/empty.json"
+    ],
+    "invalid_instances": [
+      "medium/geojson/instances/invalid/bad-geometries.json",
+      "medium/geojson/instances/invalid/missing-geometry.json"
+    ],
+    "apples_to_apples": true,
+    "source": "https://geojson.org/schema/FeatureCollection.json",
+    "license": "MIT (geojson/schema)",
+    "notes": "Official GeoJSON FeatureCollection schema (draft-07): each feature's geometry is a oneOf of null and 7 geometry types tagged by an enum `type` (a GeometryCollection nests another such union). The large tagged-union fixture; instances are 240 deterministic features of every geometry type."
+  },
+  {
     "id": "large/api-catalog",
     "size": "large",
     "schema": "large/api-catalog/schema.json",
