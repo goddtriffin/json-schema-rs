@@ -606,11 +606,11 @@ mod tests {
     #[test]
     fn whole_case_skip_expands_to_every_test() {
         let report: BowtieReport = report_with(&[
-            r#"{"seq": 1, "implementation": "a", "expected": [true, false], "skipped": true, "message": "unsupported keyword \"minimum\" at #"}"#,
+            r#"{"seq": 1, "implementation": "a", "expected": [true, false], "skipped": true, "message": "unsupported schema: invalid regex"}"#,
         ])
         .expect("valid report");
         let skipped: Verdict = Verdict::Skipped {
-            message: "unsupported keyword \"minimum\" at #".to_string(),
+            message: "unsupported schema: invalid regex".to_string(),
         };
         let expected: Vec<Verdict> = vec![skipped.clone(), skipped];
         let actual: Vec<Verdict> = verdicts_of(&report, "a");

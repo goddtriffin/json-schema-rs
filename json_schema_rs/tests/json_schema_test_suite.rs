@@ -225,8 +225,9 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
         if files.is_empty() {
             return Err(format!("no suite files under {}", draft_dir.display()));
         }
+        // Default settings, as consumers run: the suite uses keys a draft does not define
+        // (`$comment` in draft 4) to check that they are ignored, which strict parsing rejects.
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
-            .disallow_unknown_fields(true)
             .default_spec_version(spec_version)
             .build();
         // The suite's `optional/format/` tests are written for implementations that assert

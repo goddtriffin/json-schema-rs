@@ -164,9 +164,9 @@ draft 7, which allows it, and annotation-only in 2019-09/2020-12, which must not
 content by default (override with `--jss-content-mode`); other encodings and media types,
 and `contentSchema`, are annotations. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
-Schema Test Suite runs as a gate with strict parsing; the cases it still fails
-(schemas using a key their draft does not define, numbers beyond 64 bits) are listed in `json_schema_rs/tests/suite_xfail.json`
-(`suite_xfail_arbitrary_precision.json` with the `arbitrary-precision` feature).
+Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
+bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),
+which the `arbitrary-precision` feature passes.
 
 **Numbers** are compared exactly, never with an epsilon. By default every integer
 within 64 bits (`u64` / `i64`) is exact; beyond that `serde_json` reads a number as the

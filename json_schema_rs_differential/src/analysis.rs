@@ -607,7 +607,7 @@ fn our_stats(tally: Tally, findings: &OurFindings) -> OurStats {
 /// One reason our harness skipped tests, with its impact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnsupportedReason {
-    /// The normalized reason, e.g. `keyword "dependentSchemas"` or `schema: boolean schema`.
+    /// The normalized reason, e.g. `schema: boolean schema`.
     pub reason: String,
     /// Skipped tests attributed to the reason.
     pub tests: u64,
@@ -619,20 +619,11 @@ pub struct UnsupportedReason {
 
 /// Normalize one skip message from our harness to a grouping reason.
 ///
-/// The harness contract: `unsupported keyword "<key>" at <path>` (grouped by keyword, the path
-/// is dropped), `unsupported schema: <detail>` (grouped by detail), and `unsupported $ref:
+/// The harness contract: `unsupported schema: <detail>` (grouped by detail) and `unsupported $ref:
 /// "<ref>": <reason>` (grouped by reason, the reference is dropped). Anything else is kept
 /// verbatim under `unrecognized skip: `.
 #[must_use]
 pub fn skip_reason(message: &str) -> String {
-    if let Some(rest) = message.strip_prefix("unsupported keyword ") {
-        if let Some(quoted) = rest.strip_prefix('"')
-            && let Some(end) = quoted.find('"')
-        {
-            return format!("keyword \"{}\"", &quoted[..end]);
-        }
-        return format!("keyword {rest}");
-    }
     if let Some(detail) = message.strip_prefix("unsupported schema: ") {
         return format!("schema: {detail}");
     }
@@ -1282,9 +1273,6 @@ mod tests {
     #[test]
     fn skip_reason_normalizes_contract_messages() {
         let expected: Vec<String> = vec![
-            "keyword \"dependentSchemas\"".to_string(),
-            "keyword unquoted at #".to_string(),
-            "keyword \"broken".to_string(),
             "schema: boolean schema".to_string(),
             "$ref: remote reference http://x".to_string(),
             "$ref: remote references are not supported".to_string(),
@@ -1292,9 +1280,6 @@ mod tests {
             "unrecognized skip: nope".to_string(),
         ];
         let actual: Vec<String> = [
-            "unsupported keyword \"dependentSchemas\" at /properties/a",
-            "unsupported keyword unquoted at #",
-            "unsupported keyword \"broken",
             "unsupported schema: boolean schema",
             "unsupported $ref: remote reference http://x",
             "unsupported $ref: \"http://localhost:1234/a.json\": remote references are not supported",
@@ -1314,19 +1299,19 @@ mod tests {
                 "draft7",
                 "1",
                 Some(true),
-                &[(OURS, skipped("unsupported keyword \"if\" at #"))],
+                &[(OURS, skipped("unsupported schema: invalid regex"))],
             ),
             record(
                 "draft7",
                 "1",
                 Some(true),
-                &[(OURS, skipped("unsupported keyword \"if\" at #"))],
+                &[(OURS, skipped("unsupported schema: invalid regex"))],
             ),
             record(
                 "draft2020-12",
                 "4",
                 Some(true),
-                &[(OURS, skipped("unsupported keyword \"if\" at #/then"))],
+                &[(OURS, skipped("unsupported schema: invalid regex"))],
             ),
             record(
                 "draft7",
@@ -1344,7 +1329,7 @@ mod tests {
         ];
         let expected: Vec<UnsupportedReason> = vec![
             UnsupportedReason {
-                reason: "keyword \"if\"".to_string(),
+                reason: "schema: invalid regex".to_string(),
                 tests: 3,
                 cases: 2,
                 by_group: BTreeMap::from([
