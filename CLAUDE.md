@@ -83,6 +83,15 @@ Backwards compatibility is **not** a priority and **never** a justification (req
    Schema draft requires for schema authors (draft-04 `id`, `dependencies` in 2020-12,
    `definitions`) is spec behaviour and stays.
 
+## Where knowledge goes
+
+Every piece of knowledge has one home. Never record it anywhere else.
+
+- **Something to do** (a bug, a finding, a measured opportunity, a follow-up that cannot land in the current PR) → a **GitHub issue**, with its evidence and numbers.
+- **Why something is the way it is** (a decision, a rejected alternative, a trade-off, a spec divergence) → **design.md**, written when the PR that decides it lands.
+- **How to work** (process, rules, checklists) → CLAUDE.md and the skills. They hold only advice that stays true, never findings, numbers or backlogs: those drift.
+- **What the code does** → the code itself. Docs and comments never restate it.
+
 ## Testing and lint standards (summary; contribution-guide is authoritative)
 
 - One assertion per test; named `expected`/`actual` with explicit type annotations; compare

@@ -85,6 +85,15 @@ Always drive repo workflows through their **Makefile target** rather than a manu
 
 Every PR that changes what our consumers run (the library, the CLI, the macros, their output or their dependencies; see CLAUDE.md, requirement 3) runs `make differential` once, as the final step together with `make benchmark` (after correctness is confirmed), and commits the refreshed `json_schema_rs_differential/results.{json,md}`. `make benchmark` is the quick mode: our library and CLI on `main` and on the working tree, measured in the same session, printing the PR body's *Performance* section without changing any committed file. `make benchmark_full` (every tool, about an hour) refreshes the committed `json_schema_rs_benchmark/results.{json,md}`; a PR runs it as well when it changes the benchmark harness, a competitor, a fixture, or the derive or reverse codegen (see CLAUDE.md, requirement 3). It runs our validator next to other implementations through Bowtie, so the diff shows changes in coverage (unsupported keywords), correctness, and disagreements with the majority; the PR body's *JSON Schema spec parity* section summarises that change (see CLAUDE.md, *Pull request body*). See `json_schema_rs_differential/README.md` for prerequisites (bowtie, Docker, `make vendor_test_suite`).
 
+### Where knowledge goes
+
+- A finding, bug or follow-up that will not land in the current PR becomes a **GitHub issue** with its evidence.
+- The reason for a decision (including a rejected alternative) goes in **design.md** in the PR that makes it.
+- CLAUDE.md and the skills hold only lasting process, never findings or numbers.
+- The code is the source of truth for what it does.
+
+See CLAUDE.md, *Where knowledge goes*.
+
 ### Performance work
 
 For any speed, memory or generated-code-size work, use the **optimize-library** skill: how to find a target by measuring, the correctness and measurement rules, and the data-oriented lenses.
