@@ -1034,37 +1034,57 @@ struct RenderedField {
 /// The `#[serde(rename_all = "...")]` rule for members named `(Rust name, serde name)`, if one
 /// saves lines: the rule leaving the fewest members needing their own `rename` (the first in
 /// serde's order on a tie), when that count plus the `rename_all` itself is below the renames
-/// needed without a rule. `apply` is the rule's conversion for the member kind
-/// ([`RenameRule::apply_to_field`] or [`RenameRule::apply_to_variant`]).
+/// needed without a rule. `write` is the rule's conversion for the member kind
+/// ([`RenameRule::write_field`] or [`RenameRule::write_variant`]).
+///
+/// Every struct and enum passes through here, so it stays cheap: a type with fewer than two
+/// renames cannot gain and is skipped without converting a name, a rule stops counting once it
+/// cannot win, and every conversion reuses one buffer.
 fn rename_all_rule(
     members: &[(&str, &str)],
-    apply: fn(RenameRule, &str) -> String,
+    write: fn(RenameRule, &str, &mut String),
 ) -> Option<RenameRule> {
-    let renames = |rule: Option<RenameRule>| -> usize {
-        members
-            .iter()
-            .filter(|(name, key)| {
-                rule.map_or_else(|| (*name).to_string(), |rule: RenameRule| apply(rule, name))
-                    != *key
-            })
-            .count()
-    };
-    let without: usize = renames(None);
-    RenameRule::ALL
-        .into_iter()
-        .map(|rule: RenameRule| (renames(Some(rule)), rule))
-        .min_by_key(|(count, _)| *count)
-        .filter(|(count, _)| count + 1 < without)
-        .map(|(_, rule)| rule)
+    let without: usize = members.iter().filter(|(name, key)| name != key).count();
+    if without < 2 {
+        return None;
+    }
+    let mut buffer: String = String::new();
+    // The best cost so far, in lines: own renames, plus one for the `rename_all`.
+    let mut best: (usize, Option<RenameRule>) = (without, None);
+    for rule in RenameRule::ALL {
+        let mut cost: usize = 1;
+        for (name, key) in members {
+            write(rule, name, &mut buffer);
+            if buffer != *key {
+                cost += 1;
+                if cost >= best.0 {
+                    break;
+                }
+            }
+        }
+        if cost < best.0 {
+            best = (cost, Some(rule));
+        }
+    }
+    best.1
 }
 
-/// The serde name a member gets without its own `rename`: `name` under `rule`, if any.
-fn serde_name(
+/// Whether a member named `name` needs its own `rename` to be read as `key`: its serde name
+/// (`name` under `rule`, if any, converted by `write` into `buffer`) is not `key`.
+fn needs_rename(
     rule: Option<RenameRule>,
-    apply: fn(RenameRule, &str) -> String,
+    write: fn(RenameRule, &str, &mut String),
     name: &str,
-) -> String {
-    rule.map_or_else(|| name.to_string(), |rule: RenameRule| apply(rule, name))
+    key: &str,
+    buffer: &mut String,
+) -> bool {
+    match rule {
+        None => name != key,
+        Some(rule) => {
+            write(rule, name, buffer);
+            buffer != key
+        }
+    }
 }
 
 /// Renders the fields of `object`, with the container's `rename_all` rule (see
@@ -1091,12 +1111,19 @@ fn render_fields(
         .zip(&names)
         .map(|(field, name)| (name.as_str(), field.json_key.as_str()))
         .collect();
-    let rule: Option<RenameRule> = rename_all_rule(&members, RenameRule::apply_to_field);
+    let rule: Option<RenameRule> = rename_all_rule(&members, RenameRule::write_field);
+    let mut buffer: String = String::new();
     let mut out: Vec<RenderedField> = Vec::new();
     for (field, name) in object.fields.iter().zip(&names) {
-        let serde_key: String = serde_name(rule, RenameRule::apply_to_field, name);
+        let rename: bool = needs_rename(
+            rule,
+            RenameRule::write_field,
+            name,
+            &field.json_key,
+            &mut buffer,
+        );
         out.push(render_field(
-            graph, plan, home, field, name, &serde_key, imports,
+            graph, plan, home, field, name, rename, imports,
         ));
     }
     if let Some(additional) = object.additional {
@@ -1256,14 +1283,14 @@ fn integer_serde_args(
     }
 }
 
-/// Renders one field named `name`, which serde reads as `serde_key` without a `rename`.
+/// Renders one field named `name`, with its own `rename` when `rename` (see [`needs_rename`]).
 fn render_field(
     graph: &TypeGraph,
     plan: &Plan,
     home: Home,
     field: &Field,
     name: &str,
-    serde_key: &str,
+    rename: bool,
     imports: &mut Imports,
 ) -> RenderedField {
     let (nullable, value_id): (bool, TypeId) = match graph.node(field.ty) {
@@ -1290,7 +1317,7 @@ fn render_field(
         FieldShape::OptionalNullable => format!("Option<Option<{value_ty}>>"),
     };
     let mut serde_args: Vec<String> = Vec::new();
-    if serde_key != field.json_key {
+    if rename {
         serde_args.push(format!("rename = \"{}\"", escape(&field.json_key)));
     }
     // `default` is an annotation: deserializing never fills it in (absent stays absent, and a
@@ -1565,14 +1592,14 @@ fn render_enum(name: &str, e: &EnumNode, imports: &mut Imports) -> String {
             .zip(&variants)
             .map(|(value, variant)| (variant.as_str(), value.as_str().expect("string enum value")))
             .collect();
-        let rule: Option<RenameRule> = rename_all_rule(&members, RenameRule::apply_to_variant);
+        let rule: Option<RenameRule> = rename_all_rule(&members, RenameRule::write_variant);
         if let Some(rule) = rule {
             let _ = writeln!(out, "#[serde(rename_all = \"{}\")]", rule.serde_name());
         }
         let _ = writeln!(out, "pub enum {name} {{");
-        for (value, variant) in e.values.iter().zip(&variants) {
-            let raw: &str = value.as_str().expect("string enum value");
-            if raw != serde_name(rule, RenameRule::apply_to_variant, variant) {
+        let mut buffer: String = String::new();
+        for (variant, raw) in members {
+            if needs_rename(rule, RenameRule::write_variant, variant, raw, &mut buffer) {
                 let _ = writeln!(out, "    #[serde(rename = \"{}\")]", escape(raw));
             }
             let _ = writeln!(out, "    {variant},");

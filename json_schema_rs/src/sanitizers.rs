@@ -359,63 +359,96 @@ impl RenameRule {
     /// The serde name of a field named `field` (`snake_case`, without `r#`).
     #[must_use]
     pub fn apply_to_field(self, field: &str) -> String {
+        let mut out: String = String::with_capacity(field.len());
+        self.write_field(field, &mut out);
+        out
+    }
+
+    /// [`Self::apply_to_field`] into `out`, replacing its contents (one buffer for many names).
+    pub fn write_field(self, field: &str, out: &mut String) {
+        out.clear();
         match self {
-            Self::Lower | Self::Snake => field.to_owned(),
-            Self::Upper | Self::ScreamingSnake => field.to_ascii_uppercase(),
-            Self::Pascal => {
-                let mut pascal: String = String::with_capacity(field.len());
+            Self::Lower | Self::Snake => out.push_str(field),
+            Self::Upper | Self::ScreamingSnake => {
+                out.extend(field.chars().map(|ch: char| ch.to_ascii_uppercase()));
+            }
+            Self::Pascal | Self::Camel => {
                 let mut capitalize: bool = true;
                 for ch in field.chars() {
                     if ch == '_' {
                         capitalize = true;
                     } else if capitalize {
-                        pascal.push(ch.to_ascii_uppercase());
+                        out.push(ch.to_ascii_uppercase());
                         capitalize = false;
                     } else {
-                        pascal.push(ch);
+                        out.push(ch);
                     }
                 }
-                pascal
+                if self == Self::Camel {
+                    lower_first(out);
+                }
             }
-            Self::Camel => lower_first(&Self::Pascal.apply_to_field(field)),
-            Self::Kebab => field.replace('_', "-"),
-            Self::ScreamingKebab => field.to_ascii_uppercase().replace('_', "-"),
+            Self::Kebab => out.extend(
+                field
+                    .chars()
+                    .map(|ch: char| if ch == '_' { '-' } else { ch }),
+            ),
+            Self::ScreamingKebab => out.extend(field.chars().map(|ch: char| {
+                if ch == '_' {
+                    '-'
+                } else {
+                    ch.to_ascii_uppercase()
+                }
+            })),
         }
     }
 
     /// The serde name of a variant named `variant` (`PascalCase`).
     #[must_use]
     pub fn apply_to_variant(self, variant: &str) -> String {
+        let mut out: String = String::with_capacity(variant.len() + 4);
+        self.write_variant(variant, &mut out);
+        out
+    }
+
+    /// [`Self::apply_to_variant`] into `out`, replacing its contents (one buffer for many names).
+    pub fn write_variant(self, variant: &str, out: &mut String) {
+        out.clear();
         match self {
-            Self::Pascal => variant.to_owned(),
-            Self::Lower => variant.to_ascii_lowercase(),
-            Self::Upper => variant.to_ascii_uppercase(),
-            Self::Camel => lower_first(variant),
-            Self::Snake => {
-                let mut snake: String = String::with_capacity(variant.len() + 4);
+            Self::Pascal => out.push_str(variant),
+            Self::Lower => out.extend(variant.chars().map(|ch: char| ch.to_ascii_lowercase())),
+            Self::Upper => out.extend(variant.chars().map(|ch: char| ch.to_ascii_uppercase())),
+            Self::Camel => {
+                out.push_str(variant);
+                lower_first(out);
+            }
+            Self::Snake | Self::ScreamingSnake | Self::Kebab | Self::ScreamingKebab => {
+                let separator: char = if matches!(self, Self::Snake | Self::ScreamingSnake) {
+                    '_'
+                } else {
+                    '-'
+                };
+                let screaming: bool = matches!(self, Self::ScreamingSnake | Self::ScreamingKebab);
                 for (i, ch) in variant.char_indices() {
                     if i > 0 && ch.is_uppercase() {
-                        snake.push('_');
+                        out.push(separator);
                     }
-                    snake.push(ch.to_ascii_lowercase());
+                    out.push(if screaming {
+                        ch.to_ascii_uppercase()
+                    } else {
+                        ch.to_ascii_lowercase()
+                    });
                 }
-                snake
             }
-            Self::ScreamingSnake => Self::Snake.apply_to_variant(variant).to_ascii_uppercase(),
-            Self::Kebab => Self::Snake.apply_to_variant(variant).replace('_', "-"),
-            Self::ScreamingKebab => Self::ScreamingSnake
-                .apply_to_variant(variant)
-                .replace('_', "-"),
         }
     }
 }
 
-/// `name` with its first character in ASCII lowercase.
-fn lower_first(name: &str) -> String {
-    let mut chars = name.chars();
-    chars.next().map_or_else(String::new, |first: char| {
-        first.to_ascii_lowercase().to_string() + chars.as_str()
-    })
+/// Lowercases the first character of `name` in place (ASCII case mapping, as serde does).
+fn lower_first(name: &mut str) {
+    if let Some(first) = name.get_mut(0..1) {
+        first.make_ascii_lowercase();
+    }
 }
 
 #[cfg(test)]
