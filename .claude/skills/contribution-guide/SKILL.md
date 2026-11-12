@@ -87,7 +87,7 @@ Every PR that changes what our consumers run (the library, the CLI, the macros, 
 
 ### Performance work
 
-For any speed, memory or generated-code-size work, use the **optimize-library** skill: it holds the open findings, the data-oriented lenses and the measurement lessons, and it is updated by every optimization PR.
+For any speed, memory or generated-code-size work, use the **optimize-library** skill: how to find a target by measuring, the correctness and measurement rules, and the data-oriented lenses.
 
 ### Orchestrate with subagents
 
