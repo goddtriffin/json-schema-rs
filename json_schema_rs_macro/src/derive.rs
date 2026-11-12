@@ -1,6 +1,7 @@
 //! Derive macro for `ToJsonSchema`: builds JSON Schema from struct type and attributes.
 
-use crate::rename_rule::RenameRule;
+use crate::rename_rule::rename_rule_from_attrs;
+use json_schema_rs::sanitizers::RenameRule;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::ext::IdentExt;
@@ -762,7 +763,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     };
 
     let container: ContainerExprs = container_exprs(&input.attrs)?;
-    let rename_rule: Option<RenameRule> = RenameRule::from_attrs(&input.attrs)?;
+    let rename_rule: Option<RenameRule> = rename_rule_from_attrs(&input.attrs)?;
     let ContainerExprs {
         title: title_expr,
         description: description_expr,
@@ -1081,7 +1082,7 @@ fn expand_enum_to_json_schema(
         .all(|variant| matches!(variant.fields, Fields::Unit));
     let (body, generator_ident): (TokenStream2, TokenStream2) = if all_unit {
         (
-            value_enum_body(&container, data_enum, RenameRule::from_attrs(attrs)?)?,
+            value_enum_body(&container, data_enum, rename_rule_from_attrs(attrs)?)?,
             quote! { _generator },
         )
     } else {

@@ -293,8 +293,239 @@ pub fn module_name_from_path(path: &str) -> String {
     sanitize_module_name(stem)
 }
 
+/// A case rule of serde's container `#[serde(rename_all = "...")]`: how serde names the
+/// members that have no `rename` of their own.
+///
+/// Fields are converted from their `snake_case` Rust names (without `r#`), variants from their
+/// `PascalCase` names, character for character as serde's derive does (ASCII case mapping
+/// only). Codegen writes one `rename_all` on a struct or string enum when it replaces enough
+/// per-member `rename`s, and the derives read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameRule {
+    /// `lowercase`
+    Lower,
+    /// `UPPERCASE`
+    Upper,
+    /// `PascalCase`
+    Pascal,
+    /// `camelCase`
+    Camel,
+    /// `snake_case`
+    Snake,
+    /// `SCREAMING_SNAKE_CASE`
+    ScreamingSnake,
+    /// `kebab-case`
+    Kebab,
+    /// `SCREAMING-KEBAB-CASE`
+    ScreamingKebab,
+}
+
+impl RenameRule {
+    /// Every rule, in serde's order.
+    pub const ALL: [Self; 8] = [
+        Self::Lower,
+        Self::Upper,
+        Self::Pascal,
+        Self::Camel,
+        Self::Snake,
+        Self::ScreamingSnake,
+        Self::Kebab,
+        Self::ScreamingKebab,
+    ];
+
+    /// The rule's spelling in `#[serde(rename_all = "...")]`.
+    #[must_use]
+    pub const fn serde_name(self) -> &'static str {
+        match self {
+            Self::Lower => "lowercase",
+            Self::Upper => "UPPERCASE",
+            Self::Pascal => "PascalCase",
+            Self::Camel => "camelCase",
+            Self::Snake => "snake_case",
+            Self::ScreamingSnake => "SCREAMING_SNAKE_CASE",
+            Self::Kebab => "kebab-case",
+            Self::ScreamingKebab => "SCREAMING-KEBAB-CASE",
+        }
+    }
+
+    /// The rule spelled `name` in `#[serde(rename_all = "...")]`, if serde has one.
+    #[must_use]
+    pub fn from_serde_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|rule: &Self| rule.serde_name() == name)
+    }
+
+    /// The serde name of a field named `field` (`snake_case`, without `r#`).
+    #[must_use]
+    pub fn apply_to_field(self, field: &str) -> String {
+        let mut out: String = String::with_capacity(field.len());
+        self.write_field(field, &mut out);
+        out
+    }
+
+    /// [`Self::apply_to_field`] into `out`, replacing its contents (one buffer for many names).
+    pub fn write_field(self, field: &str, out: &mut String) {
+        out.clear();
+        match self {
+            Self::Lower | Self::Snake => out.push_str(field),
+            Self::Upper | Self::ScreamingSnake => {
+                out.extend(field.chars().map(|ch: char| ch.to_ascii_uppercase()));
+            }
+            Self::Pascal | Self::Camel => {
+                let mut capitalize: bool = true;
+                for ch in field.chars() {
+                    if ch == '_' {
+                        capitalize = true;
+                    } else if capitalize {
+                        out.push(ch.to_ascii_uppercase());
+                        capitalize = false;
+                    } else {
+                        out.push(ch);
+                    }
+                }
+                if self == Self::Camel {
+                    lower_first(out);
+                }
+            }
+            Self::Kebab => out.extend(
+                field
+                    .chars()
+                    .map(|ch: char| if ch == '_' { '-' } else { ch }),
+            ),
+            Self::ScreamingKebab => out.extend(field.chars().map(|ch: char| {
+                if ch == '_' {
+                    '-'
+                } else {
+                    ch.to_ascii_uppercase()
+                }
+            })),
+        }
+    }
+
+    /// The serde name of a variant named `variant` (`PascalCase`).
+    #[must_use]
+    pub fn apply_to_variant(self, variant: &str) -> String {
+        let mut out: String = String::with_capacity(variant.len() + 4);
+        self.write_variant(variant, &mut out);
+        out
+    }
+
+    /// [`Self::apply_to_variant`] into `out`, replacing its contents (one buffer for many names).
+    pub fn write_variant(self, variant: &str, out: &mut String) {
+        out.clear();
+        match self {
+            Self::Pascal => out.push_str(variant),
+            Self::Lower => out.extend(variant.chars().map(|ch: char| ch.to_ascii_lowercase())),
+            Self::Upper => out.extend(variant.chars().map(|ch: char| ch.to_ascii_uppercase())),
+            Self::Camel => {
+                out.push_str(variant);
+                lower_first(out);
+            }
+            Self::Snake | Self::ScreamingSnake | Self::Kebab | Self::ScreamingKebab => {
+                let separator: char = if matches!(self, Self::Snake | Self::ScreamingSnake) {
+                    '_'
+                } else {
+                    '-'
+                };
+                let screaming: bool = matches!(self, Self::ScreamingSnake | Self::ScreamingKebab);
+                for (i, ch) in variant.char_indices() {
+                    if i > 0 && ch.is_uppercase() {
+                        out.push(separator);
+                    }
+                    out.push(if screaming {
+                        ch.to_ascii_uppercase()
+                    } else {
+                        ch.to_ascii_lowercase()
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Lowercases the first character of `name` in place (ASCII case mapping, as serde does).
+fn lower_first(name: &mut str) {
+    if let Some(first) = name.get_mut(0..1) {
+        first.make_ascii_lowercase();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// The rule spelled `name`, applied to the field `user_id_v2` and the variant `UserIdV2`.
+    fn rename_applied(name: &str) -> (String, String) {
+        let rule: super::RenameRule = super::RenameRule::from_serde_name(name).expect("known rule");
+        (
+            rule.apply_to_field("user_id_v2"),
+            rule.apply_to_variant("UserIdV2"),
+        )
+    }
+
+    #[test]
+    fn rename_rule_lowercase() {
+        let expected: (String, String) = ("user_id_v2".to_string(), "useridv2".to_string());
+        let actual: (String, String) = rename_applied("lowercase");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_uppercase() {
+        let expected: (String, String) = ("USER_ID_V2".to_string(), "USERIDV2".to_string());
+        let actual: (String, String) = rename_applied("UPPERCASE");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_pascal_case() {
+        let expected: (String, String) = ("UserIdV2".to_string(), "UserIdV2".to_string());
+        let actual: (String, String) = rename_applied("PascalCase");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_camel_case() {
+        let expected: (String, String) = ("userIdV2".to_string(), "userIdV2".to_string());
+        let actual: (String, String) = rename_applied("camelCase");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_snake_case() {
+        let expected: (String, String) = ("user_id_v2".to_string(), "user_id_v2".to_string());
+        let actual: (String, String) = rename_applied("snake_case");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_screaming_snake_case() {
+        let expected: (String, String) = ("USER_ID_V2".to_string(), "USER_ID_V2".to_string());
+        let actual: (String, String) = rename_applied("SCREAMING_SNAKE_CASE");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_kebab_case() {
+        let expected: (String, String) = ("user-id-v2".to_string(), "user-id-v2".to_string());
+        let actual: (String, String) = rename_applied("kebab-case");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_screaming_kebab_case() {
+        let expected: (String, String) = ("USER-ID-V2".to_string(), "USER-ID-V2".to_string());
+        let actual: (String, String) = rename_applied("SCREAMING-KEBAB-CASE");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rename_rule_unknown_name_has_no_rule() {
+        let expected: Option<super::RenameRule> = None;
+        let actual: Option<super::RenameRule> = super::RenameRule::from_serde_name("Title Case");
+        assert_eq!(expected, actual);
+    }
+
     use super::*;
     use std::path::Path;
 

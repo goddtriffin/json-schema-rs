@@ -254,10 +254,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
-    #[serde(rename = "closed")]
     Closed,
-    #[serde(rename = "open")]
     Open,
 }
 
@@ -318,10 +317,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum A {
-    #[serde(rename = "x")]
     X,
-    #[serde(rename = "y")]
     Y,
 }
 
@@ -2887,10 +2885,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
-    #[serde(rename = "closed")]
     Closed,
-    #[serde(rename = "open")]
     Open,
 }
 
@@ -2950,12 +2947,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Level {
-    #[serde(rename = "high")]
     High,
-    #[serde(rename = "low")]
     Low,
-    #[serde(rename = "medium")]
     Medium,
 }
 

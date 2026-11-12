@@ -9,10 +9,13 @@
 //! values taken out of never-moved slots, so no step grows faster than the field count.
 //!
 //! It accepts the serde attributes codegen emits and rejects every other one at its span:
-//! container `deny_unknown_fields`; field `rename = "..."`, `default`, `deserialize_with =
+//! container `deny_unknown_fields` and `rename_all = "..."` (serde's case rules, for the fields
+//! without a `rename`); field `rename = "..."`, `default`, `deserialize_with =
 //! "path"`, `flatten` (the map of additional properties; with `deserialize_with`, each of its
 //! values reads through the path) and `skip_serializing_if` (serialization only, ignored).
 
+use crate::rename_rule::rename_rule_from_lit;
+use json_schema_rs::sanitizers::RenameRule;
 use proc_macro2::{Delimiter, Group, Span, TokenStream as TokenStream2, TokenTree, token_stream};
 use quote::{ToTokens, format_ident, quote};
 use syn::ext::IdentExt;
@@ -23,8 +26,10 @@ use syn::{Data, DeriveInput, Error, ExprPath, Fields, Ident, LitStr, Result as S
 struct FieldSpec {
     ident: Ident,
     ty: Type,
-    /// The object key (`rename`, else the field's name).
+    /// The object key (`rename`, else the field's name under the container's `rename_all`).
     key: String,
+    /// Whether the key is the field's own `rename`.
+    renamed: bool,
     /// `default`: an absent key is `Default::default()`.
     default: bool,
     /// `deserialize_with`: the function that reads the value (each value, on the flatten field).
@@ -43,13 +48,19 @@ fn push_error(errors: &mut Option<Error>, error: Error) {
     }
 }
 
-/// Whether the container says `deny_unknown_fields`; every other serde attribute is an error.
-fn container_deny_unknown(input: &DeriveInput, errors: &mut Option<Error>) -> bool {
+/// Whether the container says `deny_unknown_fields`, and its `rename_all` rule; every other
+/// serde attribute is an error.
+fn container_args(input: &DeriveInput, errors: &mut Option<Error>) -> (bool, Option<RenameRule>) {
     let mut deny: bool = false;
+    let mut rule: Option<RenameRule> = None;
     for attr in input.attrs.iter().filter(|a| a.path().is_ident("serde")) {
         let parsed: SynResult<()> = attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("deny_unknown_fields") {
                 deny = true;
+                Ok(())
+            } else if meta.path.is_ident("rename_all") {
+                let lit: LitStr = meta.value()?.parse()?;
+                rule = Some(rename_rule_from_lit(&lit)?);
                 Ok(())
             } else {
                 Err(meta.error("unsupported serde container attribute"))
@@ -59,7 +70,7 @@ fn container_deny_unknown(input: &DeriveInput, errors: &mut Option<Error>) -> bo
             push_error(errors, error);
         }
     }
-    deny
+    (deny, rule)
 }
 
 /// The field's spec from its serde attributes; an unsupported one is an error.
@@ -69,6 +80,7 @@ fn field_spec(field: &syn::Field, errors: &mut Option<Error>) -> FieldSpec {
         key: ident.unraw().to_string(),
         ident,
         ty: field.ty.clone(),
+        renamed: false,
         default: false,
         with: None,
         flatten: false,
@@ -79,6 +91,7 @@ fn field_spec(field: &syn::Field, errors: &mut Option<Error>) -> FieldSpec {
             if meta.path.is_ident("rename") {
                 let lit: LitStr = meta.value()?.parse()?;
                 spec.key = lit.value();
+                spec.renamed = true;
             } else if meta.path.is_ident("default") {
                 if meta.input.peek(syn::Token![=]) {
                     return Err(meta.error("`default = \"...\"` is unsupported; use `default`"));
@@ -128,12 +141,20 @@ pub fn expand_deserialize(input: &DeriveInput) -> SynResult<TokenStream2> {
         );
         return Err(errors.expect("an error"));
     };
-    let deny: bool = container_deny_unknown(input, &mut errors);
-    let specs: Vec<FieldSpec> = named
+    let (deny, rule): (bool, Option<RenameRule>) = container_args(input, &mut errors);
+    let mut specs: Vec<FieldSpec> = named
         .named
         .iter()
         .map(|field| field_spec(field, &mut errors))
         .collect();
+    if let Some(rule) = rule {
+        for spec in specs
+            .iter_mut()
+            .filter(|spec| !spec.renamed && !spec.flatten)
+        {
+            spec.key = rule.apply_to_field(&spec.key);
+        }
+    }
 
     let mut flatten: Option<&FieldSpec> = None;
     let mut fields: Vec<&FieldSpec> = Vec::new();
@@ -154,7 +175,7 @@ pub fn expand_deserialize(input: &DeriveInput) -> SynResult<TokenStream2> {
                 &mut errors,
                 Error::new(spec.span, "at most one field can be `flatten`"),
             );
-        } else if spec.default || spec.ident.unraw() != spec.key {
+        } else if spec.default || spec.renamed {
             push_error(
                 &mut errors,
                 Error::new(
@@ -554,6 +575,18 @@ mod tests {
     }
 
     #[test]
+    fn unknown_rename_all_rule_is_an_error_at_its_literal() {
+        let expected: Vec<(String, usize, usize)> = vec![(
+            "unknown rename rule `rename_all = \"Title\"`, expected one of \"lowercase\", \"UPPERCASE\", \"PascalCase\", \"camelCase\", \"snake_case\", \"SCREAMING_SNAKE_CASE\", \"kebab-case\", \"SCREAMING-KEBAB-CASE\"".to_string(),
+            1,
+            21,
+        )];
+        let actual: Vec<(String, usize, usize)> =
+            derive_errors(r#"#[serde(rename_all = "Title")] struct S { a: u8 }"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn deny_unknown_fields_expands() {
         let expected: Vec<(String, usize, usize)> = Vec::new();
         let actual: Vec<(String, usize, usize)> =
@@ -573,7 +606,7 @@ mod tests {
             ),
         ];
         let actual: Vec<(String, usize, usize)> = derive_errors(
-            r#"#[serde(rename_all = "camelCase")] struct S { #[serde(alias = "x")] a: u8, #[serde(default = "d")] b: u8 }"#,
+            r#"#[serde(rename = "CamelCaseName")] struct S { #[serde(alias = "x")] a: u8, #[serde(default = "d")] b: u8 }"#,
         );
         assert_eq!(expected, actual);
     }
@@ -668,6 +701,7 @@ mod tests {
             ident: syn::Ident::new("name", Span::call_site()),
             ty: syn::parse_quote!(String),
             key: "name".to_string(),
+            renamed: false,
             default: false,
             with: None,
             flatten: false,
