@@ -1070,25 +1070,7 @@ pub struct Person {
     pub name: Name,
 }
 
-impl Person {
-    /// Validates this value against its schema.
-    ///
-    /// # Errors
-    ///
-    /// Every error the schema's validator reports, when this value does not satisfy the schema.
-    pub fn validate(&self) -> Result<(), json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.validate_serialized(1, self)
-    }
-}
-
-impl TryFrom<serde_json::Value> for Person {
-    type Error = json_schema_rs::TypeValidationError;
-
-    /// Validates `value` against the schema, then deserializes it.
-    fn try_from(value: serde_json::Value) -> Result<Self, json_schema_rs::TypeValidationError> {
-        TYPE_VALIDATORS.deserialize(1, value)
-    }
-}
+json_schema_rs::self_validating!(Person, TYPE_VALIDATORS, 1);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
     None,
