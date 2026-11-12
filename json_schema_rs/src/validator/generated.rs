@@ -21,18 +21,30 @@
 //! a valid parent allows at its position (#107). The scope is a thread-local depth, entered and
 //! left around those deserializations only, so a plain `serde_json::from_str` of a generated type
 //! still checks every newtype and union it reads.
+//!
+//! # Union choices
+//!
+//! The validation in [`TypeValidators::deserialize`] records which branch each `anyOf` / `oneOf`
+//! chose for each object or array it was evaluated on, keyed by the value's address and the
+//! union's (#128). The instance is then read from a [`ValueRef`] over it rather than moved, so
+//! addresses stay valid: a union's `Deserialize` asks for its value's address
+//! (`deserialize_newtype_struct` with a private name, which any other deserializer passes
+//! through) and reads the recorded variant directly, without evaluating any variant again. A
+//! value with no recorded choice, or any other deserializer, takes the buffered path.
 
-use super::compiled::{CompiledEntries, LocatedEntries};
+use super::compiled::{CompiledEntries, Keyword, LocatedEntries, NodeId, Union};
+use super::eval::{UnionChoices, union_address};
+use super::value_ref::{UNION_TOKEN, ValueRef, take_union_value};
 use super::{CompileErrors, CompiledSchema, SchemaError, ValidationError};
 use crate::error_list::ErrorList;
 use crate::json_schema::{
     DialectSettings, JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaSettings, Registry,
     RegistryBuilder, Schema,
 };
-use serde::de::{DeserializeOwned, Error as _};
+use serde::de::{DeserializeOwned, Error as _, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
@@ -40,6 +52,30 @@ thread_local! {
     /// How many trusted scopes the current thread is in (see the module docs, *Trusted
     /// deserialization*).
     static TRUSTED: Cell<usize> = const { Cell::new(0) };
+
+    /// The union choices of the instance [`TypeValidators::deserialize`] is reading (see the
+    /// module docs, *Union choices*).
+    static CHOICES: RefCell<UnionChoices> = RefCell::new(UnionChoices::default());
+}
+
+/// Runs `read` with `choices` as the thread's union choices, restoring the previous ones after,
+/// also when `read` panics.
+fn with_choices<R>(choices: UnionChoices, read: impl FnOnce() -> R) -> R {
+    /// Puts the previous choices back when dropped.
+    struct Restore(Option<UnionChoices>);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                CHOICES.with(|cell: &RefCell<UnionChoices>| *cell.borrow_mut() = previous);
+            }
+        }
+    }
+
+    let previous: UnionChoices = CHOICES
+        .with(|cell: &RefCell<UnionChoices>| std::mem::replace(&mut *cell.borrow_mut(), choices));
+    let _restore: Restore = Restore(Some(previous));
+    read()
 }
 
 /// Whether the current thread deserializes inside a trusted scope.
@@ -149,6 +185,67 @@ impl std::error::Error for EmbeddedSchemaError {
 impl From<SchemaError> for EmbeddedSchemaError {
     fn from(error: SchemaError) -> Self {
         EmbeddedSchemaError::Schema(error)
+    }
+}
+
+/// The variants of a generated `anyOf` / `oneOf` union, read by position in its `variants` list
+/// (see [`TypeValidators::deserialize_union`]). Generated code implements it with
+/// `json_schema_rs::deserialize_union!`.
+pub trait UnionVariants: Sized {
+    /// Deserializes the variant at `position` from `deserializer`.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not that variant.
+    fn read_variant<'de, D: Deserializer<'de>>(
+        position: usize,
+        deserializer: D,
+    ) -> Result<Self, D::Error>;
+}
+
+/// Reads a union through [`TypeValidators::deserialize_union`]: the recorded variant when the
+/// deserializer gave the value's address and a choice was recorded for it, else the buffered
+/// path.
+struct UnionVisitor<'v, 'a, T> {
+    validators: &'v TypeValidators<'a>,
+    name: &'static str,
+    kind: UnionMatch,
+    union: Option<usize>,
+    variants: &'v [usize],
+    union_type: std::marker::PhantomData<T>,
+}
+
+impl<'de, T: UnionVariants> Visitor<'de> for UnionVisitor<'_, '_, T> {
+    type Value = T;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "a {} variant", self.name)
+    }
+
+    fn visit_newtype_struct<D: Deserializer<'de>>(self, deserializer: D) -> Result<T, D::Error> {
+        if let (Some(address), Some(union)) = (take_union_value(), self.union)
+            && let Some(position) = self
+                .validators
+                .recorded_variant(address, union, self.variants)
+        {
+            return T::read_variant(position, deserializer);
+        }
+        let value: Value = Value::deserialize(deserializer)?;
+        self.validators
+            .read_union(
+                self.kind,
+                self.union,
+                self.variants,
+                &value,
+                |position, value| T::read_variant(position, value),
+            )
+            .map_err(|error: Option<TypeValidationError>| match error {
+                Some(error) => D::Error::custom(error),
+                None => D::Error::custom(format!(
+                    "{value} does not deserialize into a {} variant whose schema it satisfies",
+                    self.name
+                )),
+            })
     }
 }
 
@@ -456,8 +553,19 @@ impl<'a> TypeValidators<'a> {
         index: usize,
         instance: Value,
     ) -> Result<T, TypeValidationError> {
-        self.validate(index, &instance)?;
-        Ok(read_trusted(|| serde_json::from_value(instance))?)
+        let (schema, types) = self.compiled()?;
+        if !schema.has_unions {
+            self.validate(index, &instance)?;
+            return Ok(read_trusted(|| serde_json::from_value(instance))?);
+        }
+        let (result, choices) = schema.validate_recording_at(&types[index], &instance);
+        result.map_err(TypeValidationError::Invalid)?;
+        if choices.is_empty() {
+            return Ok(read_trusted(|| serde_json::from_value(instance))?);
+        }
+        Ok(with_choices(choices, || {
+            read_trusted(|| T::deserialize(ValueRef(&instance)))
+        })?)
     }
 
     /// For a generated constrained newtype: validates `value` as type `index` and gives it back
@@ -580,23 +688,70 @@ impl<'a> TypeValidators<'a> {
     /// # Panics
     ///
     /// When `union` or an entry of `variants` is not a type of these validators.
-    pub fn deserialize_union<'de, D: Deserializer<'de>, T>(
+    pub fn deserialize_union<'de, D: Deserializer<'de>, T: UnionVariants>(
         &self,
         deserializer: D,
-        name: &str,
+        name: &'static str,
         kind: UnionMatch,
         union: Option<usize>,
         variants: &[usize],
-        read: impl Fn(usize, &Value) -> Result<T, serde_json::Error>,
     ) -> Result<T, D::Error> {
-        let value: Value = Value::deserialize(deserializer)?;
-        self.read_union(kind, union, variants, &value, read)
-            .map_err(|error: Option<TypeValidationError>| match error {
-                Some(error) => D::Error::custom(error),
-                None => D::Error::custom(format!(
-                    "{value} does not deserialize into a {name} variant whose schema it satisfies"
-                )),
-            })
+        deserializer.deserialize_newtype_struct(
+            UNION_TOKEN,
+            UnionVisitor {
+                validators: self,
+                name,
+                kind,
+                union,
+                variants,
+                union_type: std::marker::PhantomData,
+            },
+        )
+    }
+
+    /// The position in `variants` of the variant the recorded choice for the value at
+    /// `address` names, for the union of type `union`: `None` when nothing was recorded, or the
+    /// branch is not exactly one variant's.
+    fn recorded_variant(&self, address: usize, union: usize, variants: &[usize]) -> Option<usize> {
+        let (schema, types) = self.compiled().ok()?;
+        let mut unions = types[union].iter().flat_map(|node: &NodeId| {
+            schema
+                .node(*node)
+                .keywords
+                .iter()
+                .filter_map(|keyword| match keyword {
+                    Keyword::AnyOf(union) | Keyword::OneOf(union) => Some(&**union),
+                    _ => None,
+                })
+        });
+        let union: &Union = unions.next()?;
+        if unions.next().is_some() {
+            return None;
+        }
+        let key: (usize, usize) = (address, union_address(union));
+        let branch: u32 = CHOICES.with(|cell: &RefCell<UnionChoices>| cell.borrow().get(key))?;
+        let mut node: NodeId = *union.nodes.get(branch as usize)?;
+        let holds = |node: NodeId| {
+            variants
+                .iter()
+                .filter(|v| types[**v].contains(&node))
+                .count()
+        };
+        // A `$ref` branch is its target's variant. A chain of `$ref`s visits each node at most
+        // once unless it loops, so the node count bounds it.
+        for _ in 0..schema.nodes.len() {
+            match &*schema.node(node).keywords {
+                [Keyword::Ref { target, .. }] if holds(node) == 0 => node = *target,
+                _ => break,
+            }
+        }
+        let mut positions = variants
+            .iter()
+            .enumerate()
+            .filter(|(_, variant)| types[**variant].contains(&node))
+            .map(|(position, _)| position);
+        let position: usize = positions.next()?;
+        positions.next().is_none().then_some(position)
     }
 
     /// [`TypeValidators::deserialize_union`] on the buffered value. `Err(None)`: variants match
@@ -780,6 +935,50 @@ impl<'a> TypeValidators<'a> {
         let registry: Registry<'_> = builder.build(&root).map_err(SchemaError::Registry)?;
         Ok(compile(&registry, self.types).map_err(SchemaError::Compile)?)
     }
+}
+
+/// The `Deserialize` of a generated `anyOf` / `oneOf` union, through
+/// [`TypeValidators::deserialize_union`]: `name`, the validators static, the [`UnionMatch`]
+/// variant, the union's type index (or `None`), the variants' type indexes, and one arm per
+/// variant position reading it from the deserializer bound to `value`.
+///
+/// ```ignore
+/// json_schema_rs::deserialize_union!(Shape, TYPE_VALIDATORS, OneOf, Some(4), [1, 3], |value| {
+///     0 => <Circle as Deserialize>::deserialize(value).map(Self::Circle),
+///     _ => <Square as Deserialize>::deserialize(value).map(Self::Square),
+/// });
+/// ```
+#[macro_export]
+macro_rules! deserialize_union {
+    (
+        $name:ident, $validators:expr, $kind:ident, $union:expr, [$($variant:expr),* $(,)?],
+        |$value:ident| { $($position:pat => $read:expr),+ $(,)? }
+    ) => {
+        impl $crate::UnionVariants for $name {
+            fn read_variant<'de, D: ::serde::Deserializer<'de>>(
+                position: usize,
+                $value: D,
+            ) -> ::core::result::Result<Self, D::Error> {
+                match position {
+                    $($position => $read,)+
+                }
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(
+                deserializer: D,
+            ) -> ::core::result::Result<Self, D::Error> {
+                $validators.deserialize_union(
+                    deserializer,
+                    stringify!($name),
+                    $crate::UnionMatch::$kind,
+                    $union,
+                    &[$($variant),*],
+                )
+            }
+        }
+    };
 }
 
 /// The self-validation of a struct, enum or union that generated code defines, through a
@@ -1065,7 +1264,7 @@ macro_rules! constrained_newtype {
 mod tests {
     use super::{
         EmbeddedDocument, EmbeddedDocumentKind, TypeValidationError, TypeValidators, UnionMatch,
-        read_trusted, trusted,
+        UnionVariants, read_trusted, trusted, with_choices,
     };
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::{
@@ -1074,6 +1273,8 @@ mod tests {
     use crate::validator::{
         CompiledSchema, ValidationError, ValidationErrorKind, ValidationResult,
     };
+    use serde::Deserializer;
+    use serde::de::Error as _;
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
@@ -1735,6 +1936,60 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    /// A union that reads every variant as its position.
+    #[derive(Debug, PartialEq)]
+    struct Position(usize);
+
+    impl UnionVariants for Position {
+        fn read_variant<'de, D: Deserializer<'de>>(
+            position: usize,
+            deserializer: D,
+        ) -> Result<Self, D::Error> {
+            serde::de::IgnoredAny::deserialize(deserializer)?;
+            Ok(Position(position))
+        }
+    }
+
+    /// A union whose first variant never reads; the others read a number.
+    #[derive(Debug, PartialEq)]
+    struct NotFirst(usize);
+
+    impl UnionVariants for NotFirst {
+        fn read_variant<'de, D: Deserializer<'de>>(
+            position: usize,
+            deserializer: D,
+        ) -> Result<Self, D::Error> {
+            if position == 0 {
+                return Err(D::Error::custom("not this one"));
+            }
+            f64::deserialize(deserializer).map(|_| NotFirst(position))
+        }
+    }
+
+    /// A union none of whose variants reads.
+    #[derive(Debug, PartialEq)]
+    struct NeverReads;
+
+    impl UnionVariants for NeverReads {
+        fn read_variant<'de, D: Deserializer<'de>>(_: usize, _: D) -> Result<Self, D::Error> {
+            Err(D::Error::custom("no"))
+        }
+    }
+
+    /// A union that reads whether its variant is read trusted.
+    #[derive(Debug, PartialEq)]
+    struct ReadTrusted(bool);
+
+    impl UnionVariants for ReadTrusted {
+        fn read_variant<'de, D: Deserializer<'de>>(
+            _: usize,
+            deserializer: D,
+        ) -> Result<Self, D::Error> {
+            serde::de::IgnoredAny::deserialize(deserializer)?;
+            Ok(ReadTrusted(trusted()))
+        }
+    }
+
     /// [`TypeValidators::deserialize_union`] over the `anyOf` (`kind` `AnyOf`, union type 0) or
     /// `oneOf` (type 1) of [`UNION`], reading each variant as its position.
     fn union_position(kind: UnionMatch, instance: &Value) -> Result<usize, String> {
@@ -1743,14 +1998,8 @@ mod tests {
             UnionMatch::OneOf => 1,
         };
         union_validators()
-            .deserialize_union(
-                instance,
-                "Number",
-                kind,
-                Some(union),
-                &[2, 3, 4],
-                |variant, _| Ok(variant),
-            )
+            .deserialize_union::<_, Position>(instance, "Number", kind, Some(union), &[2, 3, 4])
+            .map(|Position(position)| position)
             .map_err(|error: serde_json::Error| error.to_string())
     }
 
@@ -1763,19 +2012,9 @@ mod tests {
 
     #[test]
     fn deserialize_union_any_of_tries_the_next_matching_variant_when_one_does_not_read() {
-        let expected: Result<usize, String> = Ok(1);
-        let actual: Result<usize, String> = union_validators()
-            .deserialize_union(
-                &json!(1),
-                "Number",
-                UnionMatch::AnyOf,
-                Some(0),
-                &[2, 3, 4],
-                |variant: usize, value: &Value| match variant {
-                    0 => Err(serde::de::Error::custom("not this one")),
-                    _ => serde_json::from_value::<f64>(value.clone()).map(|_| variant),
-                },
-            )
+        let expected: Result<NotFirst, String> = Ok(NotFirst(1));
+        let actual: Result<NotFirst, String> = union_validators()
+            .deserialize_union(&json!(1), "Number", UnionMatch::AnyOf, Some(0), &[2, 3, 4])
             .map_err(|error: serde_json::Error| error.to_string());
         assert_eq!(expected, actual);
     }
@@ -1808,34 +2047,118 @@ mod tests {
 
     #[test]
     fn deserialize_union_whose_matching_variants_do_not_read_says_so() {
-        let expected: Result<usize, String> = Err(
+        let expected: Result<NeverReads, String> = Err(
             "1 does not deserialize into a Number variant whose schema it satisfies".to_string(),
         );
-        let actual: Result<usize, String> = union_validators()
-            .deserialize_union(
-                &json!(1),
-                "Number",
-                UnionMatch::AnyOf,
-                Some(0),
-                &[2, 3, 4],
-                |_: usize, _: &Value| Err(serde::de::Error::custom("no")),
-            )
+        let actual: Result<NeverReads, String> = union_validators()
+            .deserialize_union(&json!(1), "Number", UnionMatch::AnyOf, Some(0), &[2, 3, 4])
             .map_err(|error: serde_json::Error| error.to_string());
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn deserialize_union_reads_the_variant_trusted() {
-        let expected: Result<bool, String> = Ok(true);
-        let actual: Result<bool, String> = union_validators()
-            .deserialize_union(
-                &json!(1),
-                "Number",
-                UnionMatch::OneOf,
-                Some(1),
-                &[3, 4],
-                |_: usize, _: &Value| Ok(trusted()),
+        let expected: Result<ReadTrusted, String> = Ok(ReadTrusted(true));
+        let actual: Result<ReadTrusted, String> = union_validators()
+            .deserialize_union(&json!(1), "Number", UnionMatch::OneOf, Some(1), &[3, 4])
+            .map_err(|error: serde_json::Error| error.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    /// A `oneOf` of two object shapes (type 0), each branch also a type (1, 2).
+    const SHAPES: &str = r#"{"oneOf":[{"type":"object","properties":{"r":{"type":"number"}},"required":["r"]},{"type":"object","properties":{"side":{"type":"number"}},"required":["side"]}]}"#;
+
+    static SHAPE_VALIDATORS: TypeValidators<'static> = TypeValidators::new(
+        None,
+        &[EmbeddedDocument {
+            uri: "json-schema:///",
+            json: SHAPES,
+            kind: EmbeddedDocumentKind::Parsed(None),
+        }],
+        &[
+            &["json-schema:///#"],
+            &["json-schema:///#/oneOf/0"],
+            &["json-schema:///#/oneOf/1"],
+        ],
+    );
+
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Circle {
+        r: f64,
+    }
+
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Square {
+        side: f64,
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Shape {
+        Circle(Circle),
+        Square(Square),
+    }
+
+    crate::deserialize_union!(Shape, SHAPE_VALIDATORS, OneOf, Some(0), [1, 2], |value| {
+        0 => Circle::deserialize(value).map(Self::Circle),
+        _ => Square::deserialize(value).map(Self::Square),
+    });
+
+    #[test]
+    fn validation_records_the_branch_a_union_chose() {
+        let instance: Value = json!({"side": 2});
+        let (schema, types) = SHAPE_VALIDATORS.compiled().expect("compiles");
+        let (_, choices) = schema.validate_recording_at(&types[0], &instance);
+        let expected: Option<usize> = Some(1);
+        let actual: Option<usize> = with_choices(choices, || {
+            SHAPE_VALIDATORS.recorded_variant(std::ptr::from_ref(&instance) as usize, 0, &[1, 2])
+        });
+        assert_eq!(expected, actual);
+    }
+
+    /// [`SHAPES`] with each branch a `$ref` to a `$defs` entry, which is the variant's type.
+    static REF_SHAPE_VALIDATORS: TypeValidators<'static> = TypeValidators::new(
+        None,
+        &[EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r##"{"oneOf":[{"$ref":"#/$defs/Circle"},{"$ref":"#/$defs/Square"}],"$defs":{"Circle":{"type":"object","properties":{"r":{"type":"number"}},"required":["r"]},"Square":{"type":"object","properties":{"side":{"type":"number"}},"required":["side"]}}}"##,
+            kind: EmbeddedDocumentKind::Parsed(None),
+        }],
+        &[
+            &["json-schema:///#"],
+            &["json-schema:///#/$defs/Circle"],
+            &["json-schema:///#/$defs/Square"],
+        ],
+    );
+
+    #[test]
+    fn recorded_choice_of_a_ref_branch_names_its_target_variant() {
+        let instance: Value = json!({"side": 2});
+        let (schema, types) = REF_SHAPE_VALIDATORS.compiled().expect("compiles");
+        let (_, choices) = schema.validate_recording_at(&types[0], &instance);
+        let expected: Option<usize> = Some(1);
+        let actual: Option<usize> = with_choices(choices, || {
+            REF_SHAPE_VALIDATORS.recorded_variant(
+                std::ptr::from_ref(&instance) as usize,
+                0,
+                &[1, 2],
             )
+        });
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn try_from_reads_the_recorded_variant() {
+        let expected: Result<Shape, String> = Ok(Shape::Square(Square { side: 2.0 }));
+        let actual: Result<Shape, String> = SHAPE_VALIDATORS
+            .deserialize(0, json!({"side": 2}))
+            .map_err(|error: TypeValidationError| error.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn plain_deserialization_of_a_union_takes_the_buffered_path() {
+        let expected: Result<Shape, String> = Ok(Shape::Circle(Circle { r: 1.0 }));
+        let actual: Result<Shape, String> = serde_json::from_str::<Shape>(r#"{"r": 1}"#)
             .map_err(|error: serde_json::Error| error.to_string());
         assert_eq!(expected, actual);
     }

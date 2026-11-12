@@ -537,6 +537,9 @@ pub struct CompiledSchema {
     pub(crate) target_uris: IntMap<NodeId, Box<str>>,
     /// The user-defined formats, by [`UserFormatId`].
     pub(crate) user_formats: Box<[UserFormat]>,
+    /// Whether any node has an `anyOf` / `oneOf`: without one there is no union choice to
+    /// record.
+    pub(crate) has_unions: bool,
 }
 
 /// Whether [`serde_json::Map`] iterates its keys in sorted (byte) order: it does unless some
@@ -1321,6 +1324,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             sorted_maps: self.sorted_maps,
             target_uris: self.target_uris,
             user_formats: self.user_formats.into_boxed_slice(),
+            has_unions: !unions.is_empty(),
         };
         compiled.add_discriminators(&unions);
         Ok(compiled)
