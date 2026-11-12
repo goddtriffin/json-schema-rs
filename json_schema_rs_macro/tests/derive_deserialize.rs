@@ -1,6 +1,6 @@
 //! Integration test: `#[derive(json_schema_rs_macro::Deserialize)]` on hand-written structs, for
 //! every serde attribute it accepts and its absence: present, absent, repeated and unknown keys,
-//! `deny_unknown_fields`, `rename`, `default`, `deserialize_with` (with and without `default`),
+//! `deny_unknown_fields`, `rename_all`, `rename`, `default`, `deserialize_with` (with and without `default`),
 //! `flatten` (with and without `deserialize_with`), deprecated fields, input that is not an
 //! object, a struct wide enough for the derive's other expansion, and `Self` in a field type. Errors are serde's derive's, word for word.
 
@@ -17,6 +17,17 @@ struct Plain {
     #[serde(rename = "age-years", skip_serializing_if = "Option::is_none")]
     age_years: Option<u8>,
     r#type: Option<bool>,
+}
+
+#[derive(Debug, PartialEq, json_schema_rs_macro::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Camel {
+    log_level: String,
+    #[serde(rename = "max-retries")]
+    max_retries: u8,
+    r#type: Option<bool>,
+    #[serde(flatten)]
+    additional_keys: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, PartialEq, json_schema_rs_macro::Deserialize)]
@@ -394,5 +405,42 @@ fn self_in_a_field_type_is_the_struct() {
         })),
     });
     let actual: Result<Node, String> = read(r#"{"value": 1, "next": {"value": 2}}"#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn rename_all_names_fields_without_their_own_rename() {
+    let expected: Result<Camel, String> = Ok(Camel {
+        log_level: "info".to_string(),
+        max_retries: 2,
+        r#type: Some(true),
+        additional_keys: BTreeMap::from([("log_level".to_string(), serde_json::json!(1))]),
+    });
+    let actual: Result<Camel, String> =
+        read(r#"{"logLevel": "info", "max-retries": 2, "type": true, "log_level": 1}"#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn rename_all_reads_the_same_keys_as_serde() {
+    #[derive(Debug, PartialEq, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SerdeCamel {
+        log_level: String,
+        #[serde(rename = "max-retries")]
+        max_retries: u8,
+        r#type: Option<bool>,
+        #[serde(flatten)]
+        additional_keys: BTreeMap<String, serde_json::Value>,
+    }
+    let json: &str = r#"{"logLevel": "info", "max-retries": 2, "type": true, "maxRetries": 9}"#;
+    let expected: Result<SerdeCamel, String> =
+        serde_json::from_str::<SerdeCamel>(json).map_err(|error| error.to_string());
+    let actual: Result<SerdeCamel, String> = read::<Camel>(json).map(|camel: Camel| SerdeCamel {
+        log_level: camel.log_level,
+        max_retries: camel.max_retries,
+        r#type: camel.r#type,
+        additional_keys: camel.additional_keys,
+    });
     assert_eq!(expected, actual);
 }
