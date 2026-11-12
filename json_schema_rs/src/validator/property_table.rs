@@ -4,7 +4,8 @@
 //! The evaluator looks up every member of an object it checks against `properties` and
 //! `additionalProperties`. A binary search over the sorted names costs a call to `memcmp` and a
 //! mispredicted branch per step; the index costs one multiply and, nearly always, one probe whose
-//! head comparison decides without reading the name.
+//! head comparison decides without reading the name. A short list skips the index: its heads are
+//! compared in turn.
 
 use super::compiled::NodeId;
 
@@ -19,6 +20,10 @@ struct Head {
 
 /// The largest name whose head holds every byte.
 const INLINE_BYTES: usize = 16;
+
+/// The most names a table compares one by one instead of indexing: a scan over a few heads is
+/// cheaper than hashing.
+const LINEAR_NAMES: usize = 4;
 
 impl Head {
     #[inline]
@@ -67,7 +72,8 @@ pub(crate) struct PropertyTable {
     nodes: Box<[NodeId]>,
     heads: Box<[Head]>,
     /// Open addressing with linear probing: a name's position plus one, `0` for an empty slot.
-    /// A power of two, at least twice the names, so a probe ends at an empty slot soon.
+    /// A power of two, at least twice the names, so a probe ends at an empty slot soon. Empty for
+    /// a list of at most [`LINEAR_NAMES`], whose heads are scanned instead.
     slots: Box<[u32]>,
     /// `64 - log2(slots.len())`: the hash bits that pick a slot.
     shift: u32,
@@ -79,7 +85,16 @@ impl PropertyTable {
         debug_assert!(properties.windows(2).all(|pair| pair[0].0 < pair[1].0));
         let (names, nodes): (Vec<Box<str>>, Vec<NodeId>) = properties.into_iter().unzip();
         let heads: Box<[Head]> = names.iter().map(|name| Head::of(name.as_bytes())).collect();
-        let count: usize = (2 * names.len()).next_power_of_two().max(2);
+        if names.len() <= LINEAR_NAMES {
+            return PropertyTable {
+                names: names.into_boxed_slice(),
+                nodes: nodes.into_boxed_slice(),
+                heads,
+                slots: Box::new([]),
+                shift: 0,
+            };
+        }
+        let count: usize = (2 * names.len()).next_power_of_two();
         let shift: u32 = 64 - count.trailing_zeros();
         let mut slots: Box<[u32]> = vec![0; count].into_boxed_slice();
         for (position, head) in heads.iter().enumerate() {
@@ -103,15 +118,20 @@ impl PropertyTable {
     pub(crate) fn find(&self, name: &str) -> Option<usize> {
         let bytes: &[u8] = name.as_bytes();
         let head: Head = Head::of(bytes);
+        let matches = |position: usize| {
+            self.heads[position] == head
+                && (head.len <= INLINE_BYTES
+                    || self.names[position].as_bytes()[8..head.len - 8] == bytes[8..head.len - 8])
+        };
+        if self.slots.is_empty() {
+            return (0..self.heads.len()).find(|position| matches(*position));
+        }
         let mask: usize = self.slots.len() - 1;
         let mut slot: usize = head.slot(self.shift);
         loop {
             let entry: u32 = self.slots[slot];
             let position: usize = entry.checked_sub(1)? as usize;
-            if self.heads[position] == head
-                && (head.len <= INLINE_BYTES
-                    || self.names[position].as_bytes()[8..head.len - 8] == bytes[8..head.len - 8])
-            {
+            if matches(position) {
                 return Some(position);
             }
             slot = (slot + 1) & mask;
@@ -215,6 +235,27 @@ mod tests {
         let table: PropertyTable = table(&names.iter().map(String::as_str).collect::<Vec<_>>());
         let expected: Vec<Option<NodeId>> = (0..100).map(|i| Some(NodeId::from_index(i))).collect();
         let actual: Vec<Option<NodeId>> = names.iter().map(|name| table.get(name)).collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn find_in_a_short_list_tells_names_apart() {
+        let names: [&str; 3] = ["id", "abcdefghijklmnopq", "name"];
+        let keys: [&str; 5] = [
+            "name",
+            "id",
+            "abcdefghijklmnopq",
+            "abcdefghijklmnoPq",
+            "nam",
+        ];
+        let expected: Vec<Option<&str>> = vec![
+            Some("name"),
+            Some("id"),
+            Some("abcdefghijklmnopq"),
+            None,
+            None,
+        ];
+        let actual: Vec<Option<&str>> = lookups(&names, &keys);
         assert_eq!(expected, actual);
     }
 
