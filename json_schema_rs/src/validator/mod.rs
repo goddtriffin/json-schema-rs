@@ -15,6 +15,7 @@ mod output;
 mod simple_pattern;
 #[cfg(test)]
 mod tests_keywords;
+mod value_ref;
 
 pub use compiled::{
     CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, FormatCheck,
@@ -24,7 +25,7 @@ pub use error::{
 };
 pub use generated::{
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError,
-    NewtypeValue, TypeValidationError, TypeValidators, UnionMatch,
+    NewtypeValue, TypeValidationError, TypeValidators, UnionMatch, UnionVariants,
 };
 pub use output::{BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
 

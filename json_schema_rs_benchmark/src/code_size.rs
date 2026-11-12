@@ -68,7 +68,7 @@ pub enum Category {
     /// variants.
     TypeDefinitions,
     /// Serde implementations: `impl Serialize` / `impl Deserialize` blocks,
-    /// `deserialize_untagged!`, and serde helper functions.
+    /// `deserialize_untagged!`, `deserialize_union!`, and serde helper functions.
     SerdeImpls,
     /// Validation implementations: `impl TryFrom<serde_json::Value>`, `self_validating!` and
     /// `constrained_newtype!`.
@@ -343,6 +343,7 @@ fn classify_item(line: &str) -> (Category, Option<TypeKind>) {
     {
         Category::ValidationImpls
     } else if line.starts_with("json_schema_rs::deserialize_untagged!")
+        || line.starts_with("json_schema_rs::deserialize_union!")
         || line.starts_with("fn deserialize")
         || line.starts_with("fn serialize")
     {
@@ -799,6 +800,15 @@ mod tests {
         expected.extend(lines_in(Category::ValidationImpls, 2, 42));
         expected.extend(lines_in(Category::SerdeImpls, 4, 62));
         expected.extend(lines_in(Category::Other, 2, 23));
+        let actual: CodeSize = measured(source);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn measure_source_classifies_deserialize_union_as_serde_impls() {
+        let source: &str = "json_schema_rs::deserialize_union!(U, V, OneOf, Some(0), [1], |value| {\n    _ => A::deserialize(value).map(Self::A),\n});\n";
+        let mut expected: CodeSize = size(&[(SizeMetric::Lines, 3), (SizeMetric::Bytes, 121)]);
+        expected.extend(lines_in(Category::SerdeImpls, 3, 121));
         let actual: CodeSize = measured(source);
         assert_eq!(expected, actual);
     }
