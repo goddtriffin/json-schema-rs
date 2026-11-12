@@ -25,8 +25,8 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Draft | Tests | Compliance | Coverage | Correctness | Failed | Skipped (unsupported) | Errored | Disagree with majority | Wrong vs expected |
 |---|---|---|---|---|---|---|---|---|---|
-| draft4 | 615 | 99.02% | 99.02% | 100.00% | 0 | 6 | 0 | 0 | 0 |
-| draft6 | 834 | 98.08% | 98.08% | 100.00% | 0 | 16 | 0 | 0 | 0 |
+| draft4 | 615 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
+| draft6 | 834 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
 | draft7 | 922 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
 | draft2019-09 | 1242 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
 | draft2020-12 | 1277 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
@@ -35,7 +35,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 99.55% | 4868 | 0 | 22 | 0 | 4890 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
 | `cpp-blaze` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
 | `dotnet-jsonschema-net` | 100.00% | 4275 | 0 | 0 | 0 | 4275 |
 | `go-jsonschema` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
@@ -50,7 +50,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 79.44% | 2118 | 511 | 37 | 0 | 2666 |
+| `localhost/json-schema-rs` (ours) | 80.61% | 2149 | 511 | 6 | 0 | 2666 |
 | `dotnet-jsonschema-net` | 60.11% | 1439 | 917 | 0 | 38 | 2394 |
 | `go-jsonschema` | 74.08% | 1975 | 661 | 0 | 30 | 2666 |
 | `java-networknt-json-schema-validator` | 77.72% | 2072 | 584 | 0 | 10 | 2666 |
@@ -64,7 +64,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 64.10% | 25 | 0 | 14 | 0 | 39 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 39 | 0 | 0 | 0 | 39 |
 | `dotnet-jsonschema-net` | 87.18% | 34 | 0 | 0 | 5 | 39 |
 | `go-jsonschema` | 51.28% | 20 | 0 | 0 | 19 | 39 |
 | `java-networknt-json-schema-validator` | 87.18% | 34 | 0 | 0 | 5 | 39 |
@@ -80,11 +80,6 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 
 | Reason | Tests | Cases | By group |
 |---|---|---|---|
-| keyword "$comment" | 22 | 11 | draft4: 6, draft6: 16 |
-| keyword "array_of_schemas" | 12 | 4 | draft2019-09: 3, draft2020-12: 3, draft6: 3, draft7: 3 |
-| keyword "unknown-keyword" | 8 | 4 | draft2019-09: 4, draft2020-12: 4 |
-| keyword "unknown/keyword" | 8 | 4 | draft2019-09: 4, draft2020-12: 4 |
-| keyword "const" | 3 | 1 | draft4: 3 |
 | $ref: $ref "http://localhost:1234/draft2019-09/dependentRequired.json" at /allOf/1 ("http://localhost:1234/draft2019-09/dependentRequired.json") does not resolve: could not retrieve "http://localhost:1234/draft2019-09/dependentRequired.json": retrieval is disabled; no document was given for "http://localhost:1234/draft2019-09/dependentRequired.json" | 2 | 1 | draft7: 2 |
 | $ref: $ref "http://localhost:1234/draft2020-12/prefixItems.json" at root ("http://localhost:1234/draft2020-12/prefixItems.json") does not resolve: could not retrieve "http://localhost:1234/draft2020-12/prefixItems.json": retrieval is disabled; no document was given for "http://localhost:1234/draft2020-12/prefixItems.json" | 2 | 1 | draft2019-09: 2 |
 | $ref: $ref "http://localhost:1234/draft2019-09/ignore-prefixItems.json" at root ("http://localhost:1234/draft2019-09/ignore-prefixItems.json") does not resolve: could not retrieve "http://localhost:1234/draft2019-09/ignore-prefixItems.json": retrieval is disabled; no document was given for "http://localhost:1234/draft2019-09/ignore-prefixItems.json" | 1 | 1 | draft2020-12: 1 |
@@ -100,7 +95,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 99.02% | 609 | 0 | 6 | 0 | 615 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 615 | 0 | 0 | 0 | 615 |
 | `cpp-blaze` | 100.00% | 615 | 0 | 0 | 0 | 615 |
 | `go-jsonschema` | 100.00% | 615 | 0 | 0 | 0 | 615 |
 | `java-networknt-json-schema-validator` | 100.00% | 615 | 0 | 0 | 0 | 615 |
@@ -114,7 +109,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 98.16% | 267 | 2 | 3 | 0 | 272 |
+| `localhost/json-schema-rs` (ours) | 99.26% | 270 | 2 | 0 | 0 | 272 |
 | `go-jsonschema` | 90.81% | 247 | 21 | 0 | 4 | 272 |
 | `java-networknt-json-schema-validator` | 96.69% | 263 | 9 | 0 | 0 | 272 |
 | `js-ajv` | 36.03% | 98 | 2 | 0 | 172 | 272 |
@@ -151,7 +146,7 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 98.08% | 818 | 0 | 16 | 0 | 834 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 834 | 0 | 0 | 0 | 834 |
 | `cpp-blaze` | 100.00% | 834 | 0 | 0 | 0 | 834 |
 | `dotnet-jsonschema-net` | 100.00% | 834 | 0 | 0 | 0 | 834 |
 | `go-jsonschema` | 100.00% | 834 | 0 | 0 | 0 | 834 |
@@ -166,7 +161,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 99.12% | 338 | 0 | 3 | 0 | 341 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 341 | 0 | 0 | 0 | 341 |
 | `dotnet-jsonschema-net` | 65.10% | 222 | 112 | 0 | 7 | 341 |
 | `go-jsonschema` | 92.67% | 316 | 21 | 0 | 4 | 341 |
 | `java-networknt-json-schema-validator` | 97.36% | 332 | 9 | 0 | 0 | 341 |
@@ -219,7 +214,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 99.19% | 616 | 0 | 5 | 0 | 621 |
+| `localhost/json-schema-rs` (ours) | 99.68% | 619 | 0 | 2 | 0 | 621 |
 | `dotnet-jsonschema-net` | 58.62% | 364 | 248 | 0 | 9 | 621 |
 | `go-jsonschema` | 84.22% | 523 | 92 | 0 | 6 | 621 |
 | `java-networknt-json-schema-validator` | 93.08% | 578 | 41 | 0 | 2 | 621 |
@@ -279,7 +274,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 62.54% | 444 | 252 | 14 | 0 | 710 |
+| `localhost/json-schema-rs` (ours) | 64.08% | 455 | 252 | 3 | 0 | 710 |
 | `dotnet-jsonschema-net` | 59.58% | 423 | 277 | 0 | 10 | 710 |
 | `go-jsonschema` | 62.11% | 441 | 262 | 0 | 7 | 710 |
 | `java-networknt-json-schema-validator` | 62.82% | 446 | 261 | 0 | 3 | 710 |
@@ -346,7 +341,7 @@ Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 62.74% | 453 | 257 | 12 | 0 | 722 |
+| `localhost/json-schema-rs` (ours) | 64.27% | 464 | 257 | 1 | 0 | 722 |
 | `dotnet-jsonschema-net` | 59.56% | 430 | 280 | 0 | 12 | 722 |
 | `go-jsonschema` | 62.05% | 448 | 265 | 0 | 9 | 722 |
 | `java-networknt-json-schema-validator` | 62.74% | 453 | 264 | 0 | 5 | 722 |
@@ -502,7 +497,7 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 0.00% | 0 | 0 | 4 | 0 | 4 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 4 | 0 | 0 | 0 | 4 |
 | `dotnet-jsonschema-net` | 100.00% | 4 | 0 | 0 | 0 | 4 |
 | `go-jsonschema` | 0.00% | 0 | 0 | 0 | 4 | 4 |
 | `java-networknt-json-schema-validator` | 100.00% | 4 | 0 | 0 | 0 | 4 |
@@ -516,10 +511,10 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 
 | Instance | Expected | `localhost/json-schema-rs` (ours) | `dotnet-jsonschema-net` | `go-jsonschema` | `java-networknt-json-schema-validator` | `js-ajv` | `js-hyperjump` | `python-jsonschema` | `rust-boon` | `rust-jsonschema` |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `medium/package-json/instances/valid/library.json` | valid | skipped | valid | errored | valid | errored | valid | valid | valid | valid |
-| `medium/package-json/instances/valid/minimal.json` | valid | skipped | valid | errored | valid | errored | valid | valid | valid | valid |
-| `medium/package-json/instances/invalid/name-wrong-type.json` | invalid | skipped | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
-| `medium/package-json/instances/invalid/scripts-wrong-type.json` | invalid | skipped | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
+| `medium/package-json/instances/valid/library.json` | valid | valid | valid | errored | valid | errored | valid | valid | valid | valid |
+| `medium/package-json/instances/valid/minimal.json` | valid | valid | valid | errored | valid | errored | valid | valid | valid | valid |
+| `medium/package-json/instances/invalid/name-wrong-type.json` | invalid | invalid | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
+| `medium/package-json/instances/invalid/scripts-wrong-type.json` | invalid | invalid | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
 
 </details>
 
@@ -569,7 +564,7 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 0.00% | 0 | 0 | 5 | 0 | 5 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 5 | 0 | 0 | 0 | 5 |
 | `dotnet-jsonschema-net` | 100.00% | 5 | 0 | 0 | 0 | 5 |
 | `go-jsonschema` | 0.00% | 0 | 0 | 0 | 5 | 5 |
 | `java-networknt-json-schema-validator` | 100.00% | 5 | 0 | 0 | 0 | 5 |
@@ -583,11 +578,11 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 
 | Instance | Expected | `localhost/json-schema-rs` (ours) | `dotnet-jsonschema-net` | `go-jsonschema` | `java-networknt-json-schema-validator` | `js-ajv` | `js-hyperjump` | `python-jsonschema` | `rust-boon` | `rust-jsonschema` |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `large/circleci/instances/valid/build-workflow.json` | valid | skipped | valid | errored | valid | errored | valid | valid | valid | valid |
-| `large/circleci/instances/valid/test-job.json` | valid | skipped | valid | errored | valid | errored | valid | valid | valid | valid |
-| `large/circleci/instances/invalid/bad-version.json` | invalid | skipped | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
-| `large/circleci/instances/invalid/missing-version.json` | invalid | skipped | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
-| `large/circleci/instances/invalid/workflows-wrong-type.json` | invalid | skipped | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
+| `large/circleci/instances/valid/build-workflow.json` | valid | valid | valid | errored | valid | errored | valid | valid | valid | valid |
+| `large/circleci/instances/valid/test-job.json` | valid | valid | valid | errored | valid | errored | valid | valid | valid | valid |
+| `large/circleci/instances/invalid/bad-version.json` | invalid | invalid | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
+| `large/circleci/instances/invalid/missing-version.json` | invalid | invalid | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
+| `large/circleci/instances/invalid/workflows-wrong-type.json` | invalid | invalid | invalid | errored | invalid | errored | invalid | invalid | invalid | invalid |
 
 </details>
 
@@ -637,7 +632,7 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 0.00% | 0 | 0 | 5 | 0 | 5 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 5 | 0 | 0 | 0 | 5 |
 | `dotnet-jsonschema-net` | 0.00% | 0 | 0 | 0 | 5 | 5 |
 | `go-jsonschema` | 0.00% | 0 | 0 | 0 | 5 | 5 |
 | `java-networknt-json-schema-validator` | 0.00% | 0 | 0 | 0 | 5 | 5 |
@@ -651,11 +646,11 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 
 | Instance | Expected | `localhost/json-schema-rs` (ours) | `dotnet-jsonschema-net` | `go-jsonschema` | `java-networknt-json-schema-validator` | `js-ajv` | `js-hyperjump` | `python-jsonschema` | `rust-boon` | `rust-jsonschema` |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `massive/k8s-deployment/instances/valid/minimal.json` | valid | skipped | errored | errored | errored | errored | errored | valid | valid | valid |
-| `massive/k8s-deployment/instances/valid/nginx-deployment.json` | valid | skipped | errored | errored | errored | errored | errored | valid | valid | valid |
-| `massive/k8s-deployment/instances/invalid/additional-property.json` | invalid | skipped | errored | errored | errored | errored | errored | invalid | invalid | invalid |
-| `massive/k8s-deployment/instances/invalid/bad-replicas-type.json` | invalid | skipped | errored | errored | errored | errored | errored | invalid | invalid | invalid |
-| `massive/k8s-deployment/instances/invalid/wrong-kind.json` | invalid | skipped | errored | errored | errored | errored | errored | invalid | invalid | invalid |
+| `massive/k8s-deployment/instances/valid/minimal.json` | valid | valid | errored | errored | errored | errored | errored | valid | valid | valid |
+| `massive/k8s-deployment/instances/valid/nginx-deployment.json` | valid | valid | errored | errored | errored | errored | errored | valid | valid | valid |
+| `massive/k8s-deployment/instances/invalid/additional-property.json` | invalid | invalid | errored | errored | errored | errored | errored | invalid | invalid | invalid |
+| `massive/k8s-deployment/instances/invalid/bad-replicas-type.json` | invalid | invalid | errored | errored | errored | errored | errored | invalid | invalid | invalid |
+| `massive/k8s-deployment/instances/invalid/wrong-kind.json` | invalid | invalid | errored | errored | errored | errored | errored | invalid | invalid | invalid |
 
 </details>
 
@@ -671,15 +666,11 @@ Real-world and massive schemas from `json_schema_rs_benchmark/fixtures/`, run th
 
 Every fixture instance our harness skipped, grouped by reason.
 
-| Reason | Tests | Cases | By group |
-|---|---|---|---|
-| keyword "markdownDescription" | 5 | 1 | large/circleci: 5 |
-| keyword "x-kubernetes-group-version-kind" | 5 | 1 | massive/k8s-deployment: 5 |
-| keyword "x-intellij-language-injection" | 4 | 1 | medium/package-json: 4 |
+_No tests were skipped._
 
 ## Error messages side by side
 
-In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we strict-parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
+In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
 
 ### 1. suite draft2020-12/additionalProperties.json — additionalProperties being false does not allow other properties / an additional property is invalid
 
@@ -2803,20 +2794,17 @@ Instance (`medium/package-json/instances/invalid/name-wrong-type.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: error (8 message line(s))
 
 ```text
-schema rejected: unknown keyword "x-intellij-language-injection" at /definitions/scriptsInstallAfter
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsPublishAfter
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsRestart
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsStart
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsStop
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsTest
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsUninstallBefore
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsVersionBefore
-unknown keyword "tsType" at /patternProperties/^_
-unknown keyword "tsType" at /properties/scripts/additionalProperties
-unknown keyword "x-intellij-language-injection" at /properties/scripts/additionalProperties
+schema cannot be used: $ref "ava.json" at /properties/ava ("https://json.schemastore.org/ava.json") does not resolve: could not retrieve "https://json.schemastore.org/ava.json": retrieval is disabled; no document was given for "https://json.schemastore.org/ava.json"
+schema cannot be used: $ref "eslintrc.json" at /properties/eslintConfig ("https://json.schemastore.org/eslintrc.json") does not resolve: could not retrieve "https://json.schemastore.org/eslintrc.json": retrieval is disabled; no document was given for "https://json.schemastore.org/eslintrc.json"
+schema cannot be used: $ref "jscpd.json" at /properties/jscpd ("https://json.schemastore.org/jscpd.json") does not resolve: could not retrieve "https://json.schemastore.org/jscpd.json": retrieval is disabled; no document was given for "https://json.schemastore.org/jscpd.json"
+schema cannot be used: $ref "nodemon.json" at /properties/nodemonConfig ("https://json.schemastore.org/nodemon.json") does not resolve: could not retrieve "https://json.schemastore.org/nodemon.json": retrieval is disabled; no document was given for "https://json.schemastore.org/nodemon.json"
+schema cannot be used: $ref "https://www.schemastore.org/prettierrc.json" at /properties/prettier ("https://www.schemastore.org/prettierrc.json") does not resolve: could not retrieve "https://www.schemastore.org/prettierrc.json": retrieval is disabled; no document was given for "https://www.schemastore.org/prettierrc.json"
+schema cannot be used: $ref "https://www.schemastore.org/quikrun.json" at /properties/quikrun ("https://www.schemastore.org/quikrun.json") does not resolve: could not retrieve "https://www.schemastore.org/quikrun.json": retrieval is disabled; no document was given for "https://www.schemastore.org/quikrun.json"
+schema cannot be used: $ref "semantic-release.json" at /properties/release ("https://json.schemastore.org/semantic-release.json") does not resolve: could not retrieve "https://json.schemastore.org/semantic-release.json": retrieval is disabled; no document was given for "https://json.schemastore.org/semantic-release.json"
+schema cannot be used: $ref "stylelintrc.json" at /properties/stylelint ("https://json.schemastore.org/stylelintrc.json") does not resolve: could not retrieve "https://json.schemastore.org/stylelintrc.json": retrieval is disabled; no document was given for "https://json.schemastore.org/stylelintrc.json"
 ```
 
 **jsonschema**: error (1 message line(s))
@@ -2845,20 +2833,17 @@ Instance (`medium/package-json/instances/invalid/scripts-wrong-type.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: error (8 message line(s))
 
 ```text
-schema rejected: unknown keyword "x-intellij-language-injection" at /definitions/scriptsInstallAfter
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsPublishAfter
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsRestart
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsStart
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsStop
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsTest
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsUninstallBefore
-unknown keyword "x-intellij-language-injection" at /definitions/scriptsVersionBefore
-unknown keyword "tsType" at /patternProperties/^_
-unknown keyword "tsType" at /properties/scripts/additionalProperties
-unknown keyword "x-intellij-language-injection" at /properties/scripts/additionalProperties
+schema cannot be used: $ref "ava.json" at /properties/ava ("https://json.schemastore.org/ava.json") does not resolve: could not retrieve "https://json.schemastore.org/ava.json": retrieval is disabled; no document was given for "https://json.schemastore.org/ava.json"
+schema cannot be used: $ref "eslintrc.json" at /properties/eslintConfig ("https://json.schemastore.org/eslintrc.json") does not resolve: could not retrieve "https://json.schemastore.org/eslintrc.json": retrieval is disabled; no document was given for "https://json.schemastore.org/eslintrc.json"
+schema cannot be used: $ref "jscpd.json" at /properties/jscpd ("https://json.schemastore.org/jscpd.json") does not resolve: could not retrieve "https://json.schemastore.org/jscpd.json": retrieval is disabled; no document was given for "https://json.schemastore.org/jscpd.json"
+schema cannot be used: $ref "nodemon.json" at /properties/nodemonConfig ("https://json.schemastore.org/nodemon.json") does not resolve: could not retrieve "https://json.schemastore.org/nodemon.json": retrieval is disabled; no document was given for "https://json.schemastore.org/nodemon.json"
+schema cannot be used: $ref "https://www.schemastore.org/prettierrc.json" at /properties/prettier ("https://www.schemastore.org/prettierrc.json") does not resolve: could not retrieve "https://www.schemastore.org/prettierrc.json": retrieval is disabled; no document was given for "https://www.schemastore.org/prettierrc.json"
+schema cannot be used: $ref "https://www.schemastore.org/quikrun.json" at /properties/quikrun ("https://www.schemastore.org/quikrun.json") does not resolve: could not retrieve "https://www.schemastore.org/quikrun.json": retrieval is disabled; no document was given for "https://www.schemastore.org/quikrun.json"
+schema cannot be used: $ref "semantic-release.json" at /properties/release ("https://json.schemastore.org/semantic-release.json") does not resolve: could not retrieve "https://json.schemastore.org/semantic-release.json": retrieval is disabled; no document was given for "https://json.schemastore.org/semantic-release.json"
+schema cannot be used: $ref "stylelintrc.json" at /properties/stylelint ("https://json.schemastore.org/stylelintrc.json") does not resolve: could not retrieve "https://json.schemastore.org/stylelintrc.json": retrieval is disabled; no document was given for "https://json.schemastore.org/stylelintrc.json"
 ```
 
 **jsonschema**: error (1 message line(s))
@@ -3026,209 +3011,10 @@ Instance (`large/circleci/instances/invalid/bad-version.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: invalid (1 message line(s))
 
 ```text
-schema rejected: unknown keyword "markdownDescription" at /definitions/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/if
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/anyOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/circleci_ip_ranges
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/executor/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/executor/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parallelism
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/description
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/enum
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/working_directory
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/then/properties/key
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/then/properties/plan_name
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/0
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/and
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/equal
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches/properties/pattern
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches/properties/value
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/not
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/or
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/jobs
-unknown keyword "markdownDescription" at /definitions/step/oneOf/0
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/add_ssh_keys
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/add_ssh_keys/oneOf/1/properties/fingerprints
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace/properties/at
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/depth
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/method
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/paths
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/root
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/0/properties/key
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/0/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/1/properties/keys
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/1/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/auto_rerun_delay
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/background
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/command
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/environment
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/max_auto_reruns
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/no_output_timeout
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/shell
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/working_directory
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/key
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/paths
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker/oneOf/1/properties/version
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/destination
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless/properties/condition
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless/properties/steps
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when/properties/condition
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when/properties/steps
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/context
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches/properties/only
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags/properties/ignore
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags/properties/only
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/alias
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/exclude
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/parameters
-unknown keyword "steps" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/post-steps
-unknown keyword "steps" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/pre-steps
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/requires
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/requires/items/oneOf/1/patternProperties/^[A-Za-z][A-Za-z\s\d_-]*$/oneOf/0/oneOf/5
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/serial-group
-unknown keyword "markdownDescription" at /properties/commands
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/0/properties/steps
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/auth
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/aws_auth
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/command
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/entrypoint
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/image
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/name
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/user
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/image
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/macos
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/macos/properties/xcode
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/resource_class
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/shell
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/working_directory
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches/properties/only
-unknown keyword "markdownDescription" at /properties/job-groups
-unknown keyword "markdownDescription" at /properties/job-groups/additionalProperties/properties/jobs
-unknown keyword "markdownDescription" at /properties/jobs
-unknown keyword "markdownDescription" at /properties/orbs
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/description
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/steps
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/jobs
-unknown keyword "markdownDescription" at /properties/version
-unknown keyword "markdownDescription" at /properties/workflows
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/not
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/max_auto_reruns
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/cron
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches/properties/only
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/unless
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/when
-unknown keyword "markdownDescription" at /properties/workflows/properties/version
+/version: value "not-a-version-number-or-known" not in enum (allowed: "2.1", 2.1)
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -3256,209 +3042,10 @@ Instance (`large/circleci/instances/invalid/missing-version.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: invalid (1 message line(s))
 
 ```text
-schema rejected: unknown keyword "markdownDescription" at /definitions/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/if
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/anyOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/circleci_ip_ranges
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/executor/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/executor/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parallelism
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/description
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/enum
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/working_directory
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/then/properties/key
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/then/properties/plan_name
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/0
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/and
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/equal
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches/properties/pattern
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches/properties/value
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/not
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/or
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/jobs
-unknown keyword "markdownDescription" at /definitions/step/oneOf/0
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/add_ssh_keys
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/add_ssh_keys/oneOf/1/properties/fingerprints
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace/properties/at
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/depth
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/method
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/paths
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/root
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/0/properties/key
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/0/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/1/properties/keys
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/1/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/auto_rerun_delay
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/background
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/command
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/environment
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/max_auto_reruns
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/no_output_timeout
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/shell
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/working_directory
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/key
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/paths
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker/oneOf/1/properties/version
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/destination
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless/properties/condition
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless/properties/steps
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when/properties/condition
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when/properties/steps
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/context
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches/properties/only
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags/properties/ignore
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags/properties/only
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/alias
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/exclude
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/parameters
-unknown keyword "steps" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/post-steps
-unknown keyword "steps" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/pre-steps
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/requires
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/requires/items/oneOf/1/patternProperties/^[A-Za-z][A-Za-z\s\d_-]*$/oneOf/0/oneOf/5
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/serial-group
-unknown keyword "markdownDescription" at /properties/commands
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/0/properties/steps
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/auth
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/aws_auth
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/command
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/entrypoint
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/image
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/name
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/user
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/image
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/macos
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/macos/properties/xcode
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/resource_class
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/shell
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/working_directory
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches/properties/only
-unknown keyword "markdownDescription" at /properties/job-groups
-unknown keyword "markdownDescription" at /properties/job-groups/additionalProperties/properties/jobs
-unknown keyword "markdownDescription" at /properties/jobs
-unknown keyword "markdownDescription" at /properties/orbs
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/description
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/steps
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/jobs
-unknown keyword "markdownDescription" at /properties/version
-unknown keyword "markdownDescription" at /properties/workflows
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/not
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/max_auto_reruns
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/cron
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches/properties/only
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/unless
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/when
-unknown keyword "markdownDescription" at /properties/workflows/properties/version
+root: missing required property "version"
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -3487,209 +3074,10 @@ Instance (`large/circleci/instances/invalid/workflows-wrong-type.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: invalid (1 message line(s))
 
 ```text
-schema rejected: unknown keyword "markdownDescription" at /definitions/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/if
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/anyOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/circleci_ip_ranges
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/executor/oneOf/0
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/executor/oneOf/1
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parallelism
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/description
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/enum
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/parameters/additionalProperties/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/else/then/properties/working_directory
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/else/then/properties/key
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/properties/type
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/then
-unknown keyword "markdownDescription" at /definitions/jobInvocation/oneOf/1/then/properties/plan_name
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/0
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/and
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/equal
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches/properties/pattern
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/matches/properties/value
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/not
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/1/properties/or
-unknown keyword "markdownDescription" at /definitions/logic/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /definitions/orb/oneOf/1/properties/jobs
-unknown keyword "markdownDescription" at /definitions/step/oneOf/0
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/add_ssh_keys
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/add_ssh_keys/oneOf/1/properties/fingerprints
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace/properties/at
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/attach_workspace/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/depth
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/method
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/checkout/oneOf/1/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/paths
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/persist_to_workspace/properties/root
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/0/properties/key
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/0/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/1/properties/keys
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/restore_cache/oneOf/1/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/auto_rerun_delay
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/background
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/command
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/environment
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/max_auto_reruns
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/no_output_timeout
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/shell
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/run/oneOf/1/properties/working_directory
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/key
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/paths
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/save_cache/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/setup_remote_docker/oneOf/1/properties/version
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/destination
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_artifacts/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results/properties/name
-unknown keyword "markdownDescription" at /definitions/step/oneOf/1/properties/store_test_results/properties/path
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless/properties/condition
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/unless/properties/steps
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when/properties/condition
-unknown keyword "markdownDescription" at /definitions/step/oneOf/2/properties/when/properties/steps
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/context
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/branches/properties/only
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags/properties/ignore
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/filters/oneOf/0/properties/tags/properties/only
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/alias
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/exclude
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/matrix/properties/parameters
-unknown keyword "steps" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/post-steps
-unknown keyword "steps" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/pre-steps
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/requires
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/requires/items/oneOf/1/patternProperties/^[A-Za-z][A-Za-z\s\d_-]*$/oneOf/0/oneOf/5
-unknown keyword "markdownDescription" at /definitions/workflowJobInvocation/oneOf/1/additionalProperties/properties/serial-group
-unknown keyword "markdownDescription" at /properties/commands
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/0/properties/steps
-unknown keyword "markdownDescription" at /properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/auth
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/aws_auth
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/command
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/entrypoint
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/image
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/name
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/user
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/image
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/macos
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/macos/properties/xcode
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/resource_class
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/shell
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/0/properties/working_directory
-unknown keyword "markdownDescription" at /properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /properties/experimental/properties/notify/properties/branches/properties/only
-unknown keyword "markdownDescription" at /properties/job-groups
-unknown keyword "markdownDescription" at /properties/job-groups/additionalProperties/properties/jobs
-unknown keyword "markdownDescription" at /properties/jobs
-unknown keyword "markdownDescription" at /properties/orbs
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/description
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/0/properties/steps
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/commands/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/docker/items/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/environment/oneOf/2
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/0
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/docker_layer_caching
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/machine/oneOf/1/properties/enabled
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/0/properties/parameters
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/executors/additionalProperties/oneOf/1
-unknown keyword "markdownDescription" at /properties/orbs/additionalProperties/oneOf/2/properties/jobs
-unknown keyword "markdownDescription" at /properties/version
-unknown keyword "markdownDescription" at /properties/workflows
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/not
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/max_auto_reruns
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/cron
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches/properties/ignore
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/triggers/items/properties/schedule/properties/filters/properties/branches/properties/only
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/unless
-unknown keyword "markdownDescription" at /properties/workflows/additionalProperties/properties/when
-unknown keyword "markdownDescription" at /properties/workflows/properties/version
+/workflows: expected object, got string
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -3964,72 +3352,10 @@ Instance (`massive/k8s-deployment/instances/invalid/additional-property.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: invalid (1 message line(s))
 
 ```text
-schema rejected: unknown keyword "x-kubernetes-group-version-kind" at root
-unknown keyword "x-kubernetes-patch-strategy" at /properties/metadata/properties/finalizers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-strategy" at /properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/selector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/selector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/metadata/properties/finalizers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/env
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/hostAliases
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/hostAliases
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/imagePullSecrets
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/imagePullSecrets
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/env
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/volumes
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/volumes
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/status/properties/conditions
-unknown keyword "x-kubernetes-patch-strategy" at /properties/status/properties/conditions
+/bogusTopLevel: additional property "bogusTopLevel" not allowed
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -4076,72 +3402,10 @@ Instance (`massive/k8s-deployment/instances/invalid/bad-replicas-type.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: invalid (1 message line(s))
 
 ```text
-schema rejected: unknown keyword "x-kubernetes-group-version-kind" at root
-unknown keyword "x-kubernetes-patch-strategy" at /properties/metadata/properties/finalizers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-strategy" at /properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/selector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/selector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/metadata/properties/finalizers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/env
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/hostAliases
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/hostAliases
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/imagePullSecrets
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/imagePullSecrets
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/env
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/volumes
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/volumes
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/status/properties/conditions
-unknown keyword "x-kubernetes-patch-strategy" at /properties/status/properties/conditions
+/spec/replicas: expected one of [integer, null], got string
 ```
 
 **jsonschema**: invalid (1 message line(s))
@@ -4173,72 +3437,10 @@ Instance (`massive/k8s-deployment/instances/invalid/wrong-kind.json`):
 }
 ```
 
-**json-schema-rs**: error (1 message line(s))
+**json-schema-rs**: invalid (1 message line(s))
 
 ```text
-schema rejected: unknown keyword "x-kubernetes-group-version-kind" at root
-unknown keyword "x-kubernetes-patch-strategy" at /properties/metadata/properties/finalizers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-strategy" at /properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/selector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/selector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/metadata/properties/finalizers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/metadata/properties/ownerReferences
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/preferredDuringSchedulingIgnoredDuringExecution/items/properties/podAffinityTerm/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/affinity/properties/podAntiAffinity/properties/requiredDuringSchedulingIgnoredDuringExecution/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/env
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/containers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/ephemeralContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/hostAliases
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/hostAliases
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/imagePullSecrets
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/imagePullSecrets
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/env
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/env
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/ports
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeDevices
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/initContainers/items/properties/volumeMounts
-unknown keyword "x-kubernetes-list-map-keys" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-list-type" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/topologySpreadConstraints/items/properties/labelSelector/properties/matchExpressions/items/properties/key
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/spec/properties/template/properties/spec/properties/volumes
-unknown keyword "x-kubernetes-patch-strategy" at /properties/spec/properties/template/properties/spec/properties/volumes
-unknown keyword "x-kubernetes-patch-merge-key" at /properties/status/properties/conditions
-unknown keyword "x-kubernetes-patch-strategy" at /properties/status/properties/conditions
+/kind: value "Service" not in enum (allowed: "Deployment")
 ```
 
 **jsonschema**: invalid (1 message line(s))

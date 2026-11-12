@@ -1,17 +1,15 @@
 //! Bowtie harness for json-schema-rs.
 //!
 //! Speaks Bowtie's line-delimited JSON protocol (version 1) over stdin/stdout: one command per
-//! input line, one response per output line. Each `run` case is parsed with **strict** schema
-//! ingestion (unknown keywords are rejected), its registry is built and the schema compiled once
-//! ([`json_schema_rs::CompiledSchema`]), and every test instance is validated with
+//! input line, one response per output line. Each `run` case is parsed with the default settings
+//! (unknown keywords are ignored, as the suite expects), its registry is built and the schema
+//! compiled once ([`json_schema_rs::CompiledSchema`]), and every test instance is validated with
 //! [`json_schema_rs::CompiledSchema::validate`].
 //!
 //! Classification of each case and test (the differential report builder depends on these exact
 //! skip messages):
 //!
-//! - Strict parsing rejects a key the draft does not define → whole-case skip
-//!   `unsupported keyword "<key>" at <path>`.
-//! - Any other parse failure, a registry error other than one `$ref`, or a compile error (e.g. a
+//! - A parse failure, a registry error other than one `$ref`, or a compile error (e.g. a
 //!   pattern our regex engine cannot compile) → whole-case skip `unsupported schema: <error>`.
 //! - The registry reports an unresolvable `$ref` → whole-case skip `unsupported $ref: <detail>`.
 //! - Anything else is a real verdict `{"valid": bool}`.
@@ -184,33 +182,20 @@ fn dialect_spec_version(uri: &str) -> Option<SpecVersion> {
         .map(|(_, spec_version)| *spec_version)
 }
 
-/// Strict ingestion settings for a case: Bowtie's current dialect is the default draft (a schema
-/// with its own `$schema` follows that, a custom metaschema through the registry), and keys the
-/// draft does not define are rejected, so they surface as skips rather than ignored keys.
-fn strict_settings(dialect: SpecVersion) -> JsonSchemaSettings {
+/// Settings for a case: Bowtie's current dialect is the default draft (a schema with its own
+/// `$schema` follows that, a custom metaschema through the registry).
+fn case_settings(dialect: SpecVersion) -> JsonSchemaSettings {
     JsonSchemaSettings::builder()
         .default_spec_version(dialect)
-        .disallow_unknown_fields(true)
         .build()
 }
 
-/// Skip message for a schema that strict parsing rejected.
+/// Skip message for a schema we could not parse.
 fn parse_skip_message(error: &JsonSchemaParseError) -> String {
-    match error {
-        JsonSchemaParseError::UnknownField { key, path } => format!(
-            "unsupported keyword \"{key}\" at {}",
-            path.display_root_or_path()
-        ),
-        JsonSchemaParseError::Serde(_)
-        | JsonSchemaParseError::InvalidKeywordValue { .. }
-        | JsonSchemaParseError::Io(_)
-        | JsonSchemaParseError::UnknownSchemaUri { .. } => {
-            format!("unsupported schema: {error}")
-        }
-    }
+    format!("unsupported schema: {error}")
 }
 
-/// Runs one case: parses its schema strictly and validates every test instance.
+/// Runs one case: parses its schema and validates every test instance.
 fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutcome {
     if output == OutputFormat::Annotations {
         return CaseOutcome::Results(vec![
@@ -220,7 +205,7 @@ fn run_case(case: &Case, dialect: SpecVersion, output: OutputFormat) -> CaseOutc
             case.tests.len()
         ]);
     }
-    let settings: JsonSchemaSettings = strict_settings(dialect);
+    let settings: JsonSchemaSettings = case_settings(dialect);
     let schema: Schema = match catch_panic(|| Schema::new_from_serde_value(&case.schema, &settings))
     {
         Ok(Ok(schema)) => schema,
@@ -531,29 +516,29 @@ mod tests {
     }
 
     #[test]
-    fn unknown_root_keyword_skips_case_with_exact_message() {
-        let expected: CaseOutcome =
-            CaseOutcome::Skipped("unsupported keyword \"bogus\" at root".to_string());
+    fn unknown_keywords_are_ignored() {
+        let expected: CaseOutcome = CaseOutcome::Results(vec![TestOutcome::Verdict(false)]);
         let actual: CaseOutcome = run_flag(&json!({
-            "schema": {"bogus": {"type": "string"}},
-            "tests": [{"instance": 1}]
+            "schema": {
+                "bogus": {"type": "string"},
+                "properties": {
+                    "foo": {"allOf": [{"type": "integer"}, {"bogus": {"type": "string"}}]}
+                }
+            },
+            "tests": [{"instance": {"foo": "a"}}]
         }));
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn unknown_nested_keyword_skips_case_with_exact_message() {
+    fn invalid_schema_skips_case_with_exact_message() {
         let expected: CaseOutcome = CaseOutcome::Skipped(
-            "unsupported keyword \"bogus\" at /properties/foo/allOf/1".to_string(),
+            "unsupported schema: invalid JSON Schema: expected a non-negative integer, got -1"
+                .to_string(),
         );
         let actual: CaseOutcome = run_flag(&json!({
-            "schema": {
-                "properties": {
-                    "bogus": {"type": "string"},
-                    "foo": {"allOf": [{"type": "integer"}, {"bogus": {"type": "string"}}]}
-                }
-            },
-            "tests": [{"instance": {}}]
+            "schema": {"minLength": -1},
+            "tests": [{"instance": "a"}]
         }));
         assert_eq!(expected, actual);
     }

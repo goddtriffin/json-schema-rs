@@ -498,7 +498,7 @@ fn render_tool_output(out: &mut String, tool: &ToolOutput) {
 }
 
 fn render_messages(out: &mut String, cases: &[MessageCase]) {
-    out.push_str("## Error messages side by side\n\nIn-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we strict-parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.\n\n");
+    out.push_str("## Error messages side by side\n\nIn-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.\n\n");
     if cases.is_empty() {
         out.push_str("_No cases selected._\n");
         return;
@@ -567,7 +567,7 @@ mod tests {
 
     const SUITE: &str = r#"{"implementations": {"ours": {"name": "json-schema-rs", "language": "rust"}, "a": {"name": "alpha", "language": "rust", "version": "1"}}, "dialect": "D7", "bowtie_version": "x", "started": "t"}
 {"seq": 1, "case": {"description": "c|1", "schema": {}, "tests": [{"description": "t1", "instance": 1, "valid": true}, {"description": "t2", "instance": 2, "valid": false}, {"description": "t3", "instance": 3, "valid": true}, {"description": "t4", "instance": 4, "valid": false}, {"description": "t5", "instance": 5, "valid": true}]}}
-{"seq": 1, "implementation": "ours", "expected": [true, false, true, false, true], "results": [{"valid": true}, {"valid": true}, {"skipped": true, "message": "unsupported keyword \"if\" at root"}, {"valid": true}, {"valid": false}]}
+{"seq": 1, "implementation": "ours", "expected": [true, false, true, false, true], "results": [{"valid": true}, {"valid": true}, {"skipped": true, "message": "unsupported schema: invalid regex"}, {"valid": true}, {"valid": false}]}
 {"seq": 1, "implementation": "a", "expected": [true, false, true, false, true], "results": [{"valid": true}, {"valid": false}, {"valid": true}, {"valid": true}, {"valid": true}]}
 {"did_fail_fast": false}"#;
 
@@ -703,7 +703,7 @@ Every suite test our harness skipped, grouped by reason and sorted by impact. Th
 
 | Reason | Tests | Cases | By group |
 |---|---|---|---|
-| keyword "if" | 1 | 1 | draft7: 1 |
+| schema: invalid regex | 1 | 1 | draft7: 1 |
 
 ## Per-draft results
 
@@ -793,7 +793,7 @@ _No tests were skipped._
 
 ## Error messages side by side
 
-In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we strict-parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
+In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
 
 ### 1. suite draft2020-12/type.json — string / number
 
