@@ -1084,9 +1084,10 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
         fetched
     }
 
-    /// Retrieves and parses the document at `uri`; see [`Builder::fetch`].
+    /// Retrieves and parses the document at `uri`; see [`Builder::fetch`]. A given document is
+    /// moved out of the builder rather than copied: [`Builder::fetch`] reads each URI once.
     fn fetch_uncached(
-        &self,
+        &mut self,
         uri: &Uri,
         draft: Option<SpecVersion>,
     ) -> Result<Arc<Schema>, RegistryError> {
@@ -1096,8 +1097,8 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
                     uri: uri.to_string(),
                     reason: e.to_string(),
                 })?
-            } else if let Some(value) = self.documents.get(uri.as_str()) {
-                value.clone()
+            } else if let Some(value) = self.documents.remove(uri.as_str()) {
+                value
             } else {
                 self.retriever
                     .retrieve(uri.as_str())
@@ -1112,11 +1113,12 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
         settings.forced_spec_version = None;
         settings.default_spec_version = draft.or(settings.default_spec_version);
         settings.unknown_schema_uri = super::settings::UnknownSchemaUri::Fallback;
-        let schema: Schema =
-            Schema::new_from_serde_value(&value, &settings).map_err(|e| RegistryError::Parse {
+        let schema: Schema = Schema::new_from_owned_serde_value(value, &settings).map_err(|e| {
+            RegistryError::Parse {
                 uri: uri.to_string(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
         Ok(Arc::new(schema))
     }
 
