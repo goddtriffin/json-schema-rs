@@ -30,10 +30,13 @@
 //! grows linearly with their fields (see [`macro@Deserialize`]).
 //!
 //! For reverse codegen (Rust → JSON Schema), use `#[derive(ToJsonSchema)]` with optional
-//! `#[json_schema(title = "...")]` on the struct and `#[serde(rename = "...")]` on fields.
+//! `#[json_schema(title = "...")]` on the struct, and names properties and enum values as serde does
+//! (`#[serde(rename = "...")]` on a field or variant, else its name under the container's
+//! `#[serde(rename_all = "...")]`).
 
 mod derive;
 mod deserialize;
+mod rename_rule;
 mod settings;
 
 use derive::expand_to_json_schema;
