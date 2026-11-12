@@ -21,7 +21,8 @@ use super::type_graph::{
 use crate::json_schema::{IntegerSemantics, Registry, Schema};
 use crate::number;
 use crate::sanitizers::{
-    enum_variant_name_from_value, sanitize_field_name, sanitize_struct_name, to_pascal_case,
+    RenameRule, enum_variant_name_from_value, sanitize_field_name, sanitize_struct_name,
+    to_pascal_case,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1030,14 +1031,71 @@ struct RenderedField {
     default_accessor: Option<String>,
 }
 
-/// Renders the fields of `object`.
+/// The `#[serde(rename_all = "...")]` rule for members named `(Rust name, serde name)`, if one
+/// saves lines: the rule leaving the fewest members needing their own `rename` (the first in
+/// serde's order on a tie), when that count plus the `rename_all` itself is below the renames
+/// needed without a rule. `write` is the rule's conversion for the member kind
+/// ([`RenameRule::write_field`] or [`RenameRule::write_variant`]).
+///
+/// Every struct and enum passes through here, so it stays cheap: a type with fewer than two
+/// renames cannot gain and is skipped without converting a name, a rule stops counting once it
+/// cannot win, and every conversion reuses one buffer.
+fn rename_all_rule(
+    members: &[(&str, &str)],
+    write: fn(RenameRule, &str, &mut String),
+) -> Option<RenameRule> {
+    let without: usize = members.iter().filter(|(name, key)| name != key).count();
+    if without < 2 {
+        return None;
+    }
+    let mut buffer: String = String::new();
+    // The best cost so far, in lines: own renames, plus one for the `rename_all`.
+    let mut best: (usize, Option<RenameRule>) = (without, None);
+    for rule in RenameRule::ALL {
+        let mut cost: usize = 1;
+        for (name, key) in members {
+            write(rule, name, &mut buffer);
+            if buffer != *key {
+                cost += 1;
+                if cost >= best.0 {
+                    break;
+                }
+            }
+        }
+        if cost < best.0 {
+            best = (cost, Some(rule));
+        }
+    }
+    best.1
+}
+
+/// Whether a member named `name` needs its own `rename` to be read as `key`: its serde name
+/// (`name` under `rule`, if any, converted by `write` into `buffer`) is not `key`.
+fn needs_rename(
+    rule: Option<RenameRule>,
+    write: fn(RenameRule, &str, &mut String),
+    name: &str,
+    key: &str,
+    buffer: &mut String,
+) -> bool {
+    match rule {
+        None => name != key,
+        Some(rule) => {
+            write(rule, name, buffer);
+            buffer != key
+        }
+    }
+}
+
+/// Renders the fields of `object`, with the container's `rename_all` rule (see
+/// [`rename_all_rule`]); a field gets its own `rename` only when the rule does not give its key.
 fn render_fields(
     graph: &TypeGraph,
     plan: &Plan,
     home: Home,
     object: &ObjectNode,
     imports: &mut Imports,
-) -> Vec<RenderedField> {
+) -> (Vec<RenderedField>, Option<RenameRule>) {
     let mut bases: Vec<String> = object
         .fields
         .iter()
@@ -1047,9 +1105,26 @@ fn render_fields(
         bases.push("additional".to_string());
     }
     let names: Vec<String> = unique_idents(&bases, "");
+    let members: Vec<(&str, &str)> = object
+        .fields
+        .iter()
+        .zip(&names)
+        .map(|(field, name)| (name.as_str(), field.json_key.as_str()))
+        .collect();
+    let rule: Option<RenameRule> = rename_all_rule(&members, RenameRule::write_field);
+    let mut buffer: String = String::new();
     let mut out: Vec<RenderedField> = Vec::new();
     for (field, name) in object.fields.iter().zip(&names) {
-        out.push(render_field(graph, plan, home, field, name, imports));
+        let rename: bool = needs_rename(
+            rule,
+            RenameRule::write_field,
+            name,
+            &field.json_key,
+            &mut buffer,
+        );
+        out.push(render_field(
+            graph, plan, home, field, name, rename, imports,
+        ));
     }
     if let Some(additional) = object.additional {
         let value: String = rust_type(graph, plan, home, additional, imports);
@@ -1068,7 +1143,7 @@ fn render_fields(
             default_accessor: None,
         });
     }
-    out
+    (out, rule)
 }
 
 /// Whether a value of type `id` holds integers serde's own `Deserialize` would read: an integer
@@ -1208,12 +1283,14 @@ fn integer_serde_args(
     }
 }
 
+/// Renders one field named `name`, with its own `rename` when `rename` (see [`needs_rename`]).
 fn render_field(
     graph: &TypeGraph,
     plan: &Plan,
     home: Home,
     field: &Field,
     name: &str,
+    rename: bool,
     imports: &mut Imports,
 ) -> RenderedField {
     let (nullable, value_id): (bool, TypeId) = match graph.node(field.ty) {
@@ -1240,7 +1317,7 @@ fn render_field(
         FieldShape::OptionalNullable => format!("Option<Option<{value_ty}>>"),
     };
     let mut serde_args: Vec<String> = Vec::new();
-    if name != field.json_key {
+    if rename {
         serde_args.push(format!("rename = \"{}\"", escape(&field.json_key)));
     }
     // `default` is an annotation: deserializing never fills it in (absent stays absent, and a
@@ -1357,7 +1434,8 @@ fn render_struct(
     object: &ObjectNode,
     imports: &mut Imports,
 ) -> String {
-    let fields: Vec<RenderedField> = render_fields(graph, plan, home, object, imports);
+    let (fields, rule): (Vec<RenderedField>, Option<RenameRule>) =
+        render_fields(graph, plan, home, object, imports);
     let default_accessors: Vec<String> = fields
         .iter()
         .filter_map(|f| f.default_accessor.clone())
@@ -1374,8 +1452,15 @@ fn render_struct(
     if let Some(ref id) = a.id {
         let _ = writeln!(out, "#[json_schema(id = \"{}\")]", escape(id));
     }
+    let mut container_args: Vec<String> = Vec::new();
     if object.deny_unknown {
-        out.push_str("#[serde(deny_unknown_fields)]\n");
+        container_args.push("deny_unknown_fields".to_string());
+    }
+    if let Some(rule) = rule {
+        container_args.push(format!("rename_all = \"{}\"", rule.serde_name()));
+    }
+    if !container_args.is_empty() {
+        let _ = writeln!(out, "#[serde({})]", container_args.join(", "));
     }
     let _ = writeln!(out, "pub struct {name} {{");
     for field in &fields {
@@ -1501,10 +1586,20 @@ fn render_enum(name: &str, e: &EnumNode, imports: &mut Imports) -> String {
     if e.is_string_enum() {
         out.push_str(STRING_ENUM_DERIVE);
         out.push('\n');
+        let members: Vec<(&str, &str)> = e
+            .values
+            .iter()
+            .zip(&variants)
+            .map(|(value, variant)| (variant.as_str(), value.as_str().expect("string enum value")))
+            .collect();
+        let rule: Option<RenameRule> = rename_all_rule(&members, RenameRule::write_variant);
+        if let Some(rule) = rule {
+            let _ = writeln!(out, "#[serde(rename_all = \"{}\")]", rule.serde_name());
+        }
         let _ = writeln!(out, "pub enum {name} {{");
-        for (value, variant) in e.values.iter().zip(&variants) {
-            let raw: &str = value.as_str().expect("string enum value");
-            if raw != variant {
+        let mut buffer: String = String::new();
+        for (variant, raw) in members {
+            if needs_rename(rule, RenameRule::write_variant, variant, raw, &mut buffer) {
                 let _ = writeln!(out, "    #[serde(rename = \"{}\")]", escape(raw));
             }
             let _ = writeln!(out, "    {variant},");
@@ -3178,10 +3273,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
-    #[serde(rename = "closed")]
     Closed,
-    #[serde(rename = "open")]
     Open,
 }
 
@@ -3430,12 +3524,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Level {
-    #[serde(rename = "high")]
     High,
-    #[serde(rename = "low")]
     Low,
-    #[serde(rename = "medium")]
     Medium,
 }
 
@@ -3464,10 +3556,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum A {
-    #[serde(rename = "x")]
     X,
-    #[serde(rename = "y")]
     Y,
 }
 
@@ -5179,6 +5270,163 @@ pub struct Root {
         assert_eq!(expected, actual);
     }
 
+    /// Three camelCase keys: one `rename_all` beside `deny_unknown_fields` replaces their
+    /// renames.
+    #[test]
+    fn fields_one_rule_names_become_rename_all() {
+        let json: &str = r#"{"type":"object","properties":{"logLevel":{"type":"string"},"maxRetries":{"type":"integer"},"retryDelayMs":{"type":"integer"}},"required":["logLevel"],"additionalProperties":false}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Root {
+    pub log_level: String,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<i64>,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub retry_delay_ms: Option<i64>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// One camelCase key: its own `rename` is no longer than a `rename_all`, so it stays.
+    #[test]
+    fn single_renamed_field_keeps_its_own_rename() {
+        let json: &str = r#"{"type":"object","properties":{"logLevel":{"type":"string"},"name":{"type":"string"}}}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(rename = "logLevel", skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Most keys camelCase: `rename_all` for them, and a `rename` for the key the rule does not
+    /// give (`foo-bar`); the keyword field `type_` needs none, since camelCase drops its `_`.
+    #[test]
+    fn fields_the_rule_does_not_name_keep_their_own_rename() {
+        let json: &str = r#"{"type":"object","properties":{"logLevel":{"type":"string"},"maxRetries":{"type":"integer"},"retryDelayMs":{"type":"integer"},"foo-bar":{"type":"string"},"type":{"type":"string"}},"required":["logLevel","maxRetries","retryDelayMs","foo-bar","type"]}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Root {
+    #[serde(rename = "foo-bar")]
+    pub foo_bar: String,
+    pub log_level: String,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub max_retries: i64,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub retry_delay_ms: i64,
+    pub type_: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Values no serde rule gives from the variant names (`team_1` from `Team1`): one `rename`
+    /// per variant, no `rename_all`.
+    #[test]
+    fn enum_values_no_rule_names_keep_their_own_renames() {
+        let json: &str = r#"{"type":"object","properties":{"team":{"enum":["team_1","team_2","team_3"]}},"required":["team"]}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Team {
+    #[serde(rename = "team_1")]
+    Team1,
+    #[serde(rename = "team_2")]
+    Team2,
+    #[serde(rename = "team_3")]
+    Team3,
+}
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub team: Team,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `SCREAMING_SNAKE_CASE` values: one `rename_all`, and a `rename` for the value it does not
+    /// give.
+    #[test]
+    fn enum_values_one_rule_names_become_rename_all() {
+        let json: &str = r#"{"type":"object","properties":{"level":{"enum":["LOG_LEVEL","INFO","WARN","other"]}},"required":["level"]}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Level {
+    Info,
+    LogLevel,
+    Warn,
+    #[serde(rename = "other")]
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    pub level: Level,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn generate_rust_equals_rust_backend_generate() {
         let json: &str =
@@ -5738,10 +5986,9 @@ use std::collections::BTreeMap;
 
 /// Issue status
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
-    #[serde(rename = "closed")]
     Closed,
-    #[serde(rename = "open")]
     Open,
 }
 
@@ -6844,10 +7091,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum S {
-    #[serde(rename = "b")]
     B,
-    #[serde(rename = "c")]
     C,
 }
 
@@ -10358,10 +10604,9 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 {UNIQUE_ITEMS_TEST_HEAD}{UNIQUE_ITEMS_TEST_HASH_SET}{UNIQUE_ITEMS_TEST_REQUIRED_TAIL}{ENUM_DERIVE}
+#[serde(rename_all = "lowercase")]
 pub enum Colors {{
-    #[serde(rename = "green")]
     Green,
-    #[serde(rename = "red")]
     Red,
 }}
 
@@ -10836,10 +11081,9 @@ pub struct Root {{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Level {
-    #[serde(rename = "debug")]
     Debug,
-    #[serde(rename = "error")]
     Error,
 }
 
@@ -10977,10 +11221,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum XVariant0 {
-    #[serde(rename = "a")]
     A,
-    #[serde(rename = "b")]
     B,
 }
 
