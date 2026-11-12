@@ -18,10 +18,10 @@ Follow the `contribution-guide` skill and CLAUDE.md as for any change. This skil
 ## Workflow
 
 1. **Find the target** with the biggest expected win:
+   - **Open performance issues** first: they hold findings already measured. Re-measure before acting.
    - **Competitor gaps:** `json_schema_rs_benchmark/results.md` (*Category winners* and the per-operation tables). Every cell a Rust competitor wins is a target.
    - **Generated code:** the *Generated code* tables in the same file, by category, for the biggest fixtures.
    - **Profiles** of the hot paths: macOS `sample <pid>` for time, a counting `GlobalAlloc` probe for heap, `cargo build -Ztime-passes` or the LLVM IR size for the build time of generated code.
-   - **Open performance issues**, if any.
 2. **Measure the idea's upper bound before building it:** the result with the work removed entirely, in a scratch probe (scratchpad, own `CARGO_TARGET_DIR`, the crate by path). If the bound is small, pick another target.
 3. **Implement the smallest change that captures the win.** Prefer redesigning the data layout or the algorithm over micro-tuning.
 4. **Verify**, in this order:
@@ -30,7 +30,10 @@ Follow the `contribution-guide` skill and CLAUDE.md as for any change. This skil
    - `make benchmark` and `make differential`, once, last.
 5. **Open the PR** with the *Performance* section from `target/benchmark-quick/report.md` (CLAUDE.md, *Pull request body*), then stop until it is merged.
 
-File an issue only for a finding that cannot land in the current PR (it needs a design decision, or is too big for one PR). Never file tracker issues, and never record findings in this skill. Add to it only advice that stays true: a rule, a lens, a place to look.
+Where what you learn goes (CLAUDE.md, *Where knowledge goes*):
+- **A finding that will not land in this PR** (it needs a design decision, is too big, or is another target): a GitHub issue with its numbers. Never tracker issues.
+- **Why the PR chose its design, or why an idea was rejected:** design.md, in the same PR.
+- **This skill:** only advice that stays true (a rule, a lens, a place to look). Never findings or numbers.
 
 ## Correctness rules for fast paths
 
