@@ -497,136 +497,136 @@
     "fixtures": {
       "dotnet-jsonschema-net": {
         "tally": {
-          "total": 39,
-          "passed": 34,
+          "total": 43,
+          "passed": 38,
           "failed": 0,
           "skipped": 0,
           "errored": 5,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 34,
-          "denominator": 39,
-          "percent": "87.18%"
+          "numerator": 38,
+          "denominator": 43,
+          "percent": "88.37%"
         }
       },
       "go-jsonschema": {
         "tally": {
-          "total": 39,
+          "total": 43,
           "passed": 20,
           "failed": 0,
           "skipped": 0,
-          "errored": 19,
+          "errored": 23,
           "unexpected": 0
         },
         "compliance": {
           "numerator": 20,
-          "denominator": 39,
-          "percent": "51.28%"
+          "denominator": 43,
+          "percent": "46.51%"
         }
       },
       "java-networknt-json-schema-validator": {
         "tally": {
-          "total": 39,
-          "passed": 34,
+          "total": 43,
+          "passed": 38,
           "failed": 0,
           "skipped": 0,
           "errored": 5,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 34,
-          "denominator": 39,
-          "percent": "87.18%"
+          "numerator": 38,
+          "denominator": 43,
+          "percent": "88.37%"
         }
       },
       "js-ajv": {
         "tally": {
-          "total": 39,
-          "passed": 15,
+          "total": 43,
+          "passed": 19,
           "failed": 0,
           "skipped": 0,
           "errored": 24,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 15,
-          "denominator": 39,
-          "percent": "38.46%"
+          "numerator": 19,
+          "denominator": 43,
+          "percent": "44.19%"
         }
       },
       "js-hyperjump": {
         "tally": {
-          "total": 39,
-          "passed": 34,
+          "total": 43,
+          "passed": 38,
           "failed": 0,
           "skipped": 0,
           "errored": 5,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 34,
-          "denominator": 39,
-          "percent": "87.18%"
+          "numerator": 38,
+          "denominator": 43,
+          "percent": "88.37%"
         }
       },
       "localhost/json-schema-rs": {
         "tally": {
-          "total": 39,
-          "passed": 39,
+          "total": 43,
+          "passed": 43,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 39,
-          "denominator": 39,
+          "numerator": 43,
+          "denominator": 43,
           "percent": "100.00%"
         }
       },
       "python-jsonschema": {
         "tally": {
-          "total": 39,
-          "passed": 39,
+          "total": 43,
+          "passed": 43,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 39,
-          "denominator": 39,
+          "numerator": 43,
+          "denominator": 43,
           "percent": "100.00%"
         }
       },
       "rust-boon": {
         "tally": {
-          "total": 39,
-          "passed": 39,
+          "total": 43,
+          "passed": 43,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 39,
-          "denominator": 39,
+          "numerator": 43,
+          "denominator": 43,
           "percent": "100.00%"
         }
       },
       "rust-jsonschema": {
         "tally": {
-          "total": 39,
-          "passed": 39,
+          "total": 43,
+          "passed": 43,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 39,
-          "denominator": 39,
+          "numerator": 43,
+          "denominator": 43,
           "percent": "100.00%"
         }
       }
@@ -5185,6 +5185,340 @@
       }
     },
     {
+      "id": "medium/geojson",
+      "section": {
+        "tests": 4,
+        "implementations": {
+          "dotnet-jsonschema-net": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          },
+          "go-jsonschema": {
+            "tally": {
+              "total": 4,
+              "passed": 0,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 4,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 0,
+              "denominator": 4,
+              "percent": "0.00%"
+            }
+          },
+          "java-networknt-json-schema-validator": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          },
+          "js-ajv": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          },
+          "js-hyperjump": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          },
+          "localhost/json-schema-rs": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          },
+          "python-jsonschema": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          },
+          "rust-boon": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          },
+          "rust-jsonschema": {
+            "tally": {
+              "total": 4,
+              "passed": 4,
+              "failed": 0,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 4,
+              "denominator": 4,
+              "percent": "100.00%"
+            }
+          }
+        },
+        "ours": {
+          "tally": {
+            "total": 4,
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "errored": 0,
+            "unexpected": 0
+          },
+          "compliance": {
+            "numerator": 4,
+            "denominator": 4,
+            "percent": "100.00%"
+          },
+          "coverage": {
+            "numerator": 4,
+            "denominator": 4,
+            "percent": "100.00%"
+          },
+          "correctness": {
+            "numerator": 4,
+            "denominator": 4,
+            "percent": "100.00%"
+          },
+          "disagreements_with_majority": 0,
+          "wrong_vs_expected": 0
+        }
+      },
+      "instances": [
+        {
+          "group": "medium/geojson",
+          "case_seq": "1",
+          "file": null,
+          "optional": false,
+          "case_description": "valid instances",
+          "test_description": "medium/geojson/instances/valid/collection.json",
+          "expected": true,
+          "verdicts": {
+            "dotnet-jsonschema-net": {
+              "verdict": "valid"
+            },
+            "go-jsonschema": {
+              "verdict": "errored",
+              "message": "uncaught: uncaught error"
+            },
+            "java-networknt-json-schema-validator": {
+              "verdict": "valid"
+            },
+            "js-ajv": {
+              "verdict": "valid"
+            },
+            "js-hyperjump": {
+              "verdict": "valid"
+            },
+            "localhost/json-schema-rs": {
+              "verdict": "valid"
+            },
+            "python-jsonschema": {
+              "verdict": "valid"
+            },
+            "rust-boon": {
+              "verdict": "valid"
+            },
+            "rust-jsonschema": {
+              "verdict": "valid"
+            }
+          }
+        },
+        {
+          "group": "medium/geojson",
+          "case_seq": "1",
+          "file": null,
+          "optional": false,
+          "case_description": "valid instances",
+          "test_description": "medium/geojson/instances/valid/empty.json",
+          "expected": true,
+          "verdicts": {
+            "dotnet-jsonschema-net": {
+              "verdict": "valid"
+            },
+            "go-jsonschema": {
+              "verdict": "errored",
+              "message": "uncaught: uncaught error"
+            },
+            "java-networknt-json-schema-validator": {
+              "verdict": "valid"
+            },
+            "js-ajv": {
+              "verdict": "valid"
+            },
+            "js-hyperjump": {
+              "verdict": "valid"
+            },
+            "localhost/json-schema-rs": {
+              "verdict": "valid"
+            },
+            "python-jsonschema": {
+              "verdict": "valid"
+            },
+            "rust-boon": {
+              "verdict": "valid"
+            },
+            "rust-jsonschema": {
+              "verdict": "valid"
+            }
+          }
+        },
+        {
+          "group": "medium/geojson",
+          "case_seq": "1",
+          "file": null,
+          "optional": false,
+          "case_description": "invalid instances",
+          "test_description": "medium/geojson/instances/invalid/bad-geometries.json",
+          "expected": false,
+          "verdicts": {
+            "dotnet-jsonschema-net": {
+              "verdict": "invalid"
+            },
+            "go-jsonschema": {
+              "verdict": "errored",
+              "message": "uncaught: uncaught error"
+            },
+            "java-networknt-json-schema-validator": {
+              "verdict": "invalid"
+            },
+            "js-ajv": {
+              "verdict": "invalid"
+            },
+            "js-hyperjump": {
+              "verdict": "invalid"
+            },
+            "localhost/json-schema-rs": {
+              "verdict": "invalid"
+            },
+            "python-jsonschema": {
+              "verdict": "invalid"
+            },
+            "rust-boon": {
+              "verdict": "invalid"
+            },
+            "rust-jsonschema": {
+              "verdict": "invalid"
+            }
+          }
+        },
+        {
+          "group": "medium/geojson",
+          "case_seq": "1",
+          "file": null,
+          "optional": false,
+          "case_description": "invalid instances",
+          "test_description": "medium/geojson/instances/invalid/missing-geometry.json",
+          "expected": false,
+          "verdicts": {
+            "dotnet-jsonschema-net": {
+              "verdict": "invalid"
+            },
+            "go-jsonschema": {
+              "verdict": "errored",
+              "message": "uncaught: uncaught error"
+            },
+            "java-networknt-json-schema-validator": {
+              "verdict": "invalid"
+            },
+            "js-ajv": {
+              "verdict": "invalid"
+            },
+            "js-hyperjump": {
+              "verdict": "invalid"
+            },
+            "localhost/json-schema-rs": {
+              "verdict": "invalid"
+            },
+            "python-jsonschema": {
+              "verdict": "invalid"
+            },
+            "rust-boon": {
+              "verdict": "invalid"
+            },
+            "rust-jsonschema": {
+              "verdict": "invalid"
+            }
+          }
+        }
+      ],
+      "findings": {
+        "disagreements_with_majority": [],
+        "wrong_without_consensus": [],
+        "wrong_with_majority": [],
+        "errored": []
+      }
+    },
+    {
       "id": "large/api-catalog",
       "section": {
         "tests": 5,
@@ -8876,6 +9210,176 @@
           "outcome": "error",
           "messages": [
             "schema rejected: error loading https://json.schemastore.org/ava.json"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "fixture medium/geojson",
+      "title": "medium/geojson/instances/invalid/bad-geometries.json",
+      "schema_path": "medium/geojson/schema.json",
+      "schema": null,
+      "instance_path": "medium/geojson/instances/invalid/bad-geometries.json",
+      "instance": null,
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "/features/7/geometry: instance does not match any of the 8 subschema(s)",
+            "/features/30/geometry: instance does not match any of the 8 subschema(s)",
+            "/features/57/geometry: instance does not match any of the 8 subschema(s)"
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/features/7/geometry: {\"coordinates\":[0,0],\"type\":\"Circle\"} is not valid under any of the schemas listed in the 'oneOf' keyword",
+            "/features/30/geometry: {\"coordinates\":[1.0],\"type\":\"LineString\"} is not valid under any of the schemas listed in the 'oneOf' keyword",
+            "/features/57/geometry: {\"coordinates\":[[[0,0],[1,1],[0,0]]],\"type\":\"Polygon\"} is not valid under any of the schemas listed in the 'oneOf' keyword"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '/features/7/geometry': oneOf failed, none matched",
+            "  - at '/features/7/geometry': want null, but got object",
+            "  - at '/features/7/geometry/type': value must be 'Point'",
+            "  - at '/features/7/geometry': validation failed",
+            "    - at '/features/7/geometry/coordinates': validation failed",
+            "      - at '/features/7/geometry/coordinates/0': want array, but got number",
+            "      - at '/features/7/geometry/coordinates/1': want array, but got number",
+            "    - at '/features/7/geometry/type': value must be 'LineString'",
+            "  - at '/features/7/geometry': validation failed",
+            "    - at '/features/7/geometry/coordinates': validation failed",
+            "      - at '/features/7/geometry/coordinates/0': want array, but got number",
+            "      - at '/features/7/geometry/coordinates/1': want array, but got number",
+            "    - at '/features/7/geometry/type': value must be 'Polygon'",
+            "  - at '/features/7/geometry': validation failed",
+            "    - at '/features/7/geometry/coordinates': validation failed",
+            "      - at '/features/7/geometry/coordinates/0': want array, but got number",
+            "      - at '/features/7/geometry/coordinates/1': want array, but got number",
+            "    - at '/features/7/geometry/type': value must be 'MultiPoint'",
+            "  - at '/features/7/geometry': validation failed",
+            "    - at '/features/7/geometry/coordinates': validation failed",
+            "      - at '/features/7/geometry/coordinates/0': want array, but got number",
+            "      - at '/features/7/geometry/coordinates/1': want array, but got number",
+            "    - at '/features/7/geometry/type': value must be 'MultiLineString'",
+            "  - at '/features/7/geometry': validation failed",
+            "    - at '/features/7/geometry/coordinates': validation failed",
+            "      - at '/features/7/geometry/coordinates/0': want array, but got number",
+            "      - at '/features/7/geometry/coordinates/1': want array, but got number",
+            "    - at '/features/7/geometry/type': value must be 'MultiPolygon'",
+            "  - at '/features/7/geometry': validation failed",
+            "    - at '/features/7/geometry': missing properties 'geometries'",
+            "    - at '/features/7/geometry/type': value must be 'GeometryCollection'",
+            "- at '/features/30/geometry': oneOf failed, none matched",
+            "  - at '/features/30/geometry': want null, but got object",
+            "  - at '/features/30/geometry': validation failed",
+            "    - at '/features/30/geometry/coordinates': minimum 2 items required, but got 1 items",
+            "    - at '/features/30/geometry/type': value must be 'Point'",
+            "  - at '/features/30/geometry/coordinates': validation failed",
+            "    - at '/features/30/geometry/coordinates': minimum 2 items required, but got 1 items",
+            "    - at '/features/30/geometry/coordinates/0': want array, but got number",
+            "  - at '/features/30/geometry': validation failed",
+            "    - at '/features/30/geometry/coordinates/0': want array, but got number",
+            "    - at '/features/30/geometry/type': value must be 'Polygon'",
+            "  - at '/features/30/geometry': validation failed",
+            "    - at '/features/30/geometry/coordinates/0': want array, but got number",
+            "    - at '/features/30/geometry/type': value must be 'MultiPoint'",
+            "  - at '/features/30/geometry': validation failed",
+            "    - at '/features/30/geometry/coordinates/0': want array, but got number",
+            "    - at '/features/30/geometry/type': value must be 'MultiLineString'",
+            "  - at '/features/30/geometry': validation failed",
+            "    - at '/features/30/geometry/coordinates/0': want array, but got number",
+            "    - at '/features/30/geometry/type': value must be 'MultiPolygon'",
+            "  - at '/features/30/geometry': validation failed",
+            "    - at '/features/30/geometry': missing properties 'geometries'",
+            "    - at '/features/30/geometry/type': value must be 'GeometryCollection'",
+            "- at '/features/57/geometry': oneOf failed, none matched",
+            "  - at '/features/57/geometry': want null, but got object",
+            "  - at '/features/57/geometry': validation failed",
+            "    - at '/features/57/geometry/coordinates': validation failed",
+            "      - at '/features/57/geometry/coordinates': minimum 2 items required, but got 1 items",
+            "      - at '/features/57/geometry/coordinates/0': want number, but got array",
+            "    - at '/features/57/geometry/type': value must be 'Point'",
+            "  - at '/features/57/geometry': validation failed",
+            "    - at '/features/57/geometry/coordinates': validation failed",
+            "      - at '/features/57/geometry/coordinates': minimum 2 items required, but got 1 items",
+            "      - at '/features/57/geometry/coordinates/0': validation failed",
+            "        - at '/features/57/geometry/coordinates/0/0': want number, but got array",
+            "        - at '/features/57/geometry/coordinates/0/1': want number, but got array",
+            "        - at '/features/57/geometry/coordinates/0/2': want number, but got array",
+            "    - at '/features/57/geometry/type': value must be 'LineString'",
+            "  - at '/features/57/geometry/coordinates/0': minimum 4 items required, but got 3 items",
+            "  - at '/features/57/geometry': validation failed",
+            "    - at '/features/57/geometry/coordinates/0': validation failed",
+            "      - at '/features/57/geometry/coordinates/0/0': want number, but got array",
+            "      - at '/features/57/geometry/coordinates/0/1': want number, but got array",
+            "      - at '/features/57/geometry/coordinates/0/2': want number, but got array",
+            "    - at '/features/57/geometry/type': value must be 'MultiPoint'",
+            "  - at '/features/57/geometry/type': value must be 'MultiLineString'",
+            "  - at '/features/57/geometry': validation failed",
+            "    - at '/features/57/geometry/coordinates/0': validation failed",
+            "      - at '/features/57/geometry/coordinates/0/0': validation failed",
+            "        - at '/features/57/geometry/coordinates/0/0': minimum 4 items required, but got 2 items",
+            "        - at '/features/57/geometry/coordinates/0/0/0': want array, but got number",
+            "        - at '/features/57/geometry/coordinates/0/0/1': want array, but got number",
+            "      - at '/features/57/geometry/coordinates/0/1': validation failed",
+            "        - at '/features/57/geometry/coordinates/0/1': minimum 4 items required, but got 2 items",
+            "        - at '/features/57/geometry/coordinates/0/1/0': want array, but got number",
+            "        - at '/features/57/geometry/coordinates/0/1/1': want array, but got number",
+            "      - at '/features/57/geometry/coordinates/0/2': validation failed",
+            "        - at '/features/57/geometry/coordinates/0/2': minimum 4 items required, but got 2 items",
+            "        - at '/features/57/geometry/coordinates/0/2/0': want array, but got number",
+            "        - at '/features/57/geometry/coordinates/0/2/1': want array, but got number",
+            "    - at '/features/57/geometry/type': value must be 'MultiPolygon'",
+            "  - at '/features/57/geometry': validation failed",
+            "    - at '/features/57/geometry': missing properties 'geometries'",
+            "    - at '/features/57/geometry/type': value must be 'GeometryCollection'"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "fixture medium/geojson",
+      "title": "medium/geojson/instances/invalid/missing-geometry.json",
+      "schema_path": "medium/geojson/schema.json",
+      "schema": null,
+      "instance_path": "medium/geojson/instances/invalid/missing-geometry.json",
+      "instance": {
+        "features": [
+          {
+            "properties": null,
+            "type": "Feature"
+          }
+        ],
+        "type": "FeatureCollection"
+      },
+      "outputs": [
+        {
+          "tool": "json-schema-rs",
+          "outcome": "invalid",
+          "messages": [
+            "/features/0: missing required property \"geometry\""
+          ]
+        },
+        {
+          "tool": "jsonschema",
+          "outcome": "invalid",
+          "messages": [
+            "/features/0: \"geometry\" is a required property"
+          ]
+        },
+        {
+          "tool": "boon",
+          "outcome": "invalid",
+          "messages": [
+            "jsonschema validation failed with mem://differential/schema.json#",
+            "- at '/features/0': missing properties 'geometry'"
           ]
         }
       ]

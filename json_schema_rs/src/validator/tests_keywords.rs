@@ -4045,3 +4045,149 @@ fn dependencies_schema_form_location_names_dependencies_in_2020_12() {
     let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1}));
     assert_eq!(expected, actual);
 }
+
+// --- Discriminated unions: only the branch the tag picks is evaluated ---
+
+/// A `oneOf` of two shapes told apart by `kind`.
+const SHAPES: &str = r#"{"oneOf":[
+    {"properties":{"kind":{"const":"circle"},"r":{"type":"number"}},"required":["kind","r"]},
+    {"properties":{"kind":{"const":"square"},"side":{"type":"number"}},"required":["kind","side"]}
+]}"#;
+
+fn not_const(path: &str, keyword_location: &str, expected: &str, actual: &str) -> ValidationError {
+    ValidationError::new(
+        ValidationErrorKind::NotConst {
+            expected: expected.to_string(),
+            actual: actual.to_string(),
+        },
+        ptr(path),
+        ptr(keyword_location),
+    )
+}
+
+fn expected_number(path: &str, keyword_location: &str, got: &str) -> ValidationError {
+    ValidationError::new(
+        ValidationErrorKind::ExpectedNumber {
+            got: got.to_string(),
+        },
+        ptr(path),
+        ptr(keyword_location),
+    )
+}
+
+fn missing_required_at(keyword_location: &str, property: &str) -> ValidationError {
+    ValidationError::new(
+        ValidationErrorKind::MissingRequired {
+            property: property.to_string(),
+        },
+        root(),
+        ptr(keyword_location),
+    )
+}
+
+#[test]
+fn discriminated_one_of_accepts_the_branch_its_tag_picks() {
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult =
+        validate_usable(&schema(SHAPES), &json!({"kind": "square", "side": 2}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn discriminated_one_of_reports_every_branch_when_the_picked_branch_fails() {
+    let expected: ValidationResult = Err(vec![no_subschema_matched(
+        "",
+        "/oneOf",
+        2,
+        vec![
+            missing_required_at("/oneOf/0/required", "r"),
+            not_const(
+                "/kind",
+                "/oneOf/0/properties/kind/const",
+                "\"circle\"",
+                "\"square\"",
+            ),
+            expected_number("/side", "/oneOf/1/properties/side/type", "string"),
+        ],
+    )]);
+    let actual: ValidationResult =
+        validate_usable(&schema(SHAPES), &json!({"kind": "square", "side": "x"}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn discriminated_one_of_with_an_unknown_tag_reports_every_branch() {
+    let expected: ValidationResult = Err(vec![no_subschema_matched(
+        "",
+        "/oneOf",
+        2,
+        vec![
+            missing_required_at("/oneOf/0/required", "r"),
+            not_const(
+                "/kind",
+                "/oneOf/0/properties/kind/const",
+                "\"circle\"",
+                "\"oval\"",
+            ),
+            missing_required_at("/oneOf/1/required", "side"),
+            not_const(
+                "/kind",
+                "/oneOf/1/properties/kind/const",
+                "\"square\"",
+                "\"oval\"",
+            ),
+        ],
+    )]);
+    let actual: ValidationResult = validate_usable(&schema(SHAPES), &json!({"kind": "oval"}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn discriminated_one_of_is_valid_rejects_a_failing_picked_branch() {
+    let expected: bool = false;
+    let actual: bool = compile(&schema(SHAPES)).is_valid(&json!({"kind": "circle", "r": "x"}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn discriminated_one_of_without_the_tag_evaluates_every_branch() {
+    let schema: JsonSchema = schema(
+        r#"{"oneOf":[{"properties":{"kind":{"const":"a"}}},{"properties":{"kind":{"const":"b"}}}]}"#,
+    );
+    let expected: ValidationResult = Err(vec![ValidationError::new(
+        ValidationErrorKind::MultipleSubschemasMatched {
+            subschema_count: 2,
+            match_count: 2,
+        },
+        root(),
+        kl("/oneOf"),
+    )]);
+    let actual: ValidationResult = validate_usable(&schema, &json!({}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn discriminated_any_of_annotates_from_the_picked_branch() {
+    let schema: JsonSchema = schema(
+        r#"{"anyOf":[
+            {"properties":{"kind":{"const":"a"},"x":true}},
+            {"properties":{"kind":{"const":"b"},"y":true}}
+        ],"unevaluatedProperties":false}"#,
+    );
+    let expected: ValidationResult = Err(vec![unevaluated("/x", "/unevaluatedProperties", "x")]);
+    let actual: ValidationResult = validate_usable(&schema, &json!({"kind": "b", "x": 1, "y": 1}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn discriminated_any_of_through_refs_accepts_the_picked_branch() {
+    let schema: JsonSchema = schema(
+        r##"{"anyOf":[{"$ref":"#/$defs/A"},{"$ref":"#/$defs/B"}],"$defs":{
+            "A":{"properties":{"kind":{"enum":["a1","a2"]},"n":{"type":"integer"}}},
+            "B":{"allOf":[{"properties":{"kind":{"const":"b"}}}],"properties":{"n":{"type":"string"}}}
+        }}"##,
+    );
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = validate_usable(&schema, &json!({"kind": "a2", "n": 1}));
+    assert_eq!(expected, actual);
+}

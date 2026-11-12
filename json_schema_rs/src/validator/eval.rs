@@ -18,8 +18,8 @@
 //! evaluated again in the collect mode, only to attach their errors as the failure's causes.
 
 use super::compiled::{
-    CompiledSchema, Contains, DynamicRef, EnumId, Keyword, KnownProperties, Kw, Node, NodeId,
-    PrefixItems, RegexId, Required,
+    CompiledSchema, Contains, DynamicRef, EnumId, Keyword, KnownProperties, Kw, Node, NodeId, Pick,
+    PrefixItems, RegexId, Required, Union,
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
@@ -706,8 +706,8 @@ impl CompiledSchema {
                 self.unevaluated_items::<COLLECT>(*node, items, at, cx, evaluated)
             }
             (Keyword::AllOf(nodes), _) => self.all_of::<COLLECT>(nodes, at, cx, evaluated),
-            (Keyword::AnyOf(nodes), _) => self.any_of::<COLLECT>(nodes, at, cx, evaluated),
-            (Keyword::OneOf(nodes), _) => self.one_of::<COLLECT>(nodes, at, cx, evaluated),
+            (Keyword::AnyOf(union), _) => self.any_of::<COLLECT>(union, at, cx, evaluated),
+            (Keyword::OneOf(union), _) => self.one_of::<COLLECT>(union, at, cx, evaluated),
             (Keyword::Not(node), _) => self.not::<COLLECT>(*node, at, cx),
             (
                 Keyword::IfThenElse {
@@ -1725,13 +1725,43 @@ impl CompiledSchema {
         })
     }
 
+    /// The one branch of `union` that `instance` can pass, when its discriminator decides it.
+    fn pick(union: &Union, instance: &Value) -> Pick {
+        match (&union.discriminator, instance) {
+            (Some(discriminator), Value::Object(object)) => discriminator.pick(object),
+            _ => Pick::Undecided,
+        }
+    }
+
     fn any_of<const COLLECT: bool>(
         &self,
-        nodes: &[NodeId],
+        union: &Union,
         at: At<'_, '_>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
+        let nodes: &[NodeId] = &union.nodes;
+        // Every other branch fails, so the one the discriminator picks decides. A failure is
+        // evaluated again in full below when its errors are collected.
+        let pick: Pick = Self::pick(union, at.instance);
+        if pick != Pick::Undecided {
+            if let Pick::Branch(i) = pick {
+                let branch: Location<'_> =
+                    at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
+                if self.in_place::<false>(
+                    nodes[i],
+                    at.instance,
+                    &branch,
+                    cx,
+                    evaluated.as_deref_mut(),
+                ) {
+                    return true;
+                }
+            }
+            if !COLLECT {
+                return false;
+            }
+        }
         let mut matched: bool = false;
         for (i, node) in nodes.iter().enumerate() {
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
@@ -1752,11 +1782,31 @@ impl CompiledSchema {
 
     fn one_of<const COLLECT: bool>(
         &self,
-        nodes: &[NodeId],
+        union: &Union,
         at: At<'_, '_>,
         cx: &mut Context,
-        evaluated: Option<&mut Evaluated>,
+        mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
+        let nodes: &[NodeId] = &union.nodes;
+        // As in `any_of`: only the discriminated branch can pass, so it is the one match.
+        let pick: Pick = Self::pick(union, at.instance);
+        if pick != Pick::Undecided {
+            if let Pick::Branch(i) = pick {
+                let mut sub: Evaluated = Evaluated::default();
+                let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
+                let branch: Location<'_> =
+                    at.location.in_place(Via::Index(Kw::OneOf, index_u32(i)));
+                if self.eval::<false>(nodes[i], at.instance, &branch, cx, wants) {
+                    if let Some(parent) = evaluated.as_deref_mut() {
+                        parent.merge(&sub);
+                    }
+                    return true;
+                }
+            }
+            if !COLLECT {
+                return false;
+            }
+        }
         let mut match_count: usize = 0;
         let mut first: Option<Evaluated> = None;
         for (i, node) in nodes.iter().enumerate() {
