@@ -467,6 +467,18 @@ fn typeless_items_rejects_wrong_item() {
 }
 
 #[test]
+fn items_reports_leaf_errors_in_item_order() {
+    let schema: JsonSchema = schema(r#"{"items":{"type":"integer","minimum":2}}"#);
+    let actual: ValidationResult = validate_usable(&schema, &json!([1, "x", 3, 0]));
+    let expected: ValidationResult = Err(vec![
+        below_minimum("/0", "/items/minimum", 2, 1),
+        expected_integer("/1", "/items/type", "string"),
+        below_minimum("/3", "/items/minimum", 2, 0),
+    ]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn typeless_items_ignores_object() {
     let schema: JsonSchema = schema(r#"{"items":{"type":"integer"}}"#);
     let actual: ValidationResult = validate_usable(&schema, &json!({"0": "x"}));
