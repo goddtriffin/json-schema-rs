@@ -189,9 +189,8 @@ pub fn parse_roots(value: &str) -> Vec<PathBuf> {
 /// Fixture roots from [`FIXTURE_ROOTS_ENV`], or [`default_roots`] when it is unset or empty.
 #[must_use]
 pub fn configured_roots() -> Vec<PathBuf> {
-    let from_env: Vec<PathBuf> = std::env::var(FIXTURE_ROOTS_ENV)
-        .map(|value: String| parse_roots(&value))
-        .unwrap_or_default();
+    let from_env: Vec<PathBuf> =
+        std::env::var(FIXTURE_ROOTS_ENV).map_or_default(|value: String| parse_roots(&value));
     if from_env.is_empty() {
         default_roots()
     } else {

@@ -318,10 +318,12 @@ build_generated_types() {
     remap=(--config "build.rustflags = [\"--remap-path-prefix=${src_link}=/src\", \"--remap-path-prefix=${target_link}=/target\"]")
     CARGO_TARGET_DIR="${target_link}" build_models "${manifest}" generated-types "${exclude}" \
         "${QUICK_DIR}/${side}/models" "${remap[@]}" >&2 || exit 1
+    # The bench is matched by its file name, `isolated-<hash>`: cargo puts it under `deps/`, or
+    # (from cargo 1.100) under `build/<package>/<hash>/out/`.
     exe="$(CARGO_TARGET_DIR="${target_link}" cargo bench --manifest-path "${manifest}" \
         --config "${PROFILE_CONFIG}" --profile benchmark --features generated-types "${remap[@]}" \
         --bench isolated --no-run --message-format=json \
-        | grep -o '"executable":"[^"]*"' | grep '/deps/isolated-' | tail -n 1 | cut -d '"' -f 4)"
+        | grep -o '"executable":"[^"]*"' | grep -E '/isolated-[0-9a-f]+"$' | tail -n 1 | cut -d '"' -f 4)"
     # The path cargo reports runs through the link, which the other side's build moves.
     exe="${target}${exe#"${target_link}"}"
     if [[ -z "${exe#"${target}"}" || ! -x "${exe}" ]]; then

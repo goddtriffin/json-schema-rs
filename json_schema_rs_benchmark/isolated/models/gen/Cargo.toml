@@ -4,18 +4,18 @@
 [package]
 name = "model-gen"
 description = "Generates the benchmark's models. Not published."
-version = "0.0.6"
-edition = "2024"
-rust-version = "1.99"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-json-schema-rs-benchmark = { path = "../../..", default-features = false }
-json-schema-rs = { path = "../../../../json_schema_rs" }
-serde_json = "1.0.149"
-syn = { version = "3", features = ["full", "visit-mut"] }
-prettyplease = "0.3"
-quote = "1"
+json-schema-rs-benchmark.workspace = true
+json-schema-rs.workspace = true
+serde_json.workspace = true
+syn = { workspace = true, features = ["full", "visit-mut"] }
+prettyplease.workspace = true
+quote.workspace = true
 
 [lints.rust]
 unsafe_code = { level = "forbid", priority = 0 }

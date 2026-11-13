@@ -5,9 +5,9 @@
 [package]
 name = "models-shard-1"
 description = "Benchmark models, shard 1. Not published."
-version = "0.0.6"
-edition = "2024"
-rust-version = "1.99"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 build = "../shard_build.rs"
 
@@ -19,15 +19,15 @@ generated-types = ["dep:json-schema-rs-benchmark"]
 path = "../shard_lib.rs"
 
 [dependencies]
-json-schema-rs = { path = "../../../../json_schema_rs" }
-json-schema-rs-macro = { path = "../../../../json_schema_rs_macro" }
-schemars = { version = "1.2.3", optional = true }
-json-schema-rs-benchmark = { path = "../../..", default-features = false, optional = true }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "1.0.149", features = ["float_roundtrip"] }
+json-schema-rs.workspace = true
+json-schema-rs-macro.workspace = true
+schemars = { workspace = true, optional = true }
+json-schema-rs-benchmark = { workspace = true, optional = true }
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 [build-dependencies]
-model-gen = { path = "../gen" }
+model-gen.workspace = true
 
 [lints.rust]
 unsafe_code = { level = "forbid", priority = 0 }

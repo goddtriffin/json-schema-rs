@@ -595,7 +595,6 @@ pub fn one_line(text: &str) -> String {
 /// # Panics
 ///
 /// Never: clap exits with a usage error before returning matches without `--output`.
-#[must_use]
 pub fn heap_profile_main<A: Adapter>(peak: PeakAlloc) -> ExitCode {
     let matches: clap::ArgMatches = clap::Command::new("heap_profile")
         .about("Profile in-process peak heap of every benchmarked tool on every fixture")
@@ -843,7 +842,6 @@ const MEASUREMENT: Duration = Duration::from_secs(2);
 /// and generated fixture directories). [`TOOLS_ENV`] restricts the tools and [`CELL_ENV`] the
 /// cell. Criterion CLI flags (`--warm-up-time`, `--measurement-time`, `--sample-size`, filters)
 /// override the defaults set here.
-#[must_use]
 pub fn cross_tool_main<A: Adapter>() -> ExitCode {
     let cell: Option<(Operation, String)> =
         match cell_selection(std::env::var(CELL_ENV).ok().as_deref()) {

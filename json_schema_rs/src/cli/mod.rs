@@ -282,8 +282,7 @@ pub fn run() {
                 .expect("required --output");
             let inputs: Vec<String> = gen_m
                 .get_many::<String>("inputs")
-                .map(|it| it.map(String::from).collect())
-                .unwrap_or_default();
+                .map_or_default(|it| it.map(String::from).collect());
             let schema_settings: JsonSchemaSettings = jss_settings(gen_m);
             let retrieval: RefRetrieval = RefRetrieval::from_matches(gen_m);
             generate::code_gen_settings(gen_m)
@@ -309,8 +308,7 @@ pub fn run() {
                 .map(|s| PathBuf::from(s.as_str()));
             let resources: Vec<PathBuf> = val_m
                 .get_many::<String>("resource")
-                .map(|it| it.map(PathBuf::from).collect())
-                .unwrap_or_default();
+                .map_or_default(|it| it.map(PathBuf::from).collect());
             let schema_settings: JsonSchemaSettings = jss_settings(val_m);
             let retrieval: RefRetrieval = RefRetrieval::from_matches(val_m);
             validate::run_validate(&schema, payload, &resources, &schema_settings, &retrieval)

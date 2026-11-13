@@ -40,7 +40,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 | `dotnet-jsonschema-net` | 100.00% | 4275 | 0 | 0 | 0 | 4275 |
 | `go-jsonschema` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
 | `java-networknt-json-schema-validator` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
-| `js-ajv` | 85.15% | 4164 | 63 | 0 | 663 | 4890 |
+| `js-ajv` | 81.70% | 3995 | 48 | 0 | 847 | 4890 |
 | `js-hyperjump` | 99.18% | 4850 | 0 | 40 | 0 | 4890 |
 | `python-jsonschema` | 99.94% | 4887 | 3 | 0 | 0 | 4890 |
 | `rust-boon` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
@@ -331,7 +331,7 @@ Non-optional suite:
 | `dotnet-jsonschema-net` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
 | `go-jsonschema` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
 | `java-networknt-json-schema-validator` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
-| `js-ajv` | 80.58% | 1029 | 27 | 0 | 221 | 1277 |
+| `js-ajv` | 67.35% | 860 | 12 | 0 | 405 | 1277 |
 | `js-hyperjump` | 99.69% | 1273 | 0 | 4 | 0 | 1277 |
 | `python-jsonschema` | 99.92% | 1276 | 1 | 0 | 0 | 1277 |
 | `rust-boon` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
