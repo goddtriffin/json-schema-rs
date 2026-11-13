@@ -10,7 +10,7 @@
 use super::content::Content;
 use super::ecma_regex;
 use super::format::Format;
-use super::property_table::PropertyTable;
+use super::name_index::{NameIndex, PropertyTable};
 use super::simple_pattern::SimplePattern;
 use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
@@ -418,6 +418,55 @@ pub(crate) enum Pick {
     Undecided,
 }
 
+/// An `enum` list, with an index of its strings: a string instance is decided by one lookup.
+#[derive(Debug, PartialEq)]
+pub(crate) struct EnumList {
+    /// The values as the schema wrote them, for error messages and non-string instances.
+    pub(crate) values: Box<[Value]>,
+    /// An index of the values' strings, each at its value's position, when the list has at least
+    /// two strings: one is compared directly, and an index for it would only cost an allocation
+    /// at compile time.
+    strings: Option<NameIndex>,
+    /// Whether every value is a string, so no other instance can match.
+    only_strings: bool,
+}
+
+impl EnumList {
+    fn new(values: Box<[Value]>) -> EnumList {
+        let string_count: usize = values.iter().filter(|value| value.is_string()).count();
+        EnumList {
+            strings: (string_count > 1).then(|| NameIndex::new(values.iter().map(Value::as_str))),
+            only_strings: string_count == values.len(),
+            values,
+        }
+    }
+
+    /// Whether `instance` equals one of the values (by JSON equality).
+    #[inline]
+    pub(crate) fn contains(&self, instance: &Value) -> bool {
+        match instance {
+            Value::String(string) => match &self.strings {
+                Some(index) => index
+                    .find(string, |position| {
+                        self.values[position].as_str().unwrap_or_default()
+                    })
+                    .is_some(),
+                None => self
+                    .values
+                    .iter()
+                    .any(|value| value.as_str() == Some(string)),
+            },
+            _ => {
+                !self.only_strings
+                    && self
+                        .values
+                        .iter()
+                        .any(|value| number::json_equal(value, instance))
+            }
+        }
+    }
+}
+
 /// One keyword, compiled. Rare or large payloads are boxed (or kept in a side table of the
 /// [`CompiledSchema`]), so the common keywords stay small.
 #[derive(Debug, PartialEq)]
@@ -518,7 +567,7 @@ pub struct CompiledSchema {
     pub(crate) root: NodeId,
     pub(crate) patterns: Vec<Pattern>,
     /// Distinct `enum` lists.
-    pub(crate) enums: Box<[Box<[Value]>]>,
+    pub(crate) enums: Box<[EnumList]>,
     /// Each `enum` list's values as error messages show them, serialized at the first error
     /// that needs them (a failing combinator's causes can report one list many times).
     pub(crate) enum_display: Box<[OnceLock<Box<[String]>>]>,
@@ -763,6 +812,10 @@ impl CompiledSchema {
     }
 
     pub(crate) fn enum_values(&self, id: EnumId) -> &[Value] {
+        &self.enums[id.0 as usize].values
+    }
+
+    pub(crate) fn enum_list(&self, id: EnumId) -> &EnumList {
         &self.enums[id.0 as usize]
     }
 
@@ -1090,7 +1143,7 @@ struct Compiler<'r, 'a> {
     location_bases: IntMap<usize, &'r [String]>,
     patterns: Vec<Pattern>,
     pattern_ids: HashMap<&'r str, RegexId>,
-    enums: Vec<Box<[Value]>>,
+    enums: Vec<EnumList>,
     /// Interned `enum` lists by the hash of their values.
     enum_ids: IntMap<u64, Vec<EnumId>>,
     properties: Vec<PropertyTable>,
@@ -1835,7 +1888,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         // Equal objects can be written in different key orders, which unsorted maps keep.
         let written = |list: &[Value]| serde_json::to_string(list).ok();
         if let Some(id) = candidates.iter().find(|id| {
-            let interned: &[Value] = &self.enums[id.0 as usize];
+            let interned: &[Value] = &self.enums[id.0 as usize].values;
             *interned == *values && (self.sorted_maps || written(interned) == written(values))
         }) {
             return *id;
@@ -1846,7 +1899,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
         )]
         let id: EnumId = EnumId(self.enums.len() as u32);
         candidates.push(id);
-        self.enums.push(values.into());
+        self.enums.push(EnumList::new(values.into()));
         id
     }
 
@@ -2573,7 +2626,7 @@ mod tests {
         let mut lists: Vec<Vec<String>> = compiled
             .enums
             .iter()
-            .map(|list| list.iter().map(Value::to_string).collect())
+            .map(|list| list.values.iter().map(Value::to_string).collect())
             .collect();
         lists.sort();
         lists

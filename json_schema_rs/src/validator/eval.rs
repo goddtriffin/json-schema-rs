@@ -23,7 +23,7 @@ use super::compiled::{
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
-use super::property_table::PropertyTable;
+use super::name_index::PropertyTable;
 use crate::json_pointer::{self, JsonPointer};
 use crate::json_schema::{JsonType, Scope, TypeSet};
 use crate::number::{self, JsonEqKey};
@@ -981,9 +981,7 @@ impl CompiledSchema {
         at: At<'_, '_>,
         cx: &mut Context,
     ) -> bool {
-        self.enum_values(id)
-            .iter()
-            .any(|a| number::json_equal(a, at.instance))
+        self.enum_list(id).contains(at.instance)
             || fail!(
                 COLLECT,
                 self,
@@ -1268,7 +1266,7 @@ impl CompiledSchema {
     fn is_known(&self, known: &KnownProperties, name: &str) -> bool {
         known
             .names
-            .is_some_and(|id| self.property_table(id).find(name).is_some())
+            .is_some_and(|id| self.property_table(id).contains(name))
             || known
                 .patterns
                 .iter()
