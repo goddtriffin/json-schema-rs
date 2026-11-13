@@ -18,8 +18,8 @@
 //! evaluated again in the collect mode, only to attach their errors as the failure's causes.
 
 use super::compiled::{
-    CompiledSchema, Contains, DynamicRef, EnumId, Keyword, KnownProperties, Kw, Node, NodeId, Pick,
-    PrefixItems, RegexId, Required, Union,
+    CompiledSchema, Contains, DynamicRef, EnumId, EnumList, FormatCheck, Keyword, KnownProperties,
+    Kw, Node, NodeId, Pattern, Pick, PrefixItems, RegexId, Required, Union,
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
@@ -599,48 +599,110 @@ impl CompiledSchema {
             .then(|| self.leaf_valid(&node.keywords, instance))
     }
 
+    /// [`CompiledSchema::leaf_verdict`] on each of `instances`: whether all of them pass, when
+    /// node `id` is a leaf.
+    #[inline]
+    fn leaf_verdict_all(&self, id: NodeId, instances: &[Value], cx: &Context) -> Option<bool> {
+        let node: &Node = self.node(id);
+        (node.leaf && cx.depth_exceeded.is_none() && cx.depth < DEPTH_LIMIT)
+            .then(|| self.leaf_valid_all(&node.keywords, instances))
+    }
+
     /// Whether `instance` passes every keyword of a leaf node (see [`Node::leaf`]): the same
     /// verdicts as [`CompiledSchema::keyword`], without its dispatch or error reporting.
     #[inline(never)]
     fn leaf_valid(&self, keywords: &[Keyword], instance: &Value) -> bool {
-        keywords.iter().all(|keyword| match (keyword, instance) {
-            (Keyword::False, _) => false,
-            (
-                Keyword::Type {
-                    types,
-                    integer_semantics,
-                },
-                instance,
-            ) => types.matches(instance, *integer_semantics),
-            (Keyword::Const(expected), instance) => number::json_equal(instance, expected),
-            (Keyword::Enum(id), instance) => self.enum_list(*id).contains(instance),
-            (Keyword::Minimum(minimum), Value::Number(n)) => {
-                number::cmp_num(n, minimum) != Ordering::Less
+        keywords
+            .iter()
+            .all(|keyword| self.leaf_keyword(keyword, std::iter::once(instance)))
+    }
+
+    /// Whether every one of `instances` passes every keyword of a leaf node: [`leaf_valid`] on
+    /// each, with the loops swapped. A leaf's keywords only assert, so the order they run in
+    /// changes no verdict, and taking each keyword once keeps its dispatch out of the loop over
+    /// the instances.
+    ///
+    /// [`leaf_valid`]: CompiledSchema::leaf_valid
+    #[inline(never)]
+    fn leaf_valid_all(&self, keywords: &[Keyword], instances: &[Value]) -> bool {
+        keywords
+            .iter()
+            .all(|keyword| self.leaf_keyword(keyword, instances.iter()))
+    }
+
+    /// Whether each of `instances` passes `keyword`, one of a leaf node's.
+    #[inline]
+    fn leaf_keyword<'v>(
+        &self,
+        keyword: &Keyword,
+        mut instances: impl Iterator<Item = &'v Value>,
+    ) -> bool {
+        match keyword {
+            Keyword::False => instances.next().is_none(),
+            Keyword::Type {
+                types,
+                integer_semantics,
+            } => instances.all(|instance| types.matches(instance, *integer_semantics)),
+            Keyword::Const(expected) => {
+                instances.all(|instance| number::json_equal(instance, expected))
             }
-            (Keyword::Maximum(maximum), Value::Number(n)) => {
-                number::cmp_num(n, maximum) != Ordering::Greater
+            Keyword::Enum(id) => {
+                let list: &EnumList = self.enum_list(*id);
+                instances.all(|instance| list.contains(instance))
             }
-            (Keyword::ExclusiveMinimum(minimum), Value::Number(n)) => {
-                number::cmp_num(n, minimum) == Ordering::Greater
-            }
-            (Keyword::ExclusiveMaximum(maximum), Value::Number(n)) => {
-                number::cmp_num(n, maximum) == Ordering::Less
-            }
-            (Keyword::MultipleOf(multiple_of), Value::Number(n)) => {
-                number::is_multiple_of(n, multiple_of)
-            }
+            Keyword::Minimum(minimum) => instances.all(|instance| match instance {
+                Value::Number(n) => number::cmp_num(n, minimum) != Ordering::Less,
+                _ => true,
+            }),
+            Keyword::Maximum(maximum) => instances.all(|instance| match instance {
+                Value::Number(n) => number::cmp_num(n, maximum) != Ordering::Greater,
+                _ => true,
+            }),
+            Keyword::ExclusiveMinimum(minimum) => instances.all(|instance| match instance {
+                Value::Number(n) => number::cmp_num(n, minimum) == Ordering::Greater,
+                _ => true,
+            }),
+            Keyword::ExclusiveMaximum(maximum) => instances.all(|instance| match instance {
+                Value::Number(n) => number::cmp_num(n, maximum) == Ordering::Less,
+                _ => true,
+            }),
+            Keyword::MultipleOf(multiple_of) => instances.all(|instance| match instance {
+                Value::Number(n) => number::is_multiple_of(n, multiple_of),
+                _ => true,
+            }),
             // Lengths count code points; a code point takes one to four bytes.
-            (Keyword::MinLength(min_length), Value::String(s)) => {
-                s.len() as u64 / 4 >= *min_length || s.chars().count() as u64 >= *min_length
+            Keyword::MinLength(min_length) => instances.all(|instance| match instance {
+                Value::String(s) => {
+                    s.len() as u64 / 4 >= *min_length || s.chars().count() as u64 >= *min_length
+                }
+                _ => true,
+            }),
+            Keyword::MaxLength(max_length) => instances.all(|instance| match instance {
+                Value::String(s) => {
+                    s.len() as u64 <= *max_length || s.chars().count() as u64 <= *max_length
+                }
+                _ => true,
+            }),
+            Keyword::Pattern(id) => {
+                let pattern: &Pattern = self.pattern(*id);
+                instances.all(|instance| match instance {
+                    Value::String(s) => pattern.is_match(s),
+                    _ => true,
+                })
             }
-            (Keyword::MaxLength(max_length), Value::String(s)) => {
-                s.len() as u64 <= *max_length || s.chars().count() as u64 <= *max_length
+            Keyword::Format(format) => instances.all(|instance| match instance {
+                Value::String(s) => format.is_valid(s),
+                _ => true,
+            }),
+            Keyword::UserFormat(id) => {
+                let check: &FormatCheck = &self.user_format(*id).check;
+                instances.all(|instance| match instance {
+                    Value::String(s) => check(s),
+                    _ => true,
+                })
             }
-            (Keyword::Pattern(id), Value::String(s)) => self.pattern(*id).is_match(s),
-            (Keyword::Format(format), Value::String(s)) => format.is_valid(s),
-            (Keyword::UserFormat(id), Value::String(s)) => (self.user_format(*id).check)(s),
             _ => true,
-        })
+        }
     }
 
     #[cold]
@@ -1190,7 +1252,7 @@ impl CompiledSchema {
                     )
             }
             Keyword::Pattern(id) => {
-                let pattern = self.pattern(*id);
+                let pattern: &Pattern = self.pattern(*id);
                 pattern.is_match(s)
                     || fail!(
                         COLLECT,
@@ -1668,21 +1730,31 @@ impl CompiledSchema {
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let (prefix_keyword, rest_keyword) = keywords;
-        let valid: bool = each!(
-            COLLECT,
-            items
-                .iter()
-                .enumerate()
-                .map_while(|(i, item)| match prefix.get(i) {
-                    Some(node) => Some((i, item, *node, Via::Member(prefix_keyword))),
-                    None => rest.map(|node| (i, item, node, Via::Keyword(rest_keyword))),
-                }),
-            |(i, item, node, via)| match self.leaf_verdict(node, item, cx) {
-                Some(true) => true,
-                Some(false) if !COLLECT => false,
-                _ => self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None),
-            }
-        );
+        // Items past the prefix that a leaf checks are decided together, the leaf's keywords
+        // each taken once; the general path below runs only when they fail in collect mode, to
+        // build the errors, and for the prefix.
+        let valid: bool = if let ([], Some(rest)) = (prefix, rest)
+            && let Some(valid) = self.leaf_verdict_all(rest, items, cx)
+            && (valid || !COLLECT)
+        {
+            valid
+        } else {
+            each!(
+                COLLECT,
+                items
+                    .iter()
+                    .enumerate()
+                    .map_while(|(i, item)| match prefix.get(i) {
+                        Some(node) => Some((i, item, *node, Via::Member(prefix_keyword))),
+                        None => rest.map(|node| (i, item, node, Via::Keyword(rest_keyword))),
+                    }),
+                |(i, item, node, via)| match self.leaf_verdict(node, item, cx) {
+                    Some(true) => true,
+                    Some(false) if !COLLECT => false,
+                    _ => self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None),
+                }
+            )
+        };
         if let Some(evaluated) = evaluated {
             if rest.is_some() {
                 evaluated.mark_all();
