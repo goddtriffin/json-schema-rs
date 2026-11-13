@@ -38,18 +38,18 @@ indexmap = ["dep:indexmap"]
 arbitrary-precision = ["serde_json/arbitrary_precision", "dep:num-bigint"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 # RFC 3986 / 3987 URI parsing, reference resolution and normalisation for `$id` / `$ref`.
-fluent-uri = "0.4"
-heck = "0.5"
+fluent-uri.workspace = true
+heck.workspace = true
 indexmap = { workspace = true, optional = true }
 log.workspace = true
 # SIMD substring search for the draft-4 parse prefilter (already in the tree via serde_json).
-memchr = "2.7"
+memchr.workspace = true
 # Big-integer mantissas for exact decimal arithmetic under `arbitrary-precision`.
-num-bigint = { version = "0.4", optional = true }
-regress = "0.10"
-reqwest = { version = "0.13", optional = true, features = ["blocking"] }
+num-bigint = { workspace = true, optional = true }
+regress.workspace = true
+reqwest = { workspace = true, optional = true, features = ["blocking"] }
 serde.workspace = true
 # `float_roundtrip`: parse every float to the nearest `f64` (the default parser can be one ULP off),
 # so numbers written by this crate read back exactly.
@@ -57,8 +57,8 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
-libtest-mimic = "0.8"
-tempfile = "3"
+libtest-mimic.workspace = true
+tempfile.workspace = true
 
 [[test]]
 name = "json_schema_test_suite"

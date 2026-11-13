@@ -12,7 +12,7 @@
 # Builder and runtime are both Alpine: the harness is a static musl binary, so the runtime image
 # needs nothing beyond a base filesystem.
 
-FROM rust:1.99-alpine AS builder
+FROM rust:1.100-alpine AS builder
 WORKDIR /build
 COPY . .
 # Cargo.lock is gitignored, so a local lockfile (when present in the context) pins the same

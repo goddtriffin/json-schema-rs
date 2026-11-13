@@ -125,6 +125,17 @@ Every change goes through a pull request that a human reviews and merges.
    remote one if GitHub did not), and close any related issues that did not close automatically
    (and tick them off in the roadmap #15).
 
+## Dependencies
+
+- **Declared once, at the workspace level.** Every dependency of every crate is in the root
+  `Cargo.toml`'s `[workspace.dependencies]` (and, for the isolated benchmark workspace, in
+  `json_schema_rs_benchmark/isolated/Cargo.toml`'s), with a full `M.m.p` requirement. Members
+  inherit it (`name.workspace = true`) and add only their own `features` and `optional`; a
+  member never names a version or path itself.
+- **Latest releases.** Add and upgrade dependencies at their latest stable release. Keep an older
+  one only when another dependency's API requires it, and say why in a comment on its line.
+- **Our crates only.** Upgrades never touch the vendored competitor clones under `research/repos`.
+
 ## Clean up after yourself
 
 Never leave anything running or lying around that you are not actively using. The machine is
