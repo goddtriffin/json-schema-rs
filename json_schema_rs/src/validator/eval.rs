@@ -601,7 +601,7 @@ impl CompiledSchema {
 
     /// Whether `instance` passes every keyword of a leaf node (see [`Node::leaf`]): the same
     /// verdicts as [`CompiledSchema::keyword`], without its dispatch or error reporting.
-    #[inline]
+    #[inline(never)]
     fn leaf_valid(&self, keywords: &[Keyword], instance: &Value) -> bool {
         keywords.iter().all(|keyword| match (keyword, instance) {
             (Keyword::False, _) => false,
