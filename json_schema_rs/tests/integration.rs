@@ -1049,13 +1049,14 @@ fn cli_generate_rust_validating_types_by_default_with_machine_independent_uri() 
 
 use serde::Serialize;
 
-///
 /// # Examples
 ///
+/// ```json
 /// "Ada"
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(transparent)]
-#[json_schema(min_length = 2)]
+#[json_schema(description = "", min_length = 2)]
 pub struct Name(String);
 
 json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
@@ -3912,31 +3913,74 @@ fn assert_cargo_build_workspace(workspace_root: &Path) {
     );
 }
 
-/// Runs clippy with `clippy::pedantic` over every member's library (the generated code; each
-/// `main.rs` is the test's own driver) and denies every warning, so generated code is lint-clean
-/// for consumers who enable pedantic. Cwd must be workspace root.
-fn assert_cargo_clippy_pedantic_workspace(workspace_root: &Path) {
+/// The strictest lint set a consumer can reasonably turn on, which generated code must pass:
+/// every clippy group but `nursery` (`cargo` checks package metadata, not code), the common
+/// restriction lints, `allow_attributes` and `unfulfilled_lint_expectations` forbidden (so
+/// generated code may not rely on silencing a lint), `unsafe_code` forbidden and `unused`
+/// denied.
+const STRICT_LINTS: [&str; 30] = [
+    "-D",
+    "clippy::all",
+    "-D",
+    "clippy::pedantic",
+    "-F",
+    "clippy::allow_attributes",
+    "-F",
+    "unfulfilled_lint_expectations",
+    "-F",
+    "unsafe_code",
+    "-D",
+    "unused",
+    "-F",
+    "clippy::unwrap_used",
+    "-F",
+    "clippy::expect_used",
+    "-D",
+    "clippy::panic",
+    "-D",
+    "clippy::indexing_slicing",
+    "-D",
+    "clippy::string_slice",
+    "-D",
+    "clippy::unreachable",
+    "-D",
+    "clippy::unimplemented",
+    "-D",
+    "clippy::todo",
+    "-D",
+    "clippy::exit",
+];
+
+/// Runs clippy with [`STRICT_LINTS`] over every member's library (the generated code; each
+/// `main.rs` is the test's own driver) and denies every warning, then documents the members
+/// with rustdoc's warnings denied, so generated code and its docs are lint-clean for the
+/// strictest consumer. Cwd must be workspace root.
+fn assert_cargo_clippy_strict_workspace(workspace_root: &Path) {
     let target_dir: PathBuf = integration_codegen_target_dir();
     let clippy = Command::new("cargo")
-        .args([
-            "clippy",
-            "--workspace",
-            "--lib",
-            "--keep-going",
-            "--",
-            "-W",
-            "clippy::pedantic",
-            "-D",
-            "warnings",
-        ])
+        .args(["clippy", "--workspace", "--lib", "--keep-going", "--"])
+        .args(STRICT_LINTS)
+        .args(["-D", "warnings"])
         .current_dir(workspace_root)
         .env("CARGO_TARGET_DIR", &target_dir)
         .output()
         .expect("run cargo clippy --workspace");
     assert!(
         clippy.status.success(),
-        "cargo clippy (pedantic) over generated code failed: stderr={}",
+        "cargo clippy (strict lints) over generated code failed: stderr={}",
         String::from_utf8_lossy(&clippy.stderr)
+    );
+    let doc = Command::new("cargo")
+        .args(["doc", "--workspace", "--lib", "--no-deps", "--keep-going"])
+        .current_dir(workspace_root)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("RUSTDOCFLAGS", "-D warnings")
+        .output()
+        .expect("run cargo doc --workspace");
+    assert!(
+        doc.status.success(),
+        "cargo doc over generated code failed: stderr={}",
+        String::from_utf8_lossy(&doc.stderr)
     );
 }
 
@@ -4628,6 +4672,29 @@ fn main() {
     let validated: bool = compile_test::Root::try_from(instance.clone()).is_ok();
     let expected: (serde_json::Value, bool) = (instance, true);
     let actual: (serde_json::Value, bool) = (serde_json::to_value(&root).unwrap(), validated);
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
+            "doc_markup" => (
+                // Descriptions and examples full of what clippy's and rustdoc's documentation
+                // lints reject when copied verbatim (the workspace gate runs both).
+                r#"{"description":"Configures the WidgetPool via Foo::bar() and max_retries. See https://example.com/a_b/ (or C:/tmp), <host>:<port> and [the guide](https://example.org).\n\n- first_item\n- second\nAfter the list.\n```\nlet x: u8 = <3>;\n```\nTabs\there; unmatched ` tick.","examples":[{"note":"use ``` fences"}],"type":"object","properties":{"retry_limit":{"type":"integer","description":"Overrides RetryPolicy's [x::y] <b>bold</b>"}}}"#,
+                default_code_gen.clone(),
+                r#"fn main() {
+    use json_schema_rs::ToJsonSchema as _;
+    let schema: json_schema_rs::JsonSchema = compile_test::Root::json_schema().unwrap();
+    let property: Option<String> = schema
+        .properties
+        .get("retry_limit")
+        .and_then(|p| p.as_object())
+        .and_then(|p| p.description.clone());
+    let expected: (Option<&str>, Option<&str>) = (
+        Some("Configures the WidgetPool via Foo::bar() and max_retries. See https://example.com/a_b/ (or C:/tmp), <host>:<port> and [the guide](https://example.org).\n\n- first_item\n- second\nAfter the list.\n```\nlet x: u8 = <3>;\n```\nTabs\there; unmatched ` tick."),
+        Some("Overrides RetryPolicy's [x::y] <b>bold</b>"),
+    );
+    let actual: (Option<&str>, Option<&str>) =
+        (schema.description.as_deref(), property.as_deref());
     assert_eq!(expected, actual);
 }
 "#,
@@ -6104,6 +6171,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "integer_accepts_zero_fraction",
         "integer_draft4_lexical",
         "format_types_follow_dialect",
+        "doc_markup",
     ]
     .into_iter()
     .chain(INDEXMAP_SCENARIOS.iter().copied())
@@ -6129,7 +6197,7 @@ members = [{members}]
         .expect("write workspace Cargo.toml");
 
     assert_cargo_build_workspace(workspace_root.path());
-    assert_cargo_clippy_pedantic_workspace(workspace_root.path());
+    assert_cargo_clippy_strict_workspace(workspace_root.path());
 
     for name in &scenario_list {
         let package_name: String = format!("compile_test_{name}");
