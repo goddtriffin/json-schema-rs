@@ -23,6 +23,7 @@ use super::compiled::{
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
+use super::property_table::PropertyTable;
 use crate::json_pointer::{self, JsonPointer};
 use crate::json_schema::{JsonType, Scope, TypeSet};
 use crate::number::{self, JsonEqKey};
@@ -292,9 +293,9 @@ fn first_duplicate(items: &[Value]) -> Option<&Value> {
     items.iter().find(|item| !seen.insert(JsonEqKey(item)))
 }
 
-/// A sorted walk over an object and a sorted name list pays off while neither has more than
-/// this many entries per entry of the other; past it, looking up the smaller side's entries in
-/// the larger one is cheaper.
+/// Walking an object and a name list together (or looking each member up in the list) pays off
+/// while neither has more than this many entries per entry of the other; past it, looking up the
+/// smaller side's entries in the larger one is cheaper.
 const MERGE_RATIO: usize = 4;
 
 /// Whether the object (its keys in sorted order) has every one of the sorted, distinct `names`:
@@ -306,23 +307,6 @@ fn contains_all_names(object: &Map<String, Value>, names: &[Box<str>]) -> bool {
             match key.as_str().cmp(name) {
                 Ordering::Less => {}
                 Ordering::Equal => continue 'names,
-                Ordering::Greater => return false,
-            }
-        }
-        return false;
-    }
-    true
-}
-
-/// Whether every key of the object (in sorted order) is one of the sorted `names`: one walk over
-/// both.
-fn all_keys_known(object: &Map<String, Value>, names: &[(Box<str>, NodeId)]) -> bool {
-    let mut names: std::slice::Iter<'_, (Box<str>, NodeId)> = names.iter();
-    'keys: for key in object.keys() {
-        for (name, _) in names.by_ref() {
-            match (**name).cmp(key.as_str()) {
-                Ordering::Less => {}
-                Ordering::Equal => continue 'keys,
                 Ordering::Greater => return false,
             }
         }
@@ -714,7 +698,7 @@ impl CompiledSchema {
                 self.follow::<COLLECT>(target, Kw::RecursiveRef, ref_str, at, cx, evaluated)
             }
             (Keyword::Properties(id), Value::Object(object)) => {
-                self.properties::<COLLECT>(self.property_list(*id), object, at, cx, evaluated)
+                self.properties::<COLLECT>(self.property_table(*id), object, at, cx, evaluated)
             }
             (Keyword::PatternProperties(patterns), Value::Object(object)) => {
                 self.pattern_properties::<COLLECT>(patterns, object, at, cx, evaluated)
@@ -1282,14 +1266,13 @@ impl CompiledSchema {
 
     /// Whether `name` is one `properties` or `patternProperties` covers.
     fn is_known(&self, known: &KnownProperties, name: &str) -> bool {
-        known.names.is_some_and(|id| {
-            self.property_list(id)
-                .binary_search_by(|(n, _)| (**n).cmp(name))
-                .is_ok()
-        }) || known
-            .patterns
-            .iter()
-            .any(|id| self.pattern(*id).is_match(name))
+        known
+            .names
+            .is_some_and(|id| self.property_table(id).find(name).is_some())
+            || known
+                .patterns
+                .iter()
+                .any(|id| self.pattern(*id).is_match(name))
     }
 
     fn object_assertion<const COLLECT: bool>(
@@ -1353,23 +1336,6 @@ impl CompiledSchema {
                     )
             ),
             Keyword::NoAdditionalProperties(known) => {
-                // Without patterns and with a list about the object's size, one walk over the
-                // sorted names decides; the member by member check below then runs only to
-                // report the members that are not known.
-                let names: &[(Box<str>, NodeId)] =
-                    known.names.map_or(&[], |id| self.property_list(id));
-                if self.sorted_maps
-                    && known.patterns.is_empty()
-                    && object.len() <= MERGE_RATIO * names.len()
-                    && names.len() <= MERGE_RATIO * object.len()
-                {
-                    if all_keys_known(object, names) {
-                        return true;
-                    }
-                    if !COLLECT {
-                        return false;
-                    }
-                }
                 each!(COLLECT, object.keys(), |key| self.is_known(known, key)
                     || fail!(
                         COLLECT,
@@ -1427,52 +1393,31 @@ impl CompiledSchema {
 
     fn properties<const COLLECT: bool>(
         &self,
-        properties: &[(Box<str>, NodeId)],
+        table: &PropertyTable,
         object: &Map<String, Value>,
         at: At<'_, '_>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let via: Via<'_> = Via::Member(Kw::Properties);
-        // Sorted maps and a list about the object's size: walk the members and the names
-        // together.
-        let comparable: bool = object.len() <= MERGE_RATIO * properties.len()
-            && properties.len() <= MERGE_RATIO * object.len();
-        if self.sorted_maps && comparable {
-            let mut next: usize = 0;
+        // An object much larger than the list: look each name up in the object, unless
+        // annotations need each member's position. Without sorted maps the names' order is not
+        // the members', and errors follow the names whenever the object has at least as many
+        // members as the list has names.
+        let by_name: bool = evaluated.is_none()
+            && if self.sorted_maps {
+                object.len() > MERGE_RATIO * table.len()
+            } else {
+                table.len() <= object.len()
+            };
+        if by_name {
             return each!(
                 COLLECT,
-                object.iter().enumerate().filter_map(|(i, (key, value))| {
-                    while let Some((name, node)) = properties.get(next) {
-                        match (**name).cmp(key.as_str()) {
-                            Ordering::Less => next += 1,
-                            Ordering::Equal => {
-                                next += 1;
-                                return Some((i, key, value, *node));
-                            }
-                            Ordering::Greater => return None,
-                        }
-                    }
-                    None
-                }),
-                |(i, key, value, node)| {
-                    if let Some(evaluated) = evaluated.as_deref_mut() {
-                        evaluated.mark(i);
-                    }
-                    self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
-                }
-            );
-        }
-        // A much larger object: look each name up, unless annotations need each member's
-        // position.
-        if evaluated.is_none() && properties.len() <= object.len() {
-            return each!(
-                COLLECT,
-                properties
+                table
                     .iter()
-                    .filter_map(|(name, node)| object.get_key_value(&**name).map(|kv| (kv, node))),
+                    .filter_map(|(name, node)| object.get_key_value(name).map(|kv| (kv, node))),
                 |((key, value), node)| self.eval::<COLLECT>(
-                    *node,
+                    node,
                     value,
                     &at.location.key(key, via),
                     cx,
@@ -1480,29 +1425,17 @@ impl CompiledSchema {
                 )
             );
         }
-        // Otherwise binary-search each key; with sorted maps, only among the names after the
-        // previous key.
-        let mut rest: &[(Box<str>, NodeId)] = properties;
         each!(
             COLLECT,
-            object.iter().enumerate(),
-            |(i, (key, value))| match rest.binary_search_by(|(n, _)| (**n).cmp(key)) {
-                Err(insert) => {
-                    if self.sorted_maps {
-                        rest = &rest[insert..];
-                    }
-                    true
+            object
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (key, value))| table.get(key).map(|node| (i, key, value, node))),
+            |(i, key, value, node)| {
+                if let Some(evaluated) = evaluated.as_deref_mut() {
+                    evaluated.mark(i);
                 }
-                Ok(found) => {
-                    let node: NodeId = rest[found].1;
-                    if self.sorted_maps {
-                        rest = &rest[found + 1..];
-                    }
-                    if let Some(evaluated) = evaluated.as_deref_mut() {
-                        evaluated.mark(i);
-                    }
-                    self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
-                }
+                self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
             }
         )
     }
