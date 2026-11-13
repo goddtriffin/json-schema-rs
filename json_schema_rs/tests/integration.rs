@@ -584,7 +584,7 @@ pub struct Root {
 }
 
 #[test]
-fn cli_generate_rust_number_with_min_max_emits_f32() {
+fn cli_generate_rust_number_with_min_max_emits_f64() {
     let schema_json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let schema_path = temp_dir.path().join("schema.json");
@@ -618,7 +618,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub value: f32,
+    pub value: f64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -3385,7 +3385,7 @@ pub struct Root {
 }
 
 #[test]
-fn integration_parse_and_generate_number_with_min_max_emits_f32() {
+fn integration_parse_and_generate_number_with_min_max_emits_f64() {
     let json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
     let schema: Schema = Schema::try_from(json).expect("parse schema");
     let code_gen_settings: CodeGenSettings = CodeGenSettings::builder()
@@ -3401,7 +3401,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub value: f32,
+    pub value: f64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -4409,7 +4409,7 @@ fn main() {
     let instance: serde_json::Value = serde_json::json!({"name": "Ada", "age": 36, "ratio": 0.5, "step": 10, "codes": ["xyz", "abc"]});
     let root: Root = serde_json::from_value(instance.clone()).unwrap();
     let expected = (
-        ("Ada", Some(36_u8), Some(0.5_f32), Some(10_i64), vec!["abc", "xyz"]),
+        ("Ada", Some(36_u8), Some(0.5_f64), Some(10_i64), vec!["abc", "xyz"]),
         serde_json::json!({"name": "Ada", "age": 36, "ratio": 0.5, "step": 10, "codes": ["abc", "xyz"]}),
         [true; 9],
         "root: string has 1 code points, minLength is 2\nroot: string \"a\" does not match pattern \"^[A-Z]\"".to_string(),
@@ -4430,7 +4430,7 @@ fn main() {
                 "Age": {"type": "integer", "minimum": 1, "maximum": 150},
                 "Code": {"type": "string", "pattern": "^[a-z]{3}$"},
                 "Name": {"type": "string", "minLength": 2, "maxLength": 5, "pattern": "^[A-Z]"},
-                "Ratio": {"type": "number", "minimum": f64::from(f32::MIN), "exclusiveMinimum": 0, "maximum": 1},
+                "Ratio": {"type": "number", "minimum": f64::MIN, "exclusiveMinimum": 0, "maximum": 1},
                 "Step": {"type": "integer", "minimum": i64::MIN, "maximum": i64::MAX, "multipleOf": 5}
             }
         }),
@@ -4459,7 +4459,7 @@ fn main() {
         (
             Code::try_from("abc").map(Code::into_inner).ok(),
             "Bob".parse::<Name>().map(|name| name.to_string()).ok(),
-            Ratio::try_from(f32::NAN).is_err(),
+            Ratio::try_from(f64::NAN).is_err(),
             Root::try_from(instance.clone()).is_ok(),
             root.validate().is_ok(),
         ),
@@ -5302,16 +5302,16 @@ fn main() {
         "kitchen_sink" => {
             // One schema exercising many features; the instance sets every field and must
             // round-trip unchanged, with no key falling through to the unknown-key map.
-            let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"},"enabled":{"type":"boolean"},"flag":{"type":"boolean"},"value_required":{"type":"number"},"value_optional":{"type":"number"},"count_required":{"type":"integer"},"count_optional":{"type":"integer"},"byte":{"type":"integer","minimum":0,"maximum":255},"byte_exclusive":{"type":"integer","exclusiveMinimum":-1,"exclusiveMaximum":256},"big_unsigned":{"type":"integer","minimum":0,"maximum":18446744073709551615},"value_f32":{"type":"number","minimum":0.0,"maximum":100.0},"tags_required":{"type":"array","items":{"type":"string"}},"tags_optional":{"type":"array","items":{"type":"string"}},"tags_unique":{"type":"array","items":{"type":"string"},"uniqueItems":true},"tags_min_max":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5},"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}},"name_bounded":{"type":"string","minLength":2,"maxLength":50},"foo-bar":{"type":"string"},"status":{"enum":["open","closed"]},"fixed":{"const":"only"},"name_opt":{"type":"string"}},"required":["id","enabled","value_required","count_required","byte","byte_exclusive","big_unsigned","value_f32","tags_required","tags_unique","tags_min_max","name_bounded","status","fixed"]}"#;
+            let schema_json = r#"{"type":"object","description":"Root","properties":{"id":{"type":"string","description":"Identifier"},"enabled":{"type":"boolean"},"flag":{"type":"boolean"},"value_required":{"type":"number"},"value_optional":{"type":"number"},"count_required":{"type":"integer"},"count_optional":{"type":"integer"},"byte":{"type":"integer","minimum":0,"maximum":255},"byte_exclusive":{"type":"integer","exclusiveMinimum":-1,"exclusiveMaximum":256},"big_unsigned":{"type":"integer","minimum":0,"maximum":18446744073709551615},"value_bounded":{"type":"number","minimum":0.0,"maximum":100.0},"tags_required":{"type":"array","items":{"type":"string"}},"tags_optional":{"type":"array","items":{"type":"string"}},"tags_unique":{"type":"array","items":{"type":"string"},"uniqueItems":true},"tags_min_max":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":5},"address":{"type":"object","properties":{"city":{"type":"string"},"street_address":{"type":"string"}}},"name_bounded":{"type":"string","minLength":2,"maxLength":50},"foo-bar":{"type":"string"},"status":{"enum":["open","closed"]},"fixed":{"const":"only"},"name_opt":{"type":"string"}},"required":["id","enabled","value_required","count_required","byte","byte_exclusive","big_unsigned","value_bounded","tags_required","tags_unique","tags_min_max","name_bounded","status","fixed"]}"#;
             let main_rs = r##"fn main() {
-    let expected: serde_json::Value = serde_json::from_str(r#"{"id":"x","enabled":true,"flag":false,"value_required":3.14,"value_optional":2.5,"count_required":42,"count_optional":1,"byte":42,"byte_exclusive":255,"big_unsigned":18446744073709551615,"value_f32":0.5,"tags_required":["a","b","c"],"tags_optional":["x","y"],"tags_unique":["a"],"tags_min_max":["a","b","c"],"address":{"city":"NYC","street_address":"5th Ave"},"name_bounded":"Alice","foo-bar":"baz","status":"open","fixed":"only","name_opt":"optional"}"#).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(r#"{"id":"x","enabled":true,"flag":false,"value_required":3.14,"value_optional":2.5,"count_required":42,"count_optional":1,"byte":42,"byte_exclusive":255,"big_unsigned":18446744073709551615,"value_bounded":0.5,"tags_required":["a","b","c"],"tags_optional":["x","y"],"tags_unique":["a"],"tags_min_max":["a","b","c"],"address":{"city":"NYC","street_address":"5th Ave"},"name_bounded":"Alice","foo-bar":"baz","status":"open","fixed":"only","name_opt":"optional"}"#).unwrap();
     let root: compile_test::Root = serde_json::from_value(expected.clone()).unwrap();
     // The Rust types the generator picks, checked at compile time.
-    let _: (&u8, &u8, &u64, &f32, &Vec<String>, &compile_test::Status, &compile_test::Fixed, &Option<compile_test::Address>, &Option<String>) = (
+    let _: (&u8, &u8, &u64, &f64, &Vec<String>, &compile_test::Status, &compile_test::Fixed, &Option<compile_test::Address>, &Option<String>) = (
         &root.byte,
         &root.byte_exclusive,
         &root.big_unsigned,
-        &root.value_f32,
+        &root.value_bounded,
         &root.tags_unique,
         &root.status,
         &root.fixed,
@@ -5461,7 +5461,6 @@ fn main() {
         compile_test::integer::Root::json_schema().expect("json schema"),
         compile_test::number::Root::json_schema().expect("json schema"),
         compile_test::integer_min_max::Root::json_schema().expect("json schema"),
-        // f32 bounds are held exactly.
         compile_test::number_min_max::Root::json_schema().expect("json schema"),
         compile_test::string_min_max::Root::json_schema().expect("json schema"),
         compile_test::description::Root::json_schema().expect("json schema"),
