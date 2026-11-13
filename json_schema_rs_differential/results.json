@@ -269,16 +269,16 @@
       "js-ajv": {
         "tally": {
           "total": 4890,
-          "passed": 3995,
-          "failed": 48,
+          "passed": 4164,
+          "failed": 63,
           "skipped": 0,
-          "errored": 847,
+          "errored": 663,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 3995,
+          "numerator": 4164,
           "denominator": 4890,
-          "percent": "81.70%"
+          "percent": "85.15%"
         }
       },
       "js-hyperjump": {
@@ -3221,16 +3221,16 @@
           "js-ajv": {
             "tally": {
               "total": 1277,
-              "passed": 860,
-              "failed": 12,
+              "passed": 1029,
+              "failed": 27,
               "skipped": 0,
-              "errored": 405,
+              "errored": 221,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 860,
+              "numerator": 1029,
               "denominator": 1277,
-              "percent": "67.35%"
+              "percent": "80.58%"
             }
           },
           "js-hyperjump": {

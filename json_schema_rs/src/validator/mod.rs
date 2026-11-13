@@ -11,8 +11,8 @@ mod error;
 mod eval;
 mod format;
 mod generated;
+mod name_index;
 mod output;
-mod property_table;
 mod simple_pattern;
 #[cfg(test)]
 mod tests_keywords;
