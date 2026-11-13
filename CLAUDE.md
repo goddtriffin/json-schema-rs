@@ -142,6 +142,15 @@ Every change goes through a pull request that a human reviews and merges.
 - **Latest releases.** Add and upgrade dependencies at their latest stable release. Keep an older
   one only when another dependency's API requires it, and say why in a comment on its line.
 - **Our crates only.** Upgrades never touch the vendored competitor clones under `research/repos`.
+- **Toolchain bumps re-check generated code against the strictest lints.** Every new Rust,
+  clippy and rustdoc release adds lints, and generated code must stay clean under the strictest
+  set a consumer turns on (design.md, *Lint-clean output*). A PR that bumps `rust-version` or the
+  toolchain runs `make test`, whose generated-code workspace test lints every scenario with that
+  set and rustdoc's `-D warnings`, and fixes the codegen for any new finding (never by adding a
+  lint attribute to the output). It also reads the release's new lints: a new clippy group lint
+  is covered automatically, but a new restriction lint or rustdoc lint a strict consumer would
+  enable goes into `STRICT_LINTS` in `json_schema_rs/tests/integration.rs` (or the doc step), and
+  a new kind of output the scenarios do not exercise gets a scenario.
 
 ## Clean up after yourself
 
