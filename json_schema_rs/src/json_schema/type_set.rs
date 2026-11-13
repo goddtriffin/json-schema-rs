@@ -170,18 +170,22 @@ impl TypeSet {
     /// is an integer under `integer_semantics` and the set holds [`JsonType::Integer`].
     #[must_use]
     pub fn matches(self, instance: &Value, integer_semantics: IntegerSemantics) -> bool {
-        match instance {
-            Value::Null => self.contains(JsonType::Null),
-            Value::Bool(_) => self.contains(JsonType::Boolean),
-            Value::Number(n) => {
-                self.contains(JsonType::Number)
-                    || (self.contains(JsonType::Integer)
-                        && number::is_integer(n, integer_semantics))
+        // One bit test decides every instance but a number the set accepts only as an integer.
+        let ty: JsonType = match instance {
+            Value::Null => JsonType::Null,
+            Value::Bool(_) => JsonType::Boolean,
+            Value::Number(_) => JsonType::Number,
+            Value::String(_) => JsonType::String,
+            Value::Array(_) => JsonType::Array,
+            Value::Object(_) => JsonType::Object,
+        };
+        self.contains(ty)
+            || match instance {
+                Value::Number(n) => {
+                    self.contains(JsonType::Integer) && number::is_integer(n, integer_semantics)
+                }
+                _ => false,
             }
-            Value::String(_) => self.contains(JsonType::String),
-            Value::Array(_) => self.contains(JsonType::Array),
-            Value::Object(_) => self.contains(JsonType::Object),
-        }
     }
 }
 
