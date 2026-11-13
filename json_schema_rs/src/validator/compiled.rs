@@ -1114,6 +1114,15 @@ impl Hasher for IntHasher {
     fn write_usize(&mut self, n: usize) {
         self.write_u64(n as u64);
     }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the two halves of the word are hashed in turn"
+    )]
+    fn write_u128(&mut self, n: u128) {
+        self.write_u64(n as u64);
+        self.write_u64((n >> 64) as u64);
+    }
 }
 
 /// A hash map keyed by integers, hashed with [`IntHasher`].
