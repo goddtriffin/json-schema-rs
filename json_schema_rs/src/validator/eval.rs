@@ -587,17 +587,16 @@ impl CompiledSchema {
         valid
     }
 
-    /// Whether node `id` is a leaf that `instance` passes, decided where [`CompiledSchema::eval`]
-    /// would decide it: only while the depth guard has not fired and the node sits below the
-    /// limit, so `true` is exactly what `eval` would return. Callers try it before building the
-    /// child's location, and fall back to `eval` when it says `false`.
+    /// The verdict of node `id` on `instance` when it is a leaf, decided where
+    /// [`CompiledSchema::eval`] would decide it: only while the depth guard has not fired and the
+    /// node sits below the limit, so it is exactly `eval`'s verdict. Callers try it before
+    /// building the child's location; they still call `eval` for a node that is not a leaf, and
+    /// in collect mode for a leaf that fails, to record its errors.
     #[inline]
-    fn passes_leaf(&self, id: NodeId, instance: &Value, cx: &Context) -> bool {
+    fn leaf_verdict(&self, id: NodeId, instance: &Value, cx: &Context) -> Option<bool> {
         let node: &Node = self.node(id);
-        node.leaf
-            && cx.depth_exceeded.is_none()
-            && cx.depth < DEPTH_LIMIT
-            && self.leaf_valid(&node.keywords, instance)
+        (node.leaf && cx.depth_exceeded.is_none() && cx.depth < DEPTH_LIMIT)
+            .then(|| self.leaf_valid(&node.keywords, instance))
     }
 
     /// Whether `instance` passes every keyword of a leaf node (see [`Node::leaf`]): the same
@@ -1481,8 +1480,11 @@ impl CompiledSchema {
                 table
                     .iter()
                     .filter_map(|(name, node)| object.get_key_value(name).map(|kv| (kv, node))),
-                |((key, value), node)| self.passes_leaf(node, value, cx)
-                    || self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
+                |((key, value), node)| match self.leaf_verdict(node, value, cx) {
+                    Some(true) => true,
+                    Some(false) if !COLLECT => false,
+                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                }
             );
         }
         each!(
@@ -1495,8 +1497,11 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                self.passes_leaf(node, value, cx)
-                    || self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
+                match self.leaf_verdict(node, value, cx) {
+                    Some(true) => true,
+                    Some(false) if !COLLECT => false,
+                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                }
             }
         )
     }
@@ -1545,8 +1550,11 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                self.passes_leaf(node, value, cx)
-                    || self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
+                match self.leaf_verdict(node, value, cx) {
+                    Some(true) => true,
+                    Some(false) if !COLLECT => false,
+                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                }
             }
         )
     }
@@ -1669,8 +1677,11 @@ impl CompiledSchema {
                     Some(node) => Some((i, item, *node, Via::Member(prefix_keyword))),
                     None => rest.map(|node| (i, item, node, Via::Keyword(rest_keyword))),
                 }),
-            |(i, item, node, via)| self.passes_leaf(node, item, cx)
-                || self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None)
+            |(i, item, node, via)| match self.leaf_verdict(node, item, cx) {
+                Some(true) => true,
+                Some(false) if !COLLECT => false,
+                _ => self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None),
+            }
         );
         if let Some(evaluated) = evaluated {
             if rest.is_some() {
