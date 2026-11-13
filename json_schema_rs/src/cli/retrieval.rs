@@ -78,8 +78,7 @@ impl Retrieve for CliRetriever {
     fn retrieve(&self, uri: &str) -> Result<Value, RetrieveError> {
         let scheme: String = uri
             .split_once(':')
-            .map(|(scheme, _)| scheme.to_ascii_lowercase())
-            .unwrap_or_default();
+            .map_or_default(|(scheme, _)| scheme.to_ascii_lowercase());
         match scheme.as_str() {
             "file" => self.file.retrieve(uri).map_err(|e| {
                 // Point at the flag only when the root is what refused the file.

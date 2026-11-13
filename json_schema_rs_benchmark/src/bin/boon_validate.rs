@@ -73,8 +73,7 @@ fn main() -> ExitCode {
 
     let resources: Vec<PathBuf> = matches
         .get_many::<String>("resource")
-        .map(|values| values.map(PathBuf::from).collect())
-        .unwrap_or_default();
+        .map_or_default(|values| values.map(PathBuf::from).collect());
 
     match run(&schema, &resources, &payload) {
         Ok(()) => ExitCode::SUCCESS,
