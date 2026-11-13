@@ -751,7 +751,7 @@ mod tests {
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub name: String,
     #[serde(flatten)]
@@ -807,7 +807,7 @@ pub type Root = String;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "Name")]
 #[json_schema(id = "https://example.com/name.json")]
 pub struct Name {
@@ -818,7 +818,7 @@ pub struct Name {
 
 json_schema_rs::self_validating!(Name, TYPE_VALIDATORS, 0);
 
-#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(id = "https://example.com/root.json")]
 pub struct Root {
     pub name: Name,
