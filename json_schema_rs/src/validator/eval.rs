@@ -828,6 +828,8 @@ impl CompiledSchema {
             (Keyword::Properties(id), Value::Object(object)) => {
                 self.properties::<COLLECT>(self.property_table(*id), object, at, cx, evaluated)
             }
+            (Keyword::ClosedProperties(id), Value::Object(object)) => self
+                .closed_properties::<COLLECT>(self.property_table(*id), object, at, cx, evaluated),
             (Keyword::PatternProperties(patterns), Value::Object(object)) => {
                 self.pattern_properties::<COLLECT>(patterns, object, at, cx, evaluated)
             }
@@ -915,6 +917,7 @@ impl CompiledSchema {
                 | Keyword::DependentRequired { .. }
                 | Keyword::NoAdditionalProperties(_)
                 | Keyword::Properties(_)
+                | Keyword::ClosedProperties(_)
                 | Keyword::PatternProperties(_)
                 | Keyword::AdditionalProperties { .. }
                 | Keyword::PropertyNames(_)
@@ -1566,6 +1569,102 @@ impl CompiledSchema {
                 }
             }
         )
+    }
+
+    /// [`Keyword::ClosedProperties`]: `additionalProperties: false`, then `properties`, in one
+    /// walk over the members that looks each up once. The result is exactly that of the two
+    /// keywords in turn: in collect mode the errors of the unknown members come first; in the
+    /// verdict mode, where `additionalProperties` would have failed before `properties` evaluated
+    /// any member, what evaluating them left behind (the depth guard's error, recorded union
+    /// choices) is undone. An unknown member is only noted, not a reason to stop: a branch out of
+    /// the per-member loop cost the valid path as much as the second lookup did.
+    fn closed_properties<const COLLECT: bool>(
+        &self,
+        table: &PropertyTable,
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        // More members than names: some member is unknown.
+        if !COLLECT && object.len() > table.len() {
+            return false;
+        }
+        let errors: usize = cx.errors.len();
+        let choices: usize = cx.choices.as_ref().map_or(0, |choices| choices.0.len());
+        let depth_exceeded: bool = cx.depth_exceeded.is_some();
+        let via: Via<'_> = Via::Member(Kw::Properties);
+        let mut unknown: bool = false;
+        let valid: bool = each!(
+            COLLECT,
+            object.iter().enumerate().filter_map(|(i, (key, value))| {
+                let node: Option<NodeId> = table.get(key);
+                unknown |= node.is_none();
+                node.map(|node| (i, key, value, node))
+            }),
+            |(i, key, value, node)| {
+                if let Some(evaluated) = evaluated.as_deref_mut() {
+                    evaluated.mark(i);
+                }
+                match self.leaf_verdict(node, value, cx) {
+                    Some(true) => true,
+                    Some(false) if !COLLECT => false,
+                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                }
+            }
+        ) && !unknown;
+        if !valid {
+            self.closed_properties_failed::<COLLECT>(
+                table,
+                object,
+                at,
+                cx,
+                (unknown, errors, choices, depth_exceeded),
+            );
+        }
+        valid
+    }
+
+    /// Puts a failed [`CompiledSchema::closed_properties`] walk in the state the two keywords
+    /// would have left. `start` holds whether the walk met an unknown member, then the number of
+    /// errors and of recorded choices before the walk, and whether the depth guard had fired.
+    #[cold]
+    #[inline(never)]
+    fn closed_properties_failed<const COLLECT: bool>(
+        &self,
+        table: &PropertyTable,
+        object: &Map<String, Value>,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        start: (bool, usize, usize, bool),
+    ) {
+        let (unknown, errors, choices, depth_exceeded) = start;
+        if COLLECT {
+            if unknown {
+                let properties: Vec<ValidationError> = cx.errors.split_off(errors);
+                for key in object.keys().filter(|key| !table.contains(key)) {
+                    self.report(
+                        &mut cx.errors,
+                        &at.location.key(key, Via::None),
+                        Some(Kw::AdditionalProperties),
+                        || ValidationErrorKind::DisallowedAdditionalProperty {
+                            property: key.clone(),
+                        },
+                    );
+                }
+                cx.errors.extend(properties);
+            }
+            return;
+        }
+        // The walk stopped at its first failure; an unknown member may lie past it.
+        if unknown || object.keys().any(|key| !table.contains(key)) {
+            if !depth_exceeded {
+                cx.depth_exceeded = None;
+            }
+            if let Some(recorded) = cx.choices.as_mut() {
+                recorded.0.truncate(choices);
+            }
+        }
     }
 
     fn pattern_properties<const COLLECT: bool>(
