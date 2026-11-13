@@ -1,8 +1,9 @@
-//! A `properties` list laid out for lookup by member name: the names sorted, their schemas and
-//! the names' heads in parallel arrays, and an open-addressed index over the heads.
+//! Names laid out for lookup: the names and their heads in parallel arrays, and an open-addressed
+//! index over the heads. A `properties` list is one, with its schemas alongside; an `enum` list
+//! keeps one of its strings.
 //!
 //! The evaluator looks up every member of an object it checks against `properties` and
-//! `additionalProperties`. A binary search over the sorted names costs a call to `memcmp` and a
+//! `additionalProperties`, and every string it checks against an `enum`. A binary search over the sorted names costs a call to `memcmp` and a
 //! mispredicted branch per step; the index costs one multiply and, nearly always, one probe whose
 //! head comparison decides without reading the name. A short list skips the index: its heads are
 //! compared in turn.
@@ -21,7 +22,7 @@ struct Head {
 /// The largest name whose head holds every byte.
 const INLINE_BYTES: usize = 16;
 
-/// The most names a table compares one by one instead of indexing: a scan over a few heads is
+/// The most names an index compares one by one instead of indexing: a scan over a few heads is
 /// cheaper than hashing.
 const LINEAR_NAMES: usize = 4;
 
@@ -64,31 +65,26 @@ impl Head {
     }
 }
 
-/// A `properties` list: each name and its schema, sorted by name, with an index for lookup by
-/// name (see the module docs).
+/// Distinct names, each findable by its position (see the module docs).
 #[derive(Debug, PartialEq)]
-pub(crate) struct PropertyTable {
+pub(crate) struct NameIndex {
     names: Box<[Box<str>]>,
-    nodes: Box<[NodeId]>,
     heads: Box<[Head]>,
     /// Open addressing with linear probing: a name's position plus one, `0` for an empty slot.
     /// A power of two, at least twice the names, so a probe ends at an empty slot soon. Empty for
-    /// a list of at most [`LINEAR_NAMES`], whose heads are scanned instead.
+    /// at most [`LINEAR_NAMES`] names, whose heads are scanned instead.
     slots: Box<[u32]>,
     /// `64 - log2(slots.len())`: the hash bits that pick a slot.
     shift: u32,
 }
 
-impl PropertyTable {
-    /// The table of `properties`, which must be sorted by name and free of duplicates.
-    pub(crate) fn new(properties: Vec<(Box<str>, NodeId)>) -> PropertyTable {
-        debug_assert!(properties.windows(2).all(|pair| pair[0].0 < pair[1].0));
-        let (names, nodes): (Vec<Box<str>>, Vec<NodeId>) = properties.into_iter().unzip();
+impl NameIndex {
+    /// The index of `names`, which must be distinct.
+    pub(crate) fn new(names: Box<[Box<str>]>) -> NameIndex {
         let heads: Box<[Head]> = names.iter().map(|name| Head::of(name.as_bytes())).collect();
         if names.len() <= LINEAR_NAMES {
-            return PropertyTable {
-                names: names.into_boxed_slice(),
-                nodes: nodes.into_boxed_slice(),
+            return NameIndex {
+                names,
                 heads,
                 slots: Box::new([]),
                 shift: 0,
@@ -104,16 +100,15 @@ impl PropertyTable {
             }
             slots[slot] = u32::try_from(position + 1).unwrap_or(u32::MAX);
         }
-        PropertyTable {
-            names: names.into_boxed_slice(),
-            nodes: nodes.into_boxed_slice(),
+        NameIndex {
+            names,
             heads,
             slots,
             shift,
         }
     }
 
-    /// The position of `name` in the table, if the table lists it.
+    /// The position of `name`, if the index has it.
     #[inline]
     pub(crate) fn find(&self, name: &str) -> Option<usize> {
         let bytes: &[u8] = name.as_bytes();
@@ -138,29 +133,62 @@ impl PropertyTable {
         }
     }
 
-    /// The schema of `name`, if the table lists it.
-    #[inline]
-    pub(crate) fn get(&self, name: &str) -> Option<NodeId> {
-        self.find(name).map(|position| self.nodes[position])
-    }
-
-    /// How many names the table lists.
+    /// How many names the index has.
     pub(crate) fn len(&self) -> usize {
         self.names.len()
     }
 
+    /// The names, in the order they were given.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.names.iter().map(|name| &**name)
+    }
+}
+
+/// A `properties` list: each name and its schema, sorted by name, with an index for lookup by
+/// name.
+#[derive(Debug, PartialEq)]
+pub(crate) struct PropertyTable {
+    index: NameIndex,
+    nodes: Box<[NodeId]>,
+}
+
+impl PropertyTable {
+    /// The table of `properties`, which must be sorted by name and free of duplicates.
+    pub(crate) fn new(properties: Vec<(Box<str>, NodeId)>) -> PropertyTable {
+        debug_assert!(properties.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        let (names, nodes): (Vec<Box<str>>, Vec<NodeId>) = properties.into_iter().unzip();
+        PropertyTable {
+            index: NameIndex::new(names.into_boxed_slice()),
+            nodes: nodes.into_boxed_slice(),
+        }
+    }
+
+    /// Whether the table lists `name`.
+    #[inline]
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.index.find(name).is_some()
+    }
+
+    /// The schema of `name`, if the table lists it.
+    #[inline]
+    pub(crate) fn get(&self, name: &str) -> Option<NodeId> {
+        self.index.find(name).map(|position| self.nodes[position])
+    }
+
+    /// How many names the table lists.
+    pub(crate) fn len(&self) -> usize {
+        self.index.len()
+    }
+
     /// Each name and its schema, sorted by name.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, NodeId)> {
-        self.names
-            .iter()
-            .map(|name| &**name)
-            .zip(self.nodes.iter().copied())
+        self.index.names().zip(self.nodes.iter().copied())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NodeId, PropertyTable};
+    use super::{NameIndex, NodeId, PropertyTable};
 
     fn table(names: &[&str]) -> PropertyTable {
         let mut properties: Vec<(Box<str>, NodeId)> = names
@@ -176,7 +204,7 @@ mod tests {
     fn lookups<'t>(names: &[&str], keys: &[&'t str]) -> Vec<Option<&'t str>> {
         let table: PropertyTable = table(names);
         keys.iter()
-            .map(|key| table.find(key).map(|_| *key))
+            .map(|key| table.contains(key).then_some(*key))
             .collect()
     }
 
@@ -256,6 +284,21 @@ mod tests {
             None,
         ];
         let actual: Vec<Option<&str>> = lookups(&names, &keys);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn index_finds_each_name_at_its_given_position() {
+        let names: Vec<String> = (0..20).rev().map(|i| format!("team_{i}")).collect();
+        let index: NameIndex =
+            NameIndex::new(names.iter().map(|name| Box::from(name.as_str())).collect());
+        let expected: Vec<Option<usize>> = (0..20).map(Some).chain([None]).collect();
+        let actual: Vec<Option<usize>> = names
+            .iter()
+            .map(String::as_str)
+            .chain(["team_20"])
+            .map(|name| index.find(name))
+            .collect();
         assert_eq!(expected, actual);
     }
 
