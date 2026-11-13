@@ -527,6 +527,9 @@ pub(crate) enum Keyword {
     },
     /// The `properties` list, sorted by name.
     Properties(PropertiesId),
+    /// `properties` with `additionalProperties: false` and no `patternProperties`: the list's
+    /// names are the only members allowed, so one lookup per member decides both keywords.
+    ClosedProperties(PropertiesId),
     PatternProperties(Box<[(RegexId, NodeId)]>),
     AdditionalProperties {
         node: NodeId,
@@ -905,7 +908,7 @@ impl CompiledSchema {
         let mut candidates: Vec<&str> = Vec::new();
         self.in_place_closure(*first, |node| {
             for keyword in &self.node(node).keywords {
-                if let Keyword::Properties(id) = keyword {
+                if let Keyword::Properties(id) | Keyword::ClosedProperties(id) = keyword {
                     for (name, child) in self.property_table(*id).iter() {
                         if self.pinned_strings(child).is_some() {
                             candidates.push(name);
@@ -984,7 +987,7 @@ impl CompiledSchema {
         let mut found: Vec<NodeId> = Vec::new();
         self.in_place_closure(node, |node| {
             for keyword in &self.node(node).keywords {
-                if let Keyword::Properties(id) = keyword {
+                if let Keyword::Properties(id) | Keyword::ClosedProperties(id) = keyword {
                     found.extend(self.property_table(*id).get(property));
                 }
             }
@@ -2152,13 +2155,19 @@ impl<'r, 'a> Compiler<'r, 'a> {
             self.properties.push(PropertyTable::new(properties));
             id
         });
-        if let Some(Source::Bool(false)) = parts.additional_properties {
-            out.push(Keyword::NoAdditionalProperties(Box::new(KnownProperties {
-                names: properties,
-                patterns: known_patterns.clone().into_boxed_slice(),
-            })));
+        match (parts.additional_properties, properties) {
+            (Some(Source::Bool(false)), Some(id)) if known_patterns.is_empty() => {
+                out.push(Keyword::ClosedProperties(id));
+            }
+            (Some(Source::Bool(false)), _) => {
+                out.push(Keyword::NoAdditionalProperties(Box::new(KnownProperties {
+                    names: properties,
+                    patterns: known_patterns.clone().into_boxed_slice(),
+                })));
+                out.extend(properties.map(Keyword::Properties));
+            }
+            _ => out.extend(properties.map(Keyword::Properties)),
         }
-        out.extend(properties.map(Keyword::Properties));
         if !pattern_properties.is_empty() {
             out.push(Keyword::PatternProperties(
                 pattern_properties.into_boxed_slice(),
@@ -2649,7 +2658,7 @@ mod tests {
         let root: &Node = compiled.node(compiled.root);
         let mut actual: Vec<(String, bool)> = vec![("/".to_owned(), root.leaf)];
         for keyword in &root.keywords {
-            if let Keyword::Properties(id) = keyword {
+            if let Keyword::Properties(id) | Keyword::ClosedProperties(id) = keyword {
                 for (name, node) in compiled.property_table(*id).iter() {
                     actual.push((name.to_owned(), compiled.node(node).leaf));
                 }
