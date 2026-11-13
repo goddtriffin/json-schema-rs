@@ -14,7 +14,7 @@
 //! explicit work queue: no recursion, whatever the schema depth.
 
 use super::{
-    Annotations, ArrayConstraints, Field, FloatWidth, IntWidth, NameProposal, NameTier, Newtype,
+    Annotations, ArrayConstraints, Field, IntWidth, NameProposal, NameTier, Newtype,
     NumberConstraints, ObjectNode, SchemaRoots, StringConstraints, StringFormat, TypeGraph, TypeId,
     TypeNode, UnionKind, UnionNode, ValidationTarget, Variant,
 };
@@ -703,7 +703,7 @@ impl<'r> Builder<'_, 'r> {
                     || hi.is_some_and(|hi| hi < width_hi)
                     || beyond_shape()
             }
-            TypeNode::Number(_) => {
+            TypeNode::Number => {
                 let f: Facts<'r> = facts();
                 f.lower.is_some()
                     || f.upper.is_some()
@@ -717,7 +717,7 @@ impl<'r> Builder<'_, 'r> {
             return None;
         }
         let numbers: NumberConstraints = match node {
-            TypeNode::Integer(..) | TypeNode::Number(_) => {
+            TypeNode::Integer(..) | TypeNode::Number => {
                 let f: Facts<'r> = facts();
                 let mut multiples: Vec<&serde_json::Number> = flat
                     .conjuncts
@@ -868,7 +868,7 @@ impl<'r> Builder<'_, 'r> {
                 _ => TypeNode::Integer(facts.integer_width(), self.integer_semantics(flat)),
             },
             JsonType::Number if facts.number_range_is_empty() => uninhabited(annotations),
-            JsonType::Number => TypeNode::Number(facts.float_width()),
+            JsonType::Number => TypeNode::Number,
             JsonType::String => TypeNode::String {
                 format: self.string_format(flat, &facts),
                 constraints: facts.string_constraints.clone(),
@@ -1815,29 +1815,6 @@ impl<'r> Facts<'r> {
             (Some(lo), Some(hi)) => integer_width_for_range(lo, hi).unwrap_or(IntWidth::I64),
             _ => IntWidth::I64,
         }
-    }
-
-    fn float_width(&self) -> FloatWidth {
-        let lower: Option<&serde_json::Number> = [&self.lower, &self.exclusive_lower]
-            .into_iter()
-            .flatten()
-            .max_by(|a, b| number::cmp_num(a, b));
-        let upper: Option<&serde_json::Number> = [&self.upper, &self.exclusive_upper]
-            .into_iter()
-            .flatten()
-            .min_by(|a, b| number::cmp_num(a, b));
-        if let (Some(lo), Some(hi)) = (lower, upper)
-            && let (Some(f32_min), Some(f32_max)) = (
-                serde_json::Number::from_f64(f64::from(f32::MIN)),
-                serde_json::Number::from_f64(f64::from(f32::MAX)),
-            )
-            && number::cmp_num(lo, hi) != Ordering::Greater
-            && number::cmp_num(lo, &f32_min) != Ordering::Less
-            && number::cmp_num(hi, &f32_max) != Ordering::Greater
-        {
-            return FloatWidth::F32;
-        }
-        FloatWidth::F64
     }
 
     fn string_format(&self) -> StringFormat {

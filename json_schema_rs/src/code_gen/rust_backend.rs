@@ -16,7 +16,7 @@ use super::rust_validators::{self, BufferValidators, EmbeddedSet, Entry, UnionEn
 use super::settings::{CodeGenSettings, DedupeMode, UniqueItemsType};
 use super::type_graph::passes;
 use super::type_graph::{
-    self, Annotations, EnumNode, Field, FloatWidth, IntWidth, NameProposal, NameTier, Newtype,
+    self, Annotations, EnumNode, Field, IntWidth, NameProposal, NameTier, Newtype,
     NumberConstraints, ObjectNode, StringFormat, TypeGraph, TypeId, TypeNode, UnionKind, UnionNode,
 };
 use crate::json_schema::{IntegerSemantics, Registry, Schema};
@@ -544,7 +544,7 @@ fn rust_type(
             TypeNode::Null => out.push_str("()"),
             node @ (TypeNode::Boolean
             | TypeNode::Integer(..)
-            | TypeNode::Number(_)
+            | TypeNode::Number
             | TypeNode::String { .. }) => out.push_str(scalar_type(node, imports)),
             TypeNode::Array { items, .. } => {
                 out.push_str("Vec<");
@@ -579,8 +579,7 @@ fn rust_type(
 fn scalar_type(node: &TypeNode, imports: &mut Imports) -> &'static str {
     match node {
         TypeNode::Integer(w, _) => int_name(*w),
-        TypeNode::Number(FloatWidth::F32) => "f32",
-        TypeNode::Number(FloatWidth::F64) => "f64",
+        TypeNode::Number => "f64",
         TypeNode::String { format, .. } => string_type(*format, imports),
         _ => "bool",
     }
@@ -694,7 +693,7 @@ fn set_item_nodes(graph: &TypeGraph) -> Vec<bool> {
     );
     let blocked = |node: &TypeNode| -> bool {
         match node {
-            TypeNode::Pending | TypeNode::Any | TypeNode::Number(_) => true,
+            TypeNode::Pending | TypeNode::Any | TypeNode::Number => true,
             #[cfg(feature = "uuid")]
             TypeNode::String {
                 format: StringFormat::Uuid,
@@ -916,12 +915,7 @@ fn default_literal(value: &Value, node: &TypeNode) -> Option<String> {
             let (lo, hi): (i128, i128) = width.range();
             (lo..=hi).contains(&exact).then(|| exact.to_string())
         }
-        (TypeNode::Number(width), Value::Number(n)) => {
-            let f: f64 = n.as_f64()?;
-            #[expect(clippy::cast_possible_truncation, reason = "checks the value fits f32")]
-            let fits: bool = *width == FloatWidth::F64 || (f as f32).is_finite();
-            fits.then(|| format!("{f:?}"))
-        }
+        (TypeNode::Number, Value::Number(n)) => n.as_f64().map(|f: f64| format!("{f:?}")),
         _ => None,
     }
 }
@@ -1513,7 +1507,7 @@ fn render_newtype(
         TypeNode::String { .. } if string => {
             "#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]"
         }
-        TypeNode::Number(_) => {
+        TypeNode::Number => {
             "#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, json_schema_rs_macro::ToJsonSchema)]"
         }
         _ => {
@@ -1567,7 +1561,6 @@ fn render_newtype(
     let Entry { validators, index } = entry;
     let call: String = match inner {
         "String" => format!("string, {name}, {validators}, {index}"),
-        "f32" => format!("f32, {name}, {validators}, {index}"),
         "Uuid" => format!("uuid, {name}, {validators}, {index}"),
         _ if matches!(node, TypeNode::Integer(_, IntegerSemantics::Numeric)) => {
             format!("integer, {name}, {inner}, {validators}, {index}")
@@ -1690,7 +1683,7 @@ fn variant_base(graph: &TypeGraph, plan: &Plan, union: &UnionNode, index: usize)
         TypeNode::Null => Some("Null"),
         TypeNode::Boolean => Some("Boolean"),
         TypeNode::Integer(..) => Some("Integer"),
-        TypeNode::Number(_) => Some("Number"),
+        TypeNode::Number => Some("Number"),
         TypeNode::String { .. } => Some("String"),
         TypeNode::Array { .. } => Some("Array"),
         TypeNode::Map { .. } => Some("Object"),
@@ -4087,7 +4080,7 @@ pub struct Root {
     }
 
     #[test]
-    fn number_with_exclusive_bounds_in_f32_range_emits_f32() {
+    fn number_with_exclusive_bounds_emits_f64() {
         let json = r#"{"type":"object","properties":{"n":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":1}},"required":["n"]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -4100,7 +4093,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub n: f32,
+    pub n: f64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -4110,7 +4103,7 @@ pub struct Root {
     }
 
     #[test]
-    fn number_with_bound_beyond_f32_emits_f64() {
+    fn number_with_huge_bound_emits_f64() {
         let json = r#"{"type":"object","properties":{"n":{"type":"number","minimum":0,"maximum":1e39}},"required":["n"]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -4238,7 +4231,7 @@ pub struct Root {
     }
 
     #[test]
-    fn number_with_minimum_maximum_f32_range_emits_f32() {
+    fn number_with_minimum_maximum_emits_f64() {
         let json = r#"{"type":"object","properties":{"value":{"type":"number","minimum":0.5,"maximum":100.5}},"required":["value"]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -4251,7 +4244,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub value: f32,
+    pub value: f64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -10216,7 +10209,7 @@ pub struct Root {
     }
 
     #[test]
-    fn float_default_outside_f32_gets_no_accessor() {
+    fn float_defaults_get_accessors() {
         let schema: Schema = Schema::try_from(r#"{"type": "object", "properties": {"f": {"type": "number", "minimum": 0, "maximum": 1, "default": 1e300}, "g": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5}}}"#).unwrap();
         let output: super::GenerateRustOutput =
             generate_rust(&[schema], &default_settings()).unwrap();
@@ -10230,10 +10223,10 @@ use std::collections::BTreeMap;
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[json_schema(default = 1e+300)]
-    pub f: Option<f32>,
+    pub f: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[json_schema(default = 0.5)]
-    pub g: Option<f32>,
+    pub g: Option<f64>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -10241,7 +10234,13 @@ pub struct Root {
 impl Root {
     /// The field's value, or its schema `default` when the key is absent.
     #[must_use]
-    pub fn g_or_default(&self) -> f32 {
+    pub fn f_or_default(&self) -> f64 {
+        self.f.unwrap_or(1e300)
+    }
+
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn g_or_default(&self) -> f64 {
         self.g.unwrap_or(0.5)
     }
 }
@@ -11755,9 +11754,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(transparent)]
 #[json_schema(maximum = 1, exclusive_minimum = 0)]
-pub struct Ratio(f32);
+pub struct Ratio(f64);
 
-json_schema_rs::constrained_newtype!(f32, Ratio, TYPE_VALIDATORS, 0);
+json_schema_rs::constrained_newtype!(scalar, Ratio, f64, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
