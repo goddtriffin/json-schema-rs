@@ -559,6 +559,16 @@ impl CompiledSchema {
             self.depth_exceeded(location, cx);
             return false;
         }
+        // A leaf that passes is valid in both modes (it records nothing); one that fails is
+        // evaluated again below in collect mode, which builds its errors.
+        if node.leaf {
+            if self.leaf_valid(&node.keywords, instance) {
+                return true;
+            }
+            if !COLLECT {
+                return false;
+            }
+        }
         cx.depth += 1;
         let entered: bool = self.uses_dynamic_scope && cx.dynamic_scope.last() != Some(&node.scope);
         if entered {
@@ -575,6 +585,63 @@ impl CompiledSchema {
         }
         cx.depth -= 1;
         valid
+    }
+
+    /// Whether node `id` is a leaf that `instance` passes, decided where [`CompiledSchema::eval`]
+    /// would decide it: only while the depth guard has not fired and the node sits below the
+    /// limit, so `true` is exactly what `eval` would return. Callers try it before building the
+    /// child's location, and fall back to `eval` when it says `false`.
+    #[inline]
+    fn passes_leaf(&self, id: NodeId, instance: &Value, cx: &Context) -> bool {
+        let node: &Node = self.node(id);
+        node.leaf
+            && cx.depth_exceeded.is_none()
+            && cx.depth < DEPTH_LIMIT
+            && self.leaf_valid(&node.keywords, instance)
+    }
+
+    /// Whether `instance` passes every keyword of a leaf node (see [`Node::leaf`]): the same
+    /// verdicts as [`CompiledSchema::keyword`], without its dispatch or error reporting.
+    #[inline]
+    fn leaf_valid(&self, keywords: &[Keyword], instance: &Value) -> bool {
+        keywords.iter().all(|keyword| match (keyword, instance) {
+            (Keyword::False, _) => false,
+            (
+                Keyword::Type {
+                    types,
+                    integer_semantics,
+                },
+                instance,
+            ) => types.matches(instance, *integer_semantics),
+            (Keyword::Const(expected), instance) => number::json_equal(instance, expected),
+            (Keyword::Enum(id), instance) => self.enum_list(*id).contains(instance),
+            (Keyword::Minimum(minimum), Value::Number(n)) => {
+                number::cmp_num(n, minimum) != Ordering::Less
+            }
+            (Keyword::Maximum(maximum), Value::Number(n)) => {
+                number::cmp_num(n, maximum) != Ordering::Greater
+            }
+            (Keyword::ExclusiveMinimum(minimum), Value::Number(n)) => {
+                number::cmp_num(n, minimum) == Ordering::Greater
+            }
+            (Keyword::ExclusiveMaximum(maximum), Value::Number(n)) => {
+                number::cmp_num(n, maximum) == Ordering::Less
+            }
+            (Keyword::MultipleOf(multiple_of), Value::Number(n)) => {
+                number::is_multiple_of(n, multiple_of)
+            }
+            // Lengths count code points; a code point takes one to four bytes.
+            (Keyword::MinLength(min_length), Value::String(s)) => {
+                s.len() as u64 / 4 >= *min_length || s.chars().count() as u64 >= *min_length
+            }
+            (Keyword::MaxLength(max_length), Value::String(s)) => {
+                s.len() as u64 <= *max_length || s.chars().count() as u64 <= *max_length
+            }
+            (Keyword::Pattern(id), Value::String(s)) => self.pattern(*id).is_match(s),
+            (Keyword::Format(format), Value::String(s)) => format.is_valid(s),
+            (Keyword::UserFormat(id), Value::String(s)) => (self.user_format(*id).check)(s),
+            _ => true,
+        })
     }
 
     #[cold]
@@ -1414,13 +1481,8 @@ impl CompiledSchema {
                 table
                     .iter()
                     .filter_map(|(name, node)| object.get_key_value(name).map(|kv| (kv, node))),
-                |((key, value), node)| self.eval::<COLLECT>(
-                    node,
-                    value,
-                    &at.location.key(key, via),
-                    cx,
-                    None
-                )
+                |((key, value), node)| self.passes_leaf(node, value, cx)
+                    || self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
             );
         }
         each!(
@@ -1433,7 +1495,8 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
+                self.passes_leaf(node, value, cx)
+                    || self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
             }
         )
     }
@@ -1482,7 +1545,8 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
+                self.passes_leaf(node, value, cx)
+                    || self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None)
             }
         )
     }
@@ -1605,13 +1669,8 @@ impl CompiledSchema {
                     Some(node) => Some((i, item, *node, Via::Member(prefix_keyword))),
                     None => rest.map(|node| (i, item, node, Via::Keyword(rest_keyword))),
                 }),
-            |(i, item, node, via)| self.eval::<COLLECT>(
-                node,
-                item,
-                &at.location.index(i, via),
-                cx,
-                None
-            )
+            |(i, item, node, via)| self.passes_leaf(node, item, cx)
+                || self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None)
         );
         if let Some(evaluated) = evaluated {
             if rest.is_some() {
