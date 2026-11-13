@@ -120,7 +120,7 @@ fn container_id(attrs: &[Attribute]) -> SynResult<Option<String>> {
 
 /// Builds the container's `Option<String>` description expression: `description = "..."` from
 /// the `#[json_schema(...)]` attribute if present, else the `///` doc comments (see
-/// [`doc_description_expr`]). The attribute takes precedence.
+/// [`doc_description_expr`]). The attribute takes precedence; a blank one is no description.
 fn container_description(attrs: &[Attribute]) -> SynResult<TokenStream2> {
     for attr in attrs {
         if !attr.path().is_ident("json_schema") {
@@ -141,7 +141,8 @@ fn container_description(attrs: &[Attribute]) -> SynResult<TokenStream2> {
             let syn::Lit::Str(s) = expr_lit.lit else {
                 continue;
             };
-            return Ok(quote! { Some(#s.to_string()) });
+            let support: TokenStream2 = support();
+            return Ok(quote! { #support::doc_description(&[#s]) });
         }
     }
     Ok(doc_description_expr(&doc_exprs(attrs)))
@@ -849,7 +850,17 @@ fn field_spec(name: &Ident, field: &Field, rule: Option<RenameRule>) -> SynResul
     let is_opt: bool = is_option_type(ty) && !is_required;
     let schema_ty: Type = replace_self(if is_opt { optional_inner_type(ty) } else { ty }, name);
     let required: bool = !is_opt;
-    let doc: Vec<&Expr> = doc_exprs(&field.attrs);
+    // `#[json_schema(description = "...")]` replaces the doc comments (a blank one is no
+    // description).
+    let description: Option<String> = field_str_attr(field, "description")?;
+    let description_lit: Option<LitStr> = description.map(|d| LitStr::new(&d, span));
+    let doc: Vec<TokenStream2> = match &description_lit {
+        Some(lit) => vec![quote! { #lit }],
+        None => doc_exprs(&field.attrs)
+            .into_iter()
+            .map(|expr| quote! { #expr })
+            .collect(),
+    };
     let minimum: TokenStream2 = field_number_literal(field, "minimum")?;
     let maximum: TokenStream2 = field_number_literal(field, "maximum")?;
     let exclusive_minimum: TokenStream2 = field_number_literal(field, "exclusive_minimum")?;
