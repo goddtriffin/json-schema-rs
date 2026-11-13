@@ -13,7 +13,8 @@ Follow the `contribution-guide` skill and CLAUDE.md as for any change. This skil
 
 1. **Correctness is a constraint, not a trade-off.** Same verdicts, same errors, same generated behaviour, same suite and differential results. A faster wrong answer is a bug.
 2. **Speed**, then **memory**, then **generated code size**. When two conflict, the earlier one wins: a much faster design is worth somewhat more memory.
-3. **No lost functionality.** A trade against a higher priority needs the benchmark to show its cost is negligible.
+3. **Valid instances first.** When a design speeds one path at the other's cost, the valid instance wins (CLAUDE.md, *Priorities*). Branches that `anyOf` / `oneOf` / `if` / `not` / `contains` reject inside a valid instance count as the valid path. An invalid instance may cost more, but only by a bounded factor: check that the extra work is proportional (no super-linear blow-up), and that `is_valid` still stops at the first failure. A PR that trades this way says so in its *Performance* section.
+4. **No lost functionality.** A trade against a higher priority needs the benchmark to show its cost is negligible.
 
 ## Workflow
 

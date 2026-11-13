@@ -13,6 +13,13 @@ see [design.md](design.md).
    (and against competitors with `make benchmark_full`).
    When speed and memory conflict, choose speed: a much faster design is worth somewhat
    more memory.
+   When the valid and invalid paths conflict, the **valid instance** wins: most real input is
+   valid, and reporting errors legitimately costs more. "Valid" is the instance's final
+   verdict, not a keyword's: the branches `anyOf`, `oneOf`, `if`, `not` and `contains` reject
+   while validating a valid instance are on the fast path too. An invalid instance may cost
+   more, but only by a bounded factor (no super-linear blow-up, no re-evaluating subtrees
+   over and over), since invalid input is often untrusted; and `is_valid` keeps its early exit
+   cheap.
 3. **The user-facing API.** Sane defaults and the behaviour users would most expect (library,
    CLI, generated code). Keep the spec-faithful default; offer a setting where users
    reasonably differ. One deliberate exception, chosen by the maintainer: codegen maps
