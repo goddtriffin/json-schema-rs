@@ -2624,6 +2624,52 @@ struct DocHiddenOnly {
     x: String,
 }
 
+/// Field docs with `markup`.
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct DocFieldAttrDescription {
+    /// From `doc`.
+    #[json_schema(description = "From <attribute>")]
+    x: String,
+}
+
+/// # Examples
+#[derive(ToJsonSchema)]
+#[json_schema(description = "")]
+#[expect(dead_code)]
+struct DocBlankAttrDescription {
+    /// From doc.
+    #[json_schema(description = " ")]
+    x: String,
+}
+
+#[test]
+fn derive_field_description_attribute_takes_precedence_over_doc_comment() {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        description: Some("Field docs with `markup`.".to_string()),
+        ..one_property_body(
+            "x",
+            JsonSchema {
+                description: Some("From <attribute>".to_string()),
+                ..String::json_schema().expect("schema")
+            },
+        )
+    });
+    let actual: ReverseCodeGenResult = DocFieldAttrDescription::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn derive_blank_description_attribute_is_no_description() {
+    let expected: ReverseCodeGenResult = Ok(JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        ..one_property_body("x", String::json_schema().expect("schema"))
+    });
+    let actual: ReverseCodeGenResult = DocBlankAttrDescription::json_schema();
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn derive_container_doc_comment_becomes_description() {
     let expected: ReverseCodeGenResult = Ok(JsonSchema {

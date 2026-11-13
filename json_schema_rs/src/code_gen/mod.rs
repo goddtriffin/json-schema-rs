@@ -4,6 +4,7 @@
 //! boolean schema) and returns generated source as bytes. The CLI matches on the language
 //! argument and calls the appropriate backend (e.g. the Rust backend).
 
+mod doc_text;
 mod embedded_prune;
 mod error;
 mod input;

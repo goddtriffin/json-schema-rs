@@ -10,6 +10,7 @@ use super::CodeGenBackend;
 use super::CodeGenError;
 use super::CodeGenResult;
 use super::GenerateRustOutput;
+use super::doc_text;
 use super::input::{CachingRetriever, CodeGenInput};
 use super::rust_validators::{self, BufferValidators, EmbeddedSet, Entry, UnionEntries};
 use super::settings::{CodeGenSettings, DedupeMode, UniqueItemsType};
@@ -767,31 +768,37 @@ fn accepts_null(graph: &TypeGraph, id: TypeId) -> bool {
     false
 }
 
-/// Doc comment lines: empty if `s` is `None` or blank; else one per non-empty trimmed line.
-fn doc_lines(s: Option<&str>) -> Vec<String> {
-    let Some(trimmed) = s.map(str::trim) else {
-        return Vec::new();
-    };
-    if trimmed.is_empty() {
-        return Vec::new();
+/// An item's or field's doc comment lines (`""` for a blank line) from its description and
+/// examples (see [`doc_text`]), and the description it must also state in
+/// `#[json_schema(description = "...")]` (empty for none) when the lines do not read back as it.
+fn annotation_docs(
+    description: Option<&str>,
+    examples: Option<&[Value]>,
+) -> (Vec<String>, Option<String>) {
+    let mut lines: Vec<String> = description.map_or_else(Vec::new, doc_text::description_lines);
+    if let Some(examples) = examples.filter(|e| !e.is_empty()) {
+        let section: Vec<String> = doc_text::examples_lines(examples);
+        // The section's leading blank line separates it from a description.
+        let skip: usize = usize::from(lines.is_empty());
+        lines.extend(section.into_iter().skip(skip));
     }
-    trimmed
-        .split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        // A bare carriage return is not allowed in a Rust doc comment.
-        .map(|line| line.replace('\r', " "))
-        .collect()
+    let wanted: Option<String> = description.and_then(doc_text::normalized);
+    let stated: Option<String> =
+        (doc_text::read_back(&lines) != wanted).then(|| wanted.unwrap_or_default());
+    (lines, stated)
 }
 
-/// Doc comment lines for an `# Examples` section (compact JSON per example).
-fn examples_doc_lines(examples: Option<&[Value]>) -> Vec<String> {
-    let Some(examples) = examples.filter(|e| !e.is_empty()) else {
-        return Vec::new();
-    };
-    let mut lines: Vec<String> = vec![String::new(), "# Examples".to_string(), String::new()];
-    lines.extend(examples.iter().map(Value::to_string));
-    lines
+/// `lines` as `///` comments at `indent`.
+fn doc_comment(lines: &[String], indent: &str) -> String {
+    let mut out: String = String::new();
+    for line in lines {
+        if line.is_empty() {
+            let _ = writeln!(out, "{indent}///");
+        } else {
+            let _ = writeln!(out, "{indent}/// {line}");
+        }
+    }
+    out
 }
 
 /// `s` escaped for the inside of a Rust string literal: quotes, backslashes and every control
@@ -869,20 +876,21 @@ fn deprecated_attr(deprecated: Option<bool>, description: Option<&str>, indent: 
     }
 }
 
-/// Doc comments for an item from its annotations (description, then examples).
-fn item_docs(annotations: &Annotations) -> String {
-    let mut out: String = String::new();
-    for line in doc_lines(annotations.description.as_deref()) {
-        let _ = writeln!(out, "/// {line}");
-    }
-    for line in examples_doc_lines(annotations.examples.as_deref()) {
-        if line.is_empty() {
-            out.push_str("///\n");
-        } else {
-            let _ = writeln!(out, "/// {line}");
-        }
-    }
-    out
+/// Doc comments for an item from its annotations (description, then examples), and the
+/// description it must also state in its `#[json_schema(...)]` (see [`annotation_docs`]).
+fn item_docs(annotations: &Annotations) -> (String, Option<String>) {
+    let (lines, stated): (Vec<String>, Option<String>) = annotation_docs(
+        annotations.description.as_deref(),
+        annotations.examples.as_deref(),
+    );
+    (doc_comment(&lines, ""), stated)
+}
+
+/// The `#[json_schema(description = "...")]` line for a stated description.
+fn description_attr(stated: Option<&String>) -> String {
+    stated.map_or_else(String::new, |d| {
+        format!("#[json_schema(description = \"{}\")]\n", escape(d))
+    })
 }
 
 /// A Rust literal for a scalar JSON default of the value type `node` (a string default is a
@@ -1333,8 +1341,15 @@ fn render_field(
     let integers: bool = reads_integers(graph, plan, value_id);
     shape_serde_args(shape, set, integers, imports, &mut serde_args);
     let mut attrs: String = String::new();
-    for line in doc_lines(field.description.as_deref()) {
-        let _ = writeln!(attrs, "    /// {line}");
+    let (doc_lines, stated): (Vec<String>, Option<String>) =
+        annotation_docs(field.description.as_deref(), None);
+    attrs.push_str(&doc_comment(&doc_lines, "    "));
+    if let Some(stated) = stated {
+        let _ = writeln!(
+            attrs,
+            "    #[json_schema(description = \"{}\")]",
+            escape(&stated)
+        );
     }
     attrs.push_str(&deprecated_attr(
         field.deprecated,
@@ -1442,10 +1457,12 @@ fn render_struct(
         .collect();
     let mut out: String = String::new();
     let a: &Annotations = &object.annotations;
-    out.push_str(&item_docs(a));
+    let (docs, stated): (String, Option<String>) = item_docs(a);
+    out.push_str(&docs);
     out.push_str(&deprecated_attr(a.deprecated, a.description.as_deref(), ""));
     out.push_str(struct_derive(plan, id));
     out.push('\n');
+    out.push_str(&description_attr(stated.as_ref()));
     if let Some(ref title) = a.title {
         let _ = writeln!(out, "#[json_schema(title = \"{}\")]", escape(title));
     }
@@ -1490,7 +1507,7 @@ fn render_newtype(
     let inner: &str = scalar_type(node, imports);
     let string: bool = inner == "String";
     let a: &Annotations = &newtype.annotations;
-    let mut out: String = item_docs(a);
+    let (mut out, stated): (String, Option<String>) = item_docs(a);
     out.push_str(&deprecated_attr(a.deprecated, a.description.as_deref(), ""));
     out.push_str(match node {
         TypeNode::String { .. } if string => {
@@ -1507,6 +1524,9 @@ fn render_newtype(
     let mut schema_args: Vec<String> = Vec::new();
     if let Some(ref title) = a.title {
         schema_args.push(format!("title = \"{}\"", escape(title)));
+    }
+    if let Some(ref stated) = stated {
+        schema_args.push(format!("description = \"{}\"", escape(stated)));
     }
     if let Some(ref id) = a.id {
         schema_args.push(format!("id = \"{}\"", escape(id)));
@@ -1581,11 +1601,12 @@ fn value_variant_base(value: &Value) -> String {
 fn render_enum(name: &str, e: &EnumNode, imports: &mut Imports) -> String {
     let bases: Vec<String> = e.values.iter().map(value_variant_base).collect();
     let variants: Vec<String> = unique_idents(&bases, "");
-    let mut out: String = item_docs(&e.annotations);
+    let (mut out, stated): (String, Option<String>) = item_docs(&e.annotations);
     imports.deserialize = true;
     if e.is_string_enum() {
         out.push_str(STRING_ENUM_DERIVE);
         out.push('\n');
+        out.push_str(&description_attr(stated.as_ref()));
         let members: Vec<(&str, &str)> = e
             .values
             .iter()
@@ -1611,6 +1632,7 @@ fn render_enum(name: &str, e: &EnumNode, imports: &mut Imports) -> String {
     // Schema equality (`1` equals `1.0`).
     out.push_str(VALUE_ENUM_DERIVE);
     out.push('\n');
+    out.push_str(&description_attr(stated.as_ref()));
     let _ = writeln!(out, "pub enum {name} {{");
     for (value, variant) in e.values.iter().zip(&variants) {
         let _ = writeln!(out, "    #[json_schema(value = {})]", json_tokens(value));
@@ -1697,9 +1719,10 @@ fn render_union(
         .map(|i| variant_base(graph, plan, union, i))
         .collect();
     let names: Vec<String> = unique_idents(&bases, "");
-    let mut out: String = item_docs(&union.annotations);
+    let (mut out, stated): (String, Option<String>) = item_docs(&union.annotations);
     out.push_str(union_derive(plan, id));
     out.push('\n');
+    out.push_str(&description_attr(stated.as_ref()));
     out.push_str("#[serde(untagged)]\n");
     if union.kind == UnionKind::OneOf {
         out.push_str("#[json_schema(one_of)]\n");
@@ -6207,6 +6230,37 @@ pub struct Root {
     }
 
     #[test]
+    fn description_markup_is_rendered_and_stated_for_the_round_trip() {
+        let json: &str = r#"{"description":"Configures the WidgetPool.","type":"object","properties":{"max_retries":{"type":"integer","description":"Written as <n>."},"name":{"type":"string","description":"Plain text."}}}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder().self_validating(false).build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+/// Configures the `WidgetPool`.
+#[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(description = "Configures the WidgetPool.")]
+pub struct Root {
+    /// Written as \<n\>.
+    #[json_schema(description = "Written as <n>.")]
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<i64>,
+    /// Plain text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn examples_golden_with_examples_emits_doc() {
         let json: &str = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":[{"x":"foo"}]}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
@@ -6218,11 +6272,13 @@ pub struct Root {
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-///
 /// # Examples
 ///
+/// ```json
 /// {"x":"foo"}
+/// ```
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(description = "")]
 pub struct Root {
     pub x: String,
     #[serde(flatten)]
@@ -6245,12 +6301,14 @@ pub struct Root {
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-///
 /// # Examples
 ///
+/// ```json
 /// "a"
 /// 1
+/// ```
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(description = "")]
 pub struct Root {
     pub x: String,
     #[serde(flatten)]
@@ -6273,11 +6331,13 @@ pub struct Root {
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-///
 /// # Examples
 ///
+/// ```json
 /// "open"
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(description = "")]
 pub enum Status {
     #[serde(rename = "open")]
     Open,
@@ -6337,11 +6397,13 @@ pub struct Root {
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-///
 /// # Examples
 ///
+/// ```json
 /// 1
+/// ```
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(description = "")]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -6356,11 +6418,13 @@ pub struct Root {
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-///
 /// # Examples
 ///
+/// ```json
 /// 2
+/// ```
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(description = "")]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -6394,11 +6458,13 @@ pub struct Root {
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-///
 /// # Examples
 ///
+/// ```json
 /// 1
+/// ```
 #[derive(Debug, Clone, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(description = "")]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
