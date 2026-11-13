@@ -54,13 +54,6 @@ impl IntWidth {
     }
 }
 
-/// The width of a floating-point type: `F32` when both bounds lie within `f32`'s range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum FloatWidth {
-    F32,
-    F64,
-}
-
 /// A string `format` that maps to its own type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum StringFormat {
@@ -204,7 +197,9 @@ pub(crate) enum TypeNode {
     /// An integer of the width, read by the dialect's integer rule (`Numeric`: `1.0` is an
     /// integer).
     Integer(IntWidth, IntegerSemantics),
-    Number(FloatWidth),
+    /// Always `f64`: bounds say nothing about precision, so a narrower type would lose digits
+    /// of valid values.
+    Number,
     String {
         format: StringFormat,
         constraints: StringConstraints,
@@ -244,7 +239,7 @@ impl TypeNode {
             | TypeNode::Null
             | TypeNode::Boolean
             | TypeNode::Integer(..)
-            | TypeNode::Number(_)
+            | TypeNode::Number
             | TypeNode::String { .. }
             | TypeNode::Enum(_) => Vec::new(),
             TypeNode::Array { items, .. } => vec![*items],
@@ -263,7 +258,7 @@ impl TypeNode {
             | TypeNode::Null
             | TypeNode::Boolean
             | TypeNode::Integer(..)
-            | TypeNode::Number(_)
+            | TypeNode::Number
             | TypeNode::String { .. }
             | TypeNode::Enum(_) => Vec::new(),
             TypeNode::Array { items, .. } => vec![items],
@@ -400,7 +395,7 @@ pub(crate) fn scalar_json_type(node: &TypeNode) -> Option<JsonType> {
         TypeNode::Null => Some(JsonType::Null),
         TypeNode::Boolean => Some(JsonType::Boolean),
         TypeNode::Integer(..) => Some(JsonType::Integer),
-        TypeNode::Number(_) => Some(JsonType::Number),
+        TypeNode::Number => Some(JsonType::Number),
         TypeNode::String { .. } => Some(JsonType::String),
         TypeNode::Array { .. } => Some(JsonType::Array),
         TypeNode::Map { .. } | TypeNode::Object(_) => Some(JsonType::Object),

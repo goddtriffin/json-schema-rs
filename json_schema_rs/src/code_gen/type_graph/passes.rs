@@ -153,7 +153,7 @@ fn local_signature(node: &TypeNode, mode: DedupeMode) -> String {
         | TypeNode::Null
         | TypeNode::Boolean
         | TypeNode::Integer(..)
-        | TypeNode::Number(_)
+        | TypeNode::Number
         | TypeNode::String { .. }
         | TypeNode::Array { .. }
         | TypeNode::Map { .. }
@@ -375,7 +375,7 @@ fn value_size(graph: &TypeGraph, id: TypeId, sizes: &[Option<u64>]) -> u64 {
         TypeNode::Pending | TypeNode::Any => 32,
         TypeNode::Null => 0,
         TypeNode::Boolean | TypeNode::Enum(_) => 1,
-        TypeNode::Integer(..) | TypeNode::Number(_) | TypeNode::Box(_) => 8,
+        TypeNode::Integer(..) | TypeNode::Number | TypeNode::Box(_) => 8,
         TypeNode::String { .. } | TypeNode::Map { .. } => 24,
         TypeNode::Array { unique, .. } => {
             if *unique {

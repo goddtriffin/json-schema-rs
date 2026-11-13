@@ -417,7 +417,7 @@ macro_rules! newtype_float {
     )*};
 }
 
-newtype_float!(f32, f64);
+newtype_float!(f64);
 
 /// The compiled schemas of every type, or why they cannot be used.
 type Compiled = Result<CompiledEntries, Arc<EmbeddedSchemaError>>;
@@ -601,26 +601,6 @@ impl<'a> TypeValidators<'a> {
         index: usize,
         value: T,
     ) -> Result<T, TypeValidationError> {
-        self.validate_newtype_as(index, value)
-    }
-
-    /// [`TypeValidators::validate_newtype`] for a value read as another type: validates `value`
-    /// as type `index`, then converts the instance to `T` (an `f32` newtype validates the `f64`
-    /// it read, so a number just outside a bound cannot round into it).
-    ///
-    /// # Errors
-    ///
-    /// See [`TypeValidators::validate_newtype`]; [`TypeValidationError::Json`] when the instance
-    /// is not a `T`.
-    ///
-    /// # Panics
-    ///
-    /// When `index` is not a type of these validators.
-    pub fn validate_newtype_as<T: NewtypeValue, U: NewtypeValue>(
-        &self,
-        index: usize,
-        value: U,
-    ) -> Result<T, TypeValidationError> {
         let instance: Value = value.into_instance()?;
         self.validate(index, &instance)?;
         T::from_instance(instance)
@@ -646,27 +626,6 @@ impl<'a> TypeValidators<'a> {
             return Ok(value);
         }
         self.validate_newtype(index, value)
-    }
-
-    /// [`TypeValidators::read_newtype`] for a value read as another type: converts it to `T`
-    /// when the deserialization is trusted, else [`TypeValidators::validate_newtype_as`].
-    ///
-    /// # Errors
-    ///
-    /// See [`TypeValidators::validate_newtype_as`].
-    ///
-    /// # Panics
-    ///
-    /// When `index` is not a type of these validators.
-    pub fn read_newtype_as<T: NewtypeValue, U: NewtypeValue>(
-        &self,
-        index: usize,
-        value: U,
-    ) -> Result<T, TypeValidationError> {
-        if trusted() {
-            return T::from_instance(value.into_instance()?);
-        }
-        self.validate_newtype_as(index, value)
     }
 
     /// The `Deserialize` of a generated `anyOf` / `oneOf` union: reads the value once (buffered
@@ -1054,8 +1013,6 @@ macro_rules! self_validating {
 /// - `constrained_newtype!(integer, Age, u8, VALIDATORS, 0)`: wraps an integer read by JSON
 ///   Schema's integer rule (draft 6 on: `1.0` is the integer 1; see
 ///   [`json_schema_rs::integer`](crate::integer)).
-/// - `constrained_newtype!(f32, Ratio, VALIDATORS, 0)`: wraps `f32`, deserialized as the `f64`
-///   read and validated before it is narrowed.
 /// - `constrained_newtype!(uuid, Id, VALIDATORS, 0)`: wraps `uuid::Uuid`, validated as the
 ///   string read (and, for `TryFrom<Uuid>`, the string it serializes to).
 ///
@@ -1172,30 +1129,6 @@ macro_rules! constrained_newtype {
 
         $crate::constrained_newtype!(@as_ref, $name, $inner);
         $crate::constrained_newtype!(@readers, $name, $inner);
-    };
-    (f32, $name:ident, $validators:ident, $index:expr) => {
-        impl TryFrom<f32> for $name {
-            type Error = $crate::TypeValidationError;
-
-            /// Validates `value` against the schema: every error the schema's validator reports.
-            fn try_from(value: f32) -> Result<Self, Self::Error> {
-                $validators.validate_newtype($index, value).map(Self)
-            }
-        }
-
-        impl<'de> ::serde::Deserialize<'de> for $name {
-            fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                // The number as read, before it is narrowed: a value just outside a bound must
-                // not round into it.
-                $validators
-                    .read_newtype_as($index, <f64 as ::serde::Deserialize>::deserialize(deserializer)?)
-                    .map(Self)
-                    .map_err(::serde::de::Error::custom)
-            }
-        }
-
-        $crate::constrained_newtype!(@as_ref, $name, f32);
-        $crate::constrained_newtype!(@readers, $name, f32);
     };
     (uuid, $name:ident, $validators:ident, $index:expr) => {
         impl TryFrom<::uuid::Uuid> for $name {
@@ -2381,15 +2314,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_newtype_gives_back_a_conforming_f32() {
-        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
-        let actual: Result<f32, Outcome> =
-            outcome(newtype_validators(&documents).validate_newtype(2, 0.1_f32));
-        let expected: Result<f32, Outcome> = Ok(0.1_f32);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn validate_newtype_rejects_a_non_conforming_float() {
         let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
         let actual: Result<f64, Outcome> =
@@ -2413,19 +2337,6 @@ mod tests {
     fn non_finite_error_names_the_value() {
         let actual: String = TypeValidationError::NonFinite(f64::NAN).to_string();
         let expected: &str = "NaN is not a JSON number";
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn validate_newtype_as_validates_the_value_read_before_converting() {
-        let documents: [EmbeddedDocument<'static>; 1] = [parsed("json-schema:///", NEWTYPES)];
-        let validators: TypeValidators<'_> = newtype_validators(&documents);
-        let actual: Result<f32, Outcome> =
-            outcome(validators.validate_newtype_as(2, 1.000_000_000_1_f64));
-        let expected: Result<f32, Outcome> = Err(Outcome::Invalid(
-            library_errors(r#"{"type":"number","maximum":1}"#, &json!(1.000_000_000_1))
-                .expect_err("invalid"),
-        ));
         assert_eq!(expected, actual);
     }
 }
