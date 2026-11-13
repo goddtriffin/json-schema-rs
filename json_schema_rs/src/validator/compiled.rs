@@ -423,20 +423,20 @@ pub(crate) enum Pick {
 pub(crate) struct EnumList {
     /// The values as the schema wrote them, for error messages and non-string instances.
     pub(crate) values: Box<[Value]>,
-    /// The distinct strings among the values.
-    strings: NameIndex,
+    /// An index of the values' strings, each at its value's position, when the list has at least
+    /// two strings: one is compared directly, and an index for it would only cost an allocation
+    /// at compile time.
+    strings: Option<NameIndex>,
     /// Whether every value is a string, so no other instance can match.
     only_strings: bool,
 }
 
 impl EnumList {
     fn new(values: Box<[Value]>) -> EnumList {
-        let strings: BTreeSet<&str> = values.iter().filter_map(Value::as_str).collect();
-        let only_strings: bool = values.iter().all(Value::is_string);
-        let strings: Box<[Box<str>]> = strings.into_iter().map(Box::from).collect();
+        let string_count: usize = values.iter().filter(|value| value.is_string()).count();
         EnumList {
-            strings: NameIndex::new(strings),
-            only_strings,
+            strings: (string_count > 1).then(|| NameIndex::new(values.iter().map(Value::as_str))),
+            only_strings: string_count == values.len(),
             values,
         }
     }
@@ -445,7 +445,17 @@ impl EnumList {
     #[inline]
     pub(crate) fn contains(&self, instance: &Value) -> bool {
         match instance {
-            Value::String(string) => self.strings.find(string).is_some(),
+            Value::String(string) => match &self.strings {
+                Some(index) => index
+                    .find(string, |position| {
+                        self.values[position].as_str().unwrap_or_default()
+                    })
+                    .is_some(),
+                None => self
+                    .values
+                    .iter()
+                    .any(|value| value.as_str() == Some(string)),
+            },
             _ => {
                 !self.only_strings
                     && self
