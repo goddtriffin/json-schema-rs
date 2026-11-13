@@ -309,6 +309,9 @@ pub(crate) struct Node {
     /// Whether the node has `unevaluatedProperties` / `unevaluatedItems`, so its keywords'
     /// annotations must be collected.
     pub(crate) has_unevaluated: bool,
+    /// Whether every keyword is an assertion on the instance alone (see [`Keyword::is_leaf`]):
+    /// the node applies no subschema, so it is decided without the evaluator's bookkeeping.
+    pub(crate) leaf: bool,
 }
 
 /// How a property or item applicator sees an object's members: the names `properties` lists
@@ -556,6 +559,30 @@ pub(crate) enum Keyword {
     },
     UnevaluatedProperties(NodeId),
     UnevaluatedItems(NodeId),
+}
+
+impl Keyword {
+    /// Whether the keyword asserts on the instance alone, without applying a subschema,
+    /// collecting annotations or reading anything but the instance and its own payload.
+    fn is_leaf(&self) -> bool {
+        matches!(
+            self,
+            Keyword::False
+                | Keyword::Type { .. }
+                | Keyword::Const(_)
+                | Keyword::Enum(_)
+                | Keyword::Minimum(_)
+                | Keyword::Maximum(_)
+                | Keyword::ExclusiveMinimum(_)
+                | Keyword::ExclusiveMaximum(_)
+                | Keyword::MultipleOf(_)
+                | Keyword::MinLength(_)
+                | Keyword::MaxLength(_)
+                | Keyword::Pattern(_)
+                | Keyword::Format(_)
+                | Keyword::UserFormat(_)
+        )
+    }
 }
 
 /// A schema compiled for validation. Build it once with [`CompiledSchema::new`] and validate
@@ -1522,6 +1549,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 keywords,
                 scope,
                 has_unevaluated: false,
+                leaf: !b,
             };
         }
         let dialect: Dialect = self.registry.dialect(scope);
@@ -1539,10 +1567,12 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 Keyword::UnevaluatedProperties(_) | Keyword::UnevaluatedItems(_)
             )
         });
+        let leaf: bool = !keywords.is_empty() && keywords.iter().all(Keyword::is_leaf);
         Node {
             keywords: keywords.into_boxed_slice(),
             scope,
             has_unevaluated,
+            leaf,
         }
     }
 
@@ -2588,6 +2618,44 @@ mod tests {
         let b: CompiledSchema = compile(&schema("https://example.com/b.json"));
         let expected: bool = true;
         let actual: bool = a.same_validation(&b, |uri| uri.replace("/a.json", "/b.json"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn leaf_nodes_are_those_with_only_instance_assertions() {
+        let compiled: CompiledSchema = compile(&json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "pattern": "^a"},
+                "count": {"type": "integer", "minimum": 0, "multipleOf": 2},
+                "kind": {"enum": ["a", "b"]},
+                "never": false,
+                "anything": true,
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "named": {"$ref": "#/properties/name"},
+            },
+        }));
+        let mut expected: Vec<(String, bool)> = vec![
+            ("/".to_owned(), false),
+            ("anything".to_owned(), false),
+            ("count".to_owned(), true),
+            ("kind".to_owned(), true),
+            ("name".to_owned(), true),
+            ("named".to_owned(), false),
+            ("never".to_owned(), true),
+            ("tags".to_owned(), false),
+        ];
+        expected.sort();
+        let root: &Node = compiled.node(compiled.root);
+        let mut actual: Vec<(String, bool)> = vec![("/".to_owned(), root.leaf)];
+        for keyword in &root.keywords {
+            if let Keyword::Properties(id) = keyword {
+                for (name, node) in compiled.property_table(*id).iter() {
+                    actual.push((name.to_owned(), compiled.node(node).leaf));
+                }
+            }
+        }
+        actual.sort();
         assert_eq!(expected, actual);
     }
 
