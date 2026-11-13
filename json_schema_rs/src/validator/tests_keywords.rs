@@ -1754,6 +1754,73 @@ fn additional_properties_false_with_pattern_properties_rejects_each_other() {
     assert_eq!(expected, actual);
 }
 
+/// `properties` and `additionalProperties: false` without `patternProperties`, checked in one
+/// walk over the members.
+const CLOSED: &str =
+    r#"{"properties":{"a":{"type":"integer"},"c":{"type":"string"}},"additionalProperties":false}"#;
+
+#[test]
+fn closed_properties_accepts_listed_members() {
+    let schema: JsonSchema = schema(CLOSED);
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "c": "x"}));
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn closed_properties_reports_unknown_members_before_member_errors() {
+    let schema: JsonSchema = schema(CLOSED);
+    let actual: ValidationResult =
+        validate_usable(&schema, &json!({"a": "x", "b": 1, "c": 2, "d": 3}));
+    let expected: ValidationResult = Err(vec![
+        disallowed_additional("b"),
+        disallowed_additional("d"),
+        expected_integer("/a", "/properties/a/type", "string"),
+        expected_string("/c", "/properties/c/type", "number"),
+    ]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn closed_properties_reports_unknown_member_of_valid_listed_members() {
+    let schema: JsonSchema = schema(CLOSED);
+    let actual: ValidationResult = validate_usable(&schema, &json!({"a": 1, "b": 1}));
+    let expected: ValidationResult = Err(vec![disallowed_additional("b")]);
+    assert_eq!(expected, actual);
+}
+
+/// `not` of a closed object whose member `a` nests arbitrarily deep: an unknown member fails the
+/// inner schema before `a` is evaluated, so `not` passes without reaching the depth guard. The
+/// list's second name lets an object with one unknown member have no more members than names.
+const NOT_CLOSED_DEEP: &str = r##"{"$defs":{"deep":{"items":{"$ref":"#/$defs/deep"}}},"not":{"properties":{"a":{"$ref":"#/$defs/deep"},"c":{}},"additionalProperties":false}}"##;
+
+#[test]
+fn closed_properties_unknown_member_fails_before_deep_member() {
+    let schema: JsonSchema = schema(NOT_CLOSED_DEEP);
+    let instance: Value = json!({"a": nested_arrays(DEPTH_LIMIT), "b": 1});
+    let actual: ValidationResult = validate_usable(&schema, &instance);
+    let expected: ValidationResult = Ok(());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn closed_properties_unknown_member_fails_before_deep_member_in_verdict_mode() {
+    let compiled: CompiledSchema = compile(&schema(NOT_CLOSED_DEEP));
+    let instance: Value = json!({"a": nested_arrays(DEPTH_LIMIT), "b": 1});
+    let actual: bool = compiled.is_valid(&instance);
+    let expected: bool = true;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn closed_properties_deep_listed_member_reaches_depth_guard() {
+    let compiled: CompiledSchema = compile(&schema(NOT_CLOSED_DEEP));
+    let instance: Value = json!({"a": nested_arrays(DEPTH_LIMIT)});
+    let actual: bool = compiled.is_valid(&instance);
+    let expected: bool = false;
+    assert_eq!(expected, actual);
+}
+
 // --- minProperties / maxProperties ---
 
 #[test]
