@@ -94,23 +94,23 @@ tools = [
 ]
 
 [dependencies]
-serde = { workspace = true }
-serde_json = { workspace = true }
-clap = "4"
-criterion = { version = "0.5", features = ["html_reports"] }
-fluent-uri = "0.4"
-peak_alloc = "0.3"
-syn = { version = "3", features = ["full"] }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+criterion = { workspace = true, features = ["html_reports"] }
+fluent-uri.workspace = true
+peak_alloc.workspace = true
+syn = { workspace = true, features = ["full"] }
 json-schema-rs = { workspace = true, optional = true }
-boon = { version = "0.6", optional = true }
-jsonschema = { version = "0.60", default-features = false, optional = true }
-typify = { version = "0.8", default-features = false, optional = true }
-schemars = { version = "0.8", optional = true }
-prettyplease = { version = "0.3", optional = true }
-proc-macro2 = { version = "1", optional = true }
-valico = { version = "4", optional = true }
-url = { version = "2", optional = true }
-jsonschema-valid = { version = "0.5", optional = true }
-self_cell = { version = "1", optional = true }
-schemafy_lib = { version = "0.6", optional = true }
-jsonschema_code_generator = { version = "2", optional = true }
+boon = { workspace = true, optional = true }
+jsonschema = { workspace = true, optional = true }
+typify = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+prettyplease = { workspace = true, optional = true }
+proc-macro2 = { workspace = true, optional = true }
+valico = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+jsonschema-valid = { workspace = true, optional = true }
+self_cell = { workspace = true, optional = true }
+schemafy_lib = { workspace = true, optional = true }
+jsonschema_code_generator = { workspace = true, optional = true }

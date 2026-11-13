@@ -1184,11 +1184,7 @@ impl<'r> Builder<'_, 'r> {
         mask: TypeSet,
         context: &Context,
     ) -> CodeGenResult<TypeId> {
-        let origin: String = flat
-            .conjuncts
-            .first()
-            .map(|c| c.pointer.clone())
-            .unwrap_or_default();
+        let origin: String = flat.conjuncts.first().map_or_default(|c| c.pointer.clone());
         let id: TypeId = self.request(
             Request {
                 conjuncts: flat.conjuncts.clone(),

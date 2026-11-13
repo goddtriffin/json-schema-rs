@@ -1188,8 +1188,7 @@ impl JsonSchema {
         let settings: JsonSchemaSettings =
             JsonSchemaSettings::from_dialect_settings(self.dialect_settings.unwrap_or_default());
         resolve_dialect_for_uri(self.schema.as_deref(), &settings)
-            .map(|resolved| resolved.dialect)
-            .unwrap_or_default()
+            .map_or_default(|resolved| resolved.dialect)
     }
 
     /// Returns mutable references to this schema's direct subschema objects (boolean schemas

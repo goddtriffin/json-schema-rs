@@ -30,8 +30,8 @@ path = "src/bin/differential_report.rs"
 workspace = true
 
 [dependencies]
-json-schema-rs = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-boon = "0.6"
-jsonschema = { version = "0.60", default-features = false }
+json-schema-rs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+boon.workspace = true
+jsonschema.workspace = true

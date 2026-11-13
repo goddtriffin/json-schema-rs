@@ -510,11 +510,7 @@ fn serde_args(attrs: &[Attribute]) -> SynResult<Vec<SerdeArg>> {
             continue;
         }
         attr.parse_nested_meta(|meta| {
-            let name: String = meta
-                .path
-                .get_ident()
-                .map(ToString::to_string)
-                .unwrap_or_default();
+            let name: String = meta.path.get_ident().map_or_default(ToString::to_string);
             let mut value: Option<String> = None;
             if meta.input.peek(Token![=]) {
                 let expr: Expr = meta.value()?.parse()?;

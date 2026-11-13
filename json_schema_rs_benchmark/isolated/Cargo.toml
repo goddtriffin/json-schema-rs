@@ -23,16 +23,47 @@
 [package]
 name = "json-schema-rs-benchmark-isolated"
 description = "Benchmark competitors built apart from json-schema-rs-benchmark. Not published."
-version = "0.0.6"
-edition = "2024"
-rust-version = "1.99"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [workspace]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.6"
+edition = "2024"
+rust-version = "1.100"
+
+# Every dependency of this workspace's crates, declared once here at its full version; members
+# inherit them and add only their own features and `optional`.
+[workspace.dependencies]
+json-schema-rs = { path = "../../json_schema_rs" }
+json-schema-rs-benchmark = { path = "..", default-features = false }
+json-schema-rs-macro = { path = "../../json_schema_rs_macro" }
+model-gen = { path = "models/gen" }
+models-shard-0 = { path = "models/shard_0" }
+models-shard-1 = { path = "models/shard_1" }
+models-shard-2 = { path = "models/shard_2" }
+models-shard-3 = { path = "models/shard_3" }
+models-shard-4 = { path = "models/shard_4" }
+models-shard-5 = { path = "models/shard_5" }
+models-shard-6 = { path = "models/shard_6" }
+models-shard-7 = { path = "models/shard_7" }
+corvus-json-schema = "0.2.2"
+jsonschema = { version = "0.61.2", default-features = false }
+peak_alloc = "0.3.0"
+prettyplease = "0.3.0"
+quote = "1.0.47"
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+syn = "3.0.10"
 
 [features]
 corvus = ["dep:corvus-json-schema"]
-jsonschema-macros = ["dep:jsonschema"]
+jsonschema-macros = ["dep:jsonschema", "dep:json-schema-rs-benchmark", "dep:serde_json"]
 reverse-codegen = [
     "dep:json-schema-rs",
     "dep:schemars",
@@ -87,26 +118,27 @@ name = "isolated"
 harness = false
 
 [dependencies]
-json-schema-rs-benchmark = { path = "..", default-features = false }
-serde_json = { version = "1.0.149", features = ["float_roundtrip"] }
-peak_alloc = "0.3"
-corvus-json-schema = { version = "0.2", optional = true }
-jsonschema = { version = "0.60", default-features = false, features = ["macros"], optional = true }
-json-schema-rs = { path = "../../json_schema_rs", optional = true }
-schemars = { version = "1.2.3", optional = true }
-models-shard-0 = { path = "models/shard_0", optional = true }
-models-shard-1 = { path = "models/shard_1", optional = true }
-models-shard-2 = { path = "models/shard_2", optional = true }
-models-shard-3 = { path = "models/shard_3", optional = true }
-models-shard-4 = { path = "models/shard_4", optional = true }
-models-shard-5 = { path = "models/shard_5", optional = true }
-models-shard-6 = { path = "models/shard_6", optional = true }
-models-shard-7 = { path = "models/shard_7", optional = true }
+json-schema-rs-benchmark.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+peak_alloc.workspace = true
+corvus-json-schema = { workspace = true, optional = true }
+jsonschema = { workspace = true, features = ["macros"], optional = true }
+json-schema-rs = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+models-shard-0 = { workspace = true, optional = true }
+models-shard-1 = { workspace = true, optional = true }
+models-shard-2 = { workspace = true, optional = true }
+models-shard-3 = { workspace = true, optional = true }
+models-shard-4 = { workspace = true, optional = true }
+models-shard-5 = { workspace = true, optional = true }
+models-shard-6 = { workspace = true, optional = true }
+models-shard-7 = { workspace = true, optional = true }
 
 [build-dependencies]
-json-schema-rs-benchmark = { path = "..", default-features = false }
-jsonschema = { version = "0.60", default-features = false, optional = true }
-serde_json = "1.0.149"
+# Only the `jsonschema-macros` build script uses these: it reads the fixtures.
+json-schema-rs-benchmark = { workspace = true, optional = true }
+jsonschema = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [lints.rust]
 unsafe_code = { level = "forbid", priority = 0 }
