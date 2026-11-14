@@ -1807,7 +1807,7 @@ fn main() {
                     .constrained_newtypes(false)
                     .build(),
                 r#"use compile_test::{CodeOneOf, Pet, Root, SizeAnyOf};
-use json_schema_rs::TypeValidationError;
+use json_schema_rs::{TypeValidationError, Validated};
 
 const SCHEMA: &str = include_str!("schema.json");
 
@@ -1834,6 +1834,11 @@ fn type_errors(result: Result<Root, TypeValidationError>) -> String {
     }
 }
 
+/// The error of deserializing `Validated<Root>`.
+fn validated_errors(result: Result<Validated<Root>, serde_json::Error>) -> String {
+    result.map_or_else(|e| e.to_string(), |_| String::new())
+}
+
 fn size(value: serde_json::Value) -> SizeAnyOf {
     serde_json::from_value(value).unwrap()
 }
@@ -1850,13 +1855,19 @@ fn main() {
     let expected = (
         library_errors(&invalid),
         true,
+        (true, library_errors(&invalid), true),
         (true, true),
         (true, true, true),
         (true, true),
     );
     let actual = (
-        type_errors(Root::try_from(invalid)),
+        type_errors(Root::try_from(invalid.clone())),
         Root::try_from(valid.clone()).unwrap().validate().is_ok(),
+        (
+            serde_json::from_value::<Root>(invalid.clone()).is_ok(),
+            validated_errors(serde_json::from_value(invalid)),
+            serde_json::from_str::<Validated<Root>>(&valid.to_string()).is_ok(),
+        ),
         (
             matches!(size(serde_json::json!(5)), SizeAnyOf::Small(5)),
             matches!(size(serde_json::json!(50)), SizeAnyOf::Large(50)),
