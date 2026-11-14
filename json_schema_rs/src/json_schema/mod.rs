@@ -25,8 +25,8 @@ pub use registry::{
 pub use retrievers::HttpRetriever;
 pub use retrievers::{FileRetriever, file_path, file_uri};
 pub use settings::{
-    DialectSettings, JsonSchemaSettings, JsonSchemaSettingsBuilder, UnknownSchemaUri,
-    resolve_dialect,
+    DialectSettings, JsonSchemaSettings, JsonSchemaSettingsBuilder, MetaschemaCheck,
+    UnknownSchemaUri, resolve_dialect,
 };
 pub use spec_version::SpecVersion;
 pub use type_set::{JsonType, TypeSet, UnknownJsonType};

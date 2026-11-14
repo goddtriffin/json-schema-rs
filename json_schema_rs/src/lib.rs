@@ -10,6 +10,7 @@ pub mod generated_serde;
 pub mod integer;
 pub mod json_pointer;
 pub mod json_schema;
+pub mod meta;
 mod nullable;
 mod number;
 pub mod reverse_code_gen;
@@ -30,10 +31,10 @@ pub use json_schema::{
     ContentMode, Dialect, DialectSettings, DialectWarning, ExclusiveBounds, FileRetriever,
     FormatMode, IntegerSemantics, JsonSchema, JsonSchemaParseError, JsonSchemaParseErrors,
     JsonSchemaParseResult, JsonSchemaSettings, JsonSchemaSettingsBuilder, JsonType, Keyword,
-    OfflineRetriever, RefSiblings, Registry, RegistryBuilder, RegistryError, RegistryErrors,
-    Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope, SpecVersion,
-    SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri, Vocabulary,
-    VocabularyKind, VocabularySet, file_path, file_uri, resolve_dialect,
+    MetaschemaCheck, OfflineRetriever, RefSiblings, Registry, RegistryBuilder, RegistryError,
+    RegistryErrors, Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope,
+    SpecVersion, SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri,
+    Vocabulary, VocabularyKind, VocabularySet, file_path, file_uri, resolve_dialect,
 };
 pub use nullable::Nullable;
 pub use number::json_equal;

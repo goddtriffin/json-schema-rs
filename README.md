@@ -386,7 +386,11 @@ draft 4 says no, draft 6 and later yes),
 `.ref_siblings(RefSiblings::Evaluated)` (whether keywords next to `$ref` count:
 drafts 4, 6 and 7 ignore them, 2019-09 and 2020-12 evaluate them), and
 `.unknown_schema_uri(UnknownSchemaUri::Reject)` (refuse an unrecognized
-`$schema` instead of falling back to the default draft with a warning).
+`$schema` instead of falling back to the default draft with a warning), and
+`.metaschema_check(MetaschemaCheck::Validate)` (check the schema against its
+draft's metaschema, drafts 4 to 2020-12, and refuse it with every failure; off by
+default). `json_schema_rs::meta::validate(&schema_value)` and `meta::is_valid` run
+the same check on a `serde_json::Value` (the `jsonschema` crate's `meta::validate`).
 `JsonSchema::dialect()` returns a parsed schema's effective rules and
 `resolve_dialect(&schema, &settings)` returns them with any warnings. The library
 logs warnings at `debug` level through the `log` crate; the CLI prints them to
@@ -396,7 +400,8 @@ stderr. CLI: `--jss-default-spec-version` and `--jss-forced-spec-version`
 `--jss-integer-semantics lexical|numeric`,
 `--jss-exclusive-bounds boolean-modifier|numeric`,
 `--jss-ref-siblings ignored|evaluated`,
-`--jss-unknown-schema-uri fallback|reject`.
+`--jss-unknown-schema-uri fallback|reject`,
+`--jss-metaschema-check skip|validate`.
 
 ## Using the macro (compile-time codegen)
 
@@ -451,7 +456,7 @@ json_schema_to_rust!(
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,
   `content_mode = Annotation|Assertion`, `integer_semantics = Lexical|Numeric`,
   `exclusive_bounds = BooleanModifier|Numeric`, `ref_siblings = Ignored|Evaluated`,
-  `unknown_schema_uri = Fallback|Reject`. They apply to the input schemas and to
+  `unknown_schema_uri = Fallback|Reject`, `metaschema_check = Skip|Validate`. They apply to the input schemas and to
   every file a `$ref` reads.
 
 An unknown setting, an unknown value, a setting given twice and

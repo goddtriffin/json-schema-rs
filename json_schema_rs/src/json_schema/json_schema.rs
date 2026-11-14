@@ -1,13 +1,17 @@
 //! In-memory representation of JSON Schema for codegen.
 
 use super::dialect::{
-    Dialect, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
+    Dialect, DialectWarning, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
 };
 use super::error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
-use super::settings::{DialectSettings, JsonSchemaSettings, resolve_dialect_for_uri};
+use super::settings::{
+    DialectSettings, JsonSchemaSettings, MetaschemaCheck, resolve_dialect_for_uri,
+};
+use super::spec_version::SpecVersion;
 use super::type_set::TypeSet;
 use crate::json_pointer::JsonPointer;
 use crate::number;
+use crate::validator::ValidationResult;
 use memchr::memmem;
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -802,7 +806,8 @@ impl RawSchema<'_> {
 /// strict parsing, and those cases, go through a [`Value`] so the dialect is known before the
 /// model is built.
 fn parse_raw(raw: RawSchema<'_>, settings: &JsonSchemaSettings) -> JsonSchemaParseResult<Schema> {
-    if !settings.disallow_unknown_fields {
+    // Strict keys and the metaschema check read the document as a `Value`.
+    if !settings.disallow_unknown_fields && settings.metaschema_check == MetaschemaCheck::Skip {
         match raw.parse::<Schema>() {
             Ok(schema) => {
                 let schema_uri: Option<&str> = schema.as_object().and_then(|s| s.schema.as_deref());
@@ -863,11 +868,27 @@ fn parse_value_in_dialect(
         reject_unknown: settings.disallow_unknown_fields,
         lexical_counts: resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
     };
-    let errors: Vec<JsonSchemaParseError> = if checks.reject_unknown || checks.lexical_counts {
+    let mut errors: Vec<JsonSchemaParseError> = if checks.reject_unknown || checks.lexical_counts {
         check_keywords(&value, resolved.dialect, checks)
     } else {
         Vec::new()
     };
+    if settings.metaschema_check == MetaschemaCheck::Validate
+        && let Err(failures) = check_metaschema(&value, resolved)
+    {
+        // The metaschema covers every keyword value, so the count check's findings repeat its
+        // own; unknown keys are not its concern. The model is not built: its errors would repeat
+        // the metaschema's too.
+        errors.retain(|error| matches!(error, JsonSchemaParseError::UnknownField { .. }));
+        errors.extend(
+            failures
+                .into_iter()
+                .map(|failure| JsonSchemaParseError::Metaschema(Box::new(failure))),
+        );
+        if let Some(found) = JsonSchemaParseErrors::from_vec(std::mem::take(&mut errors)) {
+            return Err(found);
+        }
+    }
     if needs_draft4_normalization(resolved.dialect) {
         normalize_draft4_shapes(value.to_mut(), resolved.dialect);
     }
@@ -886,6 +907,22 @@ fn parse_value_in_dialect(
             Err(found)
         }
     }
+}
+
+/// Validates `value` against the metaschema of the draft `resolved` parses it in. A document whose
+/// `$schema` was not recognised (parsed in a fallback draft), or parsed under a draft with no
+/// embedded metaschema (0 to 3), is not checked: its own metaschema is not the one at hand.
+fn check_metaschema(value: &Value, resolved: &ResolvedDialect) -> ValidationResult {
+    let spec_version: SpecVersion = resolved.dialect.spec_version;
+    let fallback: bool = resolved
+        .warnings
+        .iter()
+        .any(|warning| matches!(warning, DialectWarning::UnknownSchemaUri { .. }));
+    if fallback || !crate::meta::has_metaschema(spec_version) {
+        log::debug!("not checked against a metaschema: parsed as {spec_version:?} without its own");
+        return Ok(());
+    }
+    crate::meta::metaschema(spec_version).validate(value)
 }
 
 /// The count keywords: their value is a non-negative integer.
@@ -4743,6 +4780,198 @@ mod tests {
             ref_: Some("#/$defs/Foo".to_string()),
             ..Default::default()
         };
+        assert_eq!(expected, actual);
+    }
+}
+
+#[cfg(test)]
+mod metaschema_check_tests {
+    use super::Schema;
+    use crate::json_schema::{JsonSchemaSettings, MetaschemaCheck, SpecVersion};
+
+    /// Parses `json` under `settings`: `Ok`, or every error's message.
+    fn parse(json: &str, settings: &JsonSchemaSettings) -> Result<(), Vec<String>> {
+        Schema::new_from_str(json, settings)
+            .map(|_| ())
+            .map_err(|errors| errors.into_iter().map(|e| e.to_string()).collect())
+    }
+
+    fn validating() -> JsonSchemaSettings {
+        JsonSchemaSettings::builder()
+            .metaschema_check(MetaschemaCheck::Validate)
+            .build()
+    }
+
+    #[test]
+    fn metaschema_check_is_skipped_by_default() {
+        let expected: MetaschemaCheck = MetaschemaCheck::Skip;
+        let actual: MetaschemaCheck = JsonSchemaSettings::default().metaschema_check;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn skip_accepts_a_schema_its_metaschema_forbids() {
+        let expected: Result<(), Vec<String>> = Ok(());
+        let actual: Result<(), Vec<String>> =
+            parse(r#"{"required":["a","a"]}"#, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_accepts_a_conforming_schema() {
+        let expected: Result<(), Vec<String>> = Ok(());
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"type":"object","properties":{"a":{"type":"string","minLength":1}},"required":["a"]}"#,
+            &validating(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_accepts_a_boolean_schema() {
+        let expected: Result<(), Vec<String>> = Ok(());
+        let actual: Result<(), Vec<String>> = parse("true", &validating());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_required_names() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            r#"does not conform to its metaschema: /required: array has duplicate items (value: "a")"#
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = parse(r#"{"required":["a","a"]}"#, &validating());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_lists_every_failure() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "does not conform to its metaschema: /properties/b/minLength: value -1 is below minimum 0"
+                .to_string(),
+            r#"does not conform to its metaschema: /required: array has duplicate items (value: "a")"#
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"required":["a","a"],"properties":{"b":{"minLength":-1}}}"#,
+            &validating(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_checks_a_borrowed_value() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "does not conform to its metaschema: /minLength: value -1 is below minimum 0"
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> =
+            Schema::new_from_serde_value(&serde_json::json!({"minLength": -1}), &validating())
+                .map(|_| ())
+                .map_err(|errors| errors.into_iter().map(|e| e.to_string()).collect());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_checks_draft4_boolean_bounds_as_written() {
+        let expected: Result<(), Vec<String>> = Ok(());
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","minimum":1,"exclusiveMinimum":true}"#,
+            &validating(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_uses_the_documents_draft() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "does not conform to its metaschema: /required: array has 0 item(s), minimum is 1"
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","required":[]}"#,
+            &validating(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_uses_the_default_draft_without_schema() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .metaschema_check(MetaschemaCheck::Validate)
+            .default_spec_version(SpecVersion::Draft04)
+            .build();
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "does not conform to its metaschema: /required: array has 0 item(s), minimum is 1"
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = parse(r#"{"required":[]}"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_uses_the_forced_draft() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .metaschema_check(MetaschemaCheck::Validate)
+            .forced_spec_version(SpecVersion::Draft04)
+            .build();
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "does not conform to its metaschema: /required: array has 0 item(s), minimum is 1"
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","required":[]}"#,
+            &settings,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_skips_an_unrecognised_schema_uri() {
+        let expected: Result<(), Vec<String>> = Ok(());
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"$schema":"https://example.com/custom","required":["a","a"]}"#,
+            &validating(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_skips_a_draft_without_an_embedded_metaschema() {
+        let expected: Result<(), Vec<String>> = Ok(());
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"$schema":"http://json-schema.org/draft-03/schema#","required":["a","a"]}"#,
+            &validating(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_reports_unknown_keys_alongside_metaschema_failures() {
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .metaschema_check(MetaschemaCheck::Validate)
+            .disallow_unknown_fields(true)
+            .build();
+        let expected: Result<(), Vec<String>> = Err(vec![
+            r#"unknown keyword "colour" at root"#.to_string(),
+            r#"does not conform to its metaschema: /required: array has duplicate items (value: "a")"#
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> =
+            parse(r#"{"colour":"blue","required":["a","a"]}"#, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn validate_drops_the_count_check_failure_the_metaschema_repeats() {
+        let expected: Result<(), Vec<String>> = Err(vec![
+            "does not conform to its metaschema: /minLength: expected integer, got number"
+                .to_string(),
+        ]);
+        let actual: Result<(), Vec<String>> = parse(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","minLength":2.0}"#,
+            &validating(),
+        );
         assert_eq!(expected, actual);
     }
 }

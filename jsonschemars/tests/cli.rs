@@ -3372,6 +3372,83 @@ fn cli_validate_unknown_schema_uri_rejected_with_flag() {
 }
 
 #[test]
+fn cli_validate_metaschema_check_rejects_a_nonconforming_schema() {
+    let (path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"type":"object","required":["a","a"]}"#,
+        "{}",
+        &["--jss-metaschema-check", "validate"],
+    );
+    let expected: (i32, String) = (
+        2,
+        format!(
+            "error: {path}: does not conform to its metaschema: /required: array has duplicate items (value: \"a\")\nerror: schema ingestion failed with 1 error(s)\n"
+        ),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_metaschema_check_accepts_a_conforming_schema() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"type":"object","required":["a"]}"#,
+        r#"{"a":1}"#,
+        &["--jss-metaschema-check", "validate"],
+    );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_skips_the_metaschema_check_by_default() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"type":"object","required":["a","a"]}"#,
+        r#"{"a":1}"#,
+        &[],
+    );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_generate_metaschema_check_rejects_a_nonconforming_schema() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let schema_path = temp_dir.path().join("schema.json");
+    std::fs::write(
+        &schema_path,
+        r#"{"type":"object","properties":{"a":{"minLength":-1}}}"#,
+    )
+    .expect("write schema");
+    let out_dir = tempfile::tempdir().expect("temp out dir");
+    let output = Command::new(jsonschemars_bin())
+        .args([
+            "generate",
+            "rust",
+            "--jss-metaschema-check",
+            "validate",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run jsonschemars");
+    let expected: (Option<i32>, String) = (
+        Some(1),
+        format!(
+            "error: {}: does not conform to its metaschema: /properties/a/minLength: value -1 is below minimum 0\nerror: schema ingestion failed with 1 error(s); no output written\n",
+            schema_path
+                .canonicalize()
+                .expect("canonical path")
+                .display()
+        ),
+    );
+    let actual: (Option<i32>, String) = (
+        output.status.code(),
+        String::from_utf8(output.stderr).expect("utf8 stderr"),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_validate_pre_draft4_schema_warns() {
     let (path, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"http://json-schema.org/draft-03/schema#","type":"string"}"#,

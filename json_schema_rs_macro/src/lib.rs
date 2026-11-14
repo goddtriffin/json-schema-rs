@@ -482,6 +482,28 @@ mod tests {
     }
 
     #[test]
+    fn metaschema_check_validate_rejects_a_nonconforming_schema() {
+        let expected: Vec<(String, usize, usize)> = vec![(
+            r#"does not conform to its metaschema: /required: array has duplicate items (value: "a")"#
+                .to_string(),
+            1,
+            0,
+        )];
+        let actual: Vec<(String, usize, usize)> = expansion_errors(
+            r##"r#"{"type":"object","required":["a","a"]}"#, metaschema_check = Validate"##,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn nonconforming_schema_expands_without_metaschema_check() {
+        let expected: Vec<(String, usize, usize)> = Vec::new();
+        let actual: Vec<(String, usize, usize)> =
+            expansion_errors(r##"r#"{"type":"object","required":["a","a"]}"#"##);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn exclusive_bounds_boolean_modifier_accepts_boolean_exclusive_minimum() {
         let expected: Vec<(String, usize, usize)> = Vec::new();
         let actual: Vec<(String, usize, usize)> = expansion_errors(
@@ -520,7 +542,7 @@ mod tests {
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
                  `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, \
-                 `integer_semantics`, `exclusive_bounds`, `ref_siblings` or `unknown_schema_uri`"
+                 `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,
                 24,
