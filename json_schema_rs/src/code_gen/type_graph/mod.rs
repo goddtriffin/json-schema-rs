@@ -9,10 +9,11 @@
 mod build;
 pub(crate) mod passes;
 
-pub(crate) use build::{Conditionals, build};
+pub(crate) use build::{Conditionals, TargetSources, build};
 
 use crate::json_schema::{IntegerSemantics, JsonType};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Index of a node in a [`TypeGraph`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -358,6 +359,10 @@ pub(crate) struct TypeGraph {
     pub(crate) newtypes: Vec<Option<Box<Newtype>>>,
     /// Per input schema, the root and its definitions.
     pub(crate) schemas: Vec<SchemaRoots>,
+    /// Per `anyOf` / `oneOf` union with a variant target, its variants' targets as the union's
+    /// walk built them (recorded by `dedup`, which may merge a variant with an equivalent type
+    /// of another location).
+    pub(crate) variant_targets: HashMap<TypeId, Vec<Option<ValidationTarget>>>,
 }
 
 impl TypeGraph {

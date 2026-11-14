@@ -7,6 +7,7 @@
 mod compiled;
 pub(crate) mod content;
 mod ecma_regex;
+mod equivalence;
 mod error;
 mod eval;
 mod format;
@@ -21,6 +22,8 @@ mod value_ref;
 pub use compiled::{
     CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, FormatCheck,
 };
+pub(crate) use compiled::{CompiledEntries, NodeId};
+pub(crate) use equivalence::validation_classes;
 pub use error::{
     SchemaError, ValidateError, ValidationError, ValidationErrorKind, ValidationResult,
 };
