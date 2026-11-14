@@ -1195,7 +1195,12 @@ impl JsonSchema {
     /// have none), in a fixed order: `$defs`, `definitions`, `properties`,
     /// `additionalProperties`, `items`, `allOf`, `anyOf`, `oneOf`. Walk the whole tree with an
     /// explicit stack over this.
-    pub(crate) fn subschemas_mut(&mut self) -> Vec<&mut JsonSchema> {
+    ///
+    /// The raw `extensions` come back beside them, borrowed at once, since keywords held there
+    /// (`prefixItems`, `unevaluatedProperties`) can hold subschemas too.
+    pub(crate) fn subschemas_mut(
+        &mut self,
+    ) -> (Vec<&mut JsonSchema>, &mut BTreeMap<String, Value>) {
         let mut children: Vec<&mut Schema> = Vec::new();
         if let Some(defs) = self.defs.as_mut() {
             children.extend(defs.values_mut());
@@ -1216,10 +1221,13 @@ impl JsonSchema {
         {
             children.extend(list.iter_mut());
         }
-        children
-            .into_iter()
-            .filter_map(Schema::as_object_mut)
-            .collect()
+        (
+            children
+                .into_iter()
+                .filter_map(Schema::as_object_mut)
+                .collect(),
+            &mut self.extensions,
+        )
     }
 }
 
@@ -3055,6 +3063,7 @@ mod tests {
         let expected: Vec<Option<String>> = vec![Some("B".to_string()), Some("C".to_string())];
         let actual: Vec<Option<String>> = schema
             .subschemas_mut()
+            .0
             .into_iter()
             .map(|s| s.title.clone())
             .collect();

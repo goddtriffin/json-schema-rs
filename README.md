@@ -47,7 +47,7 @@ rejected with `UnknownSchemaUri::Reject`), and
 $id` in the key, Functional does not; reverse codegen via `#[json_schema(id = \"...\")]`; forward codegen emits the attribute when the schema has `$id`
 so round-trip preserves it), **allOf** (validator: instance must validate
 against every subschema; codegen: the branches, `$ref`s included, merge into one Rust
-type, and an unsatisfiable merge is an enum with no variants; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: `#[serde(untagged)]` enum with one variant per branch (a branch pair with `null` is `Option<T>`), so instances deserialize from the bare value, into a variant whose branch the value satisfies (self-validating types, the default; off, the first variant that fits); reverse codegen: untagged enums derive `anyOf`), **oneOf** (validator: instance must validate against exactly one subschema; codegen: as anyOf, with `#[json_schema(one_of)]`; deserializing checks exclusivity with self-validating types, the default; reverse codegen: `oneOf` via `#[json_schema(one_of)]`; a one-entry `anyOf` / `oneOf` can be generated as its entry's type, see *Using the library*), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: unknown keys are kept for a lossless round trip in a `#[serde(flatten)] additional` map (`serde_json::Value`, or the schema's type), false → `#[serde(deny_unknown_fields)]`, overridable with `--cgs-unknown-properties capture|drop`; beside `patternProperties` the map's values take the matching pattern's type, or an untagged enum of every pattern's and `additionalProperties`' types; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). Recursive schemas (through `#`, `$defs` or mutual
+type, and an unsatisfiable merge is an enum with no variants; reverse codegen: not supported), **anyOf** (validator: instance must validate against at least one subschema; codegen: `#[serde(untagged)]` enum with one variant per branch (a branch pair with `null` is `Option<T>`), so instances deserialize from the bare value, into a variant whose branch the value satisfies (self-validating types, the default; off, the first variant that fits); reverse codegen: untagged enums derive `anyOf`, tagged enums `oneOf`), **oneOf** (validator: instance must validate against exactly one subschema; codegen: as anyOf, with `#[json_schema(one_of)]`; deserializing checks exclusivity with self-validating types, the default; reverse codegen: `oneOf` via `#[json_schema(one_of)]`; a one-entry `anyOf` / `oneOf` can be generated as its entry's type, see *Using the library*), and **additionalProperties** (validator: false → one error per additional key; schema → validate each additional property value; codegen: unknown keys are kept for a lossless round trip in a `#[serde(flatten)] additional` map (`serde_json::Value`, or the schema's type), false → `#[serde(deny_unknown_fields)]`, overridable with `--cgs-unknown-properties capture|drop`; beside `patternProperties` the map's values take the matching pattern's type, or an untagged enum of every pattern's and `additionalProperties`' types; reverse: closed structs emit false, `BTreeMap<String, V>` emits object with additionalProperties). Recursive schemas (through `#`, `$defs` or mutual
 recursion) generate `Box` on by-value cycles, a field or union variant whose struct or union
 type would be large by value (over 256 bytes) holds it in a `Box` (so no generated value is large
 on the stack), `if`/`then`/`else` adds the
@@ -488,7 +488,16 @@ absolute and relative `$id`s alike. `json_schema()` returns every problem it
 finds (an `$id` that is not a URI reference, two different types whose `$id`s
 resolve to one URI) as a `ReverseCodeGenError`. A
 hand-written `impl ToJsonSchema` only needs `json_schema()`; implement
-`json_schema_with(&mut SchemaGenerator)` to place the type in `$defs`. Add **json-schema-rs-macro** when using the derive. Details:
+`json_schema_with(&mut SchemaGenerator)` to place the type in `$defs`. Add **json-schema-rs-macro** when using the derive.
+
+The derived schema accepts exactly what the type's serde `Deserialize` accepts, so
+a type moves from schemars by changing only the derive name. It follows serde's
+`rename`, `rename_all`, `rename_all_fields`, `default`, `skip`, `skip_deserializing`,
+`deserialize_with`, `flatten` (structs, maps, enums, `Option`s of them),
+`transparent`, `from` / `try_from`, every enum representation (external,
+`tag`, `tag` + `content`, `untagged`, a variant's `untagged`, `other`), unit and
+tuple structs. On a field, `#[json_schema(with = "Type")]` takes another type's
+schema and `#[json_schema(schema_with = "path")]` a function's. Details:
 [design.md](design.md).
 
 Validate a JSON instance against a schema (returns all errors, no fail-fast):

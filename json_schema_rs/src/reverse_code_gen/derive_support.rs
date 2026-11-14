@@ -6,7 +6,7 @@
 //! the type's width: a struct with 800 fields compiles one call, not 800 inlined blocks.
 
 use super::SchemaGenerator;
-use crate::json_schema::{JsonSchema, Schema};
+use crate::json_schema::{JsonSchema, JsonType, Schema};
 use std::collections::BTreeMap;
 
 /// A type's `ToJsonSchema::json_schema_with`, as a fn pointer.
@@ -166,21 +166,6 @@ pub fn doc_description(lines: &[&str]) -> Option<String> {
     }
 }
 
-/// The `additionalProperties` of a struct whose `#[serde(flatten)]` map has values of the
-/// type `value`: that type's schema, or `None` when it is `{}` (a map of any value adds no
-/// constraint).
-pub fn flattened_map_additional_properties(
-    generator: &mut SchemaGenerator,
-    value: SchemaFn,
-) -> Option<Schema> {
-    let value_schema: JsonSchema = value(generator);
-    if value_schema == JsonSchema::default() {
-        None
-    } else {
-        Some(Schema::from(value_schema))
-    }
-}
-
 /// The value of one variant of a derived value enum.
 #[derive(Debug, Clone, Copy)]
 pub enum EnumValue {
@@ -217,23 +202,559 @@ pub fn value_enum_keywords(
     }
 }
 
-/// The schemas of a derived union's variant payloads, in variant order.
-pub fn payload_schemas(generator: &mut SchemaGenerator, payloads: &[SchemaFn]) -> Vec<Schema> {
-    payloads
+/// One `#[serde(flatten)]` field of a derived struct or struct variant.
+#[derive(Debug, Clone, Copy)]
+pub struct FlattenSpec {
+    /// The field type's `ToJsonSchema::json_schema_flattened` (one `Option` stripped).
+    pub schema: SchemaFn,
+    /// Whether the field is an `Option`: serde reads `None` when its keys do not match, so
+    /// none of them is required.
+    pub optional: bool,
+}
+
+/// The object a derived struct (or struct variant) deserializes from.
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectSpec {
+    /// The named fields, in declaration order.
+    pub fields: &'static [FieldSpec],
+    /// The `#[serde(flatten)]` fields, in declaration order.
+    pub flattens: &'static [FlattenSpec],
+    /// Whether keys that no field (and no flattened map) claims are rejected.
+    pub closed: bool,
+}
+
+/// What a derived object says about the keys its fields do not name.
+enum Unnamed {
+    /// Rejected.
+    Closed,
+    /// Accepted, whatever their values.
+    Open,
+    /// Accepted when their values match the schema (a flattened map's value schema).
+    Schema(Schema),
+}
+
+/// The schema of the object `spec` describes.
+///
+/// A flattened field whose schema is a plain object (a derived struct's body, a map) is
+/// merged in: its properties join the parent's (the parent's own field wins a shared key,
+/// as serde gives the key to it), its required keys too unless the field is an `Option`, and
+/// a map's value schema types the keys no field names. Any other flattened schema (an enum,
+/// a `$ref`) is an `allOf` part, and the parent then closes itself with
+/// `unevaluatedProperties` (which sees the keys the parts evaluate) instead of
+/// `additionalProperties`.
+pub fn object_schema(generator: &mut SchemaGenerator, spec: &ObjectSpec) -> JsonSchema {
+    let (mut properties, required) = object_properties(generator, spec.fields);
+    let mut required: Vec<String> = required.unwrap_or_default();
+    let mut unnamed: Unnamed = if spec.closed {
+        Unnamed::Closed
+    } else {
+        Unnamed::Open
+    };
+    let mut parts: Vec<Schema> = Vec::new();
+    for flatten in spec.flattens {
+        let mut inner: JsonSchema = (flatten.schema)(generator);
+        if !is_plain_object(&inner) {
+            allow_unknown_properties(&mut inner);
+            parts.push(Schema::from(if flatten.optional {
+                JsonSchema {
+                    any_of: Some(vec![Schema::from(inner), Schema::Bool(true)]),
+                    ..JsonSchema::default()
+                }
+            } else {
+                inner
+            }));
+            continue;
+        }
+        for (key, schema) in inner.properties {
+            properties.entry(key).or_insert(schema);
+        }
+        if !flatten.optional {
+            for key in inner.required.unwrap_or_default() {
+                if !required.contains(&key) {
+                    required.push(key);
+                }
+            }
+        }
+        match inner.additional_properties {
+            // A closed inner object claims only its own properties.
+            Some(Schema::Bool(false)) => {}
+            None | Some(Schema::Bool(true)) => {
+                if matches!(unnamed, Unnamed::Closed) {
+                    unnamed = Unnamed::Open;
+                }
+            }
+            Some(Schema::Object(value)) if *value == JsonSchema::default() => {
+                if matches!(unnamed, Unnamed::Closed) {
+                    unnamed = Unnamed::Open;
+                }
+            }
+            Some(value) => {
+                // Every flattened map sees every key no field claims: the values match all.
+                unnamed = match unnamed {
+                    Unnamed::Closed | Unnamed::Open => Unnamed::Schema(value),
+                    Unnamed::Schema(previous) => Unnamed::Schema(Schema::from(JsonSchema {
+                        all_of: Some(vec![previous, value]),
+                        ..JsonSchema::default()
+                    })),
+                };
+            }
+        }
+    }
+    let unnamed: Option<Schema> = match unnamed {
+        Unnamed::Closed => Some(Schema::Bool(false)),
+        Unnamed::Open => None,
+        Unnamed::Schema(schema) => Some(schema),
+    };
+    let mut schema: JsonSchema = JsonSchema {
+        type_: Some(JsonType::Object.into()),
+        properties,
+        required: (!required.is_empty()).then_some(required),
+        ..JsonSchema::default()
+    };
+    if parts.is_empty() {
+        schema.additional_properties = unnamed;
+    } else {
+        schema.all_of = Some(parts);
+        if let Some(unnamed) = unnamed {
+            schema.extensions.insert(
+                "unevaluatedProperties".to_string(),
+                serde_json::to_value(unnamed).unwrap_or(serde_json::Value::Bool(false)),
+            );
+        }
+    }
+    schema
+}
+
+/// Whether `schema` only lists properties of an object, so a parent can merge them into its
+/// own: no combinator, `$ref`, `$id`, `enum`, `const` or other keyword that would be lost.
+fn is_plain_object(schema: &JsonSchema) -> bool {
+    let plain: JsonSchema = JsonSchema {
+        type_: None,
+        properties: BTreeMap::new(),
+        additional_properties: None,
+        required: None,
+        title: None,
+        description: None,
+        comment: None,
+        ..schema.clone()
+    };
+    plain == JsonSchema::default()
+        && schema
+            .type_
+            .is_none_or(|types| types == JsonType::Object.into())
+}
+
+/// Removes `additionalProperties: false` (and `unevaluatedProperties: false`) from `schema`
+/// and from the branches of its `allOf`, `anyOf` and `oneOf`, at any depth: under
+/// `#[serde(flatten)]` the parent's own keys sit beside the flattened ones, and the parent's
+/// `unevaluatedProperties` rejects unknown keys instead.
+fn allow_unknown_properties(schema: &mut JsonSchema) {
+    let mut stack: Vec<&mut JsonSchema> = vec![schema];
+    while let Some(current) = stack.pop() {
+        if current.additional_properties == Some(Schema::Bool(false)) {
+            current.additional_properties = None;
+        }
+        if current.extensions.get("unevaluatedProperties") == Some(&serde_json::Value::Bool(false))
+        {
+            current.extensions.remove("unevaluatedProperties");
+        }
+        for list in [
+            current.all_of.as_mut(),
+            current.any_of.as_mut(),
+            current.one_of.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            stack.extend(list.iter_mut().filter_map(Schema::as_object_mut));
+        }
+    }
+}
+
+/// How a derived enum's variants are tagged: serde's enum representations.
+#[derive(Debug, Clone, Copy)]
+pub enum Tagging {
+    /// `{"Variant": payload}`, a unit variant as the string `"Variant"`.
+    External,
+    /// `#[serde(tag = "t")]`: the tag inside the payload's own object.
+    Internal {
+        /// The tag key.
+        tag: &'static str,
+    },
+    /// `#[serde(tag = "t", content = "c")]`: `{"t": "Variant", "c": payload}`.
+    Adjacent {
+        /// The tag key.
+        tag: &'static str,
+        /// The content key.
+        content: &'static str,
+    },
+    /// `#[serde(untagged)]`: the bare payload.
+    Untagged {
+        /// `#[json_schema(one_of)]`: the branches under `oneOf`, not `anyOf`.
+        one_of: bool,
+        /// `#[json_schema(flatten_single_entry)]`: an enum of one branch is that branch.
+        flatten_single_entry: bool,
+    },
+}
+
+/// The fields of one derived enum variant.
+#[derive(Debug, Clone, Copy)]
+pub enum VariantShape {
+    /// No fields.
+    Unit,
+    /// One unnamed field.
+    Newtype {
+        /// Its type's `json_schema_with`.
+        schema: SchemaFn,
+        /// Its type's `json_schema_flattened`: the object an internal tag merges into.
+        flattened: SchemaFn,
+    },
+    /// Several unnamed fields: an array of exactly their schemas.
+    Tuple(&'static [SchemaFn]),
+    /// Named fields.
+    Struct(ObjectSpec),
+}
+
+/// One variant of a derived enum.
+#[derive(Debug, Clone, Copy)]
+pub struct VariantSpec {
+    /// The serde name (the tag value).
+    pub name: &'static str,
+    /// The variant's `///` doc lines (see [`doc_description`]).
+    pub doc: &'static [&'static str],
+    /// The variant's fields.
+    pub shape: VariantShape,
+    /// `#[serde(untagged)]` on the variant: tried after the tagged ones, as its bare payload.
+    pub untagged: bool,
+    /// `#[serde(other)]`: the unit variant every unknown tag deserializes to.
+    pub other: bool,
+}
+
+/// A derived enum (other than an externally tagged one of unit variants, a value enum).
+#[derive(Debug, Clone, Copy)]
+pub struct EnumSpec {
+    /// The tagging of every variant without `#[serde(untagged)]`.
+    pub tagging: Tagging,
+    /// The variants serde deserializes, in declaration order.
+    pub variants: &'static [VariantSpec],
+    /// Whether an internally or adjacently tagged object rejects keys it does not name.
+    pub closed: bool,
+    /// Whether this is the schema serde reads under `#[serde(flatten)]`, where an externally
+    /// tagged unit variant is the key with a `null` value.
+    pub flattened: bool,
+}
+
+/// The schema of a derived enum: one branch per variant under `oneOf` (`anyOf` when
+/// untagged), the tagged ones before any `#[serde(untagged)]` variant.
+///
+/// Externally tagged unit variants share one `{"type": "string", "enum": [...]}` branch,
+/// first.
+pub fn enum_schema(generator: &mut SchemaGenerator, spec: &EnumSpec) -> JsonSchema {
+    let mut unit_names: Vec<serde_json::Value> = Vec::new();
+    let mut tagged: Vec<Schema> = Vec::new();
+    let mut untagged: Vec<Schema> = Vec::new();
+    let other_names: Vec<serde_json::Value> = spec
+        .variants
         .iter()
-        .map(|payload: &SchemaFn| Schema::from(payload(generator)))
-        .collect()
+        .filter(|variant| !variant.untagged && !variant.other)
+        .map(|variant| serde_json::Value::String(variant.name.to_string()))
+        .collect();
+    for variant in spec.variants {
+        let tagging: Option<Tagging> = (!variant.untagged).then_some(spec.tagging);
+        let branch: Option<JsonSchema> = match tagging {
+            Some(Tagging::External) => external_branch(generator, spec, variant, &mut unit_names),
+            Some(Tagging::Internal { tag }) => {
+                Some(internal_branch(generator, spec, variant, tag, &other_names))
+            }
+            Some(Tagging::Adjacent { tag, content }) => Some(adjacent_branch(
+                generator,
+                spec,
+                variant,
+                tag,
+                content,
+                &other_names,
+            )),
+            Some(Tagging::Untagged { .. }) | None => Some(payload_schema(generator, variant.shape)),
+        };
+        let Some(mut branch) = branch else {
+            continue;
+        };
+        branch.description = doc_description(variant.doc).or(branch.description);
+        if variant.untagged || matches!(spec.tagging, Tagging::Untagged { .. }) {
+            untagged.push(Schema::from(branch));
+        } else {
+            tagged.push(Schema::from(branch));
+        }
+    }
+    if !unit_names.is_empty() {
+        tagged.insert(0, Schema::from(string_values(unit_names)));
+    }
+    let tagged: Option<Schema> = match tagged.len() {
+        0 => None,
+        1 => tagged.pop(),
+        _ => Some(Schema::from(JsonSchema {
+            one_of: Some(tagged),
+            ..JsonSchema::default()
+        })),
+    };
+    let mut branches: Vec<Schema> = tagged.into_iter().chain(untagged).collect();
+    let (untagged_enum, one_of, flatten_single_entry): (bool, bool, bool) = match spec.tagging {
+        Tagging::Untagged {
+            one_of,
+            flatten_single_entry,
+        } => (true, one_of, flatten_single_entry),
+        _ => (false, false, false),
+    };
+    if flatten_single_entry
+        && let [Schema::Object(branch)] = branches.as_slice()
+        && branch.id.is_none()
+    {
+        let Some(Schema::Object(branch)) = branches.pop() else {
+            unreachable!("matched one object branch");
+        };
+        return *branch;
+    }
+    if let [Schema::Object(branch)] = branches.as_slice()
+        && !untagged_enum
+        && branch.one_of.is_some()
+    {
+        // Every variant is tagged: the branches' own `oneOf` is the enum's.
+        let Some(Schema::Object(branch)) = branches.pop() else {
+            unreachable!("matched one object branch");
+        };
+        return *branch;
+    }
+    if one_of {
+        JsonSchema {
+            one_of: Some(branches),
+            ..JsonSchema::default()
+        }
+    } else if branches.len() == 1 && !untagged_enum {
+        match branches.pop() {
+            Some(Schema::Object(branch)) => *branch,
+            _ => JsonSchema::default(),
+        }
+    } else {
+        JsonSchema {
+            any_of: Some(branches),
+            ..JsonSchema::default()
+        }
+    }
+}
+
+/// `{"type": "string", "const": v}` for one value, `{"type": "string", "enum": [...]}` for
+/// several.
+fn string_values(mut values: Vec<serde_json::Value>) -> JsonSchema {
+    let (enum_values, const_value) = if values.len() == 1 {
+        (None, values.pop())
+    } else {
+        (Some(values), None)
+    };
+    JsonSchema {
+        type_: Some(JsonType::String.into()),
+        enum_values,
+        const_value,
+        ..JsonSchema::default()
+    }
+}
+
+/// The schema of a variant's fields on their own (an untagged variant, an external or
+/// adjacent payload): `null` for a unit variant, the field's schema for a newtype, an array
+/// of exactly the fields' schemas for a tuple, an object for named fields.
+fn payload_schema(generator: &mut SchemaGenerator, shape: VariantShape) -> JsonSchema {
+    match shape {
+        VariantShape::Unit => JsonSchema {
+            type_: Some(JsonType::Null.into()),
+            ..JsonSchema::default()
+        },
+        VariantShape::Newtype { schema, .. } => schema(generator),
+        VariantShape::Tuple(items) => tuple_schema(generator, items),
+        VariantShape::Struct(object) => object_schema(generator, &object),
+    }
+}
+
+/// An array of exactly `items.len()` values, each matching the schema at its position.
+pub fn tuple_schema(generator: &mut SchemaGenerator, items: &[SchemaFn]) -> JsonSchema {
+    let prefix: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item: &SchemaFn| {
+            serde_json::to_value(Schema::from(item(generator)))
+                .unwrap_or(serde_json::Value::Bool(true))
+        })
+        .collect();
+    let len: u64 = u64::try_from(items.len()).unwrap_or(u64::MAX);
+    let mut schema: JsonSchema = JsonSchema {
+        type_: Some(JsonType::Array.into()),
+        min_items: Some(len),
+        max_items: Some(len),
+        ..JsonSchema::default()
+    };
+    if !prefix.is_empty() {
+        schema
+            .extensions
+            .insert("prefixItems".to_string(), serde_json::Value::Array(prefix));
+    }
+    schema
+}
+
+/// An object with exactly the one key `key`, whose value matches `value`.
+fn single_key_object(key: &str, value: JsonSchema) -> JsonSchema {
+    JsonSchema {
+        type_: Some(JsonType::Object.into()),
+        properties: BTreeMap::from([(key.to_string(), Schema::from(value))]),
+        required: Some(vec![key.to_string()]),
+        additional_properties: Some(Schema::Bool(false)),
+        ..JsonSchema::default()
+    }
+}
+
+/// An externally tagged variant's branch, or `None` for a unit variant, whose name joins
+/// `unit_names` (outside `#[serde(flatten)]`).
+fn external_branch(
+    generator: &mut SchemaGenerator,
+    spec: &EnumSpec,
+    variant: &VariantSpec,
+    unit_names: &mut Vec<serde_json::Value>,
+) -> Option<JsonSchema> {
+    if matches!(variant.shape, VariantShape::Unit) && !spec.flattened {
+        unit_names.push(serde_json::Value::String(variant.name.to_string()));
+        return None;
+    }
+    Some(single_key_object(
+        variant.name,
+        payload_schema(generator, variant.shape),
+    ))
+}
+
+/// The schema of a tag key's value: the variant's name, or for `#[serde(other)]` any string
+/// that names no other variant.
+fn tag_schema(variant: &VariantSpec, other_names: &[serde_json::Value]) -> JsonSchema {
+    if variant.other {
+        let mut schema: JsonSchema = JsonSchema {
+            type_: Some(JsonType::String.into()),
+            ..JsonSchema::default()
+        };
+        if !other_names.is_empty() {
+            schema.extensions.insert(
+                "not".to_string(),
+                serde_json::json!({ "enum": other_names }),
+            );
+        }
+        schema
+    } else {
+        string_values(vec![serde_json::Value::String(variant.name.to_string())])
+    }
+}
+
+/// An internally tagged variant's branch: its fields' object with the tag key added.
+///
+/// A newtype's payload is read from the same object, so its flattened schema takes the tag
+/// when it is a plain object, and is an `allOf` part beside the tag otherwise.
+fn internal_branch(
+    generator: &mut SchemaGenerator,
+    spec: &EnumSpec,
+    variant: &VariantSpec,
+    tag: &str,
+    other_names: &[serde_json::Value],
+) -> JsonSchema {
+    let tag_value: Schema = Schema::from(tag_schema(variant, other_names));
+    let mut object: JsonSchema = match variant.shape {
+        VariantShape::Unit | VariantShape::Tuple(_) => JsonSchema {
+            type_: Some(JsonType::Object.into()),
+            additional_properties: spec.closed.then_some(Schema::Bool(false)),
+            ..JsonSchema::default()
+        },
+        VariantShape::Struct(object) => object_schema(
+            generator,
+            &ObjectSpec {
+                closed: object.closed && spec.closed,
+                ..object
+            },
+        ),
+        VariantShape::Newtype { flattened, .. } => {
+            let payload: JsonSchema = flattened(generator);
+            if payload.type_ == Some(JsonType::Null.into()) && is_plain_null(&payload) {
+                JsonSchema {
+                    type_: Some(JsonType::Object.into()),
+                    ..JsonSchema::default()
+                }
+            } else if is_plain_object(&payload) {
+                JsonSchema {
+                    type_: Some(JsonType::Object.into()),
+                    ..payload
+                }
+            } else {
+                let mut payload: JsonSchema = payload;
+                allow_unknown_properties(&mut payload);
+                JsonSchema {
+                    type_: Some(JsonType::Object.into()),
+                    all_of: Some(vec![Schema::from(payload)]),
+                    ..JsonSchema::default()
+                }
+            }
+        }
+    };
+    object.properties.insert(tag.to_string(), tag_value);
+    let mut required: Vec<String> = vec![tag.to_string()];
+    required.extend(
+        object
+            .required
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|key| key != tag),
+    );
+    object.required = Some(required);
+    object
+}
+
+/// Whether `schema` is `{"type": "null"}` and nothing else (a unit type's payload).
+fn is_plain_null(schema: &JsonSchema) -> bool {
+    *schema
+        == JsonSchema {
+            type_: Some(JsonType::Null.into()),
+            ..JsonSchema::default()
+        }
+}
+
+/// An adjacently tagged variant's branch: `{tag: name, content: payload}`, the content
+/// absent or `null` for a unit variant.
+fn adjacent_branch(
+    generator: &mut SchemaGenerator,
+    spec: &EnumSpec,
+    variant: &VariantSpec,
+    tag: &str,
+    content: &str,
+    other_names: &[serde_json::Value],
+) -> JsonSchema {
+    let mut properties: BTreeMap<String, Schema> = BTreeMap::new();
+    properties.insert(
+        tag.to_string(),
+        Schema::from(tag_schema(variant, other_names)),
+    );
+    let mut required: Vec<String> = vec![tag.to_string()];
+    let payload: JsonSchema = payload_schema(generator, variant.shape);
+    if !matches!(variant.shape, VariantShape::Unit) {
+        required.push(content.to_string());
+    }
+    properties.insert(content.to_string(), Schema::from(payload));
+    JsonSchema {
+        type_: Some(JsonType::Object.into()),
+        properties,
+        required: Some(required),
+        additional_properties: spec.closed.then_some(Schema::Bool(false)),
+        ..JsonSchema::default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultLiteral, EnumValue, FieldSpec, NumberLiteral, SchemaFn, doc_description,
-        flattened_map_additional_properties, object_properties, payload_schemas,
-        value_enum_keywords,
+        DefaultLiteral, EnumValue, FieldSpec, FlattenSpec, NumberLiteral, ObjectSpec,
+        doc_description, object_properties, object_schema, value_enum_keywords,
     };
     use crate::json_schema::{JsonSchema, JsonType, Schema};
-    use crate::reverse_code_gen::{SchemaGenerator, ToJsonSchema};
+    use crate::reverse_code_gen::SchemaGenerator;
     use std::collections::BTreeMap;
 
     type Properties = (BTreeMap<String, Schema>, Option<Vec<String>>);
@@ -461,29 +982,6 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[test]
-    fn flattened_map_of_any_value_adds_no_additional_properties() {
-        let expected: Option<Schema> = None;
-        let actual: Option<Schema> = flattened_map_additional_properties(
-            &mut SchemaGenerator::new(),
-            <serde_json::Value as ToJsonSchema>::json_schema_with,
-        );
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn flattened_map_of_typed_value_is_value_schema() {
-        let expected: Option<Schema> = Some(Schema::from(JsonSchema {
-            type_: Some(JsonType::String.into()),
-            ..JsonSchema::default()
-        }));
-        let actual: Option<Schema> = flattened_map_additional_properties(
-            &mut SchemaGenerator::new(),
-            <String as ToJsonSchema>::json_schema_with,
-        );
-        assert_eq!(expected, actual);
-    }
-
     type EnumKeywords = (Option<Vec<serde_json::Value>>, Option<serde_json::Value>);
 
     #[test]
@@ -516,23 +1014,132 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    fn string_schema(_generator: &mut SchemaGenerator) -> JsonSchema {
+        JsonSchema {
+            type_: Some(JsonType::String.into()),
+            ..JsonSchema::default()
+        }
+    }
+
+    fn integer_schema(_generator: &mut SchemaGenerator) -> JsonSchema {
+        JsonSchema {
+            type_: Some(JsonType::Integer.into()),
+            ..JsonSchema::default()
+        }
+    }
+
+    fn open_object(generator: &mut SchemaGenerator) -> JsonSchema {
+        JsonSchema {
+            type_: Some(JsonType::Object.into()),
+            properties: BTreeMap::from([("a".to_string(), Schema::from(string_schema(generator)))]),
+            required: Some(vec!["a".to_string()]),
+            ..JsonSchema::default()
+        }
+    }
+
+    fn closed_object(generator: &mut SchemaGenerator) -> JsonSchema {
+        JsonSchema {
+            additional_properties: Some(Schema::Bool(false)),
+            ..open_object(generator)
+        }
+    }
+
+    fn string_map(generator: &mut SchemaGenerator) -> JsonSchema {
+        JsonSchema {
+            type_: Some(JsonType::Object.into()),
+            additional_properties: Some(Schema::from(string_schema(generator))),
+            ..JsonSchema::default()
+        }
+    }
+
+    fn integer_map(generator: &mut SchemaGenerator) -> JsonSchema {
+        JsonSchema {
+            type_: Some(JsonType::Object.into()),
+            additional_properties: Some(Schema::from(integer_schema(generator))),
+            ..JsonSchema::default()
+        }
+    }
+
+    fn flattened(flattens: &'static [FlattenSpec]) -> JsonSchema {
+        let spec: ObjectSpec = ObjectSpec {
+            fields: &[],
+            flattens,
+            closed: true,
+        };
+        object_schema(&mut SchemaGenerator::new(), &spec)
+    }
+
     #[test]
-    fn payload_schemas_in_variant_order() {
-        let payloads: &[SchemaFn] = &[
-            <String as ToJsonSchema>::json_schema_with,
-            <bool as ToJsonSchema>::json_schema_with,
-        ];
-        let expected: Vec<Schema> = vec![
-            Schema::from(JsonSchema {
-                type_: Some(JsonType::String.into()),
+    fn object_schema_flattening_a_closed_object_stays_closed() {
+        let expected: JsonSchema = closed_object(&mut SchemaGenerator::new());
+        let actual: JsonSchema = flattened(&[FlattenSpec {
+            schema: closed_object,
+            optional: false,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn object_schema_flattening_an_open_object_opens_the_parent() {
+        let expected: JsonSchema = open_object(&mut SchemaGenerator::new());
+        let actual: JsonSchema = flattened(&[FlattenSpec {
+            schema: open_object,
+            optional: false,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn object_schema_optional_flatten_requires_none_of_its_keys() {
+        let expected: JsonSchema = JsonSchema {
+            required: None,
+            ..closed_object(&mut SchemaGenerator::new())
+        };
+        let actual: JsonSchema = flattened(&[FlattenSpec {
+            schema: closed_object,
+            optional: true,
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn object_schema_two_flattened_maps_require_both_value_schemas() {
+        let expected: JsonSchema = JsonSchema {
+            type_: Some(JsonType::Object.into()),
+            additional_properties: Some(Schema::from(JsonSchema {
+                all_of: Some(vec![
+                    Schema::from(string_schema(&mut SchemaGenerator::new())),
+                    Schema::from(integer_schema(&mut SchemaGenerator::new())),
+                ]),
                 ..JsonSchema::default()
-            }),
-            Schema::from(JsonSchema {
-                type_: Some(JsonType::Boolean.into()),
-                ..JsonSchema::default()
-            }),
-        ];
-        let actual: Vec<Schema> = payload_schemas(&mut SchemaGenerator::new(), payloads);
+            })),
+            ..JsonSchema::default()
+        };
+        let actual: JsonSchema = flattened(&[
+            FlattenSpec {
+                schema: string_map,
+                optional: false,
+            },
+            FlattenSpec {
+                schema: integer_map,
+                optional: false,
+            },
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn object_schema_open_spec_without_flattens_has_no_additional_properties() {
+        let spec: ObjectSpec = ObjectSpec {
+            fields: &[],
+            flattens: &[],
+            closed: false,
+        };
+        let expected: JsonSchema = JsonSchema {
+            type_: Some(JsonType::Object.into()),
+            ..JsonSchema::default()
+        };
+        let actual: JsonSchema = object_schema(&mut SchemaGenerator::new(), &spec);
         assert_eq!(expected, actual);
     }
 }

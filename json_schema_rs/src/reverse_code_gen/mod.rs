@@ -10,7 +10,7 @@ mod resource_uri;
 
 pub use error::{ReverseCodeGenError, ReverseCodeGenResult};
 
-use crate::json_schema::{JsonSchema, JsonType, Schema};
+use crate::json_schema::{Dialect, JsonSchema, JsonType, Schema, SpecVersion, SubschemaPosition};
 use resource_uri::Placed;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -54,6 +54,18 @@ pub trait ToJsonSchema {
     #[must_use]
     fn schema_id() -> &'static str {
         std::any::type_name::<Self>()
+    }
+
+    /// The schema of this type where serde reads it from its parent's own map, under
+    /// `#[serde(flatten)]`: the type's body itself rather than a `$ref` to it, so its
+    /// properties can merge into the parent's.
+    ///
+    /// The derive returns a struct's or enum's body (an externally tagged enum's unit variants
+    /// as `{"Name": null}` objects, the shape serde reads them in there); the default is
+    /// [`ToJsonSchema::json_schema_with`].
+    #[doc(hidden)]
+    fn json_schema_flattened(generator: &mut SchemaGenerator) -> JsonSchema {
+        Self::json_schema_with(generator)
     }
 }
 
@@ -174,6 +186,9 @@ pub struct SchemaGenerator {
     root_resource: Option<usize>,
     /// Problems reported while building, returned by [`SchemaGenerator::into_root_schema`].
     errors: Vec<ReverseCodeGenError>,
+    /// The named types whose bodies are being inlined ([`SchemaGenerator::inline_named`]), so a
+    /// type that flattens itself falls back to a `$ref` instead of recursing forever.
+    inlining: BTreeSet<String>,
 }
 
 impl SchemaGenerator {
@@ -210,6 +225,36 @@ impl SchemaGenerator {
             index
         };
         ref_schema(provisional_ref(index))
+    }
+
+    /// Returns the body of the named type `schema_id` itself, built by `inline`, for a position
+    /// that needs the schema rather than a `$ref` to it (a `#[serde(flatten)]` field merges the
+    /// body's properties into its parent).
+    ///
+    /// When the type is already being built or inlined (a type that flattens itself), this is
+    /// `fallback` (the type's `$ref`) instead, so building always ends.
+    pub fn inline_named(
+        &mut self,
+        schema_id: &str,
+        inline: impl FnOnce(&mut Self) -> JsonSchema,
+        fallback: impl FnOnce(&mut Self) -> JsonSchema,
+    ) -> JsonSchema {
+        let scope: &Scope = self.resource_scopes.last().unwrap_or(&self.document);
+        let pending_definition: bool = scope
+            .type_definitions
+            .get(schema_id)
+            .is_some_and(|index| scope.pending.contains(index));
+        let pending_resource: bool = self
+            .resource_indices
+            .get(schema_id)
+            .is_some_and(|&index| self.resources[index].built.is_none());
+        if pending_definition || pending_resource || self.inlining.contains(schema_id) {
+            return fallback(self);
+        }
+        self.inlining.insert(schema_id.to_string());
+        let body: JsonSchema = inline(self);
+        self.inlining.remove(schema_id);
+        body
     }
 
     /// Returns a `$ref` to the named type `schema_id` with `$id` `id` (preferred `$defs` key
@@ -821,18 +866,19 @@ fn parse_resource_ref(reference: &str) -> Option<usize> {
 /// The resources that the provisional refs in `body` and `scope`'s definitions name.
 fn resource_refs(body: &mut JsonSchema, scope: &mut Scope) -> BTreeSet<usize> {
     let mut found: BTreeSet<usize> = BTreeSet::new();
-    let mut stack: Vec<&mut JsonSchema> = vec![body];
-    stack.extend(
+    let mut roots: Vec<&mut JsonSchema> = vec![body];
+    roots.extend(
         scope
             .definitions
             .iter_mut()
             .filter_map(|definition| definition.body.as_mut().and_then(Schema::as_object_mut)),
     );
-    while let Some(current) = stack.pop() {
-        if let Some(index) = current.ref_.as_deref().and_then(parse_resource_ref) {
-            found.insert(index);
-        }
-        stack.extend(current.subschemas_mut());
+    for root in roots {
+        for_each_ref(root, false, &mut |reference: &mut String| {
+            if let Some(index) = parse_resource_ref(reference) {
+                found.insert(index);
+            }
+        });
     }
     found
 }
@@ -865,15 +911,11 @@ fn ref_schema(reference: String) -> JsonSchema {
 
 /// Replaces every `$ref` in `schema` (at any depth) for which `resolve` returns a new value.
 fn rewrite_refs(schema: &mut JsonSchema, resolve: &impl Fn(&str) -> Option<String>) {
-    let mut stack: Vec<&mut JsonSchema> = vec![schema];
-    while let Some(current) = stack.pop() {
-        if let Some(reference) = current.ref_.as_deref()
-            && let Some(resolved) = resolve(reference)
-        {
-            current.ref_ = Some(resolved);
+    for_each_ref(schema, false, &mut |reference: &mut String| {
+        if let Some(resolved) = resolve(reference) {
+            *reference = resolved;
         }
-        stack.extend(current.subschemas_mut());
-    }
+    });
 }
 
 /// Like [`rewrite_refs`], but leaves every subschema with `$id` (and everything inside it)
@@ -882,17 +924,90 @@ fn rewrite_refs_outside_resources(
     schema: &mut JsonSchema,
     resolve: &impl Fn(&str) -> Option<String>,
 ) {
-    let mut stack: Vec<&mut JsonSchema> = vec![schema];
-    while let Some(current) = stack.pop() {
-        if current.id.is_some() {
-            continue;
+    for_each_ref(schema, true, &mut |reference: &mut String| {
+        if let Some(resolved) = resolve(reference) {
+            *reference = resolved;
         }
-        if let Some(reference) = current.ref_.as_deref()
-            && let Some(resolved) = resolve(reference)
-        {
-            current.ref_ = Some(resolved);
+    });
+}
+
+/// Pushes the subschemas a raw `keyword: value` holds, per `dialect`'s keyword table.
+fn push_raw_subschemas<'a>(
+    dialect: Dialect,
+    keyword: &str,
+    value: &'a mut serde_json::Value,
+    stack: &mut Vec<RefNode<'a>>,
+) {
+    let Some(position) = dialect.keyword(keyword).and_then(|k| k.subschemas) else {
+        return;
+    };
+    match (position, value) {
+        (
+            SubschemaPosition::Array | SubschemaPosition::SingleOrArray,
+            serde_json::Value::Array(items),
+        ) => {
+            stack.extend(items.iter_mut().map(RefNode::Raw));
         }
-        stack.extend(current.subschemas_mut());
+        (SubschemaPosition::Map, serde_json::Value::Object(map)) => {
+            stack.extend(map.values_mut().map(RefNode::Raw));
+        }
+        (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, value) => {
+            stack.push(RefNode::Raw(value));
+        }
+        _ => {}
+    }
+}
+
+/// A schema [`for_each_ref`] still has to visit: a typed one, or one held as raw JSON in an
+/// `extensions` keyword (`prefixItems`, `unevaluatedProperties`).
+enum RefNode<'a> {
+    Typed(&'a mut JsonSchema),
+    Raw(&'a mut serde_json::Value),
+}
+
+/// Calls `visit` on every `$ref` in `schema` at any depth, through typed subschemas and through
+/// the subschema keywords (per the 2020-12 keyword table) of its raw `extensions` values. With
+/// `skip_resources`, a subschema with `$id` and everything inside it is not visited.
+fn for_each_ref(
+    schema: &mut JsonSchema,
+    skip_resources: bool,
+    visit: &mut impl FnMut(&mut String),
+) {
+    let dialect: Dialect = Dialect::for_spec_version(SpecVersion::Draft202012);
+    let mut stack: Vec<RefNode<'_>> = vec![RefNode::Typed(schema)];
+    while let Some(node) = stack.pop() {
+        match node {
+            RefNode::Typed(current) => {
+                if skip_resources && current.id.is_some() {
+                    continue;
+                }
+                if let Some(reference) = current.ref_.as_mut() {
+                    visit(reference);
+                }
+                let (subschemas, extensions) = current.subschemas_mut();
+                for (keyword, value) in extensions {
+                    push_raw_subschemas(dialect, keyword, value, &mut stack);
+                }
+                stack.extend(subschemas.into_iter().map(RefNode::Typed));
+            }
+            RefNode::Raw(value) => {
+                let serde_json::Value::Object(object) = value else {
+                    continue;
+                };
+                if skip_resources && object.contains_key("$id") {
+                    continue;
+                }
+                for (keyword, value) in object.iter_mut() {
+                    if keyword == "$ref" {
+                        if let serde_json::Value::String(reference) = value {
+                            visit(reference);
+                        }
+                    } else {
+                        push_raw_subschemas(dialect, keyword, value, &mut stack);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1288,6 +1403,10 @@ impl<T: ToJsonSchema> ToJsonSchema for Box<T> {
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
         T::json_schema_with(generator)
+    }
+
+    fn json_schema_flattened(generator: &mut SchemaGenerator) -> JsonSchema {
+        T::json_schema_flattened(generator)
     }
 }
 
