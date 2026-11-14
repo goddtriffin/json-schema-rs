@@ -879,6 +879,7 @@ impl<'r> Builder<'_, 'r> {
                     ty: inner,
                     title: None,
                     is_ref: false,
+                    branches: Vec::new(),
                 });
             }
             return Ok(TypeNode::Union(UnionNode {
@@ -1017,7 +1018,7 @@ impl<'r> Builder<'_, 'r> {
         }))
     }
 
-    #[expect(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[expect(clippy::too_many_arguments)]
     fn build_union(
         &mut self,
         flat: &Flat<'r>,
@@ -1077,10 +1078,74 @@ impl<'r> Builder<'_, 'r> {
             .enumerate()
             .filter_map(|(i, c)| c.map(|c| (i, c)))
             .collect();
+        // `anyOf` / `oneOf` with `null` branches and others: an optional value of the others.
+        let nulls: Vec<bool> = live
+            .iter()
+            .map(|(_, c)| self.is_null_only(c))
+            .collect::<CodeGenResult<Vec<bool>>>()?;
+        let others: usize = nulls.iter().filter(|null| !**null).count();
+        if others == 0 || others == live.len() {
+            return self.union_of(flat, mask, context, kind, &carried, live, annotations);
+        }
+        let rest: Vec<(usize, Conjunct<'r>)> = live
+            .into_iter()
+            .zip(nulls)
+            .filter(|(_, null)| !null)
+            .map(|(branch, _)| branch)
+            .collect();
+        if let [(_, value)] = rest.as_slice() {
+            let mut conjuncts: Vec<Conjunct<'r>> = carried.clone();
+            conjuncts.push(value.clone());
+            let inner: TypeId = self.request(
+                Request { conjuncts, mask },
+                &Context {
+                    schema_index: self.schema_index,
+                    origin: value.pointer.clone(),
+                    key_name: context.key_name.clone(),
+                    parent: context.parent.clone(),
+                    is_root: false,
+                },
+            )?;
+            return Ok(TypeNode::Option(inner));
+        }
+        // Several others: their union, validated as the whole union (`null` never reaches it).
+        let inner: TypeNode = self.union_of(
+            flat,
+            mask.without(JsonType::Null),
+            context,
+            kind,
+            &carried,
+            rest,
+            annotations,
+        )?;
+        let id: TypeId = self.graph.push(inner);
+        if self.settings.self_validating
+            && let Some((target, sources)) = self.validation_target(flat)
+        {
+            self.graph.targets[id.index()] = Some(target);
+            self.sources.insert(id, sources);
+        }
+        self.add_intrinsic_proposals(id, flat, context.parent.as_deref());
+        self.add_context_proposals(id, context);
+        Ok(TypeNode::Option(id))
+    }
+
+    /// The union of `live` (branch index, conjunct), each with the `carried` conjuncts.
+    #[expect(clippy::too_many_arguments)]
+    fn union_of(
+        &mut self,
+        flat: &Flat<'r>,
+        mask: TypeSet,
+        context: &Context,
+        kind: UnionKind,
+        carried: &[Conjunct<'r>],
+        live: Vec<(usize, Conjunct<'r>)>,
+        annotations: Annotations,
+    ) -> CodeGenResult<TypeNode> {
         // Branches that are sets of strings (`enum` / `const`) become one string enum with all
         // their values: the whole union when every branch is one, else one variant in place of
         // the first. Distinct strings never overlap, so this is exact for `oneOf` and `anyOf`.
-        let string_values: Vec<Option<Vec<Value>>> = self.branch_string_values(&carried, &live)?;
+        let string_values: Vec<Option<Vec<Value>>> = self.branch_string_values(carried, &live)?;
         if !live.is_empty() && string_values.iter().all(Option::is_some) {
             return Ok(TypeNode::Enum(super::EnumNode {
                 values: sort_values(dedup_values(
@@ -1091,27 +1156,17 @@ impl<'r> Builder<'_, 'r> {
         }
         let string_branches: usize = string_values.iter().filter(|v| v.is_some()).count();
         let all_strings: Vec<Value> = string_values.iter().flatten().flatten().cloned().collect();
-        // `anyOf` / `oneOf` of one type and `null`: an optional value.
-        if live.len() == 2 {
-            let nulls: Vec<bool> = live
-                .iter()
-                .map(|(_, c)| self.is_null_only(c))
-                .collect::<CodeGenResult<Vec<bool>>>()?;
-            if nulls[0] != nulls[1] {
-                let (_, value) = &live[usize::from(nulls[0])];
-                let mut conjuncts: Vec<Conjunct<'r>> = carried.clone();
-                conjuncts.push(value.clone());
-                let inner: TypeId = self.request(
-                    Request { conjuncts, mask },
-                    &Context {
-                        schema_index: self.schema_index,
-                        origin: value.pointer.clone(),
-                        key_name: context.key_name.clone(),
-                        parent: context.parent.clone(),
-                        is_root: false,
-                    },
-                )?;
-                return Ok(TypeNode::Option(inner));
+        // A self-validating union still validates each merged branch at its own location; the
+        // branches share the enum's variant.
+        let mut merged: Vec<Option<ValidationTarget>> = Vec::new();
+        if string_branches >= 2 && self.settings.self_validating {
+            for ((_, branch), strings) in live.iter().zip(&string_values) {
+                if strings.is_some() {
+                    let mut conjuncts: Vec<Conjunct<'r>> = carried.to_vec();
+                    conjuncts.push(branch.clone());
+                    let flat: Flat<'r> = self.flatten(conjuncts)?;
+                    merged.push(self.validation_target(&flat).map(|(target, _)| target));
+                }
             }
         }
         let base_name: String = base_name(flat, context);
@@ -1119,9 +1174,7 @@ impl<'r> Builder<'_, 'r> {
         let mut combined_done: bool = false;
         let labels: Vec<String> = variant_labels(&base_name, &live, &string_values);
         for (((i, branch), strings), label) in live.into_iter().zip(string_values).zip(labels) {
-            // Combined string branches have no single schema location to validate against, so
-            // self-validating unions keep one variant per branch.
-            if string_branches >= 2 && strings.is_some() && !self.settings.self_validating {
+            if string_branches >= 2 && strings.is_some() {
                 if combined_done {
                     continue;
                 }
@@ -1144,6 +1197,7 @@ impl<'r> Builder<'_, 'r> {
                     ty,
                     title: None,
                     is_ref: false,
+                    branches: std::mem::take(&mut merged),
                 });
                 continue;
             }
@@ -1154,7 +1208,7 @@ impl<'r> Builder<'_, 'r> {
             };
             let origin: String = branch.pointer.clone();
             let is_ref: bool = branch.schema.ref_.is_some();
-            let mut conjuncts: Vec<Conjunct<'r>> = carried.clone();
+            let mut conjuncts: Vec<Conjunct<'r>> = carried.to_vec();
             conjuncts.push(branch);
             let ty: TypeId = self.request(
                 Request { conjuncts, mask },
@@ -1166,7 +1220,12 @@ impl<'r> Builder<'_, 'r> {
                     is_root: false,
                 },
             )?;
-            variants.push(Variant { ty, title, is_ref });
+            variants.push(Variant {
+                ty,
+                title,
+                is_ref,
+                branches: Vec::new(),
+            });
         }
         Ok(TypeNode::Union(UnionNode {
             kind,
@@ -1203,6 +1262,15 @@ impl<'r> Builder<'_, 'r> {
 
     /// Whether the conjunction of `c` alone holds only `null`.
     fn is_null_only(&self, c: &Conjunct<'r>) -> CodeGenResult<bool> {
+        // A branch's own `type` or `const` without `null` rules it out without flattening (a
+        // conjunction only narrows; before 2019-09 a `$ref` makes its siblings ignored).
+        let s: &JsonSchema = c.schema;
+        if s.ref_.is_none()
+            && (s.type_.is_some_and(|t| !t.contains(JsonType::Null))
+                || s.const_value.as_ref().is_some_and(|v| !v.is_null()))
+        {
+            return Ok(false);
+        }
         let flat: Flat<'r> = self.flatten(vec![c.clone()])?;
         if first_union(&flat).is_some() {
             return Ok(false);
