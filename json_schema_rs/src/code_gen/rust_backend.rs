@@ -20,7 +20,7 @@ use super::type_graph::{
     NumberConstraints, ObjectNode, StringFormat, TargetSources, TypeGraph, TypeId, TypeNode,
     UnionKind, UnionNode,
 };
-use crate::json_schema::{IntegerSemantics, Registry, Schema};
+use crate::json_schema::{IntegerSemantics, JsonSchemaSettings, Registry, Schema};
 use crate::number;
 use crate::sanitizers::{
     RenameRule, enum_variant_name_from_value, sanitize_field_name, sanitize_struct_name,
@@ -56,31 +56,8 @@ impl CodeGenBackend for RustBackend {
                     })
             })
             .collect::<CodeGenResult<Vec<Registry<'_>>>>()?;
-        let conditionals: type_graph::Conditionals =
-            type_graph::Conditionals::collect(&schemas, &registries)?;
-        let (mut graph, sources): (TypeGraph, TargetSources<'_>) =
-            type_graph::build(&schemas, &registries, &conditionals, settings)?;
-        passes::collapse_wrapper_cycles(&mut graph);
-        passes::order_variants(&mut graph);
-        let sets: Option<Vec<EmbeddedSet>> = if settings.validates() {
-            Some(rust_validators::embedded_sets(
-                &registries,
-                input.retrieval_settings(),
-            )?)
-        } else {
-            None
-        };
-        let local: Vec<u32> = passes::local_classes(&graph, settings.dedupe_mode);
-        let validation_keys: Vec<Option<String>> = match &sets {
-            Some(sets) if !local.is_empty() => {
-                let candidates: Vec<bool> = passes::merge_candidates(&graph, &local);
-                rust_validators::validation_keys(&graph, &registries, &sources, sets, &candidates)?
-            }
-            _ => Vec::new(),
-        };
-        passes::dedup(&mut graph, &local, &validation_keys);
-        passes::break_cycles(&mut graph);
-        passes::box_large_values(&mut graph);
+        let (graph, sets, _): (TypeGraph, Option<Vec<EmbeddedSet>>, Vec<TypeId>) =
+            prepare_graph(&schemas, &registries, input.retrieval_settings(), settings)?;
         let plan: Plan = Plan::new(&graph, settings);
         let shared: Option<Vec<u8>> = if plan.has_shared() {
             Some(render_buffer(&graph, &plan, Home::Shared, sets.as_deref())?)
@@ -99,6 +76,43 @@ impl CodeGenBackend for RustBackend {
             root_types,
         })
     }
+}
+
+/// The type graph of `schemas` (one registry each) after every pass, the embedded documents of
+/// each input when types validate, and per node the node it was merged into (its own id when it
+/// was not merged; empty without deduplication).
+pub(crate) fn prepare_graph(
+    schemas: &[&Schema],
+    registries: &[Registry<'_>],
+    retrieval_settings: &JsonSchemaSettings,
+    settings: &CodeGenSettings,
+) -> CodeGenResult<(TypeGraph, Option<Vec<EmbeddedSet>>, Vec<TypeId>)> {
+    let conditionals: type_graph::Conditionals =
+        type_graph::Conditionals::collect(schemas, registries)?;
+    let (mut graph, sources): (TypeGraph, TargetSources<'_>) =
+        type_graph::build(schemas, registries, &conditionals, settings)?;
+    passes::collapse_wrapper_cycles(&mut graph);
+    passes::order_variants(&mut graph);
+    let sets: Option<Vec<EmbeddedSet>> = if settings.validates() {
+        Some(rust_validators::embedded_sets(
+            registries,
+            retrieval_settings,
+        )?)
+    } else {
+        None
+    };
+    let local: Vec<u32> = passes::local_classes(&graph, settings.dedupe_mode);
+    let validation_keys: Vec<Option<String>> = match &sets {
+        Some(sets) if !local.is_empty() => {
+            let candidates: Vec<bool> = passes::merge_candidates(&graph, &local);
+            rust_validators::validation_keys(&graph, registries, &sources, sets, &candidates)?
+        }
+        _ => Vec::new(),
+    };
+    let merged: Vec<TypeId> = passes::dedup(&mut graph, &local, &validation_keys);
+    passes::break_cycles(&mut graph);
+    passes::box_large_values(&mut graph);
+    Ok((graph, sets, merged))
 }
 
 /// Generate Rust source from one or more parsed schemas: a slice of schemas, or a

@@ -218,12 +218,16 @@ pub(crate) fn merge_candidates(graph: &TypeGraph, local: &[u32]) -> Vec<bool> {
 /// signatures as [`local_classes`] numbers it, and is empty with [`DedupeMode::Disabled`]. Classes are split by their
 /// children's classes until stable (partition refinement), so two recursive types are equal
 /// exactly when their unfoldings are. Every id in the graph is then rewritten to its class's
-/// lowest id, and name proposals are pooled there. With [`DedupeMode::Disabled`] nothing is
-/// merged.
-pub(crate) fn dedup(graph: &mut TypeGraph, local: &[u32], validation_keys: &[Option<String>]) {
+/// lowest id, and name proposals are pooled there. Returns, per node, the node it was merged into
+/// (its own id when it was not; empty with [`DedupeMode::Disabled`], where nothing is merged).
+pub(crate) fn dedup(
+    graph: &mut TypeGraph,
+    local: &[u32],
+    validation_keys: &[Option<String>],
+) -> Vec<TypeId> {
     record_variant_targets(graph);
     if local.is_empty() {
-        return;
+        return Vec::new();
     }
     let mut class: Vec<u32> = {
         let mut ids: HashMap<(u32, Option<&str>), u32> = HashMap::new();
@@ -285,6 +289,7 @@ pub(crate) fn dedup(graph: &mut TypeGraph, local: &[u32], validation_keys: &[Opt
             *id = canon[id.index()];
         }
     }
+    canon
 }
 
 /// Records, per `anyOf` / `oneOf` union, its variants' validation targets as built: the union's
