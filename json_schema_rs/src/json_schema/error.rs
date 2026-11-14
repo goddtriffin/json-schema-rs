@@ -2,6 +2,7 @@
 
 use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
+use crate::validator::ValidationError;
 use std::fmt;
 
 /// Result type for JSON Schema parsing operations: on failure, every problem found.
@@ -43,6 +44,10 @@ pub enum JsonSchemaParseError {
         /// The unrecognised `$schema` value.
         uri: String,
     },
+    /// [`MetaschemaCheck::Validate`](super::settings::MetaschemaCheck::Validate) is set and the
+    /// document does not conform to its draft's metaschema: one error per failure, its instance
+    /// location pointing into the document.
+    Metaschema(Box<ValidationError>),
 }
 
 impl fmt::Display for JsonSchemaParseError {
@@ -70,6 +75,9 @@ impl fmt::Display for JsonSchemaParseError {
             JsonSchemaParseError::UnknownSchemaUri { uri } => {
                 write!(f, "unknown $schema \"{uri}\"")
             }
+            JsonSchemaParseError::Metaschema(error) => {
+                write!(f, "does not conform to its metaschema: {error}")
+            }
         }
     }
 }
@@ -82,6 +90,7 @@ impl std::error::Error for JsonSchemaParseError {
             | JsonSchemaParseError::InvalidKeywordValue { .. }
             | JsonSchemaParseError::UnknownSchemaUri { .. } => None,
             JsonSchemaParseError::Io(e) => Some(e),
+            JsonSchemaParseError::Metaschema(e) => Some(e.as_ref()),
         }
     }
 }

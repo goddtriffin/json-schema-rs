@@ -86,7 +86,7 @@ fn without_fragment(uri: &Uri) -> Uri {
 
 /// The standard metaschemas, embedded so that `$ref` and `$schema` to them never need the
 /// network: `(URI without fragment, document text)`.
-const METASCHEMAS: &[(&str, &str)] = &[
+pub(crate) const METASCHEMAS: &[(&str, &str)] = &[
     (
         "http://json-schema.org/draft-04/schema",
         include_str!("../../metaschemas/draft-04/schema.json"),
@@ -1126,28 +1126,35 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
         uri: &Uri,
         draft: Option<SpecVersion>,
     ) -> Result<Arc<Schema>, RegistryError> {
-        let value: Value =
-            if let Some((_, text)) = METASCHEMAS.iter().find(|(known, _)| *known == uri.as_str()) {
-                serde_json::from_str(text).map_err(|e| RegistryError::Parse {
+        let embedded: Option<&str> = METASCHEMAS
+            .iter()
+            .find(|(known, _)| *known == uri.as_str())
+            .map(|(_, text)| *text);
+        let value: Value = if let Some(text) = embedded {
+            serde_json::from_str(text).map_err(|e| RegistryError::Parse {
+                uri: uri.to_string(),
+                reason: e.to_string(),
+            })?
+        } else if let Some(value) = self.documents.remove(uri.as_str()) {
+            value
+        } else {
+            self.retriever
+                .retrieve(uri.as_str())
+                .map_err(|e| RegistryError::Retrieve {
                     uri: uri.to_string(),
-                    reason: e.to_string(),
+                    reason: e.reason,
                 })?
-            } else if let Some(value) = self.documents.remove(uri.as_str()) {
-                value
-            } else {
-                self.retriever
-                    .retrieve(uri.as_str())
-                    .map_err(|e| RegistryError::Retrieve {
-                        uri: uri.to_string(),
-                        reason: e.reason,
-                    })?
-            };
+        };
         // A loaded document follows its own `$schema`; without one it takes `draft` (the
         // referencing resource's). Forcing a draft applies to the root document only.
         let mut settings: JsonSchemaSettings = self.settings.clone();
         settings.forced_spec_version = None;
         settings.default_spec_version = draft.or(settings.default_spec_version);
         settings.unknown_schema_uri = super::settings::UnknownSchemaUri::Fallback;
+        if embedded.is_some() {
+            // A standard metaschema conforms to its own draft's metaschema.
+            settings.metaschema_check = super::settings::MetaschemaCheck::Skip;
+        }
         let schema: Schema = Schema::new_from_owned_serde_value(value, &settings).map_err(|e| {
             RegistryError::Parse {
                 uri: uri.to_string(),
@@ -2128,7 +2135,7 @@ mod tests {
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::dialect::{Dialect, FormatMode, VocabularyKind, VocabularySet};
     use crate::json_schema::json_schema::{JsonSchema, Schema, SchemaRef};
-    use crate::json_schema::settings::JsonSchemaSettings;
+    use crate::json_schema::settings::{JsonSchemaSettings, MetaschemaCheck};
     use crate::json_schema::spec_version::SpecVersion;
     use crate::validator::{CompiledSchema, ValidationError, ValidationResult};
     use serde_json::{Value, json};
@@ -2669,6 +2676,39 @@ mod tests {
             target: "https://example.com/bad.json".to_string(),
             reason: "\"https://example.com/bad.json\" is not a valid schema: invalid JSON Schema: invalid type: integer `5`, expected a schema (an object or a boolean)".to_string(),
         }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn metaschema_check_rejects_a_given_document_that_does_not_conform() {
+        let root: JsonSchema = parse(&json!({"$ref": "https://example.com/bad.json"}));
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .metaschema_check(MetaschemaCheck::Validate)
+            .build();
+        let actual: Result<(), Vec<RegistryError>> = Registry::builder()
+            .settings(settings)
+            .document("https://example.com/bad.json", json!({"minLength": -1}))
+            .build(&root)
+            .map(|_| ())
+            .map_err(RegistryErrors::into_vec);
+        let expected: Result<(), Vec<RegistryError>> = Err(vec![RegistryError::UnresolvableRef {
+            ref_str: "https://example.com/bad.json".to_string(),
+            location: String::new(),
+            target: "https://example.com/bad.json".to_string(),
+            reason: "\"https://example.com/bad.json\" is not a valid schema: does not conform to its metaschema: /minLength: value -1 is below minimum 0".to_string(),
+        }]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn metaschema_check_accepts_a_reference_to_a_standard_metaschema() {
+        let root: JsonSchema =
+            parse(&json!({"$ref": "https://json-schema.org/draft/2020-12/schema"}));
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .metaschema_check(MetaschemaCheck::Validate)
+            .build();
+        let expected: bool = true;
+        let actual: bool = Registry::builder().settings(settings).build(&root).is_ok();
         assert_eq!(expected, actual);
     }
 

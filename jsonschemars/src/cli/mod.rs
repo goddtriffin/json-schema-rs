@@ -7,8 +7,8 @@ mod validate;
 
 use clap::{Arg, ArgMatches, Command};
 use json_schema_rs::{
-    ContentMode, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings, RefSiblings,
-    SpecVersion, UnknownSchemaUri,
+    ContentMode, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings,
+    MetaschemaCheck, RefSiblings, SpecVersion, UnknownSchemaUri,
 };
 use retrieval::RefRetrieval;
 use std::path::PathBuf;
@@ -45,7 +45,7 @@ const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
 ];
 
 /// JSON Schema Settings (`jss-`) arguments shared by every subcommand that reads a schema.
-fn jss_args() -> [Arg; 9] {
+fn jss_args() -> [Arg; 10] {
     [
         Arg::new("jss-disallow-unknown-fields")
             .long("jss-disallow-unknown-fields")
@@ -93,6 +93,11 @@ fn jss_args() -> [Arg; 9] {
             .value_name("POLICY")
             .value_parser(["fallback", "reject"])
             .help("JSON Schema Settings: an unrecognised $schema falls back to 2020-12 with a warning, or is rejected (default: fallback)"),
+        Arg::new("jss-metaschema-check")
+            .long("jss-metaschema-check")
+            .value_name("CHECK")
+            .value_parser(["skip", "validate"])
+            .help("JSON Schema Settings: check each schema document against its draft's metaschema before using it (validate), or not (skip) (default: skip)"),
     ]
 }
 
@@ -148,6 +153,12 @@ fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
         builder = builder.unknown_schema_uri(match policy.as_str() {
             "reject" => UnknownSchemaUri::Reject,
             _ => UnknownSchemaUri::Fallback,
+        });
+    }
+    if let Some(check) = matches.get_one::<String>("jss-metaschema-check") {
+        builder = builder.metaschema_check(match check.as_str() {
+            "validate" => MetaschemaCheck::Validate,
+            _ => MetaschemaCheck::Skip,
         });
     }
     builder.build()

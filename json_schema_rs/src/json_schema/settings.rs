@@ -19,6 +19,20 @@ pub enum UnknownSchemaUri {
     Reject,
 }
 
+/// Whether parsing checks a schema document against its draft's metaschema.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MetaschemaCheck {
+    /// Parse without the check: a document the model can hold is accepted, even where its draft's
+    /// metaschema forbids it (`"required": ["a", "a"]`, `"enum": []`).
+    #[default]
+    Skip,
+    /// Validate the document against the metaschema of the draft it is parsed in (drafts 4 to
+    /// 2020-12) before building the model, and refuse it with one
+    /// [`JsonSchemaParseError::Metaschema`] per failure. A document whose `$schema` this library
+    /// does not recognise, or that is parsed under drafts 0 to 3, is not checked.
+    Validate,
+}
+
 /// Settings that affect how JSON Schema definitions are ingested (parsed).
 ///
 /// [`Default`] follows each document's `$schema` (Draft 2020-12 when absent) with no overrides.
@@ -70,6 +84,9 @@ pub struct JsonSchemaSettings {
 
     /// What to do when `$schema` is not a recognised metaschema URI.
     pub unknown_schema_uri: UnknownSchemaUri,
+
+    /// Whether a document is checked against its draft's metaschema.
+    pub metaschema_check: MetaschemaCheck,
 }
 
 /// Builder for [`JsonSchemaSettings`].
@@ -84,6 +101,7 @@ pub struct JsonSchemaSettingsBuilder {
     exclusive_bounds: Option<ExclusiveBounds>,
     ref_siblings: Option<RefSiblings>,
     unknown_schema_uri: Option<UnknownSchemaUri>,
+    metaschema_check: Option<MetaschemaCheck>,
 }
 
 impl JsonSchemaSettingsBuilder {
@@ -162,6 +180,14 @@ impl JsonSchemaSettingsBuilder {
         self
     }
 
+    /// Set whether a document is checked against its draft's metaschema (default:
+    /// [`MetaschemaCheck::Skip`]).
+    #[must_use]
+    pub fn metaschema_check(mut self, value: MetaschemaCheck) -> Self {
+        self.metaschema_check = Some(value);
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> JsonSchemaSettings {
@@ -175,6 +201,7 @@ impl JsonSchemaSettingsBuilder {
             exclusive_bounds: self.exclusive_bounds,
             ref_siblings: self.ref_siblings,
             unknown_schema_uri: self.unknown_schema_uri.unwrap_or_default(),
+            metaschema_check: self.metaschema_check.unwrap_or_default(),
         }
     }
 }
@@ -252,6 +279,7 @@ impl JsonSchemaSettings {
             exclusive_bounds: dialect.exclusive_bounds,
             ref_siblings: dialect.ref_siblings,
             unknown_schema_uri: UnknownSchemaUri::Fallback,
+            metaschema_check: MetaschemaCheck::Skip,
         }
     }
 
@@ -326,7 +354,7 @@ pub(crate) fn resolve_dialect_for_uri(
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonSchemaSettings, UnknownSchemaUri, resolve_dialect};
+    use super::{JsonSchemaSettings, MetaschemaCheck, UnknownSchemaUri, resolve_dialect};
     use crate::json_schema::SpecVersion;
     use crate::json_schema::dialect::{
         ContentMode, Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics,
@@ -391,6 +419,7 @@ mod tests {
             exclusive_bounds: Some(ExclusiveBounds::BooleanModifier),
             ref_siblings: Some(RefSiblings::Ignored),
             unknown_schema_uri: UnknownSchemaUri::Reject,
+            metaschema_check: MetaschemaCheck::Validate,
         };
         let actual: JsonSchemaSettings = JsonSchemaSettings::builder()
             .disallow_unknown_fields(true)
@@ -402,6 +431,7 @@ mod tests {
             .exclusive_bounds(ExclusiveBounds::BooleanModifier)
             .ref_siblings(RefSiblings::Ignored)
             .unknown_schema_uri(UnknownSchemaUri::Reject)
+            .metaschema_check(MetaschemaCheck::Validate)
             .build();
         assert_eq!(expected, actual);
     }

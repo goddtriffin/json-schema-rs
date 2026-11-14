@@ -6,8 +6,8 @@
 
 use json_schema_rs::{
     CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
-    IntegerSemantics, JsonSchemaSettings, ModelNameSource, RefSiblings, SpecVersion,
-    UniqueItemsType, UnknownProperties, UnknownSchemaUri,
+    IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
+    SpecVersion, UniqueItemsType, UnknownProperties, UnknownSchemaUri,
 };
 use proc_macro2::Span;
 use std::collections::BTreeSet;
@@ -51,7 +51,7 @@ impl Parse for SettingArg {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 17] = [
+const SETTING_NAMES: [&str; 18] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -69,6 +69,7 @@ const SETTING_NAMES: [&str; 17] = [
     "exclusive_bounds",
     "ref_siblings",
     "unknown_schema_uri",
+    "metaschema_check",
 ];
 
 const MODEL_NAME_SOURCES: &[(&str, ModelNameSource)] = &[
@@ -135,6 +136,11 @@ const UNKNOWN_SCHEMA_URIS: &[(&str, UnknownSchemaUri)] = &[
     ("Reject", UnknownSchemaUri::Reject),
 ];
 
+const METASCHEMA_CHECKS: &[(&str, MetaschemaCheck)] = &[
+    ("Skip", MetaschemaCheck::Skip),
+    ("Validate", MetaschemaCheck::Validate),
+];
+
 /// The variant names of `unique_items`, whether or not this build has `IndexSet`.
 const UNIQUE_ITEMS_NAMES: &[&str] = &["Vec", "HashSet", "BTreeSet", "IndexSet"];
 
@@ -158,6 +164,7 @@ struct Overrides {
     exclusive_bounds: Option<ExclusiveBounds>,
     ref_siblings: Option<RefSiblings>,
     unknown_schema_uri: Option<UnknownSchemaUri>,
+    metaschema_check: Option<MetaschemaCheck>,
 }
 
 /// The settings a macro call's arguments produce.
@@ -216,6 +223,9 @@ impl Overrides {
                 unknown_schema_uri: self
                     .unknown_schema_uri
                     .unwrap_or(json_schema_default.unknown_schema_uri),
+                metaschema_check: self
+                    .metaschema_check
+                    .unwrap_or(json_schema_default.metaschema_check),
             },
         }
     }
@@ -373,6 +383,10 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
             &mut overrides.unknown_schema_uri,
             variant(setting, value, UNKNOWN_SCHEMA_URIS),
         ),
+        "metaschema_check" => set(
+            &mut overrides.metaschema_check,
+            variant(setting, value, METASCHEMA_CHECKS),
+        ),
         _ => Err(unknown_setting(arg)),
     }
 }
@@ -422,8 +436,8 @@ mod tests {
     use super::{MacroSettings, SettingArg, resolve};
     use json_schema_rs::{
         CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
-        IntegerSemantics, JsonSchemaSettings, ModelNameSource, RefSiblings, SpecVersion,
-        UniqueItemsType, UnknownProperties, UnknownSchemaUri,
+        IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
+        SpecVersion, UniqueItemsType, UnknownProperties, UnknownSchemaUri,
     };
     use proc_macro2::TokenStream;
     use std::str::FromStr;
@@ -488,6 +502,7 @@ mod tests {
                 .exclusive_bounds(ExclusiveBounds::BooleanModifier)
                 .ref_siblings(RefSiblings::Evaluated)
                 .unknown_schema_uri(UnknownSchemaUri::Reject)
+                .metaschema_check(MetaschemaCheck::Validate)
                 .build(),
         };
         let actual: MacroSettings = resolve_source(
@@ -498,7 +513,7 @@ mod tests {
              forced_spec_version = Draft07, default_spec_version = Draft04, \
              format_mode = Assertion, content_mode = Annotation, integer_semantics = Lexical, \
              exclusive_bounds = BooleanModifier, ref_siblings = Evaluated, \
-             unknown_schema_uri = Reject",
+             unknown_schema_uri = Reject, metaschema_check = Validate",
         )
         .expect("resolve");
         assert_eq!(expected, actual);
@@ -527,6 +542,7 @@ mod tests {
                 .exclusive_bounds(ExclusiveBounds::Numeric)
                 .ref_siblings(RefSiblings::Ignored)
                 .unknown_schema_uri(UnknownSchemaUri::Fallback)
+                .metaschema_check(MetaschemaCheck::Skip)
                 .build(),
         };
         let actual: MacroSettings = resolve_source(
@@ -537,7 +553,7 @@ mod tests {
              forced_spec_version = Draft201909, default_spec_version = Draft06, \
              format_mode = Annotation, content_mode = Assertion, integer_semantics = Numeric, \
              exclusive_bounds = Numeric, ref_siblings = Ignored, \
-             unknown_schema_uri = Fallback",
+             unknown_schema_uri = Fallback, metaschema_check = Skip",
         )
         .expect("resolve");
         assert_eq!(expected, actual);
@@ -589,7 +605,7 @@ mod tests {
              `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
              `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
              `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, \
-             `integer_semantics`, `exclusive_bounds`, `ref_siblings` or `unknown_schema_uri`"
+             `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
             1,
             0,
@@ -673,7 +689,7 @@ mod tests {
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
                  `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, \
-                 `integer_semantics`, `exclusive_bounds`, `ref_siblings` or `unknown_schema_uri`"
+                 `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,
                 0,
