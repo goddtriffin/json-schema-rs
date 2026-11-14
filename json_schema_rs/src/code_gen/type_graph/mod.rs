@@ -9,7 +9,7 @@
 mod build;
 pub(crate) mod passes;
 
-pub(crate) use build::{Conditionals, TargetSources, build};
+pub(crate) use build::{RawSubschemas, TargetSources, build};
 
 use crate::json_schema::{IntegerSemantics, JsonType};
 use serde_json::Value;

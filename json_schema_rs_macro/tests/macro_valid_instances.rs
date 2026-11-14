@@ -1,8 +1,9 @@
 //! Integration test: `json_schema_to_rust!` generates types that accept every schema-valid
 //! instance when a keyword constrains only some instances: a property only `then` defines, one
 //! both `then` and `else` define, an `additionalProperties` schema or `false` beside
-//! `patternProperties`, and `items` beside `prefixItems`. Self-validation still enforces those
-//! keywords where they apply.
+//! `patternProperties`, and `items` beside `prefixItems`; and that the keys a schema does not
+//! name are typed by `patternProperties` and `additionalProperties` together. Self-validation
+//! still enforces those keywords where they apply.
 
 use json_schema_rs_macro::json_schema_to_rust;
 use std::collections::BTreeMap;
@@ -12,7 +13,9 @@ json_schema_to_rust!(
     r#"{"type":"object","patternProperties":{"^x-":{}},"additionalProperties":{"type":"string"}}"#,
     r#"{"type":"object","properties":{"a":{"type":"string"}},"patternProperties":{"^x-":{}},"additionalProperties":false}"#,
     r#"{"type":"array","prefixItems":[{"type":"integer"}],"items":{"type":"string"}}"#,
-    r#"{"type":"object","properties":{"kind":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"properties":{"v":{"type":"integer","minimum":1}}},"else":{"properties":{"v":{"type":"integer","maximum":0}}}}"#
+    r#"{"type":"object","properties":{"kind":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"properties":{"v":{"type":"integer","minimum":1}}},"else":{"properties":{"v":{"type":"integer","maximum":0}}}}"#,
+    r#"{"type":"object","properties":{"name":{"type":"string"}},"patternProperties":{"^x-":{"type":"integer","minimum":0}},"additionalProperties":false}"#,
+    r#"{"type":"object","patternProperties":{"^x-":{"type":"integer"},"^y-":false},"additionalProperties":{"type":"string"}}"#
 );
 
 #[test]
@@ -101,5 +104,35 @@ fn then_else_shared_property_deserializes() {
 fn then_else_shared_property_try_from_rejects_value_violating_the_branch_that_applies() {
     let expected: bool = true;
     let actual: bool = schema_4::Root::try_from(serde_json::json!({"kind": "a", "v": 0})).is_err();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_property_types_unnamed_keys() {
+    let root: schema_5::Root = serde_json::from_str(r#"{"name":"n","x-a":5}"#).unwrap();
+    let expected: serde_json::Value = serde_json::json!({"x-a": 5});
+    let actual: serde_json::Value = serde_json::to_value(&root.additional).unwrap();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_property_try_from_rejects_value_violating_the_pattern() {
+    let expected: bool = true;
+    let actual: bool = schema_5::Root::try_from(serde_json::json!({"x-a": -1})).is_err();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_property_try_from_rejects_unmatched_key() {
+    let expected: bool = true;
+    let actual: bool = schema_5::Root::try_from(serde_json::json!({"b": 1})).is_err();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn pattern_property_and_additional_properties_schema_type_unnamed_keys_as_any_of() {
+    let root: schema_6::Root = serde_json::from_str(r#"{"x-a":5,"b":"s"}"#).unwrap();
+    let expected: serde_json::Value = serde_json::json!({"x-a": 5, "b": "s"});
+    let actual: serde_json::Value = serde_json::to_value(&root).unwrap();
     assert_eq!(expected, actual);
 }

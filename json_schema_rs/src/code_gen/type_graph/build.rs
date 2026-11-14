@@ -99,74 +99,83 @@ struct Context {
     is_root: bool,
 }
 
-/// `then` / `else` subschemas, parsed before the walk so they live as long as the registries
-/// (the typed model keeps `if` / `then` / `else` raw), plus, for each schema with both, the
-/// properties both define merged as `{"anyOf": [then's, else's]}`.
+/// Subschemas the typed model keeps raw that codegen types (`then`, `else` and the values of
+/// `patternProperties`), parsed before the walk so they live as long as the registries, plus the
+/// schemas codegen builds from them: for each schema with both `then` and `else`, the properties
+/// both define merged as `{"anyOf": [then's, else's]}`, and for each schema whose keys it does
+/// not name have two or more possible schemas, their `anyOf` ([`RawSubschemas::unnamed`]).
 #[derive(Debug, Default)]
-pub(crate) struct Conditionals {
-    /// Parsed schemas, boxed so their addresses stay fixed while the list grows: nested
-    /// `then` / `else` values are found by address inside them.
+pub(crate) struct RawSubschemas {
+    /// Parsed schemas, boxed so their addresses stay fixed while the list grows: nested raw
+    /// values are found by address inside them.
     #[expect(clippy::vec_box, reason = "addresses of parsed schemas must not move")]
     parsed: Vec<Box<JsonSchema>>,
-    /// Raw `then` / `else` value address → index in `parsed`.
+    /// Raw value address → index in `parsed`.
     index: HashMap<usize, usize>,
     /// (`then` index, `else` index, property key) → index in `parsed` of the merged property.
     merged: HashMap<(usize, usize, String), usize>,
+    /// Schema address → index in `parsed` of the `anyOf` of the schemas its unnamed keys may
+    /// take.
+    unnamed_any_of: HashMap<usize, usize>,
 }
 
-impl Conditionals {
-    /// Parses every `then` / `else` reachable from `schemas` and the `$ref` targets of
-    /// `registries`, including those nested in other `then` / `else` values.
-    pub(crate) fn collect(
-        schemas: &[&Schema],
-        registries: &[Registry<'_>],
-    ) -> CodeGenResult<Conditionals> {
-        let mut out: Conditionals = Conditionals::default();
-        let mut found: Vec<(usize, Value)> = Vec::new();
-        let mut stack: Vec<&JsonSchema> = schemas.iter().filter_map(|s| s.as_object()).collect();
-        for registry in registries {
+/// A raw subschema object found in the walk: its address, a copy, the registry and the scope
+/// (inside its own `$id`) it is evaluated in.
+type Found<'a> = (usize, Value, &'a Registry<'a>, Scope);
+
+/// What a key a schema object does not name in `properties` must be valid against.
+pub(crate) enum UnnamedKeys<'r> {
+    /// Any value: a pattern or `additionalProperties` allows it unconstrained.
+    Any,
+    /// One of these schemas, each with the keyword path to it (`patternProperties` and the
+    /// pattern, or `additionalProperties`); none means no such key is valid.
+    OneOf(Vec<(&'r JsonSchema, [&'r str; 2])>),
+}
+
+impl RawSubschemas {
+    /// Parses every `then` / `else` and `patternProperties` value reachable from `schemas` and
+    /// the `$ref` targets of `registries` (`registries[i]` is `schemas[i]`'s), including those
+    /// nested in other raw values, each in the dialect of the resource it sits in.
+    pub(crate) fn collect<'a>(
+        schemas: &[&'a Schema],
+        registries: &'a [Registry<'a>],
+    ) -> CodeGenResult<RawSubschemas> {
+        let mut out: RawSubschemas = RawSubschemas::default();
+        let mut found: Vec<Found<'a>> = Vec::new();
+        for (schema, registry) in schemas.iter().zip(registries) {
+            let mut stack: Vec<(&JsonSchema, Scope)> = Vec::new();
+            if let Some(s) = schema.as_object() {
+                stack.push((s, registry.enter(registry.root_scope(), s)));
+            }
             for target in registry.ref_targets() {
                 if let SchemaRef::Object(s) = target.schema {
-                    stack.push(s);
+                    stack.push((s, registry.enter(target.scope, s)));
                 }
             }
+            walk_raw(stack, registry, &mut found);
         }
-        while let Some(s) = stack.pop() {
-            push_typed_children(s, &mut stack);
-            queue_conditionals(s, &mut found);
-        }
-        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        // Parse each value, then find the raw values nested in it (their addresses are inside the
+        // boxes).
         let mut next: usize = 0;
         while next < found.len() {
-            let (address, ref value) = found[next];
+            let (address, ref value, registry, scope) = found[next];
             next += 1;
             if out.index.contains_key(&address) {
                 continue;
             }
-            let parsed: Box<JsonSchema> = parse_conditional(value)?;
-            out.index.insert(address, out.parsed.len());
+            let parsed: Box<JsonSchema> = parse_raw(value, registry.dialect(scope))?;
+            let index: usize = out.parsed.len();
+            out.index.insert(address, index);
             out.parsed.push(parsed);
+            let mut nested: Vec<Found<'a>> = Vec::new();
+            walk_raw(
+                vec![(out.parsed[index].as_ref(), scope)],
+                registry,
+                &mut nested,
+            );
+            found.extend(nested);
         }
-        // Nested `then` / `else` inside parsed values: their addresses are inside the boxes.
-        let mut scan: usize = 0;
-        while scan < out.parsed.len() {
-            let mut nested: Vec<(usize, Value)> = Vec::new();
-            let mut inner: Vec<&JsonSchema> = vec![out.parsed[scan].as_ref()];
-            while let Some(s) = inner.pop() {
-                push_typed_children(s, &mut inner);
-                queue_conditionals(s, &mut nested);
-            }
-            scan += 1;
-            for (address, value) in nested {
-                if out.index.contains_key(&address) {
-                    continue;
-                }
-                let parsed: Box<JsonSchema> = parse_conditional(&value)?;
-                out.index.insert(address, out.parsed.len());
-                out.parsed.push(parsed);
-            }
-        }
-        // Pair up `then` and `else` of the same schema.
+        // Build the merged schemas: every schema object the walk reaches, parsed ones included.
         let mut stack: Vec<&JsonSchema> = schemas.iter().filter_map(|s| s.as_object()).collect();
         for registry in registries {
             for target in registry.ref_targets() {
@@ -176,11 +185,35 @@ impl Conditionals {
             }
         }
         stack.extend(out.parsed.iter().map(AsRef::as_ref));
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        let mut unnamed: Vec<(usize, JsonSchema)> = Vec::new();
+        let mut seen: HashSet<usize> = HashSet::new();
         while let Some(s) = stack.pop() {
+            if !seen.insert(std::ptr::from_ref(s) as usize) {
+                continue;
+            }
             push_typed_children(s, &mut stack);
             if let (Some(t), Some(e)) = (out.position(s, "then"), out.position(s, "else")) {
                 pairs.push((t, e));
             }
+            if let Some(UnnamedKeys::OneOf(alternatives)) = out.unnamed_keys(s)
+                && alternatives.len() >= 2
+            {
+                let any_of: JsonSchema = JsonSchema {
+                    any_of: Some(
+                        alternatives
+                            .into_iter()
+                            .map(|(a, _)| Schema::Object(Box::new(a.clone())))
+                            .collect(),
+                    ),
+                    ..Default::default()
+                };
+                unnamed.push((std::ptr::from_ref(s) as usize, any_of));
+            }
+        }
+        for (address, any_of) in unnamed {
+            out.unnamed_any_of.insert(address, out.parsed.len());
+            out.parsed.push(Box::new(any_of));
         }
         pairs.sort_unstable();
         pairs.dedup();
@@ -207,9 +240,14 @@ impl Conditionals {
         Ok(out)
     }
 
-    /// Index in `parsed` of `s`'s `keyword` (`then` / `else`) value.
+    /// Index in `parsed` of `s`'s raw `keyword` (`then` / `else`) value.
     fn position(&self, s: &JsonSchema, keyword: &str) -> Option<usize> {
         let value: &Value = s.extensions.get(keyword)?;
+        self.of_value(value)
+    }
+
+    /// Index in `parsed` of the raw schema object `value`.
+    fn of_value(&self, value: &Value) -> Option<usize> {
         self.index
             .get(&(std::ptr::from_ref(value) as usize))
             .copied()
@@ -228,28 +266,115 @@ impl Conditionals {
             .get(&(t, e, key.to_string()))
             .map(|&i| self.parsed[i].as_ref())
     }
+
+    /// What the keys `s` does not name must be valid against, when `s` has `patternProperties`
+    /// whose values were parsed (its dialect defines the keyword): a key a pattern matches
+    /// against that pattern's schema (a `false` pattern allows no such key), any other key
+    /// against `additionalProperties` (absent allows any value). `None` without patterns.
+    pub(crate) fn unnamed_keys<'s>(&'s self, s: &'s JsonSchema) -> Option<UnnamedKeys<'s>> {
+        let Some(Value::Object(patterns)) = s.extensions.get("patternProperties") else {
+            return None;
+        };
+        if patterns.is_empty() {
+            return None;
+        }
+        let mut alternatives: Vec<(&'s JsonSchema, [&'s str; 2])> = Vec::new();
+        for (pattern, value) in patterns {
+            match value {
+                Value::Bool(false) => {}
+                Value::Object(_) => {
+                    let parsed: &JsonSchema = self.parsed[self.of_value(value)?].as_ref();
+                    if accepts_any_value(parsed) {
+                        return Some(UnnamedKeys::Any);
+                    }
+                    alternatives.push((parsed, ["patternProperties", pattern.as_str()]));
+                }
+                _ => return Some(UnnamedKeys::Any),
+            }
+        }
+        match &s.additional_properties {
+            None | Some(Schema::Bool(true)) => return Some(UnnamedKeys::Any),
+            Some(Schema::Bool(false)) => {}
+            Some(Schema::Object(a)) if accepts_any_value(a) => return Some(UnnamedKeys::Any),
+            Some(Schema::Object(a)) => alternatives.push((a, ["additionalProperties", ""])),
+        }
+        Some(UnnamedKeys::OneOf(alternatives))
+    }
+
+    /// The `anyOf` of the schemas `s`'s unnamed keys may take, when there are two or more.
+    fn unnamed_any_of(&self, s: &JsonSchema) -> Option<&JsonSchema> {
+        self.unnamed_any_of
+            .get(&(std::ptr::from_ref(s) as usize))
+            .map(|&i| self.parsed[i].as_ref())
+    }
 }
 
-/// Parses a raw `then` / `else` schema object ([`queue_conditionals`] queues only objects).
-fn parse_conditional(value: &Value) -> CodeGenResult<Box<JsonSchema>> {
-    let parsed: Schema = Schema::new_from_serde_value(value, &JsonSchemaSettings::default())
-        .map_err(|e| CodeGenError::InvalidSubschema {
+/// Whether `s` holds nothing but annotations, so every value is valid against it (`{}`). Any other
+/// keyword counts as a constraint, whether or not the dialect defines it: a schema taken as
+/// constrained still gets a faithful type, only a wider one than needed.
+fn accepts_any_value(s: &JsonSchema) -> bool {
+    s.type_.is_none()
+        && s.multiple_of.is_none()
+        && !contributes_besides_type(s, 0)
+        && s.extensions
+            .keys()
+            .all(|key| ANNOTATION_KEYWORDS.contains(&key.as_str()))
+}
+
+/// Walks the typed subschema objects from `stack` (each with its scope), queueing the raw
+/// subschema objects codegen types where the dialect defines their keyword.
+fn walk_raw<'a>(
+    mut stack: Vec<(&JsonSchema, Scope)>,
+    registry: &'a Registry<'a>,
+    found: &mut Vec<Found<'a>>,
+) {
+    let mut children: Vec<&JsonSchema> = Vec::new();
+    while let Some((s, scope)) = stack.pop() {
+        push_typed_children(s, &mut children);
+        stack.extend(children.drain(..).map(|c| (c, registry.enter(scope, c))));
+        let dialect: Dialect = registry.dialect(scope);
+        let mut queue = |value: &Value| {
+            if let Value::Object(map) = value {
+                found.push((
+                    std::ptr::from_ref(value) as usize,
+                    value.clone(),
+                    registry,
+                    registry.enter_raw(scope, map),
+                ));
+            }
+        };
+        for keyword in ["then", "else"] {
+            if dialect.keyword(keyword).is_some()
+                && let Some(value) = s.extensions.get(keyword)
+            {
+                queue(value);
+            }
+        }
+        if dialect.keyword("patternProperties").is_some()
+            && let Some(Value::Object(patterns)) = s.extensions.get("patternProperties")
+        {
+            patterns.values().for_each(&mut queue);
+        }
+    }
+}
+
+/// Parses a raw subschema object ([`walk_raw`] queues only objects) in `dialect`'s draft.
+fn parse_raw(value: &Value, dialect: Dialect) -> CodeGenResult<Box<JsonSchema>> {
+    let settings: JsonSchemaSettings = JsonSchemaSettings {
+        disallow_unknown_fields: false,
+        forced_spec_version: Some(dialect.spec_version),
+        ..JsonSchemaSettings::default()
+    };
+    let parsed: Schema = Schema::new_from_serde_value(value, &settings).map_err(|e| {
+        CodeGenError::InvalidSubschema {
             reason: e.to_string(),
-        })?;
+        }
+    })?;
     match parsed {
         Schema::Object(schema) => Ok(schema),
         Schema::Bool(value) => Err(CodeGenError::InvalidSubschema {
             reason: format!("expected a schema object, found `{value}`"),
         }),
-    }
-}
-
-/// Queues `s`'s raw `then` / `else` object values with their addresses.
-fn queue_conditionals(s: &JsonSchema, found: &mut Vec<(usize, Value)>) {
-    for keyword in ["then", "else"] {
-        if let Some(value @ Value::Object(_)) = s.extensions.get(keyword) {
-            found.push((std::ptr::from_ref(value) as usize, value.clone()));
-        }
     }
 }
 
@@ -268,7 +393,8 @@ fn push_typed_children<'a>(s: &'a JsonSchema, stack: &mut Vec<&'a JsonSchema>) {
 }
 
 /// Prefix of the pointer of a conjunct whose schema codegen built (the `anyOf` of a property
-/// both `then` and `else` define), which sits at no location in any document. It is not a JSON
+/// both `then` and `else` define, or of the schemas a key the schema does not name may take),
+/// which sits at no location in any document. It is not a JSON
 /// Pointer, nor is any pointer built from it, so neither the node nor its children get a
 /// validation target: the parent's own validation checks the value.
 const BUILT: &str = "#built";
@@ -283,7 +409,7 @@ fn pointer_push(pointer: &str, token: &str) -> String {
 pub(crate) fn build<'r>(
     schemas: &[&'r Schema],
     registries: &'r [Registry<'r>],
-    conditionals: &'r Conditionals,
+    raw: &'r RawSubschemas,
     settings: &CodeGenSettings,
 ) -> CodeGenResult<(TypeGraph, TargetSources<'r>)> {
     let mut graph: TypeGraph = TypeGraph::default();
@@ -300,7 +426,7 @@ pub(crate) fn build<'r>(
             sources: &mut sources,
             memo: &mut memo,
             registry,
-            conditionals,
+            raw,
             settings,
             schema_index: index,
             class: classes[index],
@@ -358,7 +484,7 @@ struct Builder<'g, 'r> {
     sources: &'g mut TargetSources<'r>,
     memo: &'g mut HashMap<(usize, NodeKey), TypeId>,
     registry: &'r Registry<'r>,
-    conditionals: &'r Conditionals,
+    raw: &'r RawSubschemas,
     settings: &'g CodeGenSettings,
     schema_index: usize,
     /// See [`ValidationTarget::class`].
@@ -719,7 +845,7 @@ impl<'r> Builder<'_, 'r> {
                 .iter()
                 .any(|c| asserts_beyond_shape(c.schema, self.registry.dialect(c.scope)))
         };
-        let facts = || Facts::of(flat, mask, self.registry, self.conditionals);
+        let facts = || Facts::of(flat, mask, self.registry, self.raw);
         let constrained: bool = match node {
             TypeNode::Boolean => beyond_shape(),
             TypeNode::String { constraints, .. } => {
@@ -846,7 +972,7 @@ impl<'r> Builder<'_, 'r> {
         if let Some((owner, kind, branches)) = first_union(flat) {
             return self.build_union(flat, mask, context, owner, kind, branches, annotations);
         }
-        let facts: Facts = Facts::of(flat, mask, self.registry, self.conditionals);
+        let facts: Facts = Facts::of(flat, mask, self.registry, self.raw);
         if let Some(values) = facts.enum_values {
             let (nullable, values): (bool, Vec<Value>) = split_null(values);
             if nullable && !values.is_empty() {
@@ -1253,7 +1379,7 @@ impl<'r> Builder<'_, 'r> {
                 out.push(None);
                 continue;
             }
-            let facts: Facts<'r> = Facts::of(&flat, all_types(), self.registry, self.conditionals);
+            let facts: Facts<'r> = Facts::of(&flat, all_types(), self.registry, self.raw);
             out.push(
                 facts
                     .enum_values
@@ -1278,7 +1404,7 @@ impl<'r> Builder<'_, 'r> {
         if first_union(&flat).is_some() {
             return Ok(false);
         }
-        let facts: Facts<'r> = Facts::of(&flat, all_types(), self.registry, self.conditionals);
+        let facts: Facts<'r> = Facts::of(&flat, all_types(), self.registry, self.raw);
         if let Some(ref values) = facts.enum_values {
             return Ok(!values.is_empty() && values.iter().all(Value::is_null));
         }
@@ -1528,6 +1654,7 @@ fn contributes_besides_type(s: &JsonSchema, skip_bits: u8) -> bool {
         || (s.all_of.is_some() && !skipped(skip::ALL_OF))
         || s.extensions.contains_key("then")
         || s.extensions.contains_key("else")
+        || s.extensions.contains_key("patternProperties")
 }
 
 /// Whether `s` has an assertion or applicator the type graph does not model (`multipleOf`,
@@ -1747,7 +1874,7 @@ impl<'r> Facts<'r> {
         flat: &Flat<'r>,
         mask: TypeSet,
         registry: &Registry<'_>,
-        conditionals: &'r Conditionals,
+        raw: &'r RawSubschemas,
     ) -> Facts<'r> {
         let mut explicit: Option<TypeSet> = None;
         let mut enum_values: Option<Vec<Value>> = None;
@@ -1875,26 +2002,58 @@ impl<'r> Facts<'r> {
                     entry.required = true;
                 }
             }
-            // A key that matches a `patternProperties` pattern of the same schema is checked
-            // against the pattern's schema, not `additionalProperties`, so with patterns
-            // `additionalProperties` neither types nor forbids the keys the schema does not name.
-            let additional: Option<&Schema> =
-                if has_keyword_entries(s, "patternProperties", registry.dialect(c.scope)) {
-                    None
-                } else {
-                    s.additional_properties.as_ref()
-                };
-            match additional {
-                None | Some(Schema::Bool(true)) => {}
-                Some(Schema::Bool(false)) => facts.deny_unknown = true,
-                Some(Schema::Object(a)) => facts.additional.push(Conjunct {
-                    schema: a,
-                    scope: c.scope,
-                    pointer: pointer_push(&c.pointer, "additionalProperties"),
-                    skip: 0,
-                }),
+            // A key the schema does not name is checked against each `patternProperties` pattern
+            // it matches, and against `additionalProperties` only when it matches none, so with
+            // patterns its value takes one of those schemas: their `anyOf` when there are several.
+            let patterned: bool =
+                has_keyword_entries(s, "patternProperties", registry.dialect(c.scope));
+            let unnamed: UnnamedKeys<'r> = if patterned {
+                raw.unnamed_keys(s).unwrap_or(UnnamedKeys::Any)
+            } else {
+                match &s.additional_properties {
+                    None | Some(Schema::Bool(true)) => UnnamedKeys::Any,
+                    Some(Schema::Bool(false)) => UnnamedKeys::OneOf(Vec::new()),
+                    Some(Schema::Object(a)) => {
+                        UnnamedKeys::OneOf(vec![(a, ["additionalProperties", ""])])
+                    }
+                }
+            };
+            match unnamed {
+                UnnamedKeys::Any => {}
+                UnnamedKeys::OneOf(alternatives) => match alternatives.as_slice() {
+                    [] => facts.deny_unknown = true,
+                    [(a, [keyword, pattern])] => facts.additional.push(Conjunct {
+                        schema: a,
+                        scope: c.scope,
+                        pointer: if *keyword == "additionalProperties" {
+                            pointer_push(&c.pointer, keyword)
+                        } else {
+                            pointer_push(&pointer_push(&c.pointer, keyword), pattern)
+                        },
+                        skip: 0,
+                    }),
+                    _ => {
+                        if let Some(any_of) = raw.unnamed_any_of(s) {
+                            facts.additional.push(Conjunct {
+                                schema: any_of,
+                                scope: c.scope,
+                                pointer: format!(
+                                    "{BUILT}{}",
+                                    pointer_push(
+                                        &c.pointer,
+                                        "patternProperties|additionalProperties"
+                                    )
+                                ),
+                                skip: 0,
+                            });
+                        }
+                    }
+                },
             }
-            if !s.properties.is_empty() || s.required.is_some() || s.additional_properties.is_some()
+            if patterned
+                || !s.properties.is_empty()
+                || s.required.is_some()
+                || s.additional_properties.is_some()
             {
                 inferred.insert(JsonType::Object);
             }
@@ -1920,7 +2079,7 @@ impl<'r> Facts<'r> {
             let s: &'r JsonSchema = c.schema;
             let branches: Vec<&'r JsonSchema> = ["then", "else"]
                 .into_iter()
-                .filter_map(|k| conditionals.get(s, k))
+                .filter_map(|k| raw.get(s, k))
                 .collect();
             for &branch in &branches {
                 for (key, property) in &branch.properties {
@@ -1934,7 +2093,7 @@ impl<'r> Facts<'r> {
                     let in_both: bool = branches.len() == 2
                         && branches.iter().all(|b| b.properties.contains_key(key));
                     let conjuncts: Vec<Conjunct<'r>> = if in_both {
-                        let Some(merged) = conditionals.merged(s, key) else {
+                        let Some(merged) = raw.merged(s, key) else {
                             continue;
                         };
                         vec![Conjunct {

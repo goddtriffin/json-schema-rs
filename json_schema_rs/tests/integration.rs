@@ -2039,6 +2039,28 @@ fn main() {
 }
 "#,
             ),
+            "pattern_properties_typed_unnamed_keys" => (
+                // `patternProperties` and `additionalProperties` together type the keys the schema
+                // does not name: one pattern's schema, or the `anyOf` of several; the
+                // self-validating `TryFrom` still checks the key names and the patterns' bounds.
+                r#"{"type":"object","properties":{"name":{"type":"string"},"tags":{"type":"object","patternProperties":{"^x-":{"type":"integer"},"^y-":false},"additionalProperties":{"type":"string"}}},"patternProperties":{"^x-":{"type":"integer","minimum":0}},"additionalProperties":false}"#,
+                default_code_gen.clone(),
+                r#"fn main() {
+    use compile_test::Root;
+    let instance: serde_json::Value =
+        serde_json::json!({"name": "n", "x-a": 1, "tags": {"x-b": 2, "c": "s"}});
+    let root: Root = serde_json::from_value(instance.clone()).unwrap();
+    let expected: (serde_json::Value, bool, bool, bool) = (instance.clone(), true, true, true);
+    let actual: (serde_json::Value, bool, bool, bool) = (
+        serde_json::to_value(&root).unwrap(),
+        Root::try_from(instance).is_ok(),
+        Root::try_from(serde_json::json!({"x-a": -1})).is_err(),
+        Root::try_from(serde_json::json!({"tags": {"y-a": "s"}})).is_err(),
+    );
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
             "pattern_properties_additional_false_open_map" => (
                 // `additionalProperties: false` beside `patternProperties` still admits the keys
                 // the patterns match, so the struct keeps an open map; the self-validating
@@ -3463,6 +3485,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "then_else_shared_property",
         "pattern_properties_untyped_additional_map",
         "pattern_properties_additional_false_open_map",
+        "pattern_properties_typed_unnamed_keys",
         "prefix_items_untyped_items",
         "integer_accepts_zero_fraction",
         "integer_draft4_lexical",
