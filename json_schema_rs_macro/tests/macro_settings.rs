@@ -96,22 +96,19 @@ fn dedupe_default_shares_identical_schemas() {
     assert_eq!(expected, actual);
 }
 
-// Two objects that differ only in `description`. Self-validating types merge only when they
-// validate against the same schema location, and these two sit at different locations, so both
-// sides pin `self_validating = false` to let the dedupe mode decide.
+// Two objects that differ only in `description`, at different locations: self-validating types
+// that validate the same merge wherever they sit, so the dedupe mode decides.
 
 mod dedupe_functional {
     json_schema_rs_macro::json_schema_to_rust!(
         r#"{"type":"object","properties":{"home":{"title":"Address","type":"object","description":"Home address","properties":{"street":{"type":"string"}},"required":["street"]},"work":{"title":"Address","type":"object","description":"Work address","properties":{"street":{"type":"string"}},"required":["street"]}},"required":["home","work"]}"#,
-        dedupe_mode = Functional,
-        self_validating = false
+        dedupe_mode = Functional
     );
 }
 
-mod dedupe_full_plain_data {
+mod dedupe_full {
     json_schema_rs_macro::json_schema_to_rust!(
-        r#"{"type":"object","properties":{"home":{"title":"Address","type":"object","description":"Home address","properties":{"street":{"type":"string"}},"required":["street"]},"work":{"title":"Address","type":"object","description":"Work address","properties":{"street":{"type":"string"}},"required":["street"]}},"required":["home","work"]}"#,
-        self_validating = false
+        r#"{"type":"object","properties":{"home":{"title":"Address","type":"object","description":"Home address","properties":{"street":{"type":"string"}},"required":["street"]},"work":{"title":"Address","type":"object","description":"Work address","properties":{"street":{"type":"string"}},"required":["street"]}},"required":["home","work"]}"#
     );
 }
 
@@ -134,18 +131,48 @@ fn dedupe_functional_merges_types_differing_only_in_description() {
 
 #[test]
 fn dedupe_default_keeps_types_differing_in_description_apart() {
-    let root: dedupe_full_plain_data::schema_0::Root = serde_json::from_value(
+    let root: dedupe_full::schema_0::Root = serde_json::from_value(
         serde_json::json!({"home": {"street": "A"}, "work": {"street": "B"}}),
     )
     .expect("deserialize");
     let expected: [&str; 2] = [
-        "macro_settings::dedupe_full_plain_data::schema_0::Address0",
-        "macro_settings::dedupe_full_plain_data::schema_0::Address1",
+        "macro_settings::dedupe_full::schema_0::Address0",
+        "macro_settings::dedupe_full::schema_0::Address1",
     ];
     let actual: [&str; 2] = [
         std::any::type_name_of_val(&root.home),
         std::any::type_name_of_val(&root.work),
     ];
+    assert_eq!(expected, actual);
+}
+
+// Two different documents that define the same `Address`: one shared type, which validates.
+mod dedupe_across_documents {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"title":"Order","type":"object","properties":{"id":{"type":"string"},"address":{"title":"Address","type":"object","properties":{"street":{"type":"string","minLength":1}}}}}"#,
+        r#"{"title":"Customer","type":"object","properties":{"name":{"type":"string"},"address":{"title":"Address","type":"object","properties":{"street":{"type":"string","minLength":1}}}}}"#
+    );
+}
+
+#[test]
+fn dedupe_default_shares_identical_types_across_documents() {
+    let expected: [&str; 2] = [
+        "macro_settings::dedupe_across_documents::shared::Address",
+        "macro_settings::dedupe_across_documents::shared::Address",
+    ];
+    let actual: [&str; 2] = [
+        std::any::type_name::<dedupe_across_documents::schema_0::Address>(),
+        std::any::type_name::<dedupe_across_documents::schema_1::Address>(),
+    ];
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn dedupe_shared_type_across_documents_validates() {
+    let expected: bool = false;
+    let actual: bool =
+        dedupe_across_documents::shared::Address::try_from(serde_json::json!({"street": ""}))
+            .is_ok();
     assert_eq!(expected, actual);
 }
 

@@ -739,6 +739,23 @@ impl CompiledSchema {
         Compiler::new(registry).compile_entries(entries)
     }
 
+    /// [`CompiledSchema::with_entries`] for entries given as the schema objects themselves, each
+    /// with the scope it is evaluated in (after [`Registry::enter`] on it), as a walk of
+    /// `registry` found them: no URI to resolve. Error locations are not meaningful (each entry
+    /// starts at the location of the first compiled entry); what codegen compares validation by
+    /// (`validation_classes`) does not read them.
+    ///
+    /// # Errors
+    ///
+    /// Every [`CompileError`] found, including a `$ref` the registry does not know in its scope
+    /// (a schema the registry was not built from).
+    pub(crate) fn with_schema_entries<'r>(
+        registry: &'r Registry<'r>,
+        entries: &[Vec<(&'r JsonSchema, Scope)>],
+    ) -> Result<CompiledEntries, CompileErrors> {
+        Compiler::new(registry).compile_schema_entries(entries)
+    }
+
     /// [`CompiledSchema::with_entries`], also returning where every compiled schema sits: each
     /// schema position the compiled nodes were built from (a subschema, a `$ref` target, an
     /// entry), as its document's retrieval URI and JSON Pointer segments, deduplicated and
@@ -1319,6 +1336,28 @@ impl<'r, 'a> Compiler<'r, 'a> {
         let root_source: Source<'r> = Source::from_schema_ref(self.registry.root());
         let root: NodeId = self.node_for(root_source, self.registry.root_scope(), 0);
         self.finish(root)
+    }
+
+    /// See [`CompiledSchema::with_schema_entries`].
+    fn compile_schema_entries(
+        mut self,
+        entries: &[Vec<(&'r JsonSchema, Scope)>],
+    ) -> Result<CompiledEntries, CompileErrors> {
+        let nodes: Vec<Box<[NodeId]>> = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .iter()
+                    .map(|&(schema, scope)| self.node_for(Source::Typed(schema), scope, 0))
+                    .collect()
+            })
+            .collect();
+        let root: NodeId = match nodes.iter().find_map(|ids| ids.first()) {
+            Some(id) => *id,
+            None => self.node_for(Source::Bool(true), self.registry.root_scope(), 0),
+        };
+        let compiled: CompiledSchema = self.finish(root)?;
+        Ok((compiled, nodes))
     }
 
     /// See [`CompiledSchema::with_entries`].

@@ -19,12 +19,16 @@
 //! [`CodeGenSettings::self_validating`]: super::CodeGenSettings::self_validating
 
 use super::embedded_prune::prune;
-use super::type_graph::{TypeGraph, TypeId, TypeNode, UnionKind, ValidationTarget};
+use super::type_graph::{TargetSources, TypeGraph, TypeId, TypeNode, UnionKind, ValidationTarget};
 use super::{CodeGenError, CodeGenResult};
 use crate::json_schema::{
-    DialectSettings, JsonSchemaSettings, Registry, RegistryDocumentKind, SchemaRef, Scope,
+    DialectSettings, JsonSchema, JsonSchemaSettings, Registry, RegistryDocumentKind, SchemaRef,
+    Scope,
 };
-use crate::validator::{EmbeddedDocument, EmbeddedDocumentKind, TypeValidators};
+use crate::validator::{
+    CompiledEntries, CompiledSchema, EmbeddedDocument, EmbeddedDocumentKind, NodeId,
+    TypeValidators, validation_classes,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -175,6 +179,95 @@ fn non_default(settings: DialectSettings) -> Option<DialectSettings> {
     (settings != DialectSettings::default()).then_some(settings)
 }
 
+/// Per type-graph node, what deduplication compares its validation by (see design.md,
+/// *Self-validating types*, *Identity*): two nodes with equal keys validate every instance
+/// identically, errors included, wherever their schemas sit. Each input's targets are compiled
+/// once, from the schema objects the walk found them at (`sources`), and a target's key is the
+/// [`validation_classes`] of its entry nodes. Only `candidates` (see `merge_candidates`) are
+/// compiled; every other node, and every node of a registry that tracks the dynamic scope, is
+/// keyed by location ([`ValidationTarget::key`]). `None` for a node without a target.
+pub(crate) fn validation_keys<'r>(
+    graph: &TypeGraph,
+    registries: &'r [Registry<'r>],
+    sources: &TargetSources<'r>,
+    sets: &[EmbeddedSet],
+    candidates: &[bool],
+) -> CodeGenResult<Vec<Option<String>>> {
+    /// One input's distinct entries, in first-use order: their URIs, their schema objects, and
+    /// each URI list's index.
+    #[derive(Default)]
+    struct Group<'r> {
+        uris: Vec<Vec<String>>,
+        schemas: Vec<Vec<(&'r JsonSchema, Scope)>>,
+        index: HashMap<Vec<String>, usize>,
+    }
+    let mut groups: BTreeMap<usize, Group<'r>> = BTreeMap::new();
+    for (i, (target, &candidate)) in graph.targets.iter().zip(candidates).enumerate() {
+        let Some(target) = target.as_ref().filter(|_| candidate) else {
+            continue;
+        };
+        let group: &mut Group<'r> = groups.entry(target.schema).or_default();
+        if !group.index.contains_key(&target.uris) {
+            group.index.insert(target.uris.clone(), group.uris.len());
+            group.uris.push(target.uris.clone());
+            let id: TypeId = TypeId(u32::try_from(i).expect("fewer than 2^32 nodes"));
+            group.schemas.push(sources[&id].clone());
+        }
+    }
+    let mut compiled: Vec<(usize, CompiledEntries)> = Vec::with_capacity(groups.len());
+    for (&schema, group) in &groups {
+        // The schema objects in the input's own registry; the embedded documents when they do
+        // not compile there (a `$ref` the registry resolved only through an entry), which
+        // reports a schema the validator cannot compile as the generated static would.
+        let entries: CompiledEntries = if let Ok(entries) =
+            CompiledSchema::with_schema_entries(&registries[schema], &group.schemas)
+        {
+            entries
+        } else {
+            let set: &EmbeddedSet = &sets[schema];
+            #[expect(
+                clippy::redundant_closure_for_method_calls,
+                reason = "the method path is bound to one `TypeValidators` lifetime; the closure is not"
+            )]
+            let compiled = compile(set.settings, &set.documents, &group.uris, |v| v.compile());
+            compiled.map_err(|e| CodeGenError::Batch {
+                index: schema,
+                source: Box::new(CodeGenError::SelfValidation(e)),
+            })?
+        };
+        compiled.push((schema, entries));
+    }
+    let schemas: Vec<&CompiledSchema> = compiled.iter().map(|(_, (schema, _))| schema).collect();
+    let classes: Vec<Option<Vec<u32>>> = validation_classes(&schemas);
+    let position: HashMap<usize, usize> = compiled
+        .iter()
+        .enumerate()
+        .map(|(position, (schema, _))| (*schema, position))
+        .collect();
+    Ok(graph
+        .targets
+        .iter()
+        .zip(candidates)
+        .map(|(target, &candidate)| {
+            let target: &ValidationTarget = target.as_ref()?;
+            if !candidate {
+                return Some(format!("location|{}", target.key()));
+            }
+            let at: usize = position[&target.schema];
+            let Some(node_classes) = &classes[at] else {
+                return Some(format!("location|{}", target.key()));
+            };
+            let entry: usize = groups[&target.schema].index[&target.uris];
+            let nodes: &[NodeId] = &compiled[at].1.1[entry];
+            let mut key: String = "validation".to_string();
+            for node in nodes {
+                let _ = write!(key, "|{}", node_classes[node.index()]);
+            }
+            Some(key)
+        })
+        .collect())
+}
+
 /// Where a type's validator lives in the generated code: its static and entry index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
@@ -222,28 +315,25 @@ impl BufferValidators {
             if union.kind == UnionKind::TypeArray {
                 continue;
             }
-            // Every variant was built in the union's walk, so the union's registry resolves
-            // their locations; a union without a target uses its first variant's registry.
-            let schema: Option<usize> = target.map(|t| t.schema).or_else(|| {
-                union
-                    .variants
-                    .iter()
-                    .find_map(|v| graph.targets[graph.peel(v.ty).index()].as_ref())
-                    .map(|t| t.schema)
-            });
+            // The variants' targets as the union's walk built them (a merged variant type may
+            // carry an equivalent target elsewhere), so the union's registry resolves them; a
+            // union without a target uses its first variant's registry.
+            let Some(variant_targets) = graph.variant_targets.get(&id) else {
+                continue;
+            };
+            let schema: Option<usize> = target
+                .map(|t| t.schema)
+                .or_else(|| variant_targets.iter().flatten().map(|t| t.schema).next());
             let Some(schema) = schema else {
                 continue;
             };
             let union_index: Option<usize> = target.map(|_| out.items[&id].1);
-            let variants: Vec<usize> = union
-                .variants
+            let variants: Vec<usize> = variant_targets
                 .iter()
-                .map(|v| {
+                .map(|variant| {
                     // A variant with no target accepts any value (a `true` branch): the empty
                     // conjunction.
-                    let uris: &[String] = graph.targets[graph.peel(v.ty).index()]
-                        .as_ref()
-                        .map_or(&[], |t| t.uris.as_slice());
+                    let uris: &[String] = variant.as_ref().map_or(&[], |t| t.uris.as_slice());
                     out.register(schema, uris)
                 })
                 .collect();
