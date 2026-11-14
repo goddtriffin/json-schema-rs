@@ -157,8 +157,10 @@ define (`date-time`, `date`, `time`, `duration`, `email`, `idn-email`, `hostname
 `idn-hostname`, `ipv4`, `ipv6`, `uri`, `uri-reference`, `iri`, `iri-reference`,
 `uri-template`, `json-pointer`, `relative-json-pointer`, `regex`, `uuid`), asserted
 by default in drafts 4/6/7 and annotation-only in 2019-09/2020-12 (override with
-`--jss-format-mode`); user-defined formats are registered with
-`CompiledSchema::builder().format(name, check)`. `contentEncoding` (`base64`) and
+`--jss-format-mode`); an unknown format is ignored unless `--jss-unknown-formats reject`
+makes it a schema error wherever formats are asserted. User-defined formats are
+registered with `CompiledSchema::builder().format(name, |s: &str| ...)` (strings) or
+`.value_format(name, |v: &Value| ...)` (any instance type, e.g. `int32`). `contentEncoding` (`base64`) and
 `contentMediaType` (`application/json` and any `+json` type) are asserted by default in
 draft 7, which allows it, and annotation-only in 2019-09/2020-12, which must not decode
 content by default (override with `--jss-content-mode`); other encodings and media types,
@@ -379,6 +381,8 @@ loads still follow their own),
 `.content_mode(ContentMode::Assertion)` (check `contentEncoding` and
 `contentMediaType` whatever the draft: draft 7 checks them by default, 2019-09 and
 2020-12 only record them),
+`.unknown_formats(UnknownFormats::Reject)` (refuse a schema that asserts a format
+neither the draft nor a user format defines, instead of ignoring it),
 `.integer_semantics(IntegerSemantics::Numeric)` (whether `1.0` is an integer:
 draft 4 says no, draft 6 and later yes),
 `.exclusive_bounds(ExclusiveBounds::BooleanModifier)` (read `exclusiveMinimum` /
@@ -397,6 +401,7 @@ logs warnings at `debug` level through the `log` crate; the CLI prints them to
 stderr. CLI: `--jss-default-spec-version` and `--jss-forced-spec-version`
 (`draft-04|draft-06|draft-07|2019-09|2020-12`, and `draft-00` to `draft-05`), `--jss-format-mode annotation|assertion`,
 `--jss-content-mode annotation|assertion`,
+`--jss-unknown-formats ignore|reject`,
 `--jss-integer-semantics lexical|numeric`,
 `--jss-exclusive-bounds boolean-modifier|numeric`,
 `--jss-ref-siblings ignored|evaluated`,
@@ -454,7 +459,7 @@ json_schema_to_rust!(
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,
-  `content_mode = Annotation|Assertion`, `integer_semantics = Lexical|Numeric`,
+  `content_mode = Annotation|Assertion`, `unknown_formats = Ignore|Reject`, `integer_semantics = Lexical|Numeric`,
   `exclusive_bounds = BooleanModifier|Numeric`, `ref_siblings = Ignored|Evaluated`,
   `unknown_schema_uri = Fallback|Reject`, `metaschema_check = Skip|Validate`. They apply to the input schemas and to
   every file a `$ref` reads.

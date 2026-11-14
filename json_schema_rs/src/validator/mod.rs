@@ -19,9 +19,7 @@ mod simple_pattern;
 mod tests_keywords;
 mod value_ref;
 
-pub use compiled::{
-    CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, FormatCheck,
-};
+pub use compiled::{CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder};
 pub(crate) use compiled::{CompiledEntries, NodeId};
 pub(crate) use equivalence::validation_classes;
 pub use error::{
@@ -330,7 +328,7 @@ mod tests {
             ])
             .expect("non-empty"),
         ));
-        let expected: &str = "/pattern: invalid regular expression \"(\": unbalanced\nroot: unknown format \"custom\" under the format-assertion vocabulary";
+        let expected: &str = "/pattern: invalid regular expression \"(\": unbalanced\nroot: unknown format \"custom\"";
         let actual: String = error.to_string();
         assert_eq!(expected, actual);
     }
@@ -343,9 +341,7 @@ mod tests {
                 format: "custom".to_string(),
             },
         )));
-        let expected: Option<String> = Some(
-            "root: unknown format \"custom\" under the format-assertion vocabulary".to_string(),
-        );
+        let expected: Option<String> = Some("root: unknown format \"custom\"".to_string());
         let actual: Option<String> = std::error::Error::source(&error).map(ToString::to_string);
         assert_eq!(expected, actual);
     }
@@ -4816,7 +4812,7 @@ mod tests {
         Err(vec![ValidationError::new(
             ValidationErrorKind::InvalidFormat {
                 format: format.to_string(),
-                value: "not-valid".to_string(),
+                value: serde_json::Value::String("not-valid".to_string()),
             },
             JsonPointer::root(),
             kl("/format"),
@@ -4907,7 +4903,7 @@ mod tests {
                 causes: vec![ValidationError::new(
                     ValidationErrorKind::InvalidFormat {
                         format: "ipv4".to_string(),
-                        value: "not-valid".to_string(),
+                        value: serde_json::Value::String("not-valid".to_string()),
                     },
                     JsonPointer::root(),
                     kl("/anyOf/0/format"),

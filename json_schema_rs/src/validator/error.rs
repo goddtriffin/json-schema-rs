@@ -1,7 +1,7 @@
 use super::compiled::CompileErrors;
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{RegistryErrors, TypeSet};
-use serde_json::Number;
+use serde_json::{Number, Value};
 use std::fmt;
 
 pub type ValidationResult = Result<(), Vec<ValidationError>>;
@@ -304,13 +304,15 @@ pub enum ValidationErrorKind {
         /// The instance string value (for user-facing context).
         value: String,
     },
-    /// The string instance is not in the `format` the schema asserts (only when formats are
-    /// asserted: see `FormatMode`).
+    /// The instance is not in the `format` the schema asserts (only when formats are asserted:
+    /// see `FormatMode`). Built-in formats and those registered with
+    /// `CompiledSchemaBuilder::format` check strings only; one registered with
+    /// `CompiledSchemaBuilder::value_format` may reject any instance.
     InvalidFormat {
         /// The format name (`"date-time"`, `"uuid"`, ...).
         format: String,
-        /// The invalid string value (for user-facing context).
-        value: String,
+        /// The invalid instance (for user-facing context).
+        value: Value,
     },
     /// The string instance is not in the encoding `contentEncoding` names (only where the
     /// content keywords are asserted: see `ContentMode`).
@@ -550,9 +552,10 @@ impl fmt::Display for ValidationErrorKind {
             ValidationErrorKind::PatternMismatch { pattern, value, .. } => {
                 write!(f, "string \"{value}\" does not match pattern \"{pattern}\"")
             }
-            ValidationErrorKind::InvalidFormat { format, value, .. } => {
-                write!(f, "string \"{value}\" is not a valid {format}")
-            }
+            ValidationErrorKind::InvalidFormat { format, value, .. } => match value {
+                Value::String(s) => write!(f, "string \"{s}\" is not a valid {format}"),
+                _ => write!(f, "{value} is not a valid {format}"),
+            },
             ValidationErrorKind::InvalidContentEncoding {
                 encoding, value, ..
             } => {

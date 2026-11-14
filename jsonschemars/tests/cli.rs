@@ -3570,6 +3570,37 @@ fn cli_validate_content_mode_annotation_flag_ignores_draft7_content() {
 }
 
 #[test]
+fn cli_validate_unknown_format_is_ignored_by_default() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"format":"colour"}"#,
+        r#""red""#,
+        &["--jss-format-mode", "assertion"],
+    );
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_unknown_formats_reject_flag_fails_on_unknown_format() {
+    let (_, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"format":"colour"}"#,
+        r#""red""#,
+        &[
+            "--jss-format-mode",
+            "assertion",
+            "--jss-unknown-formats",
+            "reject",
+        ],
+    );
+    let expected: (i32, String) = (
+        2,
+        "schema error: root: unknown format \"colour\"\nerror: the schema cannot be used: 1 problem(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_validate_forced_spec_version_flag_overrides_schema_keyword() {
     let (_, actual): (String, (i32, String)) = run_cli_validate(
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string","format":"ipv4"}"#,

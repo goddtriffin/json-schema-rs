@@ -7,7 +7,7 @@
 use json_schema_rs::{
     CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
     IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-    SpecVersion, UniqueItemsType, UnknownProperties, UnknownSchemaUri,
+    SpecVersion, UniqueItemsType, UnknownFormats, UnknownProperties, UnknownSchemaUri,
 };
 use proc_macro2::Span;
 use std::collections::BTreeSet;
@@ -51,7 +51,7 @@ impl Parse for SettingArg {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 18] = [
+const SETTING_NAMES: [&str; 19] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -65,6 +65,7 @@ const SETTING_NAMES: [&str; 18] = [
     "default_spec_version",
     "format_mode",
     "content_mode",
+    "unknown_formats",
     "integer_semantics",
     "exclusive_bounds",
     "ref_siblings",
@@ -116,6 +117,11 @@ const CONTENT_MODES: &[(&str, ContentMode)] = &[
     ("Assertion", ContentMode::Assertion),
 ];
 
+const UNKNOWN_FORMATS: &[(&str, UnknownFormats)] = &[
+    ("Ignore", UnknownFormats::Ignore),
+    ("Reject", UnknownFormats::Reject),
+];
+
 const INTEGER_SEMANTICS: &[(&str, IntegerSemantics)] = &[
     ("Lexical", IntegerSemantics::Lexical),
     ("Numeric", IntegerSemantics::Numeric),
@@ -160,6 +166,7 @@ struct Overrides {
     default_spec_version: Option<SpecVersion>,
     format_mode: Option<FormatMode>,
     content_mode: Option<ContentMode>,
+    unknown_formats: Option<UnknownFormats>,
     integer_semantics: Option<IntegerSemantics>,
     exclusive_bounds: Option<ExclusiveBounds>,
     ref_siblings: Option<RefSiblings>,
@@ -213,6 +220,7 @@ impl Overrides {
                     .or(json_schema_default.default_spec_version),
                 format_mode: self.format_mode.or(json_schema_default.format_mode),
                 content_mode: self.content_mode.or(json_schema_default.content_mode),
+                unknown_formats: self.unknown_formats.or(json_schema_default.unknown_formats),
                 integer_semantics: self
                     .integer_semantics
                     .or(json_schema_default.integer_semantics),
@@ -367,6 +375,10 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
             &mut overrides.content_mode,
             variant(setting, value, CONTENT_MODES),
         ),
+        "unknown_formats" => set(
+            &mut overrides.unknown_formats,
+            variant(setting, value, UNKNOWN_FORMATS),
+        ),
         "integer_semantics" => set(
             &mut overrides.integer_semantics,
             variant(setting, value, INTEGER_SEMANTICS),
@@ -437,7 +449,7 @@ mod tests {
     use json_schema_rs::{
         CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
         IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-        SpecVersion, UniqueItemsType, UnknownProperties, UnknownSchemaUri,
+        SpecVersion, UniqueItemsType, UnknownFormats, UnknownProperties, UnknownSchemaUri,
     };
     use proc_macro2::TokenStream;
     use std::str::FromStr;
@@ -498,6 +510,7 @@ mod tests {
                 .default_spec_version(SpecVersion::Draft04)
                 .format_mode(FormatMode::Assertion)
                 .content_mode(ContentMode::Annotation)
+                .unknown_formats(UnknownFormats::Reject)
                 .integer_semantics(IntegerSemantics::Lexical)
                 .exclusive_bounds(ExclusiveBounds::BooleanModifier)
                 .ref_siblings(RefSiblings::Evaluated)
@@ -511,7 +524,7 @@ mod tests {
              flatten_single_entry_combinators = true, self_validating = false, \
              constrained_newtypes = false, format_types = FollowDialect, disallow_unknown_fields = true, \
              forced_spec_version = Draft07, default_spec_version = Draft04, \
-             format_mode = Assertion, content_mode = Annotation, integer_semantics = Lexical, \
+             format_mode = Assertion, content_mode = Annotation, unknown_formats = Reject, integer_semantics = Lexical, \
              exclusive_bounds = BooleanModifier, ref_siblings = Evaluated, \
              unknown_schema_uri = Reject, metaschema_check = Validate",
         )
@@ -538,6 +551,7 @@ mod tests {
                 .default_spec_version(SpecVersion::Draft06)
                 .format_mode(FormatMode::Annotation)
                 .content_mode(ContentMode::Assertion)
+                .unknown_formats(UnknownFormats::Ignore)
                 .integer_semantics(IntegerSemantics::Numeric)
                 .exclusive_bounds(ExclusiveBounds::Numeric)
                 .ref_siblings(RefSiblings::Ignored)
@@ -551,7 +565,7 @@ mod tests {
              flatten_single_entry_combinators = false, self_validating = true, \
              constrained_newtypes = true, format_types = Typed, disallow_unknown_fields = false, \
              forced_spec_version = Draft201909, default_spec_version = Draft06, \
-             format_mode = Annotation, content_mode = Assertion, integer_semantics = Numeric, \
+             format_mode = Annotation, content_mode = Assertion, unknown_formats = Ignore, integer_semantics = Numeric, \
              exclusive_bounds = Numeric, ref_siblings = Ignored, \
              unknown_schema_uri = Fallback, metaschema_check = Skip",
         )
@@ -604,7 +618,7 @@ mod tests {
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
              `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
-             `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, \
+             `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
             1,
@@ -688,7 +702,7 @@ mod tests {
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
-                 `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, \
+                 `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,

@@ -38,6 +38,19 @@ pub enum FormatMode {
     Assertion,
 }
 
+/// What an asserted `format` does when it names a format the draft does not define and no
+/// user format is registered under that name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnknownFormats {
+    /// The unknown format is ignored, as every draft allows (default). The 2020-12
+    /// `format-assertion` vocabulary still rejects it, as that vocabulary requires.
+    Ignore,
+    /// The schema does not compile: a `CompileError::UnknownFormat` names each unknown format
+    /// that would be asserted, so a misspelt or unsupported format is never silently skipped.
+    /// A format that is only an annotation ([`FormatMode::Annotation`]) is never rejected.
+    Reject,
+}
+
 /// Whether `contentEncoding` and `contentMediaType` are checked or only recorded.
 ///
 /// Asserted, a string under `contentEncoding: "base64"` must be base64 (RFC 4648, section 4),
@@ -223,6 +236,8 @@ pub struct Dialect {
     pub format_mode: FormatMode,
     /// Whether `contentEncoding` and `contentMediaType` are checked.
     pub content_mode: ContentMode,
+    /// What an asserted `format` naming an unknown format does.
+    pub unknown_formats: UnknownFormats,
     /// The shape of `exclusiveMinimum` / `exclusiveMaximum`.
     pub exclusive_bounds: ExclusiveBounds,
     /// The vocabularies in force: [`VocabularySet::standard`] for every draft, or the ones a
@@ -473,6 +488,7 @@ impl Dialect {
             integer_semantics,
             format_mode,
             content_mode,
+            unknown_formats: UnknownFormats::Ignore,
             exclusive_bounds,
             active_vocabularies: VocabularySet::standard(),
         }

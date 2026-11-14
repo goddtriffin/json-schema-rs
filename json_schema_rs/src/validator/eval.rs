@@ -18,8 +18,8 @@
 //! evaluated again in the collect mode, only to attach their errors as the failure's causes.
 
 use super::compiled::{
-    CompiledSchema, Contains, DynamicRef, EnumId, EnumList, FormatCheck, Keyword, KnownProperties,
-    Kw, Node, NodeId, Pattern, Pick, PrefixItems, RegexId, Required, Union,
+    CompiledSchema, Contains, DynamicRef, EnumId, EnumList, Keyword, KnownProperties, Kw, Node,
+    NodeId, Pattern, Pick, PrefixItems, RegexId, Required, Union, UserFormat, UserFormatId,
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
@@ -695,11 +695,8 @@ impl CompiledSchema {
                 _ => true,
             }),
             Keyword::UserFormat(id) => {
-                let check: &FormatCheck = &self.user_format(*id).check;
-                instances.all(|instance| match instance {
-                    Value::String(s) => check(s),
-                    _ => true,
-                })
+                let format: &UserFormat = self.user_format(*id);
+                instances.all(|instance| format.check(instance))
             }
             _ => true,
         }
@@ -784,10 +781,12 @@ impl CompiledSchema {
                 | Keyword::MaxLength(_)
                 | Keyword::Pattern(_)
                 | Keyword::Format(_)
-                | Keyword::UserFormat(_)
                 | Keyword::Content(_),
                 Value::String(s),
             ) => self.string::<COLLECT>(keyword, s, at, cx),
+            (Keyword::UserFormat(id), instance) => {
+                self.user_format_check::<COLLECT>(*id, instance, at, cx)
+            }
             (
                 Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems,
                 Value::Array(items),
@@ -906,7 +905,6 @@ impl CompiledSchema {
                 | Keyword::MaxLength(_)
                 | Keyword::Pattern(_)
                 | Keyword::Format(_)
-                | Keyword::UserFormat(_)
                 | Keyword::Content(_)
                 | Keyword::MinItems(_)
                 | Keyword::MaxItems(_)
@@ -930,6 +928,31 @@ impl CompiledSchema {
                 _,
             ) => true,
         }
+    }
+
+    /// Checks a user-defined format against an instance of any type. Kept out of line: the
+    /// keyword is rare, and inlining it into the dispatch slows every other keyword.
+    #[inline(never)]
+    fn user_format_check<const COLLECT: bool>(
+        &self,
+        id: UserFormatId,
+        instance: &Value,
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
+        let format: &UserFormat = self.user_format(id);
+        format.check(instance)
+            || fail!(
+                COLLECT,
+                self,
+                cx,
+                at.location,
+                Kw::Format,
+                ValidationErrorKind::InvalidFormat {
+                    format: format.name.to_string(),
+                    value: instance.clone(),
+                }
+            )
     }
 
     /// Evaluates a subschema at the same instance, entered through `location`; its
@@ -1279,26 +1302,11 @@ impl CompiledSchema {
                         Kw::Format,
                         ValidationErrorKind::InvalidFormat {
                             format: format.name().to_string(),
-                            value: s.to_string(),
+                            value: Value::String(s.to_string()),
                         }
                     )
             }
             Keyword::Content(content) => self.content::<COLLECT>(content, s, at, cx),
-            Keyword::UserFormat(id) => {
-                let format = self.user_format(*id);
-                (format.check)(s)
-                    || fail!(
-                        COLLECT,
-                        self,
-                        cx,
-                        at.location,
-                        Kw::Format,
-                        ValidationErrorKind::InvalidFormat {
-                            format: format.name.to_string(),
-                            value: s.to_string(),
-                        }
-                    )
-            }
             _ => true,
         }
     }

@@ -17,7 +17,7 @@ use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
     ContentMode, Dialect, FormatMode, IntegerSemantics, JsonSchema, JsonType,
     Keyword as DialectKeyword, RefSiblings, Registry, Schema, SchemaRef, Scope, TypeSet,
-    VocabularyKind,
+    UnknownFormats, VocabularyKind,
 };
 use crate::number;
 use serde::Deserialize;
@@ -50,8 +50,9 @@ pub enum CompileError {
         /// The shape the keyword needs.
         expected: &'static str,
     },
-    /// A `format` this library does not know, under the `format-assertion` vocabulary, which
-    /// requires failing on unknown formats.
+    /// An asserted `format` naming a format the draft does not define and no user format,
+    /// where unknown formats are rejected: under the `format-assertion` vocabulary, which
+    /// requires it, or with `UnknownFormats::Reject`.
     UnknownFormat {
         /// JSON Pointer to the schema object holding the format, within its document.
         location: String,
@@ -99,11 +100,9 @@ impl fmt::Display for CompileError {
                 "{}: the value of \"{keyword}\" must be {expected}",
                 at(location)
             ),
-            CompileError::UnknownFormat { location, format } => write!(
-                f,
-                "{}: unknown format \"{format}\" under the format-assertion vocabulary",
-                at(location)
-            ),
+            CompileError::UnknownFormat { location, format } => {
+                write!(f, "{}: unknown format \"{format}\"", at(location))
+            }
             CompileError::UnknownRef { location, ref_str } => write!(
                 f,
                 "{}: $ref \"{ref_str}\" is not in the schema's registry",
@@ -251,14 +250,32 @@ impl Kw {
     }
 }
 
-/// A user-defined format check: answers whether a string is a member of the format.
-pub type FormatCheck = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+/// A user-defined format check: answers whether an instance is a member of the format.
+#[derive(Clone)]
+pub(crate) enum FormatCheck {
+    /// Checks strings; other instances pass ([`CompiledSchemaBuilder::format`]).
+    String(Arc<dyn Fn(&str) -> bool + Send + Sync>),
+    /// Checks every instance ([`CompiledSchemaBuilder::value_format`]).
+    Value(Arc<dyn Fn(&Value) -> bool + Send + Sync>),
+}
 
 /// A format the user registered with [`CompiledSchemaBuilder::format`].
 #[derive(Clone)]
 pub(crate) struct UserFormat {
     pub(crate) name: Box<str>,
     pub(crate) check: FormatCheck,
+}
+
+impl UserFormat {
+    /// Whether `instance` is a member of the format: a string check passes every other type.
+    #[inline(never)]
+    pub(crate) fn check(&self, instance: &Value) -> bool {
+        match (&self.check, instance) {
+            (FormatCheck::String(check), Value::String(s)) => check(s),
+            (FormatCheck::String(_), _) => true,
+            (FormatCheck::Value(check), _) => check(instance),
+        }
+    }
 }
 
 impl fmt::Debug for UserFormat {
@@ -671,16 +688,50 @@ impl CompiledSchemaBuilder {
     /// of the same name, and registering a name twice keeps the last check.
     #[must_use]
     pub fn format(
-        mut self,
+        self,
         name: impl Into<String>,
         check: impl Fn(&str) -> bool + Send + Sync + 'static,
     ) -> Self {
-        let name: Box<str> = name.into().into_boxed_str();
+        self.register(name.into(), FormatCheck::String(Arc::new(check)))
+    }
+
+    /// Registers the format `name`, checked by `check` on **every** instance type, not only
+    /// strings: a format over numbers (`int32`, `float`) or any other JSON value. Otherwise
+    /// like [`format`](Self::format): checked only where formats are asserted, known in every
+    /// draft, replacing a built-in or earlier user format of the same name. The specification
+    /// leaves which types a custom format applies to up to the implementation (validation
+    /// §7.2.3).
+    ///
+    /// ```
+    /// use json_schema_rs::{CompiledSchema, FormatMode, JsonSchemaSettings, Registry, Schema};
+    /// use serde_json::{Value, json};
+    ///
+    /// let settings = JsonSchemaSettings::builder().format_mode(FormatMode::Assertion).build();
+    /// let schema = Schema::new_from_serde_value(&json!({"format": "int32"}), &settings).unwrap();
+    /// let registry = Registry::new(&schema).unwrap();
+    /// let compiled = CompiledSchema::builder()
+    ///     .value_format("int32", |v: &Value| {
+    ///         v.as_i64().is_some_and(|n| i32::try_from(n).is_ok())
+    ///     })
+    ///     .build(&registry)
+    ///     .unwrap();
+    /// assert!(compiled.is_valid(&json!(7)));
+    /// assert!(!compiled.is_valid(&json!(4_294_967_296_i64)));
+    /// assert!(!compiled.is_valid(&json!("7")));
+    /// ```
+    #[must_use]
+    pub fn value_format(
+        self,
+        name: impl Into<String>,
+        check: impl Fn(&Value) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.register(name.into(), FormatCheck::Value(Arc::new(check)))
+    }
+
+    fn register(mut self, name: String, check: FormatCheck) -> Self {
+        let name: Box<str> = name.into_boxed_str();
         self.formats.retain(|format| format.name != name);
-        self.formats.push(UserFormat {
-            name,
-            check: Arc::new(check),
-        });
+        self.formats.push(UserFormat { name, check });
         self
     }
 
@@ -2365,9 +2416,10 @@ impl<'r, 'a> Compiler<'r, 'a> {
         out
     }
 
-    /// Compiles `format`: a check when the dialect asserts formats and defines this one. Under
-    /// the `format-assertion` vocabulary an unknown format is an error (2020-12 validation
-    /// §7.2.3); otherwise it is ignored.
+    /// Compiles `format`: a check when the dialect asserts formats and defines this one (or a
+    /// user registered it). An unknown format is an error under the `format-assertion`
+    /// vocabulary (2020-12 validation §7.2.3) and, where formats are asserted, under
+    /// `UnknownFormats::Reject`; otherwise it is ignored.
     fn lower_format(
         &mut self,
         name: &str,
@@ -2393,7 +2445,10 @@ impl<'r, 'a> Compiler<'r, 'a> {
             Some(format) if dialect.format_mode == FormatMode::Assertion => {
                 out.push(Keyword::Format(format));
             }
-            None if dialect.vocabulary_active(VocabularyKind::FormatAssertion) => {
+            None if dialect.vocabulary_active(VocabularyKind::FormatAssertion)
+                || (dialect.unknown_formats == UnknownFormats::Reject
+                    && dialect.format_mode == FormatMode::Assertion) =>
+            {
                 let location: String = self.location_string(location);
                 self.errors.push(CompileError::UnknownFormat {
                     location,
