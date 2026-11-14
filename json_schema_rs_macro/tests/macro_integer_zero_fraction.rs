@@ -89,12 +89,29 @@ fn draft_4_rejects_zero_fraction_number() {
 
 json_schema_to_rust!(r#"{"type":"array","items":{"type":"integer"}}"#);
 
+mod plain {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"type":"array","items":{"type":"integer"}}"#,
+        self_validating = false
+    );
+}
+
+#[test]
+fn root_newtype_of_integers_reads_zero_fraction_numbers() {
+    let expected: Vec<i64> = vec![3, 4];
+    let actual: Vec<i64> = serde_json::from_str::<schema_0::Root>("[3.0, 4e0]")
+        .unwrap()
+        .0;
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn root_alias_of_integers_reads_through_integer_wrapper() {
-    let expected: schema_0::Root = vec![3, 4];
-    let actual: schema_0::Root =
-        serde_json::from_str::<json_schema_rs::integer::Integer<schema_0::Root>>("[3.0, 4e0]")
-            .unwrap()
-            .0;
+    let expected: plain::schema_0::Root = vec![3, 4];
+    let actual: plain::schema_0::Root = serde_json::from_str::<
+        json_schema_rs::integer::Integer<plain::schema_0::Root>,
+    >("[3.0, 4e0]")
+    .unwrap()
+    .0;
     assert_eq!(expected, actual);
 }
