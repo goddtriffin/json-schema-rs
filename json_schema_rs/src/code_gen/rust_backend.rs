@@ -1777,9 +1777,16 @@ fn render_enum(name: &str, e: &EnumNode, imports: &mut Imports) -> String {
             json_tokens(value)
         );
     }
+    // The validator's wording, without the generated type's name.
+    let allowed: String = e
+        .values
+        .iter()
+        .map(|value| serde_json::to_string(value).unwrap_or_default())
+        .collect::<Vec<String>>()
+        .join(", ");
     let _ = writeln!(
         out,
-        "        Err(serde::de::Error::custom(format!(\"{{value}} is not a {name} value\")))\n    }}\n}}\n"
+        "        Err(serde::de::Error::custom(format!(\"value {{value}} not in enum (allowed: {{}})\", {allowed:?})))\n    }}\n}}\n"
     );
     out
 }
@@ -3898,7 +3905,7 @@ impl<'de> Deserialize<'de> for Tag {
         if json_schema_rs::json_equal(&value, &serde_json::json!(true)) {
             return Ok(Self::True);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a Tag value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "\"foo\", 1, true")))
     }
 }
 
@@ -9188,7 +9195,7 @@ impl<'de> Deserialize<'de> for Level {
         if json_schema_rs::json_equal(&value, &serde_json::json!(3)) {
             return Ok(Self::N3);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a Level value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "1, 2, 3")))
     }
 }
 
@@ -9238,7 +9245,7 @@ impl<'de> Deserialize<'de> for Version {
         if json_schema_rs::json_equal(&value, &serde_json::json!(2)) {
             return Ok(Self::N2);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a Version value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "2")))
     }
 }
 
@@ -10816,7 +10823,7 @@ impl<'de> Deserialize<'de> for E {
         if json_schema_rs::json_equal(&value, &serde_json::json!({"k\"": [null, true]})) {
             return Ok(Self::Object);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a E value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "\"a\\u0001b\", 1, {\"k\\\"\":[null,true]}")))
     }
 }
 
@@ -11522,7 +11529,7 @@ impl<'de> Deserialize<'de> for CodeVariant1 {
         if json_schema_rs::json_equal(&value, &serde_json::json!(1)) {
             return Ok(Self::N1);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a CodeVariant1 value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "\"a\", 1")))
     }
 }
 
@@ -11661,7 +11668,7 @@ impl<'de> Deserialize<'de> for CodeVariant1 {
         if json_schema_rs::json_equal(&value, &serde_json::json!(1.5)) {
             return Ok(Self::N1Point5);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a CodeVariant1 value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "\"a\", 1.5")))
     }
 }
 
@@ -11795,7 +11802,7 @@ impl<'de> Deserialize<'de> for K {
         if json_schema_rs::json_equal(&value, &serde_json::json!(1)) {
             return Ok(Self::N1);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a K value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "1")))
     }
 }
 
