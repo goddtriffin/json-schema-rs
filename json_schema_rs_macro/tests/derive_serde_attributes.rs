@@ -1,6 +1,6 @@
 //! Integration test: `#[derive(ToJsonSchema)]` describes what serde deserializes: every enum
 //! representation (external, internal, adjacent, untagged, per-variant `untagged`, `other`),
-//! `flatten` of any type, `skip`, `default`, `rename` / `rename_all` (including their
+//! `flatten` of any type, `skip`, `default`, `alias`, `rename` / `rename_all` (including their
 //! `deserialize = ...` forms), `rename_all_fields`, `deserialize_with`, `transparent`, `from`,
 //! unit and tuple structs; and the field overrides `json_schema(with)` / `json_schema(schema_with)`.
 //! The agreement tests run the same instances through serde and through the derived schema.
@@ -927,5 +927,188 @@ fn named_types_inside_prefix_items_are_shared_definitions() {
         }
     })));
     let actual: ReverseCodeGenResult = Sides::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Deserialize, ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+#[expect(dead_code)]
+struct Paint {
+    #[serde(alias = "colour")]
+    color: String,
+    #[serde(default, alias = "hue", alias = "tint")]
+    shade: Option<i32>,
+}
+
+#[derive(Deserialize, ToJsonSchema)]
+#[serde(tag = "kind")]
+#[expect(dead_code)]
+enum Pet {
+    #[serde(alias = "Puppy")]
+    Dog {
+        name: String,
+    },
+    Cat,
+}
+
+#[derive(Deserialize, ToJsonSchema)]
+#[expect(dead_code)]
+enum Signal {
+    #[serde(alias = "R")]
+    Red,
+    #[serde(alias = "N")]
+    Number(i32),
+}
+
+#[derive(Deserialize, ToJsonSchema)]
+enum Level {
+    #[serde(alias = "lo")]
+    Low,
+    High,
+}
+
+#[test]
+fn field_alias_is_a_property_and_the_object_takes_one_name_per_field() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "color": { "type": "string" },
+            "colour": { "type": "string" },
+            "hue": { "type": "integer", "minimum": i32::MIN, "maximum": i32::MAX },
+            "shade": { "type": "integer", "minimum": i32::MIN, "maximum": i32::MAX },
+            "tint": { "type": "integer", "minimum": i32::MIN, "maximum": i32::MAX }
+        },
+        "additionalProperties": false,
+        "allOf": [
+            { "oneOf": [{ "required": ["color"] }, { "required": ["colour"] }] },
+            {
+                "not": {
+                    "anyOf": [
+                        { "required": ["shade", "hue"] },
+                        { "required": ["shade", "tint"] },
+                        { "required": ["hue", "tint"] }
+                    ]
+                }
+            }
+        ]
+    })));
+    let actual: ReverseCodeGenResult = Paint::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn field_alias_schema_agrees_with_serde() {
+    let instances: Vec<serde_json::Value> = vec![
+        serde_json::json!({"color": "red"}),
+        serde_json::json!({"colour": "red"}),
+        serde_json::json!({"color": "red", "colour": "red"}),
+        serde_json::json!({}),
+        serde_json::json!({"color": "red", "hue": 1}),
+        serde_json::json!({"color": "red", "tint": 1}),
+        serde_json::json!({"color": "red", "shade": 1, "tint": 1}),
+        serde_json::json!({"color": "red", "hue": 1, "tint": 1}),
+        serde_json::json!({"colour": 1}),
+        serde_json::json!({"color": "red", "tone": 1}),
+    ];
+    let expected: Vec<bool> = serde_accepts::<Paint>(&instances);
+    let actual: Vec<bool> = schema_accepts::<Paint>(&instances);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn variant_alias_joins_the_tag_values() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["Dog", "Puppy"] },
+                    "name": { "type": "string" }
+                },
+                "additionalProperties": false,
+                "required": ["kind", "name"]
+            },
+            {
+                "type": "object",
+                "properties": { "kind": { "type": "string", "const": "Cat" } },
+                "additionalProperties": false,
+                "required": ["kind"]
+            }
+        ]
+    })));
+    let actual: ReverseCodeGenResult = Pet::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn variant_alias_tag_schema_agrees_with_serde() {
+    let instances: Vec<serde_json::Value> = vec![
+        serde_json::json!({"kind": "Dog", "name": "Rex"}),
+        serde_json::json!({"kind": "Puppy", "name": "Rex"}),
+        serde_json::json!({"kind": "Cat"}),
+        serde_json::json!({"kind": "Kitten"}),
+        serde_json::json!({"kind": "Puppy"}),
+    ];
+    let expected: Vec<bool> = serde_accepts::<Pet>(&instances);
+    let actual: Vec<bool> = schema_accepts::<Pet>(&instances);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn externally_tagged_variant_alias_is_another_name_or_key() {
+    let number: serde_json::Value =
+        serde_json::json!({ "type": "integer", "minimum": i32::MIN, "maximum": i32::MAX });
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+            { "type": "string", "enum": ["Red", "R"] },
+            {
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": { "Number": number },
+                        "additionalProperties": false,
+                        "required": ["Number"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": { "N": number },
+                        "additionalProperties": false,
+                        "required": ["N"]
+                    }
+                ]
+            }
+        ]
+    })));
+    let actual: ReverseCodeGenResult = Signal::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn externally_tagged_variant_alias_schema_agrees_with_serde() {
+    let instances: Vec<serde_json::Value> = vec![
+        serde_json::json!("Red"),
+        serde_json::json!("R"),
+        serde_json::json!({"Number": 1}),
+        serde_json::json!({"N": 1}),
+        serde_json::json!({"N": 1, "Number": 1}),
+        serde_json::json!("N"),
+        serde_json::json!("G"),
+    ];
+    let expected: Vec<bool> = serde_accepts::<Signal>(&instances);
+    let actual: Vec<bool> = schema_accepts::<Signal>(&instances);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn value_enum_alias_is_another_value() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "string",
+        "enum": ["Low", "lo", "High"]
+    })));
+    let actual: ReverseCodeGenResult = Level::json_schema();
     assert_eq!(expected, actual);
 }
