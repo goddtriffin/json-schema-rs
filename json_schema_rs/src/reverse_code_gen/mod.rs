@@ -1189,8 +1189,20 @@ fn nullable(schema: JsonSchema) -> JsonSchema {
 ///
 /// The derive strips one `Option` from a struct field to mean "not required", so this impl is
 /// reached where `Option` means `null` is allowed: nested (`Vec<Option<T>>`, an
-/// `Option<Option<T>>` field) or on a field marked `#[json_schema(required)]`.
+/// `Option<Option<T>>` field) or on a field marked `#[json_schema(required)]`. Generated code
+/// uses [`Nullable`](crate::Nullable) for optional nullable fields instead.
 impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
+    fn json_schema() -> ReverseCodeGenResult {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        nullable(T::json_schema_with(generator))
+    }
+}
+
+impl<T: ToJsonSchema> ToJsonSchema for crate::Nullable<T> {
+    /// `T`'s schema with `null` allowed, as for `Option<T>`; a `Nullable` field is optional.
     fn json_schema() -> ReverseCodeGenResult {
         root_schema_for::<Self>()
     }

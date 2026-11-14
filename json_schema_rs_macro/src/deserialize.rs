@@ -507,9 +507,6 @@ fn unknown_keys(
 /// A newtype around `ty` whose `Deserialize` is the `deserialize_with` function `path`.
 fn wrapper_type(wrapper: &Ident, ty: &TokenStream2, path: &ExprPath) -> TokenStream2 {
     quote! {
-        // The wrapper repeats the field's type: a nullable field's `Option<Option<T>>` is
-        // deliberate (absent vs null), so clippy's lint on that spelling stays on the field.
-        #[allow(clippy::option_option)]
         struct #wrapper(#ty);
 
         impl<'de> ::serde::Deserialize<'de> for #wrapper {
@@ -735,7 +732,7 @@ mod tests {
         let expected: String = concat!(
             "# [automatically_derived] # [allow (deprecated)] impl < 'de > :: serde :: Deserialize < 'de > for Pet { ",
             "fn deserialize < __D : :: serde :: Deserializer < 'de >> (__deserializer : __D ,) ",
-            "-> :: core :: result :: Result < Self , __D :: Error > { # [allow (clippy :: option_option)] ",
+            "-> :: core :: result :: Result < Self , __D :: Error > { ",
             "struct __DeserializeWith1 (Option < u8 >) ; ",
             "impl < 'de > :: serde :: Deserialize < 'de > for __DeserializeWith1 { ",
             "fn deserialize < __D : :: serde :: Deserializer < 'de >> (__deserializer : __D ,) ",

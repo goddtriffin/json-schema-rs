@@ -29,8 +29,9 @@ fn error<T: serde::de::DeserializeOwned + std::fmt::Debug>(json: &str) -> String
 fn struct_with_additional_map_reads_float_fields() {
     let root: schema_0::Root =
         serde_json::from_str(r#"{"plain": 1.5, "req_null": 2.25, "opt_null": 0.5}"#).unwrap();
-    let expected: (f64, Option<f64>, Option<Option<f64>>) = (1.5, Some(2.25), Some(Some(0.5)));
-    let actual: (f64, Option<f64>, Option<Option<f64>>) =
+    let expected: (f64, Option<f64>, json_schema_rs::Nullable<f64>) =
+        (1.5, Some(2.25), json_schema_rs::Nullable::Value(0.5));
+    let actual: (f64, Option<f64>, json_schema_rs::Nullable<f64>) =
         (root.plain, root.req_null, root.opt_null);
     assert_eq!(expected, actual);
 }
@@ -124,8 +125,12 @@ fn optional_nullable_field_tells_null_from_absent() {
     let absent: schema_0::Root = serde_json::from_str(r#"{"plain": 1, "req_null": null}"#).unwrap();
     let null: schema_0::Root =
         serde_json::from_str(r#"{"plain": 1, "req_null": null, "opt_null": null}"#).unwrap();
-    let expected: (Option<Option<f64>>, Option<Option<f64>>) = (None, Some(None));
-    let actual: (Option<Option<f64>>, Option<Option<f64>>) = (absent.opt_null, null.opt_null);
+    let expected: (json_schema_rs::Nullable<f64>, json_schema_rs::Nullable<f64>) = (
+        json_schema_rs::Nullable::Absent,
+        json_schema_rs::Nullable::Null,
+    );
+    let actual: (json_schema_rs::Nullable<f64>, json_schema_rs::Nullable<f64>) =
+        (absent.opt_null, null.opt_null);
     assert_eq!(expected, actual);
 }
 

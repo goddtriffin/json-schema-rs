@@ -1055,15 +1055,15 @@ fn render_default_accessor(
         ),
         (FieldShape::OptionalNullable, false) => (
             format!("Option<{value_ty}>"),
-            format!("self.{name}.unwrap_or(Some({literal}))"),
+            format!("self.{name}.or_absent(Some({literal}))"),
         ),
         (FieldShape::OptionalNullable, true) => (
             "Option<&str>".to_string(),
-            format!(
-                "match &self.{name} {{\n            Some(value) => value.as_deref(),\n            None => Some({literal}),\n        }}"
-            ),
+            format!("self.{name}.as_deref().or_absent(Some({literal}))"),
         ),
-        (FieldShape::Plain | FieldShape::RequiredNullable, _) => return None,
+        (FieldShape::Plain | FieldShape::RequiredNullable | FieldShape::OptionalHoldingNull, _) => {
+            return None;
+        }
     };
     Some(format!(
         "    /// The field's value, or its schema `default` when the key is absent.\n    #[must_use]\n    pub fn {name}_or_default(&self) -> {ret} {{\n        {body}\n    }}\n"
@@ -1093,17 +1093,15 @@ fn render_newtype_default_accessor(
         ),
         (FieldShape::OptionalNullable, false) => (
             format!("Option<{inner}>"),
-            format!(
-                "self.{name}.map_or(Some({literal}), |value| value.map({newtype}::into_inner))"
-            ),
+            format!("self.{name}.map({newtype}::into_inner).or_absent(Some({literal}))"),
         ),
         (FieldShape::OptionalNullable, true) => (
             "Option<&str>".to_string(),
-            format!(
-                "match &self.{name} {{\n            Some(value) => value.as_deref().map(String::as_str),\n            None => Some({literal}),\n        }}"
-            ),
+            format!("self.{name}.as_deref().map(String::as_str).or_absent(Some({literal}))"),
         ),
-        (FieldShape::Plain | FieldShape::RequiredNullable, _) => return None,
+        (FieldShape::Plain | FieldShape::RequiredNullable | FieldShape::OptionalHoldingNull, _) => {
+            return None;
+        }
     };
     Some(format!(
         "    /// The field's value, or its schema `default` when the key is absent.\n    #[must_use]\n    pub fn {name}_or_default(&self) -> {ret} {{\n        {body}\n    }}\n"
@@ -1119,9 +1117,16 @@ enum FieldShape {
     Optional,
     /// Required, nullable: `Option<T>`, `None` for `null`; absence is an error.
     RequiredNullable,
-    /// Optional, nullable: `Option<Option<T>>`: `None` absent, `Some(None)` `null`.
+    /// Optional, nullable: `json_schema_rs::Nullable<T>`: `Absent`, `Null` or `Value`.
     OptionalNullable,
+    /// Optional, and the value type itself holds `null` (any value, a union with a `null`
+    /// branch): `Option<T>`, `None` only when absent (present values go through
+    /// `deserialize_some`).
+    OptionalHoldingNull,
 }
+
+/// `skip_serializing_if` for a `Nullable` field: an absent key is not written.
+const SKIP_ABSENT: &str = "skip_serializing_if = \"json_schema_rs::Nullable::is_absent\"";
 
 /// One rendered field.
 #[derive(Debug)]
@@ -1330,7 +1335,7 @@ fn shape_serde_args(
         (FieldShape::OptionalNullable, Some(_)) => {
             serde_args.push("default".to_string());
             serde_args.push("deserialize_with = \"unique_items::optional_nullable\"".to_string());
-            serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
+            serde_args.push(SKIP_ABSENT.to_string());
         }
         (FieldShape::Plain, None) => {}
         (FieldShape::Optional, None) => {
@@ -1340,6 +1345,11 @@ fn shape_serde_args(
             serde_args.push("deserialize_with = \"Option::deserialize\"".to_string());
         }
         (FieldShape::OptionalNullable, None) => {
+            serde_args.push("default".to_string());
+            serde_args.push(SKIP_ABSENT.to_string());
+        }
+        // A set never holds `null`, so this shape has none.
+        (FieldShape::OptionalHoldingNull, _) => {
             imports.deserialize_some = true;
             serde_args.push("default".to_string());
             serde_args.push("deserialize_with = \"deserialize_some\"".to_string());
@@ -1357,7 +1367,10 @@ fn integer_serde_args(
     imports: &mut Imports,
     serde_args: &mut Vec<String>,
 ) {
-    let optional: bool = matches!(shape, FieldShape::Optional | FieldShape::OptionalNullable);
+    let optional: bool = matches!(
+        shape,
+        FieldShape::Optional | FieldShape::OptionalNullable | FieldShape::OptionalHoldingNull
+    );
     if optional {
         serde_args.push("default".to_string());
     }
@@ -1368,19 +1381,21 @@ fn integer_serde_args(
                 "unique_items::{}_integer",
                 match shape {
                     FieldShape::Plain => "required",
-                    FieldShape::Optional => "optional",
+                    FieldShape::Optional | FieldShape::OptionalHoldingNull => "optional",
                     FieldShape::RequiredNullable => "nullable",
                     FieldShape::OptionalNullable => "optional_nullable",
                 }
             )
         }
-        (FieldShape::OptionalNullable, None) => {
+        (FieldShape::OptionalHoldingNull, None) => {
             "json_schema_rs::integer::deserialize_some".to_string()
         }
         (_, None) => INTEGER_READ.to_string(),
     };
     serde_args.push(format!("deserialize_with = \"{path}\""));
-    if optional {
+    if shape == FieldShape::OptionalNullable {
+        serde_args.push(SKIP_ABSENT.to_string());
+    } else if optional {
         serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
     }
 }
@@ -1407,16 +1422,18 @@ fn render_field(
         (true, false, _) => FieldShape::Plain,
         (false, false, false) => FieldShape::Optional,
         (true, true, _) => FieldShape::RequiredNullable,
-        (false, true, _) | (false, false, true) => FieldShape::OptionalNullable,
+        (false, true, _) => FieldShape::OptionalNullable,
+        (false, false, true) => FieldShape::OptionalHoldingNull,
     };
     let (value_ty, set): (String, Option<SetKind>) =
         field_value_type(graph, plan, home, value_id, imports);
     let ty: String = match shape {
         FieldShape::Plain => value_ty.clone(),
-        FieldShape::Optional | FieldShape::RequiredNullable => format!("Option<{value_ty}>"),
         // `T` already holds `null`: one `Option` marks absence.
-        FieldShape::OptionalNullable if holds_null => format!("Option<{value_ty}>"),
-        FieldShape::OptionalNullable => format!("Option<Option<{value_ty}>>"),
+        FieldShape::Optional | FieldShape::RequiredNullable | FieldShape::OptionalHoldingNull => {
+            format!("Option<{value_ty}>")
+        }
+        FieldShape::OptionalNullable => format!("json_schema_rs::Nullable<{value_ty}>"),
     };
     let mut serde_args: Vec<String> = Vec::new();
     if rename {
@@ -2048,7 +2065,7 @@ fn unique_items_module(imports: &Imports) -> String {
     for shape in &imports.unique_shapes {
         out.push_str(match shape {
             FieldShape::Plain => UNIQUE_ITEMS_REQUIRED,
-            FieldShape::Optional => UNIQUE_ITEMS_OPTIONAL,
+            FieldShape::Optional | FieldShape::OptionalHoldingNull => UNIQUE_ITEMS_OPTIONAL,
             FieldShape::RequiredNullable => UNIQUE_ITEMS_NULLABLE,
             FieldShape::OptionalNullable => UNIQUE_ITEMS_OPTIONAL_NULLABLE,
         });
@@ -2059,7 +2076,7 @@ fn unique_items_module(imports: &Imports) -> String {
     for shape in &imports.unique_integer_shapes {
         out.push_str(match shape {
             FieldShape::Plain => UNIQUE_ITEMS_REQUIRED_INTEGER,
-            FieldShape::Optional => UNIQUE_ITEMS_OPTIONAL_INTEGER,
+            FieldShape::Optional | FieldShape::OptionalHoldingNull => UNIQUE_ITEMS_OPTIONAL_INTEGER,
             FieldShape::RequiredNullable => UNIQUE_ITEMS_NULLABLE_INTEGER,
             FieldShape::OptionalNullable => UNIQUE_ITEMS_OPTIONAL_NULLABLE_INTEGER,
         });
@@ -2200,14 +2217,14 @@ const UNIQUE_ITEMS_NULLABLE: &str = "
 const UNIQUE_ITEMS_OPTIONAL_NULLABLE: &str = "
     pub(super) fn optional_nullable<'de, D, S>(
         deserializer: D,
-    ) -> Result<Option<Option<S>>, D::Error>
+    ) -> Result<json_schema_rs::Nullable<S>, D::Error>
     where
         D: serde::Deserializer<'de>,
         S: UniqueSet,
         S::Item: Deserialize<'de>,
     {
-        Option::<Unique<S>>::deserialize(deserializer)
-            .map(|value: Option<Unique<S>>| Some(value.map(|unique: Unique<S>| unique.0)))
+        json_schema_rs::Nullable::<Unique<S>>::deserialize(deserializer)
+            .map(|value: json_schema_rs::Nullable<Unique<S>>| value.map(|unique: Unique<S>| unique.0))
     }
 ";
 
@@ -2294,15 +2311,15 @@ const UNIQUE_ITEMS_NULLABLE_INTEGER: &str = "
 const UNIQUE_ITEMS_OPTIONAL_NULLABLE_INTEGER: &str = "
     pub(super) fn optional_nullable_integer<'de, D, S>(
         deserializer: D,
-    ) -> Result<Option<Option<S>>, D::Error>
+    ) -> Result<json_schema_rs::Nullable<S>, D::Error>
     where
         D: serde::Deserializer<'de>,
         S: UniqueSet,
         S::Item: json_schema_rs::integer::DeserializeInteger<'de>,
     {
-        Option::<UniqueIntegers<S>>::deserialize(deserializer).map(|value: Option<UniqueIntegers<S>>| {
-            Some(value.map(|unique: UniqueIntegers<S>| unique.0))
-        })
+        json_schema_rs::Nullable::<UniqueIntegers<S>>::deserialize(deserializer).map(
+            |value: json_schema_rs::Nullable<UniqueIntegers<S>>| value.map(|unique: UniqueIntegers<S>| unique.0),
+        )
     }
 ";
 
@@ -2833,7 +2850,7 @@ pub struct Root {
 
     /// An optional `["string", "null"]` property tells absent (`None`) from `null` (`Some(None)`).
     #[test]
-    fn optional_property_type_string_or_null_emits_option_option_string() {
+    fn optional_property_type_string_or_null_emits_nullable_string() {
         let json = r#"{"type":"object","properties":{"name":{"type":["string","null"]}}}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -2841,21 +2858,13 @@ pub struct Root {
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
         let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
-    pub name: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
+    pub name: json_schema_rs::Nullable<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -2866,7 +2875,7 @@ pub struct Root {
 
     /// The order of a type array does not matter: `["null", "string"]` reads as `["string", "null"]`.
     #[test]
-    fn optional_property_type_null_or_string_emits_option_option_string() {
+    fn optional_property_type_null_or_string_emits_nullable_string() {
         let json = r#"{"type":"object","properties":{"name":{"type":["null","string"]}}}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -2874,21 +2883,13 @@ pub struct Root {
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
         let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
-    pub name: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
+    pub name: json_schema_rs::Nullable<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -3011,8 +3012,8 @@ pub struct Root {
     pub multi: Option<Multi>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opt: Option<String>,
-    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize_some", skip_serializing_if = "Option::is_none")]
-    pub opt_null: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
+    pub opt_null: json_schema_rs::Nullable<i64>,
     pub plain: f64,
     #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     #[json_schema(required)]
@@ -4681,14 +4682,14 @@ mod unique_items {
 
     pub(super) fn optional_nullable<'de, D, S>(
         deserializer: D,
-    ) -> Result<Option<Option<S>>, D::Error>
+    ) -> Result<json_schema_rs::Nullable<S>, D::Error>
     where
         D: serde::Deserializer<'de>,
         S: UniqueSet,
         S::Item: Deserialize<'de>,
     {
-        Option::<Unique<S>>::deserialize(deserializer)
-            .map(|value: Option<Unique<S>>| Some(value.map(|unique: Unique<S>| unique.0)))
+        json_schema_rs::Nullable::<Unique<S>>::deserialize(deserializer)
+            .map(|value: json_schema_rs::Nullable<Unique<S>>| value.map(|unique: Unique<S>| unique.0))
     }
 
     /// Reads integer items by JSON Schema's integer rule (`1.0` is the integer 1).
@@ -4753,9 +4754,9 @@ pub struct Root {
     #[serde(default, deserialize_with = "unique_items::optional_integer", skip_serializing_if = "Option::is_none")]
     #[json_schema(unique_items)]
     pub ids: Option<HashSet<i64>>,
-    #[serde(default, deserialize_with = "unique_items::optional_nullable", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "unique_items::optional_nullable", skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
     #[json_schema(unique_items)]
-    pub maybe: Option<Option<HashSet<bool>>>,
+    pub maybe: json_schema_rs::Nullable<HashSet<bool>>,
     #[serde(deserialize_with = "unique_items::nullable")]
     #[json_schema(required, unique_items)]
     pub must: Option<HashSet<String>>,
@@ -8989,9 +8990,9 @@ pub struct Root {
         assert_eq!(expected, actual);
     }
 
-    /// The flatten setting leaves a two-entry `anyOf` of a type and `null` as a nullable `Option`.
+    /// The flatten setting leaves a two-entry `anyOf` of a type and `null` as a nullable field.
     #[test]
-    fn flatten_enabled_nullable_any_of_stays_option() {
+    fn flatten_enabled_nullable_any_of_stays_nullable() {
         let json: &str = r#"{"type":"object","properties":{"name":{"anyOf":[{"type":"string"},{"type":"null"}]}}}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = CodeGenSettings::builder()
@@ -9002,21 +9003,13 @@ pub struct Root {
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
         let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
-    pub name: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
+    pub name: json_schema_rs::Nullable<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -9088,7 +9081,7 @@ pub struct Root {
         assert_eq!(expected, actual);
     }
 
-    /// An optional `oneOf` of `null` and a type is an optional nullable field: `Option<Option<T>>`.
+    /// An optional `oneOf` of `null` and a type is an optional nullable field: `Nullable<T>`.
     #[test]
     fn optional_one_of_null_and_type_emits_optional_nullable_field() {
         let json: &str = r#"{"type":"object","properties":{"name":{"oneOf":[{"type":"null"},{"type":"string"}]}}}"#;
@@ -9098,21 +9091,13 @@ pub struct Root {
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
         let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
-    pub name: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
+    pub name: json_schema_rs::Nullable<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -9692,15 +9677,15 @@ mod unique_items {
 
     pub(super) fn optional_nullable_integer<'de, D, S>(
         deserializer: D,
-    ) -> Result<Option<Option<S>>, D::Error>
+    ) -> Result<json_schema_rs::Nullable<S>, D::Error>
     where
         D: serde::Deserializer<'de>,
         S: UniqueSet,
         S::Item: json_schema_rs::integer::DeserializeInteger<'de>,
     {
-        Option::<UniqueIntegers<S>>::deserialize(deserializer).map(|value: Option<UniqueIntegers<S>>| {
-            Some(value.map(|unique: UniqueIntegers<S>| unique.0))
-        })
+        json_schema_rs::Nullable::<UniqueIntegers<S>>::deserialize(deserializer).map(
+            |value: json_schema_rs::Nullable<UniqueIntegers<S>>| value.map(|unique: UniqueIntegers<S>| unique.0),
+        )
     }
 }
 
@@ -9709,9 +9694,9 @@ pub struct Root {
     #[serde(default, deserialize_with = "unique_items::optional_integer", skip_serializing_if = "Option::is_none")]
     #[json_schema(unique_items)]
     pub opt: Option<BTreeSet<i64>>,
-    #[serde(default, deserialize_with = "unique_items::optional_nullable_integer", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "unique_items::optional_nullable_integer", skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
     #[json_schema(unique_items)]
-    pub opt_null: Option<Option<BTreeSet<i64>>>,
+    pub opt_null: json_schema_rs::Nullable<BTreeSet<i64>>,
     #[serde(deserialize_with = "unique_items::required_integer")]
     #[json_schema(unique_items)]
     pub req: BTreeSet<i64>,
@@ -10626,25 +10611,17 @@ pub struct Root {
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
         let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize_some", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
     #[json_schema(default = -3)]
-    pub m: Option<Option<i64>>,
-    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
+    pub m: json_schema_rs::Nullable<i64>,
+    #[serde(default, skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
     #[json_schema(default = "z")]
-    pub n: Option<Option<String>>,
+    pub n: json_schema_rs::Nullable<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -10653,16 +10630,13 @@ impl Root {
     /// The field's value, or its schema `default` when the key is absent.
     #[must_use]
     pub fn m_or_default(&self) -> Option<i64> {
-        self.m.unwrap_or(Some(-3))
+        self.m.or_absent(Some(-3))
     }
 
     /// The field's value, or its schema `default` when the key is absent.
     #[must_use]
     pub fn n_or_default(&self) -> Option<&str> {
-        match &self.n {
-            Some(value) => value.as_deref(),
-            None => Some("z"),
-        }
+        self.n.as_deref().or_absent(Some("z"))
     }
 }
 
@@ -10678,16 +10652,8 @@ impl Root {
         let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
         let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct O {
@@ -10703,8 +10669,8 @@ pub struct Root {
     pub a: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub o: Option<O>,
-    #[serde(default, deserialize_with = "deserialize_some", skip_serializing_if = "Option::is_none")]
-    pub z: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
+    pub z: json_schema_rs::Nullable<String>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }

@@ -200,6 +200,14 @@ impl<'de, T: DeserializeInteger<'de>> DeserializeInteger<'de> for Option<T> {
     }
 }
 
+impl<'de, T: DeserializeInteger<'de>> DeserializeInteger<'de> for crate::Nullable<T> {
+    /// `null` is [`Nullable::Null`](crate::Nullable::Null), an integer a value; an absent key
+    /// takes the field's `#[serde(default)]`.
+    fn deserialize_integer<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize_integer(deserializer).map(crate::Nullable::from)
+    }
+}
+
 impl<'de, T: DeserializeInteger<'de>> DeserializeInteger<'de> for Box<T> {
     fn deserialize_integer<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         T::deserialize_integer(deserializer).map(Box::new)
