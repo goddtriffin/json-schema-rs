@@ -762,6 +762,10 @@ pub struct Registry<'a> {
     documents: Vec<Document<'a>>,
     detached: Vec<Schema>,
     resources: Vec<Resource>,
+    /// The custom metaschemas a document's `$schema` named (and the ones their own `$schema`
+    /// named in turn), each read only for its `$vocabulary` and base draft: retrieval URI and
+    /// root, in the order they were loaded.
+    metaschemas: Vec<(Uri, Arc<Schema>)>,
 }
 
 /// A `$ref` waiting to be resolved: the scope it appears in, the reference as written, and where
@@ -881,6 +885,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
                 documents: Vec::new(),
                 detached: Vec::new(),
                 resources: Vec::new(),
+                metaschemas: Vec::new(),
             },
             by_uri: HashMap::new(),
             root_base,
@@ -1001,7 +1006,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
         let Ok(meta_uri) = parse_uri(uri).map(|u| without_fragment(&u)) else {
             return fallback;
         };
-        let metaschema: Arc<Schema> = match self.fetch(&meta_uri, None) {
+        let metaschema: Arc<Schema> = match self.load_metaschema(&meta_uri) {
             Ok(m) => m,
             Err(e) => {
                 log::debug!(
@@ -1010,6 +1015,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
                 return fallback;
             }
         };
+        self.record_metaschema(&meta_uri, &metaschema);
         let Some(meta) = metaschema.as_object() else {
             return fallback;
         };
@@ -1030,7 +1036,8 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
                 break;
             }
             seen.push(parsed.clone());
-            if let Ok(doc) = self.fetch(&parsed, None) {
+            if let Ok(doc) = self.load_metaschema(&parsed) {
+                self.record_metaschema(&parsed, &doc);
                 next = doc.as_object().and_then(|o| o.schema.clone());
             }
         }
@@ -1061,6 +1068,34 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
 
     /// Fetches and parses the document at `uri` (embedded metaschema, given document, or
     /// retriever), once. `draft` pins the draft of a document without `$schema`.
+    /// The custom metaschema at `uri`: a parsed document given to the builder under that URI or
+    /// root `$id` (an input or a resource), else retrieved like any document.
+    fn load_metaschema(&mut self, uri: &Uri) -> Result<Arc<Schema>, RegistryError> {
+        if let Some(&index) = self.parsed_by_uri.get(uri) {
+            let schema: Schema = match self.parsed_documents[index].1 {
+                SchemaRef::Object(object) => Schema::Object(Box::new(object.clone())),
+                SchemaRef::Bool(value) => Schema::Bool(value),
+            };
+            return Ok(Arc::new(schema));
+        }
+        self.fetch(uri, None)
+    }
+
+    /// Records a custom metaschema `$schema` led to (see [`Registry::embeddable_documents`]),
+    /// once per URI.
+    fn record_metaschema(&mut self, uri: &Uri, schema: &Arc<Schema>) {
+        if !self
+            .registry
+            .metaschemas
+            .iter()
+            .any(|(known, _)| known == uri)
+        {
+            self.registry
+                .metaschemas
+                .push((uri.clone(), Arc::clone(schema)));
+        }
+    }
+
     fn fetch(
         &mut self,
         uri: &Uri,
@@ -2003,10 +2038,14 @@ impl<'a> Registry<'a> {
     }
 
     /// Every document but the embedded standard metaschemas, in the order they were added: the
-    /// root first, then each document a `$ref` (or an entry) reached.
+    /// root first, then each document a `$ref` (or an entry) reached, then each custom
+    /// metaschema a `$schema` named that no `$ref` reached ([`RegistryDocumentKind::Loaded`]:
+    /// a registry given these documents builds the same dialects, since it reads the same
+    /// `$vocabulary`).
     #[must_use]
     pub(crate) fn embeddable_documents(&self) -> Vec<RegistryDocument<'_>> {
-        self.documents
+        let mut out: Vec<RegistryDocument<'_>> = self
+            .documents
             .iter()
             .filter_map(|document| {
                 Some(RegistryDocument {
@@ -2015,7 +2054,17 @@ impl<'a> Registry<'a> {
                     kind: document.kind?,
                 })
             })
-            .collect()
+            .collect();
+        for (uri, schema) in &self.metaschemas {
+            if !out.iter().any(|document| document.uri == uri.as_str()) {
+                out.push(RegistryDocument {
+                    uri: uri.as_str(),
+                    schema: schema.as_schema_ref(),
+                    kind: RegistryDocumentKind::Loaded,
+                });
+            }
+        }
+        out
     }
 
     /// The retrieval URI of the document the resource `scope` is in, as
@@ -3929,6 +3978,62 @@ mod tests {
             .into_iter()
             .map(|document| (document.uri.to_string(), document.kind))
             .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// A custom metaschema whose `$vocabulary` makes `format` assert.
+    fn format_assertion_metaschema() -> Value {
+        json!({
+            "$id": "https://example.com/meta",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$vocabulary": {
+                "https://json-schema.org/draft/2020-12/vocab/core": true,
+                "https://json-schema.org/draft/2020-12/vocab/applicator": true,
+                "https://json-schema.org/draft/2020-12/vocab/validation": true,
+                "https://json-schema.org/draft/2020-12/vocab/format-assertion": true
+            },
+            "$dynamicAnchor": "meta"
+        })
+    }
+
+    #[test]
+    fn embeddable_documents_list_a_custom_metaschema_last() {
+        let root: JsonSchema = parse(&json!({"$schema": "https://example.com/meta"}));
+        let registry: Registry<'_> = Registry::builder()
+            .base_uri("https://example.com/root.json")
+            .document("https://example.com/meta", format_assertion_metaschema())
+            .build(&root)
+            .expect("build registry");
+        let expected: Vec<(String, RegistryDocumentKind)> = vec![
+            (
+                "https://example.com/root.json".to_string(),
+                RegistryDocumentKind::Root,
+            ),
+            (
+                "https://example.com/meta".to_string(),
+                RegistryDocumentKind::Loaded,
+            ),
+        ];
+        let actual: Vec<(String, RegistryDocumentKind)> = registry
+            .embeddable_documents()
+            .into_iter()
+            .map(|document| (document.uri.to_string(), document.kind))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn custom_metaschema_given_as_a_parsed_document_sets_the_vocabularies() {
+        let root: JsonSchema =
+            parse(&json!({"$schema": "https://example.com/meta", "format": "ipv4"}));
+        let meta: JsonSchema = parse(&format_assertion_metaschema());
+        let registry: Registry<'_> = Registry::builder()
+            .parsed_document("file:///schemas/meta.json", &meta)
+            .build(&root)
+            .expect("build registry");
+        let compiled: CompiledSchema = CompiledSchema::new(&registry).expect("compiles");
+        let expected: bool = false;
+        let actual: bool = compiled.is_valid(&json!("boom"));
         assert_eq!(expected, actual);
     }
 
