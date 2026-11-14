@@ -13,7 +13,7 @@ specs for every published draft (draft-00 through 2020-12); run
 `make vendor_specs` to fetch them locally—specs are not stored in the repo.
 Supported keywords include **type** (all seven types, a single name or an array of
 names; the validator accepts any listed type and rejects unknown names at parse time; codegen
-reads `["T", "null"]` as nullable (`Option`, with an absent key distinct from `null`), several non-null types as an untagged enum, and a typeless property as `serde_json::Value`), **boolean
+reads `["T", "null"]` as nullable (`Option<T>` when required; `json_schema_rs::Nullable<T>`, which keeps an absent key distinct from `null`, when optional), several non-null types as an untagged enum, and a typeless property as `serde_json::Value`), **boolean
 schemas** (`true` / `false` anywhere a schema may appear, including a whole document, which
 codegen turns into `serde_json::Value` for `true` and an enum with no variants for `false`), **properties**, **required**, **const** (draft-06+;
 validator: instance must equal const, numbers by value so `1` equals `1.0`; codegen: single-value enum (string or any other JSON value); reverse: single-variant unit enum → const), **enum**

@@ -2870,6 +2870,29 @@ fn derive_option_fields_emit_optional_required_nullable_and_renamed_properties()
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
+struct NullableWrapperField {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "json_schema_rs::Nullable::is_absent")]
+    pub owner: json_schema_rs::Nullable<String>,
+}
+
+#[test]
+fn derive_nullable_field_is_optional_and_allows_null() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "owner": { "type": ["null", "string"] }
+        },
+        "additionalProperties": false,
+        "required": ["name"]
+    })));
+    let actual: ReverseCodeGenResult = NullableWrapperField::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToJsonSchema)]
 struct NullableLeaf {
     pub x: String,
 }

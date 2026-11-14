@@ -585,13 +585,19 @@ fn field_property_key(field: &Field, rule: Option<RenameRule>) -> SynResult<Stri
 
 /// Returns true if the type is `Option<T>` (path is `Option` or `std::option::Option`).
 fn is_option_type(ty: &Type) -> bool {
+    last_segment_is(ty, "Option")
+}
+
+/// Whether `ty` is a path whose last segment is `name` (`Nullable`, `json_schema_rs::Nullable`).
+fn last_segment_is(ty: &Type, name: &str) -> bool {
     let Type::Path(type_path) = ty else {
         return false;
     };
-    let path = &type_path.path;
-    path.segments
+    type_path
+        .path
+        .segments
         .last()
-        .is_some_and(|seg| seg.ident == "Option")
+        .is_some_and(|seg| seg.ident == name)
 }
 
 /// The value type `V` of `BTreeMap<String, V>`, or `None` for any other type.
@@ -848,8 +854,10 @@ fn field_spec(name: &Ident, field: &Field, rule: Option<RenameRule>) -> SynResul
     let key_lit: LitStr = LitStr::new(&key, span);
     let is_required: bool = json_schema_flag(&field.attrs, "required")?;
     let is_opt: bool = is_option_type(ty) && !is_required;
+    // A `Nullable<T>` field is optional and its schema allows `null` (the type's own schema).
+    let is_nullable: bool = last_segment_is(ty, "Nullable") && !is_required;
     let schema_ty: Type = replace_self(if is_opt { optional_inner_type(ty) } else { ty }, name);
-    let required: bool = !is_opt;
+    let required: bool = !is_opt && !is_nullable;
     // `#[json_schema(description = "...")]` replaces the doc comments (a blank one is no
     // description).
     let description: Option<String> = field_str_attr(field, "description")?;
