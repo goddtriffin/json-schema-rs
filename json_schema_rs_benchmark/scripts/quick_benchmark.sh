@@ -157,7 +157,7 @@ extract_base() {
 # benchmark package, it would get the features cargo unifies across both.
 build_side() {
     local root="$1" target="$2" exe
-    _profile_cargo "${root}" "${target}" build -p json-schema-rs --bin jsonschemars >&2
+    _profile_cargo "${root}" "${target}" build -p jsonschemars >&2
     _profile_cargo "${root}" "${target}" build -p json-schema-rs-benchmark --bin heap_profile \
         --bench cross_tool >&2
     exe="$(_profile_cargo "${root}" "${target}" bench -p json-schema-rs-benchmark \

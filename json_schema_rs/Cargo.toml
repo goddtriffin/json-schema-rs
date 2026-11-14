@@ -16,10 +16,6 @@ exclude.workspace = true
 [lib]
 path = "src/lib.rs"
 
-[[bin]]
-name = "jsonschemars"
-path = "src/main.rs"
-
 [lints]
 workspace = true
 
@@ -38,7 +34,6 @@ indexmap = ["dep:indexmap"]
 arbitrary-precision = ["serde_json/arbitrary_precision", "dep:num-bigint"]
 
 [dependencies]
-clap = { workspace = true, features = ["derive"] }
 # RFC 3986 / 3987 URI parsing, reference resolution and normalisation for `$id` / `$ref`.
 fluent-uri.workspace = true
 heck.workspace = true

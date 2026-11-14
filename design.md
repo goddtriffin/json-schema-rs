@@ -19,7 +19,7 @@ The crate provides **three tools**:
 
 **For every feature we develop, implement it for each of these three tools** where the feature applies.
 
-We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. Code layout: workspace crates `json_schema_rs/` (library and `jsonschemars` CLI binary) and `json_schema_rs_macro/` (proc-macro `generate_rust_schema!` for compile-time codegen). When adding a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples.
+We have three separate pipelines: Schema→Rust, Rust→Schema, and the validator. Code layout: workspace crates `json_schema_rs/` (the library), `json_schema_rs_macro/` (proc-macro `json_schema_to_rust!` for compile-time codegen, and the derives generated code uses) and `jsonschemars/` (the CLI). The CLI is its own crate, not a binary of the library behind a `cli` feature: generated code depends on the library at run time, so everything the library's package pulls in reaches every consumer, and a binary's dependencies are package dependencies (`clap` was 12 of a generated-code consumer's 39 crates). Its own crate also makes `cargo install jsonschemars` work with no feature flags. Its features (`http`, `indexmap`, `uuid`, `arbitrary-precision`) turn on the library's. When adding a new keyword or type, consider: schema model, codegen/validation behavior, tests, and examples.
 
 ### JSON Schema validator
 
@@ -309,7 +309,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | Frontend | What it tests | Where tests live |
 |----------|----------------|------------------|
 | Golden string | Library API: `Schema::try_from` / `Schema::new_from_str` + `generate_rust`; assert full generated string equals expected. | `json_schema_rs/src/code_gen/rust_backend.rs` (unit), `json_schema_rs/tests/integration.rs` (e.g. `integration_parse_and_generate`) |
-| CLI | Run `jsonschemars generate rust -o DIR <inputs>`; assert exit code and output file contents. | `json_schema_rs/tests/integration.rs` (`cli_generate_rust_*`) |
+| CLI | Run `jsonschemars generate rust -o DIR <inputs>`; assert exit code and output file contents. | `jsonschemars/tests/cli.rs` (`cli_generate_rust_*`) |
 | Generated Rust build + deserialize | One workspace test: generate code per scenario, write to workspace members, `cargo build --workspace` (shared `CARGO_TARGET_DIR`), `cargo clippy --workspace --lib` with the strict lint set and `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings` over the generated code (see *Lint-clean output*; the `doc_markup` scenario holds descriptions and examples full of what those lints reject verbatim), `cargo run -p <name>` per scenario with `serde_json::from_str` into generated types. | `json_schema_rs/tests/integration.rs` (`generated_rust_build_and_deserialize_all_scenarios`) |
 | Macro | `json_schema_to_rust!(...)` (inline and/or path); expanded code compiles and types/values behave as expected. | `json_schema_rs_macro/tests/` (`macro_single_inline`, `macro_single_path`, `macro_multiple_inline`, `macro_multiple_path`; cross-file path schemas in `macro_cross_file_*` with fixtures in `tests/fixtures/cross_file/`) |
 

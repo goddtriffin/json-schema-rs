@@ -9,6 +9,7 @@
 !json_schema_rs_macro/
 !json_schema_rs_benchmark/
 !json_schema_rs_differential/
+!jsonschemars/
 
 # Large or generated content inside the allowed members
 **/target/

@@ -568,7 +568,7 @@ main() {
 
     # 2. Build.
     echo "==> building benchmark-profile binaries ($(profile_summary))"
-    _profile_cargo build -p json-schema-rs --bin jsonschemars
+    _profile_cargo build -p jsonschemars --bin jsonschemars
     _profile_cargo build -p json-schema-rs-benchmark --bins
 
     # 3. Synthetic fixtures.
