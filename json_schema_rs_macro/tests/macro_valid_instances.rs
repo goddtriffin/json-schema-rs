@@ -1,7 +1,8 @@
 //! Integration test: `json_schema_to_rust!` generates types that accept every schema-valid
-//! instance when a keyword constrains only some instances: a property only `then` defines, an
-//! `additionalProperties` schema or `false` beside `patternProperties`, and `items` beside
-//! `prefixItems`. Self-validation still enforces those keywords where they apply.
+//! instance when a keyword constrains only some instances: a property only `then` defines, one
+//! both `then` and `else` define, an `additionalProperties` schema or `false` beside
+//! `patternProperties`, and `items` beside `prefixItems`. Self-validation still enforces those
+//! keywords where they apply.
 
 use json_schema_rs_macro::json_schema_to_rust;
 use std::collections::BTreeMap;
@@ -10,7 +11,8 @@ json_schema_to_rust!(
     r#"{"type":"object","properties":{"kind":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"properties":{"x":{"type":"string","minLength":3}}}}"#,
     r#"{"type":"object","patternProperties":{"^x-":{}},"additionalProperties":{"type":"string"}}"#,
     r#"{"type":"object","properties":{"a":{"type":"string"}},"patternProperties":{"^x-":{}},"additionalProperties":false}"#,
-    r#"{"type":"array","prefixItems":[{"type":"integer"}],"items":{"type":"string"}}"#
+    r#"{"type":"array","prefixItems":[{"type":"integer"}],"items":{"type":"string"}}"#,
+    r#"{"type":"object","properties":{"kind":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"properties":{"v":{"type":"integer","minimum":1}}},"else":{"properties":{"v":{"type":"integer","maximum":0}}}}"#
 );
 
 #[test]
@@ -84,5 +86,20 @@ fn items_beside_prefix_items_deserializes_each_position() {
     let root: schema_3::Root = serde_json::from_str(r#"[1,"a"]"#).unwrap();
     let expected: Vec<serde_json::Value> = vec![serde_json::json!(1), serde_json::json!("a")];
     let actual: Vec<serde_json::Value> = root;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn then_else_shared_property_deserializes() {
+    let root: schema_4::Root = serde_json::from_str(r#"{"kind":"a","v":5}"#).unwrap();
+    let expected: serde_json::Value = serde_json::json!({"kind": "a", "v": 5});
+    let actual: serde_json::Value = serde_json::to_value(&root).unwrap();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn then_else_shared_property_try_from_rejects_value_violating_the_branch_that_applies() {
+    let expected: bool = true;
+    let actual: bool = schema_4::Root::try_from(serde_json::json!({"kind": "a", "v": 0})).is_err();
     assert_eq!(expected, actual);
 }

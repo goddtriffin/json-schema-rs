@@ -2005,6 +2005,26 @@ fn main() {
 }
 "#,
             ),
+            "then_else_shared_property" => (
+                // A key both `then` and `else` define is the `anyOf` of the two, a schema codegen
+                // builds (at no location in the document): its type has no validation target of
+                // its own, and the self-validating parent checks it.
+                r#"{"type":"object","properties":{"kind":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"properties":{"v":{"type":"integer","minimum":1}}},"else":{"properties":{"v":{"type":"integer","maximum":0}}}}"#,
+                default_code_gen.clone(),
+                r#"fn main() {
+    use compile_test::Root;
+    let instance: serde_json::Value = serde_json::json!({"kind": "a", "v": 5});
+    let root: Root = serde_json::from_value(instance.clone()).unwrap();
+    let expected: (serde_json::Value, bool, bool) = (instance.clone(), true, true);
+    let actual: (serde_json::Value, bool, bool) = (
+        serde_json::to_value(&root).unwrap(),
+        Root::try_from(instance).is_ok(),
+        Root::try_from(serde_json::json!({"kind": "a", "v": 0})).is_err(),
+    );
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
             "pattern_properties_untyped_additional_map" => (
                 // `additionalProperties` does not apply to keys `patternProperties` matches, so it
                 // does not type the map.
@@ -3440,6 +3460,7 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "constrained_newtypes",
         "cross_file_refs",
         "then_only_property_any_value",
+        "then_else_shared_property",
         "pattern_properties_untyped_additional_map",
         "pattern_properties_additional_false_open_map",
         "prefix_items_untyped_items",

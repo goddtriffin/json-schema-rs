@@ -267,6 +267,12 @@ fn push_typed_children<'a>(s: &'a JsonSchema, stack: &mut Vec<&'a JsonSchema>) {
     }
 }
 
+/// Prefix of the pointer of a conjunct whose schema codegen built (the `anyOf` of a property
+/// both `then` and `else` define), which sits at no location in any document. It is not a JSON
+/// Pointer, nor is any pointer built from it, so neither the node nor its children get a
+/// validation target: the parent's own validation checks the value.
+const BUILT: &str = "#built";
+
 /// Appends a JSON Pointer token (RFC 6901 escaped) to `pointer`.
 fn pointer_push(pointer: &str, token: &str) -> String {
     let escaped: String = token.replace('~', "~0").replace('/', "~1");
@@ -468,7 +474,7 @@ impl<'r> Builder<'_, 'r> {
     /// `anyOf` / `oneOf` flattened into the conjunction) from an earlier conjunct is left out:
     /// validating the earlier one validates it. Conjuncts come in discovery order, so in a
     /// cycle the first one stays. `None` for an empty conjunction (any value) or when a conjunct
-    /// has no location (the `anyOf` of a property both `then` and `else` define).
+    /// has no location (its pointer starts with [`BUILT`]).
     fn validation_target(
         &self,
         flat: &Flat<'r>,
@@ -1934,7 +1940,10 @@ impl<'r> Facts<'r> {
                         vec![Conjunct {
                             schema: merged,
                             scope: c.scope,
-                            pointer: pointer_push(&pointer_push(&c.pointer, "then|else"), key),
+                            pointer: format!(
+                                "{BUILT}{}",
+                                pointer_push(&pointer_push(&c.pointer, "then|else"), key)
+                            ),
                             skip: 0,
                         }]
                     } else if facts.deny_unknown {
