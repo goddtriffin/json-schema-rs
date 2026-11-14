@@ -271,13 +271,14 @@ fn pointer_push(pointer: &str, token: &str) -> String {
 }
 
 /// Builds the type graph for `schemas`; `registries[i]` is `schemas[i]`'s registry.
-pub(crate) fn build(
-    schemas: &[&Schema],
-    registries: &[Registry<'_>],
-    conditionals: &Conditionals,
+pub(crate) fn build<'r>(
+    schemas: &[&'r Schema],
+    registries: &'r [Registry<'r>],
+    conditionals: &'r Conditionals,
     settings: &CodeGenSettings,
-) -> CodeGenResult<TypeGraph> {
+) -> CodeGenResult<(TypeGraph, TargetSources<'r>)> {
     let mut graph: TypeGraph = TypeGraph::default();
+    let mut sources: TargetSources<'r> = HashMap::new();
     let mut memo: HashMap<(usize, NodeKey), TypeId> = HashMap::new();
     let classes: Vec<usize> = if settings.validates() && registries.len() > 1 {
         registry_classes(registries)
@@ -287,6 +288,7 @@ pub(crate) fn build(
     for (index, (schema, registry)) in schemas.iter().zip(registries).enumerate() {
         let mut builder: Builder<'_, '_> = Builder {
             graph: &mut graph,
+            sources: &mut sources,
             memo: &mut memo,
             registry,
             conditionals,
@@ -303,8 +305,14 @@ pub(crate) fn build(
             })?;
         graph.schemas.push(roots);
     }
-    Ok(graph)
+    sources.retain(|id, _| graph.targets[id.index()].is_some());
+    Ok((graph, sources))
 }
+
+/// Per node with a validation target, the schema objects of its target (each with the scope it
+/// is evaluated in), in the order of its URIs: what codegen compiles to compare validation
+/// without resolving the URIs again.
+pub(crate) type TargetSources<'r> = HashMap<TypeId, Vec<(&'r JsonSchema, Scope)>>;
 
 /// Per input, the first input whose registry holds the same documents (see
 /// [`ValidationTarget::class`]): what lets identical inputs without a URI share their types.
@@ -337,6 +345,8 @@ fn registry_classes(registries: &[Registry<'_>]) -> Vec<usize> {
 
 struct Builder<'g, 'r> {
     graph: &'g mut TypeGraph,
+    /// See [`TargetSources`].
+    sources: &'g mut TargetSources<'r>,
     memo: &'g mut HashMap<(usize, NodeKey), TypeId>,
     registry: &'r Registry<'r>,
     conditionals: &'r Conditionals,
@@ -434,8 +444,11 @@ impl<'r> Builder<'_, 'r> {
         } else {
             let id: TypeId = self.graph.push(TypeNode::Pending);
             self.memo.insert((self.schema_index, key), id);
-            if self.settings.validates() {
-                self.graph.targets[id.index()] = self.validation_target(&flat);
+            if self.settings.validates()
+                && let Some((target, sources)) = self.validation_target(&flat)
+            {
+                self.graph.targets[id.index()] = Some(target);
+                self.sources.insert(id, sources);
             }
             self.add_intrinsic_proposals(id, &flat);
             self.queue.push((id, flat, request.mask, context.clone()));
@@ -451,13 +464,17 @@ impl<'r> Builder<'_, 'r> {
     /// validating the earlier one validates it. Conjuncts come in discovery order, so in a
     /// cycle the first one stays. `None` for an empty conjunction (any value) or when a conjunct
     /// has no location (the `anyOf` of a property both `then` and `else` define).
-    fn validation_target(&self, flat: &Flat<'r>) -> Option<ValidationTarget> {
+    fn validation_target(
+        &self,
+        flat: &Flat<'r>,
+    ) -> Option<(ValidationTarget, Vec<(&'r JsonSchema, Scope)>)> {
         if flat.conjuncts.is_empty() {
             return None;
         }
         let address = |s: &JsonSchema| std::ptr::from_ref(s) as usize;
         let mut reached: HashSet<usize> = HashSet::new();
         let mut uris: Vec<String> = Vec::new();
+        let mut sources: Vec<(&'r JsonSchema, Scope)> = Vec::new();
         let mut local: bool = false;
         for c in &flat.conjuncts {
             let s: &'r JsonSchema = c.schema;
@@ -467,6 +484,7 @@ impl<'r> Builder<'_, 'r> {
                 let uri: String = self.registry.location_uri(c.scope, &segments)?;
                 local |= uri.starts_with("json-schema:");
                 uris.push(uri);
+                sources.push((s, c.scope));
             }
             if let Some(ref_str) = s.ref_.as_deref()
                 && let Ok(resolved) = self.registry.resolve(c.scope, ref_str)
@@ -488,12 +506,15 @@ impl<'r> Builder<'_, 'r> {
                 }
             }
         }
-        Some(ValidationTarget {
-            schema: self.schema_index,
-            uris,
-            local,
-            class: self.class,
-        })
+        Some((
+            ValidationTarget {
+                schema: self.schema_index,
+                uris,
+                local,
+                class: self.class,
+            },
+            sources,
+        ))
     }
 
     /// Proposals from the conjunction itself: the `$defs` key of its first schema, its title.

@@ -13,7 +13,9 @@
 //!
 //! Every pass is iterative (explicit stacks and work lists).
 
-use super::{Annotations, TypeGraph, TypeId, TypeNode, scalar_json_type};
+use super::{
+    Annotations, TypeGraph, TypeId, TypeNode, UnionKind, ValidationTarget, scalar_json_type,
+};
 use crate::code_gen::settings::DedupeMode;
 use crate::json_schema::JsonType;
 use std::collections::{BTreeSet, HashMap};
@@ -169,31 +171,69 @@ fn local_signature(node: &TypeNode, mode: DedupeMode) -> String {
     }
 }
 
-/// Merges structurally identical nodes. Nodes start in classes by [`local_signature`]; classes
-/// are split by their children's classes until stable (partition refinement), so two recursive
-/// types are equal exactly when their unfoldings are. Every id in the graph is then rewritten to
-/// its class's lowest id, and name proposals are pooled there. With [`DedupeMode::Disabled`]
-/// nothing is merged.
-pub(crate) fn dedup(graph: &mut TypeGraph, mode: DedupeMode) {
+/// Each node's own content ([`local_signature`]) as a number: equal numbers, equal content.
+/// Computed once for [`merge_candidates`] and [`dedup`]; empty with [`DedupeMode::Disabled`].
+pub(crate) fn local_classes(graph: &TypeGraph, mode: DedupeMode) -> Vec<u32> {
     if mode == DedupeMode::Disabled {
+        return Vec::new();
+    }
+    let mut ids: HashMap<String, u32> = HashMap::new();
+    graph
+        .nodes
+        .iter()
+        .map(|node| {
+            let next: u32 = u32::try_from(ids.len()).expect("fewer than 2^32 classes");
+            *ids.entry(local_signature(node, mode)).or_insert(next)
+        })
+        .collect()
+}
+
+/// The nodes whose validation must be compared for [`dedup`]: a node with a target whose own
+/// content (`local`, from [`local_classes`]) equals another node's with a different target. Every
+/// other node either merges with no one, or only with nodes of the same target, so its location
+/// identity ([`ValidationTarget::key`]) decides as well, without compiling its schema.
+pub(crate) fn merge_candidates(graph: &TypeGraph, local: &[u32]) -> Vec<bool> {
+    // Per local class: the first target key seen, and whether a second one differs.
+    let mut groups: HashMap<u32, (String, bool)> = HashMap::new();
+    for (target, &class) in graph.targets.iter().zip(local) {
+        if let Some(target) = target {
+            let key: String = target.key();
+            groups
+                .entry(class)
+                .and_modify(|(first, differs)| *differs |= *first != key)
+                .or_insert((key, false));
+        }
+    }
+    graph
+        .targets
+        .iter()
+        .zip(local)
+        .map(|(target, class)| target.is_some() && groups[class].1)
+        .collect()
+}
+
+/// Merges structurally identical nodes. Nodes start in classes by [`local_signature`] and, for a
+/// node with a validation target, its validation key (`validation_keys`, one per node or empty:
+/// two self-validating types merge only when they validate the same); `local` holds the
+/// signatures as [`local_classes`] numbers it, and is empty with [`DedupeMode::Disabled`]. Classes are split by their
+/// children's classes until stable (partition refinement), so two recursive types are equal
+/// exactly when their unfoldings are. Every id in the graph is then rewritten to its class's
+/// lowest id, and name proposals are pooled there. With [`DedupeMode::Disabled`] nothing is
+/// merged.
+pub(crate) fn dedup(graph: &mut TypeGraph, local: &[u32], validation_keys: &[Option<String>]) {
+    record_variant_targets(graph);
+    if local.is_empty() {
         return;
     }
     let mut class: Vec<u32> = {
-        let mut ids: HashMap<String, u32> = HashMap::new();
-        graph
-            .nodes
+        let mut ids: HashMap<(u32, Option<&str>), u32> = HashMap::new();
+        local
             .iter()
-            .zip(&graph.targets)
-            .map(|(node, target)| {
+            .enumerate()
+            .map(|(i, &own)| {
                 let next: u32 = u32::try_from(ids.len()).expect("fewer than 2^32 classes");
-                // A self-validating type validates against its schema locations, so two nodes
-                // merge only when those are the same (see `ValidationTarget`).
-                let mut signature: String = local_signature(node, mode);
-                if let Some(target) = target {
-                    signature.push_str("|target:");
-                    signature.push_str(&target.key());
-                }
-                *ids.entry(signature).or_insert(next)
+                let key: Option<&str> = validation_keys.get(i).and_then(Option::as_deref);
+                *ids.entry((own, key)).or_insert(next)
             })
             .collect()
     };
@@ -245,6 +285,30 @@ pub(crate) fn dedup(graph: &mut TypeGraph, mode: DedupeMode) {
             *id = canon[id.index()];
         }
     }
+}
+
+/// Records, per `anyOf` / `oneOf` union, its variants' validation targets as built: the union's
+/// walk built them, so the union's registry resolves them and its compiled branches are their
+/// entries. Merging may give a variant's type the target of an equivalent schema elsewhere,
+/// even in another document; the union keeps validating its variants at its own branches.
+fn record_variant_targets(graph: &mut TypeGraph) {
+    let mut recorded: HashMap<TypeId, Vec<Option<ValidationTarget>>> = HashMap::new();
+    for (i, node) in graph.nodes.iter().enumerate() {
+        if let TypeNode::Union(union) = node
+            && union.kind != UnionKind::TypeArray
+        {
+            let targets: Vec<Option<ValidationTarget>> = union
+                .variants
+                .iter()
+                .map(|v| graph.targets[graph.peel(v.ty).index()].clone())
+                .collect();
+            if targets.iter().any(Option::is_some) {
+                let id: TypeId = TypeId(u32::try_from(i).expect("fewer than 2^32 nodes"));
+                recorded.insert(id, targets);
+            }
+        }
+    }
+    graph.variant_targets = recorded;
 }
 
 /// A by-value slot: (index in [`TypeNode::children`], the named node it holds).
