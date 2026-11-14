@@ -492,7 +492,7 @@ hand-written `impl ToJsonSchema` only needs `json_schema()`; implement
 
 The derived schema accepts exactly what the type's serde `Deserialize` accepts, so
 a type moves from schemars by changing only the derive name. It follows serde's
-`rename`, `rename_all`, `rename_all_fields`, `default`, `skip`, `skip_deserializing`,
+`rename`, `rename_all`, `rename_all_fields`, `alias`, `default`, `skip`, `skip_deserializing`,
 `deserialize_with`, `flatten` (structs, maps, enums, `Option`s of them),
 `transparent`, `from` / `try_from`, every enum representation (external,
 `tag`, `tag` + `content`, `untagged`, a variant's `untagged`, `other`), unit and

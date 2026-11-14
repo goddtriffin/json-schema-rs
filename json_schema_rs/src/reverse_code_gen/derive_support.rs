@@ -66,6 +66,8 @@ impl DefaultLiteral {
 pub struct FieldSpec {
     /// The JSON property key (`#[serde(rename)]` or the field name).
     pub key: &'static str,
+    /// The field's `#[serde(alias = "...")]` keys, which serde reads as `key`.
+    pub aliases: &'static [&'static str],
     /// The schema of the field's type (one `Option` stripped for an optional field).
     pub schema: SchemaFn,
     /// Whether the key is in `required`.
@@ -144,13 +146,56 @@ pub fn object_properties(
         if let Some(default) = field.default {
             schema.default_value = default.to_value();
         }
-        if field.required {
+        if field.required && field.aliases.is_empty() {
             required.push(field.key.to_string());
+        }
+        for alias in field.aliases {
+            properties.insert((*alias).to_string(), Schema::from(schema.clone()));
         }
         properties.insert(field.key.to_string(), Schema::from(schema));
     }
     let required: Option<Vec<String>> = (!required.is_empty()).then_some(required);
     (properties, required)
+}
+
+/// What an aliased field's names require of the object: serde reads the field from any one of
+/// them and rejects a second as a duplicate, so a required field's names are a `oneOf` of
+/// single-key `required` sets, and an optional field's are `not` any two together.
+fn alias_constraints(fields: &[FieldSpec]) -> Vec<Schema> {
+    let required_one = |key: &str| -> Schema {
+        Schema::from(JsonSchema {
+            required: Some(vec![key.to_string()]),
+            ..JsonSchema::default()
+        })
+    };
+    let mut constraints: Vec<Schema> = Vec::new();
+    for field in fields.iter().filter(|field| !field.aliases.is_empty()) {
+        let names: Vec<&str> = std::iter::once(field.key)
+            .chain(field.aliases.iter().copied())
+            .collect();
+        if field.required {
+            constraints.push(Schema::from(JsonSchema {
+                one_of: Some(names.iter().map(|name| required_one(name)).collect()),
+                ..JsonSchema::default()
+            }));
+            continue;
+        }
+        let mut pairs: Vec<serde_json::Value> = Vec::new();
+        for (index, first) in names.iter().enumerate() {
+            for second in &names[index + 1..] {
+                pairs.push(serde_json::json!({ "required": [first, second] }));
+            }
+        }
+        let forbidden: serde_json::Value = if pairs.len() == 1 {
+            pairs.pop().unwrap_or(serde_json::Value::Bool(true))
+        } else {
+            serde_json::json!({ "anyOf": pairs })
+        };
+        let mut constraint: JsonSchema = JsonSchema::default();
+        constraint.extensions.insert("not".to_string(), forbidden);
+        constraints.push(Schema::from(constraint));
+    }
+    constraints
 }
 
 /// The description from doc lines: each line trimmed, joined with `\n`, leading and trailing
@@ -251,6 +296,7 @@ pub fn object_schema(generator: &mut SchemaGenerator, spec: &ObjectSpec) -> Json
         Unnamed::Open
     };
     let mut parts: Vec<Schema> = Vec::new();
+    let aliases: Vec<Schema> = alias_constraints(spec.fields);
     for flatten in spec.flattens {
         let mut inner: JsonSchema = (flatten.schema)(generator);
         if !is_plain_object(&inner) {
@@ -313,7 +359,11 @@ pub fn object_schema(generator: &mut SchemaGenerator, spec: &ObjectSpec) -> Json
     };
     if parts.is_empty() {
         schema.additional_properties = unnamed;
+        if !aliases.is_empty() {
+            schema.all_of = Some(aliases);
+        }
     } else {
+        parts.extend(aliases);
         schema.all_of = Some(parts);
         if let Some(unnamed) = unnamed {
             schema.extensions.insert(
@@ -420,6 +470,8 @@ pub enum VariantShape {
 pub struct VariantSpec {
     /// The serde name (the tag value).
     pub name: &'static str,
+    /// The variant's `#[serde(alias = "...")]` names, which serde reads as `name`.
+    pub aliases: &'static [&'static str],
     /// The variant's `///` doc lines (see [`doc_description`]).
     pub doc: &'static [&'static str],
     /// The variant's fields.
@@ -457,7 +509,7 @@ pub fn enum_schema(generator: &mut SchemaGenerator, spec: &EnumSpec) -> JsonSche
         .variants
         .iter()
         .filter(|variant| !variant.untagged && !variant.other)
-        .map(|variant| serde_json::Value::String(variant.name.to_string()))
+        .flat_map(variant_names)
         .collect();
     for variant in spec.variants {
         let tagging: Option<Tagging> = (!variant.untagged).then_some(spec.tagging);
@@ -617,13 +669,29 @@ fn external_branch(
     unit_names: &mut Vec<serde_json::Value>,
 ) -> Option<JsonSchema> {
     if matches!(variant.shape, VariantShape::Unit) && !spec.flattened {
-        unit_names.push(serde_json::Value::String(variant.name.to_string()));
+        unit_names.extend(variant_names(variant));
         return None;
     }
-    Some(single_key_object(
-        variant.name,
-        payload_schema(generator, variant.shape),
-    ))
+    let payload: JsonSchema = payload_schema(generator, variant.shape);
+    if variant.aliases.is_empty() {
+        return Some(single_key_object(variant.name, payload));
+    }
+    // One single-key object per name: the names are distinct keys, so exactly one matches.
+    let branches: Vec<Schema> = std::iter::once(variant.name)
+        .chain(variant.aliases.iter().copied())
+        .map(|name| Schema::from(single_key_object(name, payload.clone())))
+        .collect();
+    Some(JsonSchema {
+        one_of: Some(branches),
+        ..JsonSchema::default()
+    })
+}
+
+/// A variant's serde name and its aliases, as JSON strings.
+fn variant_names(variant: &VariantSpec) -> impl Iterator<Item = serde_json::Value> {
+    std::iter::once(variant.name)
+        .chain(variant.aliases.iter().copied())
+        .map(|name| serde_json::Value::String(name.to_string()))
 }
 
 /// The schema of a tag key's value: the variant's name, or for `#[serde(other)]` any string
@@ -642,7 +710,7 @@ fn tag_schema(variant: &VariantSpec, other_names: &[serde_json::Value]) -> JsonS
         }
         schema
     } else {
-        string_values(vec![serde_json::Value::String(variant.name.to_string())])
+        string_values(variant_names(variant).collect())
     }
 }
 
@@ -785,6 +853,7 @@ mod tests {
     /// A field with no attributes over [`base_schema`].
     const PLAIN: FieldSpec = FieldSpec {
         key: "k",
+        aliases: &[],
         schema: base_schema,
         required: false,
         doc: &[],
@@ -946,6 +1015,26 @@ mod tests {
             FieldSpec { key: "m", ..PLAIN },
             FieldSpec {
                 key: "a",
+                required: true,
+                ..PLAIN
+            },
+        ])
+        .1;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn required_aliased_field_is_left_out_of_required() {
+        let expected: Option<Vec<String>> = Some(vec!["b".to_string()]);
+        let actual: Option<Vec<String>> = build(&[
+            FieldSpec {
+                key: "a",
+                aliases: &["x"],
+                required: true,
+                ..PLAIN
+            },
+            FieldSpec {
+                key: "b",
                 required: true,
                 ..PLAIN
             },

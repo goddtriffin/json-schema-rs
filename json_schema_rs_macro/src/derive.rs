@@ -561,6 +561,16 @@ fn serde_str(attrs: &[Attribute], key: &str) -> SynResult<Option<String>> {
         .and_then(|arg| arg.value))
 }
 
+/// Every `#[serde(alias = "...")]` in `attrs`, in order, as string literals.
+fn serde_aliases(attrs: &[Attribute], span: proc_macro2::Span) -> SynResult<Vec<LitStr>> {
+    Ok(serde_args(attrs)?
+        .into_iter()
+        .filter(|arg| arg.name == "alias")
+        .filter_map(|arg| arg.value)
+        .map(|alias: String| LitStr::new(&alias, span))
+        .collect())
+}
+
 /// Whether `attrs` carry the bare serde flag `#[serde(flag)]` (e.g. `flatten`, `untagged`).
 fn serde_flag(attrs: &[Attribute], flag: &str) -> SynResult<bool> {
     Ok(serde_args(attrs)?
@@ -1037,11 +1047,13 @@ fn field_spec(
         },
     );
     let deprecated: bool = field_deprecated(field)? == Some(true);
+    let aliases: Vec<LitStr> = serde_aliases(&field.attrs, span)?;
     let default: TokenStream2 =
         field_default(field)?.map_or_else(|| quote! { None }, |d| quote! { Some(#d) });
     Ok(quote! {
         #support::FieldSpec {
             key: #key_lit,
+            aliases: &[#(#aliases),*],
             schema: #schema_fn,
             required: #required,
             doc: &[#(#doc),*],
@@ -1399,9 +1411,11 @@ fn enum_spec_body(
         };
         let untagged: bool = serde_flag(&variant.attrs, "untagged")?;
         let other: bool = serde_flag(&variant.attrs, "other")?;
+        let aliases: Vec<LitStr> = serde_aliases(&variant.attrs, variant.ident.span())?;
         specs.push(quote! {
             #support::VariantSpec {
                 name: #name_lit,
+                aliases: &[#(#aliases),*],
                 doc: &[#(#doc),*],
                 shape: #shape,
                 untagged: #untagged,
@@ -1446,6 +1460,9 @@ fn value_enum_body(
             let external: String = variant_external_name(variant, rule)?;
             let lit: LitStr = LitStr::new(&external, variant.ident.span());
             values.push(quote! { #support::EnumValue::Name(#lit) });
+            for alias in serde_aliases(&variant.attrs, variant.ident.span())? {
+                values.push(quote! { #support::EnumValue::Name(#alias) });
+            }
         }
     }
 
