@@ -1,21 +1,32 @@
-//! Reading serde's container `#[serde(rename_all = "...")]`; the case conversion itself is
+//! Reading serde's `#[serde(rename_all = "...")]` (and `rename_all_fields`); the case conversion itself is
 //! [`json_schema_rs::sanitizers::RenameRule`], shared with codegen.
 
 use json_schema_rs::sanitizers::RenameRule;
 use syn::{Attribute, Error, LitStr, Result as SynResult, Token};
 
-/// The rule of the container's `#[serde(rename_all = "...")]`, if it has one; an unknown rule
-/// is an error at its literal, with serde's list of the valid ones.
+/// The rule of `#[serde(<key> = "...")]` (`rename_all`, `rename_all_fields`) in `attrs`, or of
+/// its `deserialize = "..."` in the list form, if present; an unknown rule is an error at its
+/// literal, with serde's list of the valid ones.
 ///
 /// The other arguments of the container's serde attributes are skipped whatever their form
 /// (serde validates them).
-pub fn rename_rule_from_attrs(attrs: &[Attribute]) -> SynResult<Option<RenameRule>> {
+pub fn rename_rule_from_attrs(attrs: &[Attribute], key: &str) -> SynResult<Option<RenameRule>> {
     let mut rule: Option<RenameRule> = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("serde")) {
         attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename_all") && meta.input.peek(Token![=]) {
+            if meta.path.is_ident(key) && meta.input.peek(Token![=]) {
                 let lit: LitStr = meta.value()?.parse()?;
                 rule = Some(rename_rule_from_lit(&lit)?);
+            } else if meta.path.is_ident(key) && meta.input.peek(syn::token::Paren) {
+                // `rename_all(serialize = "...", deserialize = "...")`: the deserialize rule
+                // names what serde reads.
+                meta.parse_nested_meta(|inner| {
+                    let lit: LitStr = inner.value()?.parse()?;
+                    if inner.path.is_ident("deserialize") {
+                        rule = Some(rename_rule_from_lit(&lit)?);
+                    }
+                    Ok(())
+                })?;
             } else if meta.input.peek(Token![=]) {
                 let _: syn::Expr = meta.value()?.parse()?;
             } else if meta.input.peek(syn::token::Paren) {
@@ -59,7 +70,7 @@ mod tests {
     fn rule_of(source: &str) -> syn::Result<Option<RenameRule>> {
         let tokens: TokenStream = TokenStream::from_str(source).expect("tokenize");
         let input: DeriveInput = syn::parse2(tokens).expect("parse");
-        rename_rule_from_attrs(&input.attrs)
+        rename_rule_from_attrs(&input.attrs, "rename_all")
     }
 
     #[test]
@@ -69,6 +80,24 @@ mod tests {
             "#[serde(deny_unknown_fields, rename_all = \"camelCase\", bound(serialize = \"\"))] struct S;",
         )
         .expect("parses");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn container_rename_all_list_form_reads_the_deserialize_rule() {
+        let expected: Option<RenameRule> = Some(RenameRule::Kebab);
+        let actual: Option<RenameRule> = rule_of(
+            "#[serde(rename_all(serialize = \"camelCase\", deserialize = \"kebab-case\"))] struct S;",
+        )
+        .expect("parses");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn container_rename_all_list_form_without_deserialize_has_no_rule() {
+        let expected: Option<RenameRule> = None;
+        let actual: Option<RenameRule> =
+            rule_of("#[serde(rename_all(serialize = \"camelCase\"))] struct S;").expect("parses");
         assert_eq!(expected, actual);
     }
 

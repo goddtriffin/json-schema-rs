@@ -491,7 +491,8 @@ fn field_default(field: &Field) -> SynResult<Option<TokenStream2>> {
     Ok(None)
 }
 
-/// One argument of a `#[serde(...)]` attribute: its name and, for `name = "..."`, the string.
+/// One argument of a `#[serde(...)]` attribute: its name and, for `name = "..."` (or the
+/// `deserialize = "..."` of `name(...)`), the string.
 struct SerdeArg {
     name: String,
     value: Option<String>,
@@ -523,9 +524,27 @@ fn serde_args(attrs: &[Attribute]) -> SynResult<Vec<SerdeArg>> {
                     value = Some(lit_str.value());
                 }
             } else if meta.input.peek(syn::token::Paren) {
-                let content;
-                syn::parenthesized!(content in meta.input);
-                content.parse::<TokenStream2>()?;
+                // `rename(serialize = "a", deserialize = "b")`: the deserialize value names
+                // what serde reads; other list forms (`bound(...)`) carry no value used here.
+                let mut deserialize: Option<String> = None;
+                let parsed: SynResult<()> = meta.parse_nested_meta(|inner| {
+                    if inner.input.peek(Token![=]) {
+                        let expr: Expr = inner.value()?.parse()?;
+                        if inner.path.is_ident("deserialize")
+                            && let Expr::Lit(syn::ExprLit {
+                                lit: Lit::Str(lit_str),
+                                ..
+                            }) = expr
+                        {
+                            deserialize = Some(lit_str.value());
+                        }
+                    }
+                    Ok(())
+                });
+                if parsed.is_err() {
+                    deserialize = None;
+                }
+                value = deserialize;
             }
             args.push(SerdeArg { name, value });
             Ok(())
@@ -547,6 +566,16 @@ fn serde_flag(attrs: &[Attribute], flag: &str) -> SynResult<bool> {
     Ok(serde_args(attrs)?
         .iter()
         .any(|arg| arg.name == flag && arg.value.is_none()))
+}
+
+/// Whether `attrs` carry the serde argument `name` in any form (`default`, `default = "f"`).
+fn serde_has(attrs: &[Attribute], name: &str) -> SynResult<bool> {
+    Ok(serde_args(attrs)?.iter().any(|arg| arg.name == name))
+}
+
+/// Whether serde never reads `attrs`' field or variant (`skip`, `skip_deserializing`).
+fn serde_skipped(attrs: &[Attribute]) -> SynResult<bool> {
+    Ok(serde_has(attrs, "skip")? || serde_has(attrs, "skip_deserializing")?)
 }
 
 /// Whether `attrs` carry the bare flag `#[json_schema(flag)]` (e.g. `required`, `one_of`).
@@ -598,36 +627,6 @@ fn last_segment_is(ty: &Type, name: &str) -> bool {
         .segments
         .last()
         .is_some_and(|seg| seg.ident == name)
-}
-
-/// The value type `V` of `BTreeMap<String, V>`, or `None` for any other type.
-fn btree_map_value_type(ty: &Type) -> Option<&Type> {
-    let Type::Path(type_path) = ty else {
-        return None;
-    };
-    let seg = type_path.path.segments.last()?;
-    if seg.ident != "BTreeMap" {
-        return None;
-    }
-    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-        return None;
-    };
-    let mut types = args.args.iter().filter_map(|arg| match arg {
-        syn::GenericArgument::Type(t) => Some(t),
-        _ => None,
-    });
-    let (Some(key), Some(value), None) = (types.next(), types.next(), types.next()) else {
-        return None;
-    };
-    let Type::Path(key_path) = key else {
-        return None;
-    };
-    key_path
-        .path
-        .segments
-        .last()
-        .is_some_and(|seg| seg.ident == "String")
-        .then_some(value)
 }
 
 /// Returns the serde name of an enum variant: its `rename`, else its name under the
@@ -739,111 +738,227 @@ fn container_exprs(attrs: &[Attribute]) -> SynResult<ContainerExprs> {
 
 pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
     let name: Ident = input.ident;
+    let attrs: &[Attribute] = &input.attrs;
+
+    if let Some(ty) = forwarded_type(&name, attrs)? {
+        return Ok(forwarding_impl(&name, &ty));
+    }
+    if let Some(field) = transparent_field(&name, attrs, &input.data)? {
+        return expand_newtype_to_json_schema(&name, attrs, &field);
+    }
 
     if let syn::Data::Enum(data_enum) = &input.data {
-        return expand_enum_to_json_schema(&name, &input.attrs, data_enum);
+        return expand_enum_to_json_schema(&name, attrs, data_enum);
     }
 
-    let fields = match &input.data {
-        syn::Data::Struct(s) => match &s.fields {
-            Fields::Named(named) => &named.named,
-            Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                return expand_newtype_to_json_schema(&name, &input.attrs, &unnamed.unnamed[0]);
+    let syn::Data::Struct(data_struct) = &input.data else {
+        return Err(Error::new_spanned(
+            name,
+            "ToJsonSchema derive only supports structs and enums",
+        ));
+    };
+    let container: ContainerExprs = container_exprs(attrs)?;
+    let support: TokenStream2 = support();
+    let schema_expr: TokenStream2 = match &data_struct.fields {
+        Fields::Named(named) => {
+            let spec: TokenStream2 = object_spec(
+                &name,
+                named.named.iter(),
+                rename_rule_from_attrs(attrs, "rename_all")?,
+                serde_has(attrs, "default")?,
+            )?;
+            quote! {
+                static SPEC: #support::ObjectSpec = #spec;
+                #support::object_schema(generator, &SPEC)
             }
-            Fields::Unnamed(_) | Fields::Unit => {
-                return Err(Error::new_spanned(
-                    name,
-                    "ToJsonSchema derive only supports structs with named fields and newtypes (one unnamed field)",
-                ));
+        }
+        Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
+            return expand_newtype_to_json_schema(&name, attrs, &unnamed.unnamed[0]);
+        }
+        Fields::Unnamed(unnamed) => {
+            let items: Vec<Type> = unnamed
+                .unnamed
+                .iter()
+                .map(|field: &Field| replace_self(&field.ty, &name))
+                .collect();
+            quote! {
+                static ITEMS: &[#support::SchemaFn] = &[
+                    #(<#items as ::json_schema_rs::ToJsonSchema>::json_schema_with),*
+                ];
+                #support::tuple_schema(generator, ITEMS)
+            }
+        }
+        // A unit struct deserializes from `null`.
+        Fields::Unit => quote! {
+            let _ = generator;
+            ::json_schema_rs::JsonSchema {
+                type_: Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::Null)),
+                ..::json_schema_rs::JsonSchema::default()
             }
         },
-        syn::Data::Enum(_) | syn::Data::Union(_) => {
-            return Err(Error::new_spanned(
-                name,
-                "ToJsonSchema derive only supports structs and enums",
-            ));
-        }
     };
+    let body: TokenStream2 = with_container(&container, &schema_expr);
+    Ok(named_type_impl(&name, container.id.as_deref(), &body, None))
+}
 
-    let container: ContainerExprs = container_exprs(&input.attrs)?;
-    let rename_rule: Option<RenameRule> = rename_rule_from_attrs(&input.attrs)?;
+/// `schema_expr` (statements ending in a `JsonSchema` expression) with the container's `$id`,
+/// `title`, `description` (or doc comments) and `comment` on top: each one set replaces what
+/// the schema has.
+fn with_container(container: &ContainerExprs, schema_expr: &TokenStream2) -> TokenStream2 {
     let ContainerExprs {
-        title: title_expr,
-        description: description_expr,
-        comment: comment_expr,
+        title,
+        description,
+        comment,
         id_expr,
-        id,
+        ..
     } = container;
-
-    let support: TokenStream2 = support();
-    let mut field_specs: Vec<TokenStream2> = Vec::new();
-    // `additionalProperties`: closed (`false`) unless a `#[serde(flatten)]` map collects the
-    // keys that are not properties.
-    let mut additional_properties_expr: Option<TokenStream2> = None;
-
-    for field in fields {
-        let ty: &Type = &field.ty;
-        if serde_flag(&field.attrs, "flatten")? {
-            let Some(value_ty) = btree_map_value_type(ty) else {
-                return Err(Error::new_spanned(
-                    ty,
-                    "ToJsonSchema derive supports #[serde(flatten)] only on a BTreeMap<String, V> field (it becomes additionalProperties)",
-                ));
-            };
-            if additional_properties_expr.is_some() {
-                return Err(Error::new_spanned(
-                    field,
-                    "ToJsonSchema derive supports at most one #[serde(flatten)] field",
-                ));
-            }
-            // A map of any value (`{}`) is the same as no `additionalProperties`: leave it out.
-            additional_properties_expr = Some(quote! {
-                #support::flattened_map_additional_properties(
-                    generator,
-                    <#value_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with,
-                )
-            });
-            continue;
-        }
-        field_specs.push(field_spec(&name, field, rename_rule)?);
-    }
-
-    let additional_properties_expr: TokenStream2 = additional_properties_expr
-        .unwrap_or_else(|| quote! { Some(::json_schema_rs::Schema::Bool(false)) });
-    // Every field is static data: the body is one builder call whatever the struct's width.
-    let body: TokenStream2 = quote! {
-        static FIELDS: &[#support::FieldSpec] = &[#(#field_specs),*];
-        let (properties, required): (
-            ::std::collections::BTreeMap<::std::string::String, ::json_schema_rs::Schema>,
-            ::core::option::Option<::std::vec::Vec<::std::string::String>>,
-        ) = #support::object_properties(generator, FIELDS);
-        let additional_properties: ::core::option::Option<::json_schema_rs::Schema> =
-            #additional_properties_expr;
+    quote! {
+        let schema: ::json_schema_rs::JsonSchema = { #schema_expr };
         ::json_schema_rs::JsonSchema {
-            id: #id_expr,
-            type_: Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::Object)),
-            properties,
-            additional_properties,
-            required,
-            title: #title_expr,
-            description: #description_expr,
-            comment: #comment_expr,
-            ..::json_schema_rs::JsonSchema::default()
+            id: #id_expr.or(schema.id),
+            title: #title.or(schema.title),
+            description: #description.or(schema.description),
+            comment: #comment.or(schema.comment),
+            ..schema
         }
+    }
+}
+
+/// The type serde deserializes the container through, if it is not the container's own
+/// shape: the type of `#[serde(from = "...")]` / `#[serde(try_from = "...")]`.
+fn forwarded_type(name: &Ident, attrs: &[Attribute]) -> SynResult<Option<Type>> {
+    for key in ["from", "try_from"] {
+        if let Some(path) = serde_str(attrs, key)? {
+            let ty: Type = syn::parse_str(&path).map_err(|error: Error| {
+                Error::new_spanned(name, format!("serde({key} = \"{path}\"): {error}"))
+            })?;
+            return Ok(Some(ty));
+        }
+    }
+    Ok(None)
+}
+
+/// The one read field of a `#[serde(transparent)]` struct: serde reads the struct as that
+/// field, so it is a newtype of the field's type (a named type carrying the container's
+/// constraints and annotations).
+fn transparent_field(
+    name: &Ident,
+    attrs: &[Attribute],
+    data: &syn::Data,
+) -> SynResult<Option<Field>> {
+    if !serde_flag(attrs, "transparent")? {
+        return Ok(None);
+    }
+    let syn::Data::Struct(data_struct) = data else {
+        return Err(Error::new_spanned(
+            name,
+            "#[serde(transparent)] applies to structs only",
+        ));
     };
-    Ok(named_type_impl(
-        &name,
-        id.as_deref(),
-        &quote! { generator },
-        &body,
+    for field in &data_struct.fields {
+        if !serde_skipped(&field.attrs)? {
+            return Ok(Some(Field {
+                ty: replace_self(&field.ty, name),
+                ..field.clone()
+            }));
+        }
+    }
+    Err(Error::new_spanned(
+        name,
+        "#[serde(transparent)] needs one field that is not skipped",
     ))
 }
 
-/// The constant `FieldSpec` expression of one (non-flattened) named field of struct `name`.
+/// The impl of a type serde reads as another type `ty`: every method is `ty`'s, so the type
+/// has exactly `ty`'s schema and shares its `$defs` entry.
+fn forwarding_impl(name: &Ident, ty: &Type) -> TokenStream2 {
+    quote! {
+        impl ::json_schema_rs::ToJsonSchema for #name {
+            fn json_schema() -> ::json_schema_rs::ReverseCodeGenResult {
+                <#ty as ::json_schema_rs::ToJsonSchema>::json_schema()
+            }
+
+            fn json_schema_with(
+                generator: &mut ::json_schema_rs::SchemaGenerator,
+            ) -> ::json_schema_rs::JsonSchema {
+                <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator)
+            }
+
+            fn json_schema_flattened(
+                generator: &mut ::json_schema_rs::SchemaGenerator,
+            ) -> ::json_schema_rs::JsonSchema {
+                <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_flattened(generator)
+            }
+
+            fn schema_id() -> &'static str {
+                <#ty as ::json_schema_rs::ToJsonSchema>::schema_id()
+            }
+        }
+    }
+}
+
+/// The constant `ObjectSpec` expression of the named fields `fields` of type `name` (a struct
+/// or a struct variant), keys named by `rule`; `container_default` is the container's
+/// `#[serde(default)]`, which makes every field optional.
 ///
-/// An `Option` field is optional (one `Option` stripped) unless marked
-/// `#[json_schema(required)]`: then it is required and keeps `Option<T>`'s nullable schema.
-fn field_spec(name: &Ident, field: &Field, rule: Option<RenameRule>) -> SynResult<TokenStream2> {
+/// Fields serde never reads (`skip`, `skip_deserializing`) are left out; `#[serde(flatten)]`
+/// fields become flatten entries, merged into the object by the library.
+fn object_spec<'a>(
+    name: &Ident,
+    fields: impl Iterator<Item = &'a Field>,
+    rule: Option<RenameRule>,
+    container_default: bool,
+) -> SynResult<TokenStream2> {
+    let support: TokenStream2 = support();
+    let mut field_specs: Vec<TokenStream2> = Vec::new();
+    let mut flattens: Vec<TokenStream2> = Vec::new();
+    for field in fields {
+        if serde_skipped(&field.attrs)? {
+            continue;
+        }
+        if serde_flag(&field.attrs, "flatten")? {
+            let optional: bool = is_option_type(&field.ty);
+            let ty: Type = replace_self(
+                if optional {
+                    optional_inner_type(&field.ty)
+                } else {
+                    &field.ty
+                },
+                name,
+            );
+            flattens.push(quote! {
+                #support::FlattenSpec {
+                    schema: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_flattened,
+                    optional: #optional,
+                }
+            });
+            continue;
+        }
+        field_specs.push(field_spec(name, field, rule, container_default)?);
+    }
+    Ok(quote! {
+        #support::ObjectSpec {
+            fields: &[#(#field_specs),*],
+            flattens: &[#(#flattens),*],
+            closed: true,
+        }
+    })
+}
+
+/// The constant `FieldSpec` expression of one (non-flattened) named field of type `name`.
+///
+/// A field is optional when serde fills it in when absent: an `Option` (one `Option`
+/// stripped from its schema) read by serde's own deserializer, a `Nullable`, or a field with
+/// `#[serde(default)]` (its own or the container's, `container_default`).
+/// `#[json_schema(required)]` makes any field required, an `Option` keeping its nullable
+/// schema. `#[json_schema(with = "Type")]` gives the field `Type`'s schema, and
+/// `#[json_schema(schema_with = "path")]` the schema `path(generator)` returns.
+fn field_spec(
+    name: &Ident,
+    field: &Field,
+    rule: Option<RenameRule>,
+    container_default: bool,
+) -> SynResult<TokenStream2> {
     let support: TokenStream2 = support();
     let ty: &Type = &field.ty;
     let key: String = field_property_key(field, rule)?;
@@ -853,11 +968,37 @@ fn field_spec(name: &Ident, field: &Field, rule: Option<RenameRule>) -> SynResul
         .map_or_else(proc_macro2::Span::call_site, syn::spanned::Spanned::span);
     let key_lit: LitStr = LitStr::new(&key, span);
     let is_required: bool = json_schema_flag(&field.attrs, "required")?;
-    let is_opt: bool = is_option_type(ty) && !is_required;
+    // serde fills in an absent `Option` only through its own deserializer: a field with
+    // `deserialize_with` or `with` is required unless it has a default.
+    let custom_deserializer: bool =
+        serde_has(&field.attrs, "deserialize_with")? || serde_has(&field.attrs, "with")?;
+    let has_default: bool = container_default || serde_has(&field.attrs, "default")?;
+    let strip_option: bool = is_option_type(ty) && !is_required;
     // A `Nullable<T>` field is optional and its schema allows `null` (the type's own schema).
     let is_nullable: bool = last_segment_is(ty, "Nullable") && !is_required;
-    let schema_ty: Type = replace_self(if is_opt { optional_inner_type(ty) } else { ty }, name);
-    let required: bool = !is_opt && !is_nullable;
+    let absent_is_none: bool = strip_option && !custom_deserializer;
+    let required: bool = is_required || (!absent_is_none && !is_nullable && !has_default);
+    let schema_fn: TokenStream2 = if let Some(path) = field_str_attr(field, "schema_with")? {
+        let path: syn::ExprPath = syn::parse_str(&path).map_err(|error: Error| {
+            Error::new_spanned(
+                field,
+                format!("json_schema(schema_with = \"{path}\"): {error}"),
+            )
+        })?;
+        quote! { #path }
+    } else {
+        let schema_ty: Type = if let Some(with) = field_str_attr(field, "with")? {
+            syn::parse_str(&with).map_err(|error: Error| {
+                Error::new_spanned(field, format!("json_schema(with = \"{with}\"): {error}"))
+            })?
+        } else if strip_option {
+            optional_inner_type(ty).clone()
+        } else {
+            ty.clone()
+        };
+        let schema_ty: Type = replace_self(&schema_ty, name);
+        quote! { <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with }
+    };
     // `#[json_schema(description = "...")]` replaces the doc comments (a blank one is no
     // description).
     let description: Option<String> = field_str_attr(field, "description")?;
@@ -901,7 +1042,7 @@ fn field_spec(name: &Ident, field: &Field, rule: Option<RenameRule>) -> SynResul
     Ok(quote! {
         #support::FieldSpec {
             key: #key_lit,
-            schema: <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with,
+            schema: #schema_fn,
             required: #required,
             doc: &[#(#doc),*],
             minimum: #minimum,
@@ -985,21 +1126,18 @@ fn expand_newtype_to_json_schema(
         schema.pattern = #pattern_expr.or(schema.pattern);
         schema
     };
-    Ok(named_type_impl(
-        name,
-        id.as_deref(),
-        &quote! { generator },
-        &body,
-    ))
+    Ok(named_type_impl(name, id.as_deref(), &body, None))
 }
 
 /// Emits the `ToJsonSchema` impl for a named type (derived struct or enum) whose schema body
-/// is `body`, an expression that may use the generator bound to `generator_ident`.
+/// is `body`, statements ending in a `JsonSchema` that may use the generator `generator`.
 ///
 /// The body lives in a hidden inherent fn so it is written once: `json_schema_with` registers
 /// it in the generator's `$defs` and returns a `$ref`; `json_schema` builds it as the root
-/// with a fresh generator and adds `$schema`. The type's identity in the generator is its full
-/// path (`module_path!()` expands where the type is defined), so same-name types from
+/// with a fresh generator and adds `$schema`; `json_schema_flattened` inlines it (without
+/// `$id`) for `#[serde(flatten)]`, or inlines `flattened_body` when the type reads differently
+/// there (an externally tagged enum's unit variants). The type's identity in the generator is
+/// its full path (`module_path!()` expands where the type is defined), so same-name types from
 /// different modules get separate `$defs` entries.
 ///
 /// A type with `id` is its own schema resource, built through the generator's resource
@@ -1007,8 +1145,8 @@ fn expand_newtype_to_json_schema(
 fn named_type_impl(
     name: &Ident,
     id: Option<&str>,
-    generator_ident: &TokenStream2,
     body: &TokenStream2,
+    flattened_body: Option<&TokenStream2>,
 ) -> TokenStream2 {
     let name_lit: LitStr = LitStr::new(&name.to_string(), name.span());
     let (root_call, subschema_call): (TokenStream2, TokenStream2) = if let Some(id) = id {
@@ -1049,14 +1187,30 @@ fn named_type_impl(
             },
         )
     };
+    let (flattened_fn, flattened_path): (TokenStream2, TokenStream2) = match flattened_body {
+        Some(flattened_body) => (
+            quote! {
+                #[doc(hidden)]
+                fn __json_schema_rs_flattened_body(
+                    generator: &mut ::json_schema_rs::SchemaGenerator,
+                ) -> ::json_schema_rs::JsonSchema {
+                    #flattened_body
+                }
+            },
+            quote! { Self::__json_schema_rs_flattened_body },
+        ),
+        None => (quote! {}, quote! { Self::__json_schema_rs_body }),
+    };
     quote! {
         impl #name {
             #[doc(hidden)]
             fn __json_schema_rs_body(
-                #generator_ident: &mut ::json_schema_rs::SchemaGenerator,
+                generator: &mut ::json_schema_rs::SchemaGenerator,
             ) -> ::json_schema_rs::JsonSchema {
                 #body
             }
+
+            #flattened_fn
         }
 
         impl ::json_schema_rs::ToJsonSchema for #name {
@@ -1073,6 +1227,17 @@ fn named_type_impl(
                 #subschema_call
             }
 
+            fn json_schema_flattened(
+                generator: &mut ::json_schema_rs::SchemaGenerator,
+            ) -> ::json_schema_rs::JsonSchema {
+                let schema: ::json_schema_rs::JsonSchema = generator.inline_named(
+                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    #flattened_path,
+                    <Self as ::json_schema_rs::ToJsonSchema>::json_schema_with,
+                );
+                ::json_schema_rs::JsonSchema { id: None, ..schema }
+            }
+
             fn schema_id() -> &'static str {
                 ::core::concat!(::core::module_path!(), "::", #name_lit)
             }
@@ -1080,38 +1245,179 @@ fn named_type_impl(
     }
 }
 
-/// Expand `ToJsonSchema` for an enum.
+/// Expand `ToJsonSchema` for an enum, as serde deserializes it.
 ///
-/// An enum of unit variants is a value enum (see [`value_enum_body`]). An enum of single-field
-/// tuple variants with `#[serde(untagged)]` is a union (see [`union_enum_body`]). Any other
-/// shape is an error.
+/// An externally tagged enum whose variants serde reads are all unit variants is a value enum
+/// (see [`value_enum_body`]). Any other enum is described variant by variant by the library's
+/// `enum_schema`, under serde's representation: external, internal (`tag`), adjacent (`tag`
+/// and `content`) or untagged, with `#[serde(untagged)]` variants after the tagged ones.
 fn expand_enum_to_json_schema(
     name: &Ident,
     attrs: &[Attribute],
     data_enum: &syn::DataEnum,
 ) -> SynResult<TokenStream2> {
+    let support: TokenStream2 = support();
     let container: ContainerExprs = container_exprs(attrs)?;
-    let all_unit: bool = data_enum
+    let rule: Option<RenameRule> = rename_rule_from_attrs(attrs, "rename_all")?;
+    let fields_rule: Option<RenameRule> = rename_rule_from_attrs(attrs, "rename_all_fields")?;
+    let tag: Option<String> = serde_str(attrs, "tag")?;
+    let content: Option<String> = serde_str(attrs, "content")?;
+    let untagged: bool = serde_flag(attrs, "untagged")?;
+    let one_of: bool = json_schema_flag(attrs, "one_of")?;
+    let flatten_single_entry: bool = json_schema_flag(attrs, "flatten_single_entry")?;
+    let tagging: TokenStream2 = match (&tag, &content, untagged) {
+        (_, _, true) => quote! {
+            #support::Tagging::Untagged {
+                one_of: #one_of,
+                flatten_single_entry: #flatten_single_entry,
+            }
+        },
+        (Some(tag), Some(content), false) => {
+            quote! { #support::Tagging::Adjacent { tag: #tag, content: #content } }
+        }
+        (Some(tag), None, false) => quote! { #support::Tagging::Internal { tag: #tag } },
+        (None, _, false) => quote! { #support::Tagging::External },
+    };
+    let internal: bool = tag.is_some() && content.is_none() && !untagged;
+    let variants: Vec<&Variant> = data_enum
         .variants
         .iter()
-        .all(|variant| matches!(variant.fields, Fields::Unit));
-    let (body, generator_ident): (TokenStream2, TokenStream2) = if all_unit {
-        (
-            value_enum_body(&container, data_enum, rename_rule_from_attrs(attrs)?)?,
-            quote! { _generator },
-        )
+        .map(|variant: &Variant| Ok((variant, serde_skipped(&variant.attrs)?)))
+        .collect::<SynResult<Vec<(&Variant, bool)>>>()?
+        .into_iter()
+        .filter_map(|(variant, skipped)| (!skipped).then_some(variant))
+        .collect();
+
+    let mut value_enum: bool = tag.is_none() && !untagged;
+    for variant in &variants {
+        value_enum &= matches!(variant.fields, Fields::Unit)
+            && !serde_flag(&variant.attrs, "untagged")?
+            && !serde_flag(&variant.attrs, "other")?;
+    }
+    if value_enum {
+        let body: TokenStream2 = value_enum_body(&container, &variants, rule)?;
+        // Under `#[serde(flatten)]` serde reads a unit variant as its key with a `null` value.
+        let flattened: TokenStream2 = enum_spec_body(
+            name,
+            &variants,
+            &quote! { #support::Tagging::External },
+            rule,
+            fields_rule,
+            true,
+        )?;
+        return Ok(named_type_impl(
+            name,
+            container.id.as_deref(),
+            &body,
+            Some(&with_container(&container, &flattened)),
+        ));
+    }
+    for variant in &variants {
+        if variant_value_tokens(variant)?.is_some() {
+            return Err(Error::new_spanned(
+                variant,
+                "json_schema(value = ...) applies to the variants of an enum of unit variants only",
+            ));
+        }
+        if internal
+            && !serde_flag(&variant.attrs, "untagged")?
+            && matches!(&variant.fields, Fields::Unnamed(unnamed) if unnamed.unnamed.len() > 1)
+        {
+            return Err(Error::new_spanned(
+                variant,
+                "serde cannot deserialize a tuple variant of an internally tagged enum",
+            ));
+        }
+    }
+    let body: TokenStream2 = enum_spec_body(name, &variants, &tagging, rule, fields_rule, false)?;
+    let flattened: Option<TokenStream2> = if tag.is_none() && !untagged {
+        Some(with_container(
+            &container,
+            &enum_spec_body(name, &variants, &tagging, rule, fields_rule, true)?,
+        ))
     } else {
-        (
-            union_enum_body(name, attrs, &container, data_enum)?,
-            quote! { generator },
-        )
+        None
     };
     Ok(named_type_impl(
         name,
         container.id.as_deref(),
-        &generator_ident,
-        &body,
+        &with_container(&container, &body),
+        flattened.as_ref(),
     ))
+}
+
+/// Statements building the enum's schema through the library's `enum_schema` from a static
+/// `EnumSpec`; `flattened` selects the shape serde reads under `#[serde(flatten)]`.
+fn enum_spec_body(
+    name: &Ident,
+    variants: &[&Variant],
+    tagging: &TokenStream2,
+    rule: Option<RenameRule>,
+    fields_rule: Option<RenameRule>,
+    flattened: bool,
+) -> SynResult<TokenStream2> {
+    let support: TokenStream2 = support();
+    let mut specs: Vec<TokenStream2> = Vec::new();
+    for variant in variants {
+        let variant_name: String = variant_external_name(variant, rule)?;
+        let name_lit: LitStr = LitStr::new(&variant_name, variant.ident.span());
+        let doc: Vec<&Expr> = doc_exprs(&variant.attrs);
+        let shape: TokenStream2 = match &variant.fields {
+            Fields::Unit => quote! { #support::VariantShape::Unit },
+            Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
+                let ty: Type = replace_self(&unnamed.unnamed[0].ty, name);
+                quote! {
+                    #support::VariantShape::Newtype {
+                        schema: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with,
+                        flattened: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_flattened,
+                    }
+                }
+            }
+            Fields::Unnamed(unnamed) => {
+                let items: Vec<Type> = unnamed
+                    .unnamed
+                    .iter()
+                    .map(|field: &Field| replace_self(&field.ty, name))
+                    .collect();
+                quote! {
+                    #support::VariantShape::Tuple(&[
+                        #(<#items as ::json_schema_rs::ToJsonSchema>::json_schema_with),*
+                    ])
+                }
+            }
+            Fields::Named(named) => {
+                let variant_rule: Option<RenameRule> =
+                    rename_rule_from_attrs(&variant.attrs, "rename_all")?.or(fields_rule);
+                let spec: TokenStream2 = object_spec(
+                    name,
+                    named.named.iter(),
+                    variant_rule,
+                    serde_has(&variant.attrs, "default")?,
+                )?;
+                quote! { #support::VariantShape::Struct(#spec) }
+            }
+        };
+        let untagged: bool = serde_flag(&variant.attrs, "untagged")?;
+        let other: bool = serde_flag(&variant.attrs, "other")?;
+        specs.push(quote! {
+            #support::VariantSpec {
+                name: #name_lit,
+                doc: &[#(#doc),*],
+                shape: #shape,
+                untagged: #untagged,
+                other: #other,
+            }
+        });
+    }
+    Ok(quote! {
+        static SPEC: #support::EnumSpec = #support::EnumSpec {
+            tagging: #tagging,
+            variants: &[#(#specs),*],
+            closed: true,
+            flattened: #flattened,
+        };
+        #support::enum_schema(generator, &SPEC)
+    })
 }
 
 /// The schema of an enum of unit variants: its variants' values as `enum` (`const` for one
@@ -1126,13 +1432,13 @@ fn expand_enum_to_json_schema(
 /// it), turned into `enum` / `const` by one library call whatever the number of variants.
 fn value_enum_body(
     container: &ContainerExprs,
-    data_enum: &syn::DataEnum,
+    variants: &[&Variant],
     rule: Option<RenameRule>,
 ) -> SynResult<TokenStream2> {
     let support: TokenStream2 = support();
     let mut values: Vec<TokenStream2> = Vec::new();
     let mut any_explicit_value: bool = false;
-    for variant in &data_enum.variants {
+    for variant in variants {
         if let Some(tokens) = variant_value_tokens(variant)? {
             any_explicit_value = true;
             values.push(quote! { #support::EnumValue::Json(|| ::serde_json::json!(#tokens)) });
@@ -1157,6 +1463,7 @@ fn value_enum_body(
         ..
     } = container;
     Ok(quote! {
+        let _ = generator;
         static VALUES: &[#support::EnumValue] = &[#(#values),*];
         let (enum_values, const_value): (
             ::core::option::Option<::std::vec::Vec<::serde_json::Value>>,
@@ -1175,107 +1482,71 @@ fn value_enum_body(
     })
 }
 
-/// The schema of an untagged enum whose variants each wrap one value: `anyOf` (or `oneOf` with
-/// `#[json_schema(one_of)]`) of the variants' payload schemas, in variant order.
-///
-/// Each payload schema comes from `json_schema_with`, so a named payload type lands in `$defs`
-/// behind a `$ref` exactly as a struct field does (a recursive payload included).
-///
-/// With `#[json_schema(flatten_single_entry)]`, an enum of exactly one variant is its payload's
-/// schema with the container's `title`, `description`, `comment` and `id` on top (each one
-/// set replaces the payload's), instead of a one-entry `anyOf` / `oneOf`: the two are
-/// equivalent for validation. A payload that is itself a schema resource (`$id`, from a
-/// hand-written impl) keeps the combinator, since moving it to the enum's position would change
-/// what its `$id` and the `$ref`s inside it resolve against.
-fn union_enum_body(
-    name: &Ident,
-    attrs: &[Attribute],
-    container: &ContainerExprs,
-    data_enum: &syn::DataEnum,
-) -> SynResult<TokenStream2> {
-    let shape_error = |span: &dyn quote::ToTokens| {
-        Error::new_spanned(
-            span,
-            "ToJsonSchema derive for enum supports unit variants, or single-field tuple variants under #[serde(untagged)]",
-        )
-    };
-    if !serde_flag(attrs, "untagged")? {
-        return Err(shape_error(name));
+#[cfg(test)]
+mod tests {
+    use super::expand_to_json_schema;
+    use syn::DeriveInput;
+
+    /// The error message `expand_to_json_schema` gives for `source`, or `None` when it expands.
+    fn expansion_error(source: &str) -> Option<String> {
+        let input: DeriveInput = syn::parse_str(source).expect("derive input");
+        expand_to_json_schema(input)
+            .err()
+            .map(|error: syn::Error| error.to_string())
     }
-    let mut payload_types: Vec<&Type> = Vec::new();
-    for variant in &data_enum.variants {
-        let Fields::Unnamed(unnamed) = &variant.fields else {
-            return Err(shape_error(variant));
-        };
-        let (Some(field), 1) = (unnamed.unnamed.first(), unnamed.unnamed.len()) else {
-            return Err(shape_error(variant));
-        };
-        if variant_value_tokens(variant)?.is_some() {
-            return Err(Error::new_spanned(
-                variant,
-                "json_schema(value = ...) applies to unit variants only",
-            ));
-        }
-        payload_types.push(&field.ty);
+
+    #[test]
+    fn internally_tagged_tuple_variant_is_an_error() {
+        let expected: Option<String> = Some(
+            "serde cannot deserialize a tuple variant of an internally tagged enum".to_string(),
+        );
+        let actual: Option<String> =
+            expansion_error(r#"#[serde(tag = "t")] enum E { A(i32, i32) }"#);
+        assert_eq!(expected, actual);
     }
-    let combinator_field: Ident = if json_schema_flag(attrs, "one_of")? {
-        Ident::new("one_of", proc_macro2::Span::call_site())
-    } else {
-        Ident::new("any_of", proc_macro2::Span::call_site())
-    };
-    let ContainerExprs {
-        title,
-        description,
-        comment,
-        id_expr,
-        ..
-    } = container;
-    if let [payload] = payload_types.as_slice()
-        && json_schema_flag(attrs, "flatten_single_entry")?
-    {
-        return Ok(quote! {
-            let payload: ::json_schema_rs::JsonSchema =
-                <#payload as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator);
-            if payload.id.is_some() {
-                ::json_schema_rs::JsonSchema {
-                    id: #id_expr,
-                    title: #title,
-                    description: #description,
-                    comment: #comment,
-                    #combinator_field: Some(::std::vec::Vec::from([
-                        ::json_schema_rs::Schema::from(payload),
-                    ])),
-                    ..::json_schema_rs::JsonSchema::default()
-                }
-            } else {
-                ::json_schema_rs::JsonSchema {
-                    id: #id_expr,
-                    title: #title.or(payload.title),
-                    description: #description.or(payload.description),
-                    comment: #comment.or(payload.comment),
-                    ..payload
-                }
-            }
-        });
+
+    #[test]
+    fn internally_tagged_untagged_tuple_variant_expands() {
+        let expected: Option<String> = None;
+        let actual: Option<String> = expansion_error(
+            r#"#[serde(tag = "t")] enum E { A { x: i32 }, #[serde(untagged)] B(i32, i32) }"#,
+        );
+        assert_eq!(expected, actual);
     }
-    // The payloads are static fn pointers built by one library call, whatever the number of
-    // variants.
-    let support: TokenStream2 = support();
-    let payload_types: Vec<Type> = payload_types
-        .into_iter()
-        .map(|ty: &Type| replace_self(ty, name))
-        .collect();
-    Ok(quote! {
-        static PAYLOADS: &[#support::SchemaFn] = &[
-            #(<#payload_types as ::json_schema_rs::ToJsonSchema>::json_schema_with),*
-        ];
-        ::json_schema_rs::JsonSchema {
-            id: #id_expr,
-            title: #title,
-            description: #description,
-            comment: #comment,
-            #combinator_field: Some(#support::payload_schemas(generator, PAYLOADS)),
-            ..::json_schema_rs::JsonSchema::default()
-        }
-    })
+
+    #[test]
+    fn value_on_a_variant_of_a_non_unit_enum_is_an_error() {
+        let expected: Option<String> = Some(
+            "json_schema(value = ...) applies to the variants of an enum of unit variants only"
+                .to_string(),
+        );
+        let actual: Option<String> =
+            expansion_error("enum E { #[json_schema(value = 1)] A, B(i32) }");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn transparent_without_a_read_field_is_an_error() {
+        let expected: Option<String> =
+            Some("#[serde(transparent)] needs one field that is not skipped".to_string());
+        let actual: Option<String> =
+            expansion_error("#[serde(transparent)] struct S { #[serde(skip)] a: i32 }");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn transparent_enum_is_an_error() {
+        let expected: Option<String> =
+            Some("#[serde(transparent)] applies to structs only".to_string());
+        let actual: Option<String> = expansion_error("#[serde(transparent)] enum E { A }");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unparsable_from_type_is_an_error() {
+        let expected: bool = true;
+        let actual: bool = expansion_error(r#"#[serde(from = "not a type")] struct S;"#)
+            .is_some_and(|message: String| message.starts_with("serde(from = \"not a type\"): "));
+        assert_eq!(expected, actual);
+    }
 }
