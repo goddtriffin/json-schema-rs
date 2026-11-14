@@ -670,7 +670,7 @@ fn dialect_settings_tokens(settings: Option<DialectSettings>) -> String {
         value.map_or_else(|| "None".to_string(), |v| format!("Some({v})"))
     };
     format!(
-        "Some(json_schema_rs::DialectSettings {{ forced_spec_version: {}, default_spec_version: {}, format_mode: {}, content_mode: {}, integer_semantics: {}, exclusive_bounds: {}, ref_siblings: {} }})",
+        "Some(json_schema_rs::DialectSettings {{ forced_spec_version: {}, default_spec_version: {}, format_mode: {}, content_mode: {}, unknown_formats: {}, integer_semantics: {}, exclusive_bounds: {}, ref_siblings: {} }})",
         field(
             s.forced_spec_version
                 .map(|v| format!("json_schema_rs::SpecVersion::{v:?}"))
@@ -686,6 +686,10 @@ fn dialect_settings_tokens(settings: Option<DialectSettings>) -> String {
         field(
             s.content_mode
                 .map(|v| format!("json_schema_rs::ContentMode::{v:?}"))
+        ),
+        field(
+            s.unknown_formats
+                .map(|v| format!("json_schema_rs::UnknownFormats::{v:?}"))
         ),
         field(
             s.integer_semantics

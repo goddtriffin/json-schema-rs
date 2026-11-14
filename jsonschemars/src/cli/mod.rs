@@ -8,7 +8,7 @@ mod validate;
 use clap::{Arg, ArgMatches, Command};
 use json_schema_rs::{
     ContentMode, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings,
-    MetaschemaCheck, RefSiblings, SpecVersion, UnknownSchemaUri,
+    MetaschemaCheck, RefSiblings, SpecVersion, UnknownFormats, UnknownSchemaUri,
 };
 use retrieval::RefRetrieval;
 use std::path::PathBuf;
@@ -45,7 +45,7 @@ const SPEC_VERSIONS: [(&str, SpecVersion); 10] = [
 ];
 
 /// JSON Schema Settings (`jss-`) arguments shared by every subcommand that reads a schema.
-fn jss_args() -> [Arg; 10] {
+fn jss_args() -> [Arg; 11] {
     [
         Arg::new("jss-disallow-unknown-fields")
             .long("jss-disallow-unknown-fields")
@@ -73,6 +73,11 @@ fn jss_args() -> [Arg; 10] {
             .value_name("MODE")
             .value_parser(["annotation", "assertion"])
             .help("JSON Schema Settings: check `contentEncoding` (base64) and `contentMediaType` (JSON) (assertion) or only record them (annotation) (default: the draft's rule, assertion only in draft 7)"),
+        Arg::new("jss-unknown-formats")
+            .long("jss-unknown-formats")
+            .value_name("POLICY")
+            .value_parser(["ignore", "reject"])
+            .help("JSON Schema Settings: an asserted `format` naming a format the draft does not define is ignored, or makes the schema an error (reject) (default: ignore, except where the 2020-12 format-assertion vocabulary rejects it)"),
         Arg::new("jss-integer-semantics")
             .long("jss-integer-semantics")
             .value_name("RULE")
@@ -129,6 +134,12 @@ fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
         builder = builder.content_mode(match mode.as_str() {
             "assertion" => ContentMode::Assertion,
             _ => ContentMode::Annotation,
+        });
+    }
+    if let Some(policy) = matches.get_one::<String>("jss-unknown-formats") {
+        builder = builder.unknown_formats(match policy.as_str() {
+            "reject" => UnknownFormats::Reject,
+            _ => UnknownFormats::Ignore,
         });
     }
     if let Some(rule) = matches.get_one::<String>("jss-integer-semantics") {

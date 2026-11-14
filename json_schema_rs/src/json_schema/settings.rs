@@ -2,7 +2,7 @@
 
 use super::dialect::{
     ContentMode, Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics,
-    RefSiblings, ResolvedDialect,
+    RefSiblings, ResolvedDialect, UnknownFormats,
 };
 use super::error::JsonSchemaParseError;
 use super::json_schema::JsonSchema;
@@ -70,6 +70,12 @@ pub struct JsonSchemaSettings {
     /// errors.
     pub content_mode: Option<ContentMode>,
 
+    /// What an asserted `format` naming a format the draft does not define (and no user
+    /// format) does. `None` follows the draft: it is ignored, except under the 2020-12
+    /// `format-assertion` vocabulary, which rejects it. [`UnknownFormats::Reject`] makes the
+    /// schema fail to compile wherever such a format would be asserted.
+    pub unknown_formats: Option<UnknownFormats>,
+
     /// Which numbers `"type": "integer"` accepts. `None` follows the draft: draft 4 is lexical
     /// (`1.0` is not an integer), draft 6 and later numeric (`1.0` is an integer).
     pub integer_semantics: Option<IntegerSemantics>,
@@ -97,6 +103,7 @@ pub struct JsonSchemaSettingsBuilder {
     default_spec_version: Option<SpecVersion>,
     format_mode: Option<FormatMode>,
     content_mode: Option<ContentMode>,
+    unknown_formats: Option<UnknownFormats>,
     integer_semantics: Option<IntegerSemantics>,
     exclusive_bounds: Option<ExclusiveBounds>,
     ref_siblings: Option<RefSiblings>,
@@ -143,6 +150,14 @@ impl JsonSchemaSettingsBuilder {
     #[must_use]
     pub fn content_mode(mut self, value: ContentMode) -> Self {
         self.content_mode = Some(value);
+        self
+    }
+
+    /// Ignore or reject an asserted `format` that names an unknown format (see
+    /// [`JsonSchemaSettings::unknown_formats`]).
+    #[must_use]
+    pub fn unknown_formats(mut self, value: UnknownFormats) -> Self {
+        self.unknown_formats = Some(value);
         self
     }
 
@@ -197,6 +212,7 @@ impl JsonSchemaSettingsBuilder {
             default_spec_version: self.default_spec_version,
             format_mode: self.format_mode,
             content_mode: self.content_mode,
+            unknown_formats: self.unknown_formats,
             integer_semantics: self.integer_semantics,
             exclusive_bounds: self.exclusive_bounds,
             ref_siblings: self.ref_siblings,
@@ -220,6 +236,8 @@ pub struct DialectSettings {
     pub format_mode: Option<FormatMode>,
     /// See [`JsonSchemaSettings::content_mode`].
     pub content_mode: Option<ContentMode>,
+    /// See [`JsonSchemaSettings::unknown_formats`].
+    pub unknown_formats: Option<UnknownFormats>,
     /// See [`JsonSchemaSettings::integer_semantics`].
     pub integer_semantics: Option<IntegerSemantics>,
     /// See [`JsonSchemaSettings::exclusive_bounds`].
@@ -237,6 +255,9 @@ impl DialectSettings {
         }
         if let Some(content_mode) = self.content_mode {
             dialect.content_mode = content_mode;
+        }
+        if let Some(unknown_formats) = self.unknown_formats {
+            dialect.unknown_formats = unknown_formats;
         }
         if let Some(integer_semantics) = self.integer_semantics {
             dialect.integer_semantics = integer_semantics;
@@ -260,6 +281,7 @@ impl JsonSchemaSettings {
             default_spec_version: self.default_spec_version,
             format_mode: self.format_mode,
             content_mode: self.content_mode,
+            unknown_formats: self.unknown_formats,
             integer_semantics: self.integer_semantics,
             exclusive_bounds: self.exclusive_bounds,
             ref_siblings: self.ref_siblings,
@@ -275,6 +297,7 @@ impl JsonSchemaSettings {
             default_spec_version: dialect.default_spec_version,
             format_mode: dialect.format_mode,
             content_mode: dialect.content_mode,
+            unknown_formats: dialect.unknown_formats,
             integer_semantics: dialect.integer_semantics,
             exclusive_bounds: dialect.exclusive_bounds,
             ref_siblings: dialect.ref_siblings,
@@ -358,7 +381,7 @@ mod tests {
     use crate::json_schema::SpecVersion;
     use crate::json_schema::dialect::{
         ContentMode, Dialect, DialectWarning, ExclusiveBounds, FormatMode, IntegerSemantics,
-        RefSiblings, ResolvedDialect,
+        RefSiblings, ResolvedDialect, UnknownFormats,
     };
     use crate::json_schema::error::JsonSchemaParseError;
     use crate::json_schema::json_schema::JsonSchema;
@@ -415,6 +438,7 @@ mod tests {
             default_spec_version: Some(SpecVersion::Draft04),
             format_mode: Some(FormatMode::Annotation),
             content_mode: Some(ContentMode::Annotation),
+            unknown_formats: Some(UnknownFormats::Reject),
             integer_semantics: Some(IntegerSemantics::Lexical),
             exclusive_bounds: Some(ExclusiveBounds::BooleanModifier),
             ref_siblings: Some(RefSiblings::Ignored),
@@ -427,6 +451,7 @@ mod tests {
             .default_spec_version(SpecVersion::Draft04)
             .format_mode(FormatMode::Annotation)
             .content_mode(ContentMode::Annotation)
+            .unknown_formats(UnknownFormats::Reject)
             .integer_semantics(IntegerSemantics::Lexical)
             .exclusive_bounds(ExclusiveBounds::BooleanModifier)
             .ref_siblings(RefSiblings::Ignored)

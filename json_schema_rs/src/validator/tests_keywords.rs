@@ -11,7 +11,7 @@ use super::{
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
     ContentMode, FormatMode, JsonSchema, JsonSchemaSettings, RefSiblings, Registry, Schema,
-    SpecVersion,
+    SpecVersion, UnknownFormats,
 };
 use serde_json::{Number, Value, json};
 
@@ -2454,7 +2454,7 @@ fn format_is_asserted_in_draft_7() {
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "date".to_string(),
-            value: "nope".to_string(),
+            value: Value::String("nope".to_string()),
         },
         root(),
         kl("/format"),
@@ -2480,7 +2480,7 @@ fn format_assertion_setting_asserts_in_2020_12() {
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "date".to_string(),
-            value: "nope".to_string(),
+            value: Value::String("nope".to_string()),
         },
         ptr("/d"),
         kl("/properties/d/format"),
@@ -2712,7 +2712,7 @@ fn display_invalid_format() {
     let error: ValidationError = ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "date".to_string(),
-            value: "nope".to_string(),
+            value: Value::String("nope".to_string()),
         },
         ptr("/d"),
         kl("/properties/d/format"),
@@ -3272,14 +3272,138 @@ fn unknown_format_is_ignored_when_asserting() {
     assert_eq!(expected, actual);
 }
 
+/// Compiles `json` under `settings` with formats asserted and unknown formats rejected.
+fn compile_rejecting_unknown_formats(json: &str) -> Result<(), CompileErrors> {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .format_mode(FormatMode::Assertion)
+        .unknown_formats(UnknownFormats::Reject)
+        .build();
+    let schema: JsonSchema = schema_with(json, &settings);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    CompiledSchema::new(&registry).map(|_| ())
+}
+
+#[test]
+fn unknown_formats_reject_fails_to_compile_on_unknown_format() {
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::UnknownFormat {
+            location: "/properties/a".to_string(),
+            format: "not-a-real-format".to_string(),
+        }));
+    let actual: Result<(), CompileErrors> =
+        compile_rejecting_unknown_formats(r#"{"properties":{"a":{"format":"not-a-real-format"}}}"#);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn unknown_formats_reject_lists_every_unknown_format() {
+    let expected: Result<(), CompileErrors> = Err(CompileErrors::from_vec(vec![
+        CompileError::UnknownFormat {
+            location: "/properties/b".to_string(),
+            format: "int32".to_string(),
+        },
+        CompileError::UnknownFormat {
+            location: "/properties/a".to_string(),
+            format: "colour".to_string(),
+        },
+    ])
+    .expect("non-empty"));
+    let actual: Result<(), CompileErrors> = compile_rejecting_unknown_formats(
+        r#"{"properties":{"a":{"format":"colour"},"b":{"format":"int32"}}}"#,
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn unknown_formats_reject_compiles_known_format() {
+    let expected: Result<(), CompileErrors> = Ok(());
+    let actual: Result<(), CompileErrors> =
+        compile_rejecting_unknown_formats(r#"{"format":"email"}"#);
+    assert_eq!(expected, actual);
+}
+
+/// A format a later draft defines is unknown in a draft that does not.
+#[test]
+fn unknown_formats_reject_fails_on_format_the_draft_does_not_define() {
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::UnknownFormat {
+            location: String::new(),
+            format: "uuid".to_string(),
+        }));
+    let actual: Result<(), CompileErrors> = compile_rejecting_unknown_formats(
+        r#"{"$schema":"http://json-schema.org/draft-07/schema#","format":"uuid"}"#,
+    );
+    assert_eq!(expected, actual);
+}
+
+/// An annotation-only format is never checked, so it is never rejected.
+#[test]
+fn unknown_formats_reject_ignores_unknown_format_when_formats_are_annotations() {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .format_mode(FormatMode::Annotation)
+        .unknown_formats(UnknownFormats::Reject)
+        .build();
+    let schema: JsonSchema = schema_with(r#"{"format":"not-a-real-format"}"#, &settings);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let expected: Result<(), CompileErrors> = Ok(());
+    let actual: Result<(), CompileErrors> = CompiledSchema::new(&registry).map(|_| ());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn unknown_formats_reject_accepts_user_format() {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .format_mode(FormatMode::Assertion)
+        .unknown_formats(UnknownFormats::Reject)
+        .build();
+    let schema: JsonSchema = schema_with(r#"{"format":"even-length"}"#, &settings);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let expected: Result<(), CompileErrors> = Ok(());
+    let actual: Result<(), CompileErrors> = CompiledSchema::builder()
+        .format("even-length", |s: &str| s.chars().count().is_multiple_of(2))
+        .build(&registry)
+        .map(|_| ());
+    assert_eq!(expected, actual);
+}
+
+/// `Ignore` is the draft default: it does not lift the `format-assertion` vocabulary's rule.
+#[test]
+fn unknown_formats_ignore_keeps_format_assertion_vocabulary_rejection() {
+    let meta: Value = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://ex.com/meta",
+        "$vocabulary": {
+            "https://json-schema.org/draft/2020-12/vocab/core": true,
+            "https://json-schema.org/draft/2020-12/vocab/format-assertion": true
+        }
+    });
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .unknown_formats(UnknownFormats::Ignore)
+        .build();
+    let schema: JsonSchema = schema_with(
+        r#"{"$schema":"https://ex.com/meta","format":"colour"}"#,
+        &settings,
+    );
+    let registry: Registry<'_> = Registry::builder()
+        .document("https://ex.com/meta", meta)
+        .build(&schema)
+        .expect("build registry");
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::UnknownFormat {
+            location: String::new(),
+            format: "colour".to_string(),
+        }));
+    let actual: Result<(), CompileErrors> = CompiledSchema::new(&registry).map(|_| ());
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn unknown_format_error_display() {
     let error: CompileError = CompileError::UnknownFormat {
         location: "/not".to_string(),
         format: "colour".to_string(),
     };
-    let expected: String =
-        "/not: unknown format \"colour\" under the format-assertion vocabulary".to_string();
+    let expected: String = "/not: unknown format \"colour\"".to_string();
     let actual: String = error.to_string();
     assert_eq!(expected, actual);
 }
@@ -3732,7 +3856,7 @@ fn invalid_regex_format(value: &str) -> ValidationResult {
     Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "regex".to_string(),
-            value: value.to_string(),
+            value: Value::String(value.to_string()),
         },
         root(),
         kl("/format"),
@@ -3957,7 +4081,7 @@ fn user_format_rejects_non_member_when_asserted() {
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "even-length".to_string(),
-            value: "abc".to_string(),
+            value: Value::String("abc".to_string()),
         },
         ptr("/a"),
         kl("/properties/a/format"),
@@ -4047,12 +4171,123 @@ fn user_format_is_known_under_format_assertion_vocabulary() {
     let expected: ValidationResult = Err(vec![ValidationError::new(
         ValidationErrorKind::InvalidFormat {
             format: "even-length".to_string(),
-            value: "abc".to_string(),
+            value: Value::String("abc".to_string()),
         },
         root(),
         kl("/format"),
     )]);
     let actual: ValidationResult = compiled.validate(&json!("abc"));
+    assert_eq!(expected, actual);
+}
+
+/// Compiles `json` (formats asserted) with the user format `int32` over every instance type.
+fn compile_with_int32(json: &str) -> CompiledSchema {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .format_mode(FormatMode::Assertion)
+        .build();
+    let schema: JsonSchema = schema_with(json, &settings);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    CompiledSchema::builder()
+        .value_format("int32", |v: &Value| {
+            v.as_i64().is_some_and(|n| i32::try_from(n).is_ok())
+        })
+        .build(&registry)
+        .expect("compile")
+}
+
+#[test]
+fn value_format_accepts_member_number() {
+    let compiled: CompiledSchema = compile_with_int32(r#"{"format":"int32"}"#);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(-7));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn value_format_rejects_non_member_number() {
+    let compiled: CompiledSchema = compile_with_int32(r#"{"properties":{"a":{"format":"int32"}}}"#);
+    let expected: ValidationResult = Err(vec![ValidationError::new(
+        ValidationErrorKind::InvalidFormat {
+            format: "int32".to_string(),
+            value: json!(4_294_967_296_i64),
+        },
+        ptr("/a"),
+        kl("/properties/a/format"),
+    )]);
+    let actual: ValidationResult = compiled.validate(&json!({"a": 4_294_967_296_i64}));
+    assert_eq!(expected, actual);
+}
+
+/// A value format sees strings too: this one rejects them.
+#[test]
+fn value_format_checks_strings() {
+    let compiled: CompiledSchema = compile_with_int32(r#"{"format":"int32"}"#);
+    let expected: ValidationResult = Err(vec![ValidationError::new(
+        ValidationErrorKind::InvalidFormat {
+            format: "int32".to_string(),
+            value: json!("7"),
+        },
+        root(),
+        kl("/format"),
+    )]);
+    let actual: ValidationResult = compiled.validate(&json!("7"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn value_format_is_valid_matches_validate() {
+    let compiled: CompiledSchema = compile_with_int32(r#"{"items":{"format":"int32"}}"#);
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        compiled.is_valid(&json!([1, 2, 3])),
+        compiled.is_valid(&json!([1, 2.5, 3])),
+    );
+    assert_eq!(expected, actual);
+}
+
+/// 2020-12 records formats as annotations by default, so a value format is not checked.
+#[test]
+fn value_format_is_not_checked_when_formats_are_annotations() {
+    let schema: JsonSchema = schema(r#"{"format":"int32"}"#);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let compiled: CompiledSchema = CompiledSchema::builder()
+        .value_format("int32", |_: &Value| false)
+        .build(&registry)
+        .expect("compile");
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+/// A later registration of the same name replaces the earlier one, whichever kind it is.
+#[test]
+fn value_format_replaces_string_format_of_same_name() {
+    let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        .format_mode(FormatMode::Assertion)
+        .build();
+    let schema: JsonSchema = schema_with(r#"{"format":"x"}"#, &settings);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let compiled: CompiledSchema = CompiledSchema::builder()
+        .format("x", |_: &str| true)
+        .value_format("x", |v: &Value| v.is_null())
+        .build(&registry)
+        .expect("compile");
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        compiled.is_valid(&json!(null)),
+        compiled.is_valid(&json!("a")),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn invalid_format_on_non_string_display() {
+    let kind: ValidationErrorKind = ValidationErrorKind::InvalidFormat {
+        format: "int32".to_string(),
+        value: json!(4_294_967_296_i64),
+    };
+    let expected: String = "4294967296 is not a valid int32".to_string();
+    let actual: String = kind.to_string();
     assert_eq!(expected, actual);
 }
 

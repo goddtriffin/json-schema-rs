@@ -33,8 +33,9 @@ pub use json_schema::{
     JsonSchemaParseResult, JsonSchemaSettings, JsonSchemaSettingsBuilder, JsonType, Keyword,
     MetaschemaCheck, OfflineRetriever, RefSiblings, Registry, RegistryBuilder, RegistryError,
     RegistryErrors, Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope,
-    SpecVersion, SubschemaPosition, TypeSet, UnknownJsonType, UnknownRef, UnknownSchemaUri,
-    Vocabulary, VocabularyKind, VocabularySet, file_path, file_uri, resolve_dialect,
+    SpecVersion, SubschemaPosition, TypeSet, UnknownFormats, UnknownJsonType, UnknownRef,
+    UnknownSchemaUri, Vocabulary, VocabularyKind, VocabularySet, file_path, file_uri,
+    resolve_dialect,
 };
 pub use nullable::Nullable;
 pub use number::json_equal;
@@ -45,7 +46,7 @@ pub use validated::Validated;
 pub use validator::{
     BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder,
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError, FlagOutput,
-    FormatCheck, NewtypeValue, Output, OutputFormat, OutputUnit, SchemaError, TypeValidationError,
+    NewtypeValue, Output, OutputFormat, OutputUnit, SchemaError, TypeValidationError,
     TypeValidators, UnionMatch, UnionVariants, ValidateError, ValidationError, ValidationErrorKind,
     ValidationResult, validate,
 };
