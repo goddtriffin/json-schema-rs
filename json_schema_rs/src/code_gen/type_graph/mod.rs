@@ -158,6 +158,10 @@ pub(crate) struct Variant {
     pub(crate) title: Option<String>,
     /// Whether the branch is a `$ref` (its variant is named after the target's type).
     pub(crate) is_ref: bool,
+    /// When the variant stands for several branches (string `enum` / `const` branches merged
+    /// into one enum), each branch's validation target, in branch order; empty for a variant of
+    /// one branch, which validates at its type's target.
+    pub(crate) branches: Vec<Option<ValidationTarget>>,
 }
 
 /// `oneOf` / `anyOf` (or a multi-type `type` array): exactly one / at least one alternative.
@@ -363,10 +367,10 @@ pub(crate) struct TypeGraph {
     pub(crate) newtypes: Vec<Option<Box<Newtype>>>,
     /// Per input schema, the root and its definitions.
     pub(crate) schemas: Vec<SchemaRoots>,
-    /// Per `anyOf` / `oneOf` union with a variant target, its variants' targets as the union's
-    /// walk built them (recorded by `dedup`, which may merge a variant with an equivalent type
-    /// of another location).
-    pub(crate) variant_targets: HashMap<TypeId, Vec<Option<ValidationTarget>>>,
+    /// Per `anyOf` / `oneOf` union with a variant target, its branches' targets as the union's
+    /// walk built them, each with the position of the variant it reads (recorded by `dedup`,
+    /// which may merge a variant with an equivalent type of another location).
+    pub(crate) variant_targets: HashMap<TypeId, Vec<(usize, Option<ValidationTarget>)>>,
 }
 
 impl TypeGraph {

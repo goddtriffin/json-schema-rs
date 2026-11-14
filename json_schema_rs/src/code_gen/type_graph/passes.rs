@@ -292,22 +292,26 @@ pub(crate) fn dedup(
     canon
 }
 
-/// Records, per `anyOf` / `oneOf` union, its variants' validation targets as built: the union's
-/// walk built them, so the union's registry resolves them and its compiled branches are their
-/// entries. Merging may give a variant's type the target of an equivalent schema elsewhere,
-/// even in another document; the union keeps validating its variants at its own branches.
+/// Records, per `anyOf` / `oneOf` union, its branches' validation targets as built, each with
+/// the position of the variant that reads it: the union's walk built them, so the union's
+/// registry resolves them and its compiled branches are their entries. Merging may give a
+/// variant's type the target of an equivalent schema elsewhere, even in another document; the
+/// union keeps validating its variants at its own branches.
 fn record_variant_targets(graph: &mut TypeGraph) {
-    let mut recorded: HashMap<TypeId, Vec<Option<ValidationTarget>>> = HashMap::new();
+    let mut recorded: HashMap<TypeId, Vec<(usize, Option<ValidationTarget>)>> = HashMap::new();
     for (i, node) in graph.nodes.iter().enumerate() {
         if let TypeNode::Union(union) = node
             && union.kind != UnionKind::TypeArray
         {
-            let targets: Vec<Option<ValidationTarget>> = union
-                .variants
-                .iter()
-                .map(|v| graph.targets[graph.peel(v.ty).index()].clone())
-                .collect();
-            if targets.iter().any(Option::is_some) {
+            let mut targets: Vec<(usize, Option<ValidationTarget>)> = Vec::new();
+            for (position, v) in union.variants.iter().enumerate() {
+                if v.branches.is_empty() {
+                    targets.push((position, graph.targets[graph.peel(v.ty).index()].clone()));
+                } else {
+                    targets.extend(v.branches.iter().map(|t| (position, t.clone())));
+                }
+            }
+            if targets.iter().any(|(_, t)| t.is_some()) {
                 let id: TypeId = TypeId(u32::try_from(i).expect("fewer than 2^32 nodes"));
                 recorded.insert(id, targets);
             }

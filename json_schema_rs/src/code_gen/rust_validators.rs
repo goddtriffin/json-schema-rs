@@ -275,12 +275,15 @@ pub(crate) struct Entry {
     pub(crate) index: usize,
 }
 
-/// The validation code of one union: its own entry and one per variant, in variant order.
+/// The validation code of one union: its own entry and one per branch, in branch order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnionEntries {
     pub(crate) validators: String,
     pub(crate) union: Option<usize>,
     pub(crate) variants: Vec<usize>,
+    /// Per branch, the position of the variant that reads it (several branches merged into one
+    /// enum share one variant).
+    pub(crate) arms: Vec<usize>,
 }
 
 /// The validators of one output buffer: per input schema, the entries its types use.
@@ -291,8 +294,8 @@ pub(crate) struct BufferValidators {
     index: HashMap<(usize, Vec<String>), usize>,
     /// Named item → its entry (input schema, index).
     items: HashMap<TypeId, (usize, usize)>,
-    /// `anyOf` / `oneOf` union → (input schema, union entry, variant entries).
-    unions: HashMap<TypeId, (usize, Option<usize>, Vec<usize>)>,
+    /// `anyOf` / `oneOf` union → (input schema, its entries; `validators` is named on lookup).
+    unions: HashMap<TypeId, (usize, UnionEntries)>,
 }
 
 impl BufferValidators {
@@ -321,23 +324,37 @@ impl BufferValidators {
             let Some(variant_targets) = graph.variant_targets.get(&id) else {
                 continue;
             };
-            let schema: Option<usize> = target
-                .map(|t| t.schema)
-                .or_else(|| variant_targets.iter().flatten().map(|t| t.schema).next());
+            let schema: Option<usize> = target.map(|t| t.schema).or_else(|| {
+                variant_targets
+                    .iter()
+                    .find_map(|(_, t)| t.as_ref().map(|t| t.schema))
+            });
             let Some(schema) = schema else {
                 continue;
             };
             let union_index: Option<usize> = target.map(|_| out.items[&id].1);
             let variants: Vec<usize> = variant_targets
                 .iter()
-                .map(|variant| {
-                    // A variant with no target accepts any value (a `true` branch): the empty
+                .map(|(_, target)| {
+                    // A branch with no target accepts any value (a `true` branch): the empty
                     // conjunction.
-                    let uris: &[String] = variant.as_ref().map_or(&[], |t| t.uris.as_slice());
+                    let uris: &[String] = target.as_ref().map_or(&[], |t| t.uris.as_slice());
                     out.register(schema, uris)
                 })
                 .collect();
-            out.unions.insert(id, (schema, union_index, variants));
+            let arms: Vec<usize> = variant_targets.iter().map(|(arm, _)| *arm).collect();
+            out.unions.insert(
+                id,
+                (
+                    schema,
+                    UnionEntries {
+                        validators: String::new(),
+                        union: union_index,
+                        variants,
+                        arms,
+                    },
+                ),
+            );
         }
         out
     }
@@ -376,13 +393,10 @@ impl BufferValidators {
     }
 
     pub(crate) fn union(&self, id: TypeId) -> Option<UnionEntries> {
-        self.unions
-            .get(&id)
-            .map(|(schema, union, variants)| UnionEntries {
-                validators: self.static_name(*schema),
-                union: *union,
-                variants: variants.clone(),
-            })
+        self.unions.get(&id).map(|(schema, entries)| UnionEntries {
+            validators: self.static_name(*schema),
+            ..entries.clone()
+        })
     }
 
     /// The statics, after compiling each one as the generated code will (an error here is a
@@ -569,7 +583,7 @@ pub(crate) struct UnionVariant {
 /// The `Deserialize` of an `anyOf` / `oneOf` union: one `json_schema_rs::deserialize_union!`,
 /// whose runtime reads the variant validation recorded for the value, else buffers the value and
 /// takes the first variant whose branch it satisfies (for `oneOf`, the one) and that
-/// deserializes. Each arm reads the variant at a position.
+/// deserializes. Each arm reads the variant of the branches at its positions.
 pub(crate) fn render_union_deserialize(
     name: &str,
     kind: UnionKind,
@@ -600,10 +614,18 @@ pub(crate) fn render_union_deserialize(
         },
     ) in variants.iter().enumerate()
     {
+        // The branches this variant reads (several when merged into one enum).
         let arm: String = if i + 1 == variants.len() {
             "_".to_string()
         } else {
-            i.to_string()
+            entries
+                .arms
+                .iter()
+                .enumerate()
+                .filter(|(_, variant)| **variant == i)
+                .map(|(position, _)| position.to_string())
+                .collect::<Vec<String>>()
+                .join(" | ")
         };
         let read: String = if *integers {
             format!("json_schema_rs::integer::deserialize::<_, {ty}>(value).map(Self::{variant})")

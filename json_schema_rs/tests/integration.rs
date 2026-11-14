@@ -1579,6 +1579,56 @@ fn type_graph_scenario(scenario_name: &str, default_code_gen: &CodeGenSettings) 
 }
 "##,
             ),
+            "nullable_one_of_union" => (
+                r#"{"type":"object","properties":{"value":{"oneOf":[{"type":"null"},{"type":"string"},{"type":"integer"}]}},"required":["value"]}"#,
+                default_code_gen.clone(),
+                r##"fn main() {
+    use compile_test::ValueOneOf;
+    let parse = |json: &str| -> Option<Option<ValueOneOf>> {
+        serde_json::from_str::<compile_test::Root>(json).ok().map(|root| root.value)
+    };
+    let expected: [Option<Option<ValueOneOf>>; 4] = [
+        Some(None),
+        Some(Some(ValueOneOf::String("a".to_string()))),
+        Some(Some(ValueOneOf::Integer(3))),
+        None,
+    ];
+    let actual: [Option<Option<ValueOneOf>>; 4] = [
+        parse(r#"{"value":null}"#),
+        parse(r#"{"value":"a"}"#),
+        parse(r#"{"value":3}"#),
+        parse(r#"{"value":1.5}"#),
+    ];
+    assert_eq!(expected, actual);
+}
+"##,
+            ),
+            "string_branches_one_variant" => (
+                r#"{"type":"object","properties":{"parser":{"anyOf":[{"const":"flow"},{"const":"babel"},{"type":"string","minLength":2}]}},"required":["parser"]}"#,
+                default_code_gen.clone(),
+                r##"fn main() {
+    use compile_test::{ParserAnyOf, ParserString, ParserVariant0};
+    let parse = |json: &str| -> Option<ParserAnyOf> {
+        serde_json::from_str::<compile_test::Root>(json).ok().map(|root| root.parser)
+    };
+    let expected: [Option<ParserAnyOf>; 4] = [
+        Some(ParserAnyOf::Variant0(ParserVariant0::Flow)),
+        Some(ParserAnyOf::Variant0(ParserVariant0::Babel)),
+        Some(ParserAnyOf::String(
+            serde_json::from_str::<ParserString>(r#""custom""#).unwrap(),
+        )),
+        None,
+    ];
+    let actual: [Option<ParserAnyOf>; 4] = [
+        parse(r#"{"parser":"flow"}"#),
+        parse(r#"{"parser":"babel"}"#),
+        parse(r#"{"parser":"custom"}"#),
+        parse(r#"{"parser":"x"}"#),
+    ];
+    assert_eq!(expected, actual);
+}
+"##,
+            ),
             "type_array_integer_number" => (
                 r#"{"type":"object","properties":{"amount":{"type":["integer","number"]}},"required":["amount"]}"#,
                 default_code_gen.clone(),
@@ -3258,6 +3308,8 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "anyof_ref_and_string_union",
         "oneof_const_discriminated",
         "nullable_anyof_option",
+        "nullable_one_of_union",
+        "string_branches_one_variant",
         "type_array_integer_number",
         "nullable_absent_vs_null",
         "unknown_keys_captured",
