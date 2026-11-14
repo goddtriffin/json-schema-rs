@@ -308,9 +308,18 @@ is a generation error. `.self_validating(false)` (`--cgs-self-validating false`)
 plain data types: only the Rust shape is checked, and a union takes the first variant
 that fits.
 
+A struct's plain `Deserialize` (`serde_json::from_str::<Person>`) is **not** a full
+check: it checks the Rust shape, constrained newtypes and union variants, but not array,
+object or applicator keywords (`minItems`, `uniqueItems`, `maxProperties`, `not`, ...).
+Deserialize `json_schema_rs::Validated<Person>` instead to check the whole schema
+wherever a framework deserializes for you (`axum::Json<Validated<Person>>`,
+`actix_web::web::Json<Validated<Person>>`, `response.json::<Validated<Person>>()`): it
+reads the value through `TryFrom`, so an invalid instance fails with every error.
+
 ```rust
 let person: Person = Person::try_from(serde_json::json!({"name": "A"}))?; // Err: name too short
 person.validate()?;
+let person: Validated<Person> = serde_json::from_str(r#"{"name": "A"}"#)?; // Err: name too short
 ```
 
 **Constrained newtypes (on by default).** Codegen generates a newtype for each string, integer, number or

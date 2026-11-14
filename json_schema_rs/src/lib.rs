@@ -14,6 +14,7 @@ mod nullable;
 mod number;
 pub mod reverse_code_gen;
 pub mod sanitizers;
+mod validated;
 pub mod validator;
 
 pub use code_gen::{
@@ -39,6 +40,7 @@ pub use number::json_equal;
 pub use reverse_code_gen::{
     ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema,
 };
+pub use validated::Validated;
 pub use validator::{
     BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder,
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError, FlagOutput,

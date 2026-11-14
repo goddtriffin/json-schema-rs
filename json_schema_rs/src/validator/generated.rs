@@ -978,6 +978,10 @@ macro_rules! self_validating {
         impl $name {
             /// Validates this value against its schema.
             ///
+            /// The type's `Deserialize` checks only its Rust shape, its constrained newtypes and
+            /// its unions' variants; deserialize `json_schema_rs::Validated<Self>` (or use
+            /// `TryFrom<serde_json::Value>`) to check the whole schema.
+            ///
             /// # Errors
             ///
             /// Every error the schema's validator reports, when this value does not satisfy the
