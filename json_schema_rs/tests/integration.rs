@@ -1379,7 +1379,7 @@ mod unique_items {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Points {
+pub struct Point {
     #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
     pub x: i64,
 }
@@ -1388,7 +1388,7 @@ pub struct Points {
 pub struct Root {
     #[serde(deserialize_with = "unique_items::required")]
     #[json_schema(unique_items)]
-    pub points: BTreeSet<Points>,
+    pub points: BTreeSet<Point>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -2511,17 +2511,17 @@ pub struct Dog {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
-pub enum PetsAnyOf {
+pub enum PetAnyOf {
     Cat(Cat),
     Dog(Dog),
     String(String),
 }
 
-json_schema_rs::deserialize_untagged!(PetsAnyOf { Cat(Cat), Dog(Dog), String(String) });
+json_schema_rs::deserialize_untagged!(PetAnyOf { Cat(Cat), Dog(Dog), String(String) });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub pets: Vec<PetsAnyOf>,
+    pub pets: Vec<PetAnyOf>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -2544,7 +2544,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub enum Kind0 {
+pub enum CircleKind {
     #[serde(rename = "circle")]
     Circle,
 }
@@ -2552,14 +2552,14 @@ pub enum Kind0 {
 #[derive(Debug, Clone, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "Circle")]
 pub struct Circle {
-    pub kind: Kind0,
+    pub kind: CircleKind,
     pub radius: f64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub enum Kind1 {
+pub enum SquareKind {
     #[serde(rename = "square")]
     Square,
 }
@@ -2567,7 +2567,7 @@ pub enum Kind1 {
 #[derive(Debug, Clone, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "Square")]
 pub struct Square {
-    pub kind: Kind1,
+    pub kind: SquareKind,
     pub side: f64,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
@@ -2576,16 +2576,16 @@ pub struct Square {
 #[derive(Debug, Clone, PartialEq, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
 #[json_schema(one_of)]
-pub enum ShapesOneOf {
+pub enum ShapeOneOf {
     Circle(Circle),
     Square(Square),
 }
 
-json_schema_rs::deserialize_untagged!(ShapesOneOf { Circle(Circle), Square(Square) });
+json_schema_rs::deserialize_untagged!(ShapeOneOf { Circle(Circle), Square(Square) });
 
 #[derive(Debug, Clone, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub shapes: Vec<ShapesOneOf>,
+    pub shapes: Vec<ShapeOneOf>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -3799,7 +3799,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct Items {
+pub struct Item {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(flatten)]
@@ -3808,7 +3808,7 @@ pub struct Items {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub items: Vec<Items>,
+    pub items: Vec<Item>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -4253,16 +4253,16 @@ fn type_graph_scenario(scenario_name: &str, default_code_gen: &CodeGenSettings) 
                 r##"{"$defs":{"Cat":{"type":"object","properties":{"meow":{"type":"boolean"}},"required":["meow"],"additionalProperties":false},"Dog":{"type":"object","properties":{"bark":{"type":"integer"}},"required":["bark"],"additionalProperties":false}},"type":"object","properties":{"pets":{"type":"array","items":{"anyOf":[{"$ref":"#/$defs/Cat"},{"$ref":"#/$defs/Dog"},{"type":"string"}]}}},"required":["pets"]}"##,
                 default_code_gen.clone(),
                 r#"fn main() {
-    use compile_test::PetsAnyOf;
+    use compile_test::PetAnyOf;
     let expected_json: serde_json::Value = serde_json::json!({"pets": [{"meow": true}, {"bark": 3}, "goldfish"]});
     let root: compile_test::Root = serde_json::from_value(expected_json.clone()).unwrap();
     let kinds: Vec<&str> = root
         .pets
         .iter()
         .map(|pet| match pet {
-            PetsAnyOf::Cat(_) => "cat",
-            PetsAnyOf::Dog(_) => "dog",
-            PetsAnyOf::String(_) => "string",
+            PetAnyOf::Cat(_) => "cat",
+            PetAnyOf::Dog(_) => "dog",
+            PetAnyOf::String(_) => "string",
         })
         .collect();
     let expected: (Vec<&str>, serde_json::Value) = (vec!["cat", "dog", "string"], expected_json);
@@ -4275,7 +4275,7 @@ fn type_graph_scenario(scenario_name: &str, default_code_gen: &CodeGenSettings) 
                 r#"{"type":"object","properties":{"shapes":{"type":"array","items":{"oneOf":[{"title":"Circle","type":"object","properties":{"kind":{"const":"circle"},"radius":{"type":"number"}},"required":["kind","radius"]},{"title":"Square","type":"object","properties":{"kind":{"const":"square"},"side":{"type":"number"}},"required":["kind","side"]}]}}},"required":["shapes"]}"#,
                 default_code_gen.clone(),
                 r#"fn main() {
-    use compile_test::ShapesOneOf;
+    use compile_test::ShapeOneOf;
     let expected_json: serde_json::Value = serde_json::json!({
         "shapes": [{"kind": "square", "side": 2.5}, {"kind": "circle", "radius": 1.5}]
     });
@@ -4284,8 +4284,8 @@ fn type_graph_scenario(scenario_name: &str, default_code_gen: &CodeGenSettings) 
         .shapes
         .iter()
         .map(|shape| match shape {
-            ShapesOneOf::Circle(_) => "circle",
-            ShapesOneOf::Square(_) => "square",
+            ShapeOneOf::Circle(_) => "circle",
+            ShapeOneOf::Square(_) => "square",
         })
         .collect();
     let expected: (Vec<&str>, serde_json::Value) = (vec!["square", "circle"], expected_json);
@@ -5334,7 +5334,7 @@ fn main() {
     let hash: compile_test::hash_set::Root = serde_json::from_value(instance.clone()).unwrap();
     let hash_points: HashSet<compile_test::hash_set::Point> =
         serde_json::from_value(instance["points"].clone()).unwrap();
-    let hash_ids: HashSet<compile_test::hash_set::IdsOneOf> =
+    let hash_ids: HashSet<compile_test::hash_set::IdOneOf> =
         serde_json::from_value(instance["ids"].clone()).unwrap();
     let btree: compile_test::btree_set::Root = serde_json::from_value(instance).unwrap();
     let expected: (bool, bool, usize, String, String, String) = (

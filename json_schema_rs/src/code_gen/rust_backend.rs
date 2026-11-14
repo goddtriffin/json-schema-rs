@@ -278,6 +278,7 @@ impl Plan {
                 (Home::Shared, Home::Schema(s)) | (Home::Schema(s), Home::Shared) => uses_shared[s],
             }
         };
+        let wanted: Vec<(String, Home)> = qualify_collisions(&wanted, &candidates, &clash);
         let names: Vec<String> = allocate_names(&wanted, clash);
         let mut items: HashMap<TypeId, (Home, String)> = HashMap::new();
         let mut root_aliases: Vec<Option<String>> = vec![None; graph.schemas.len()];
@@ -334,6 +335,7 @@ fn best_proposal(graph: &TypeGraph, id: TypeId) -> NameProposal {
             tier: NameTier::Fallback,
             origin: (usize::MAX, String::new()),
             text: "Unnamed".to_string(),
+            qualifier: None,
         })
 }
 
@@ -351,6 +353,7 @@ fn root_alias_proposal(graph: &TypeGraph, schema: usize, root: TypeId) -> NamePr
             tier: NameTier::Root,
             origin: (schema, String::new()),
             text: "Root".to_string(),
+            qualifier: None,
         })
 }
 
@@ -366,6 +369,58 @@ fn item_base_name(graph: &TypeGraph, id: TypeId, proposal: &NameProposal) -> Str
         },
         _ => base,
     }
+}
+
+/// `wanted` with every base name that collides (two or more items that `clash` want it, or it is
+/// reserved)
+/// qualified by each item's parent (`proposal.qualifier`): `type` in `GeoJSON Point` and in
+/// `GeoJSON Polygon` become `GeoJsonPointType` and `GeoJsonPolygonType`, so only names that
+/// still collide get numbered ([`allocate_names`]). An item without a parent, or whose
+/// qualified name another item of the group shares, keeps its base.
+fn qualify_collisions<K>(
+    wanted: &[(String, Home)],
+    candidates: &[(NameProposal, K, Home)],
+    clash: &impl Fn(Home, Home) -> bool,
+) -> Vec<(String, Home)> {
+    let mut by_base: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, (base, _)) in wanted.iter().enumerate() {
+        by_base.entry(base.as_str()).or_default().push(i);
+    }
+    let mut out: Vec<(String, Home)> = wanted.to_vec();
+    for members in by_base.values() {
+        let mut qualified: Vec<(usize, String)> = Vec::new();
+        for &i in members {
+            let base: &str = wanted[i].0.as_str();
+            let collides: bool = RESERVED_NAMES.contains(&base)
+                || members
+                    .iter()
+                    .any(|&j| j != i && clash(wanted[i].1, wanted[j].1));
+            if !collides {
+                continue;
+            }
+            if let Some(parent) = &candidates[i].0.qualifier {
+                let parent: String = sanitize_struct_name(parent);
+                // A base that already names its parent (`ExecutorsValueVariant0` under
+                // `ExecutorsValue`) or a parent ending in the base (`HomeAddress` for `Address`)
+                // gains nothing from the prefix.
+                if !base.starts_with(parent.as_str()) && !parent.ends_with(base) {
+                    qualified.push((i, format!("{parent}{base}")));
+                }
+            }
+        }
+        // Qualifying helps only where it tells an item apart: one whose qualified name another
+        // item of the group shares (two `Item`s under one parent) keeps its base and is
+        // numbered.
+        for (i, name) in &qualified {
+            let shared: bool = qualified
+                .iter()
+                .any(|(j, other)| j != i && other == name && clash(wanted[*i].1, wanted[*j].1));
+            if !shared {
+                out[*i].0.clone_from(name);
+            }
+        }
+    }
+    out
 }
 
 /// Final names for `wanted` items (base name and home, in allocation order). Items whose base
@@ -3421,7 +3476,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct FooVariant1 {
+pub struct FooObject {
     #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
     pub x: Option<i64>,
     #[serde(flatten)]
@@ -3432,10 +3487,10 @@ pub struct FooVariant1 {
 #[serde(untagged)]
 pub enum FooAnyOf {
     String(String),
-    Variant1(FooVariant1),
+    Variant1(FooObject),
 }
 
-json_schema_rs::deserialize_untagged!(FooAnyOf { String(String), Variant1(FooVariant1) });
+json_schema_rs::deserialize_untagged!(FooAnyOf { String(String), Variant1(FooObject) });
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -3503,7 +3558,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct FooVariant1 {
+pub struct FooObject {
     #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
     pub x: Option<i64>,
     #[serde(flatten)]
@@ -3515,10 +3570,10 @@ pub struct FooVariant1 {
 #[json_schema(one_of)]
 pub enum FooOneOf {
     String(String),
-    Variant1(FooVariant1),
+    Variant1(FooObject),
 }
 
-json_schema_rs::deserialize_untagged!(FooOneOf { String(String), Variant1(FooVariant1) });
+json_schema_rs::deserialize_untagged!(FooOneOf { String(String), Variant1(FooObject) });
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -4935,7 +4990,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct Items {
+pub struct Item {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(flatten)]
@@ -4945,7 +5000,7 @@ pub struct Items {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[json_schema(unique_items)]
-    pub items: Vec<Items>,
+    pub items: Vec<Item>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -5064,7 +5119,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct Items {
+pub struct Item {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(flatten)]
@@ -5073,7 +5128,7 @@ pub struct Items {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
-    pub items: Vec<Items>,
+    pub items: Vec<Item>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -8034,7 +8089,148 @@ pub struct Root {
 
     /// A name taken by std or the generated imports (`String`) gets a numeric suffix.
     #[test]
-    fn reserved_struct_name_gets_numeric_suffix() {
+    fn colliding_property_types_are_qualified_by_their_parent() {
+        let schema: Schema = serde_json::from_str(r#"{"type":"object","properties":{"point":{"title":"Point","type":"object","properties":{"kind":{"enum":["a","b"]}}},"line":{"title":"Line","type":"object","properties":{"kind":{"enum":["c","d"]}}}}}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &default_settings()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LineKind {
+    C,
+    D,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Line")]
+pub struct Line {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<LineKind>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PointKind {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Point")]
+pub struct Point {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PointKind>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<Line>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point: Option<Point>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn union_variants_are_named_after_what_tells_them_apart() {
+        let schema: Schema = serde_json::from_str(r#"{"type":"object","properties":{"auth":{"oneOf":[{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false},{"type":"object","properties":{"role":{"type":"string"}},"required":["role"],"additionalProperties":false},{"const":"anonymous"}]}}}"#).unwrap();
+        let output: super::GenerateRustOutput =
+            generate_rust(&[schema], &CodeGenSettings::builder().build()).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthKey {
+    pub key: String,
+}
+
+json_schema_rs::self_validating!(AuthKey, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthRole {
+    pub role: String,
+}
+
+json_schema_rs::self_validating!(AuthRole, TYPE_VALIDATORS, 1);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum AuthAnonymous {
+    #[serde(rename = "anonymous")]
+    Anonymous,
+}
+
+json_schema_rs::self_validating!(AuthAnonymous, TYPE_VALIDATORS, 2);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
+pub enum AuthOneOf {
+    Variant0(AuthKey),
+    Variant1(AuthRole),
+    Variant2(AuthAnonymous),
+}
+
+json_schema_rs::deserialize_union!(AuthOneOf, TYPE_VALIDATORS, OneOf, Some(3), [0, 1, 2], |value| {
+    0 => <AuthKey as Deserialize>::deserialize(value).map(Self::Variant0),
+    1 => <AuthRole as Deserialize>::deserialize(value).map(Self::Variant1),
+    _ => <AuthAnonymous as Deserialize>::deserialize(value).map(Self::Variant2),
+});
+
+json_schema_rs::self_validating!(AuthOneOf, TYPE_VALIDATORS, 3);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthOneOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 4);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"auth":{"oneOf":[{"additionalProperties":false,"properties":{"key":{"type":"string"}},"required":["key"],"type":"object"},{"additionalProperties":false,"properties":{"role":{"type":"string"}},"required":["role"],"type":"object"},{"const":"anonymous"}]}},"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/properties/auth/oneOf/0"],
+        &["#/properties/auth/oneOf/1"],
+        &["#/properties/auth/oneOf/2"],
+        &["#/properties/auth"],
+        &["#"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn reserved_struct_name_is_qualified_by_its_parent() {
         let json: &str = r#"{"type":"object","properties":{"s":{"title":"String","type":"object","properties":{"a":{"type":"string"}}}}}"#;
         let schema: Schema = serde_json::from_str(json).unwrap();
         let settings: CodeGenSettings = default_settings();
@@ -8047,7 +8243,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "String")]
-pub struct String0 {
+pub struct RootString {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<String>,
     #[serde(flatten)]
@@ -8057,7 +8253,7 @@ pub struct String0 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub s: Option<String0>,
+    pub s: Option<RootString>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -8209,7 +8405,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct RootVariant0 {
+pub struct RootObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<String>,
     #[serde(flatten)]
@@ -8219,10 +8415,10 @@ pub struct RootVariant0 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
 pub enum RootAnyOf {
-    Variant0(RootVariant0),
+    Variant0(RootObject),
 }
 
-json_schema_rs::deserialize_untagged!(RootAnyOf { Variant0(RootVariant0) });
+json_schema_rs::deserialize_untagged!(RootAnyOf { Variant0(RootObject) });
 
 "#;
         assert_eq!(expected, actual);
@@ -8271,7 +8467,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub struct RootVariant0 {
+pub struct RootObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<String>,
     #[serde(flatten)]
@@ -8282,10 +8478,10 @@ pub struct RootVariant0 {
 #[serde(untagged)]
 #[json_schema(one_of)]
 pub enum RootOneOf {
-    Variant0(RootVariant0),
+    Variant0(RootObject),
 }
 
-json_schema_rs::deserialize_untagged!(RootOneOf { Variant0(RootVariant0) });
+json_schema_rs::deserialize_untagged!(RootOneOf { Variant0(RootObject) });
 
 "#;
         assert_eq!(expected, actual);
@@ -11197,7 +11393,7 @@ mod unique_items {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum Colors {
+pub enum Color {
     Green,
     Red,
 }
@@ -11206,7 +11402,7 @@ pub enum Colors {
 pub struct Root {
     #[serde(deserialize_with = "unique_items::required")]
     #[json_schema(unique_items)]
-    pub colors: HashSet<Colors>,
+    pub colors: HashSet<Color>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -11302,18 +11498,18 @@ mod unique_items {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
 #[json_schema(one_of)]
-pub enum IdsOneOf {
+pub enum IdOneOf {
     String(String),
     Integer(i64),
 }
 
-json_schema_rs::deserialize_untagged!(IdsOneOf { String(String), Integer(i64 = with(json_schema_rs::integer::deserialize)) });
+json_schema_rs::deserialize_untagged!(IdOneOf { String(String), Integer(i64 = with(json_schema_rs::integer::deserialize)) });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(deserialize_with = "unique_items::required")]
     #[json_schema(unique_items)]
-    pub ids: HashSet<IdsOneOf>,
+    pub ids: HashSet<IdOneOf>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -11334,14 +11530,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, json_schema_rs_macro::ToJsonSchema)]
-pub enum CodesVariant1 {
+pub enum CodeVariant1 {
     #[json_schema(value = "a")]
     A,
     #[json_schema(value = 1)]
     N1,
 }
 
-impl Serialize for CodesVariant1 {
+impl Serialize for CodeVariant1 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let value: serde_json::Value = match self {
             Self::A => serde_json::json!("a"),
@@ -11351,7 +11547,7 @@ impl Serialize for CodesVariant1 {
     }
 }
 
-impl<'de> Deserialize<'de> for CodesVariant1 {
+impl<'de> Deserialize<'de> for CodeVariant1 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
         if json_schema_rs::json_equal(&value, &serde_json::json!("a")) {
@@ -11360,23 +11556,23 @@ impl<'de> Deserialize<'de> for CodesVariant1 {
         if json_schema_rs::json_equal(&value, &serde_json::json!(1)) {
             return Ok(Self::N1);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a CodesVariant1 value")))
+        Err(serde::de::Error::custom(format!("{value} is not a CodeVariant1 value")))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
-pub enum CodesAnyOf {
+pub enum CodeAnyOf {
     Integer(i64),
-    Variant1(CodesVariant1),
+    Variant1(CodeVariant1),
 }
 
-json_schema_rs::deserialize_untagged!(CodesAnyOf { Integer(i64 = with(json_schema_rs::integer::deserialize)), Variant1(CodesVariant1) });
+json_schema_rs::deserialize_untagged!(CodeAnyOf { Integer(i64 = with(json_schema_rs::integer::deserialize)), Variant1(CodeVariant1) });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[json_schema(unique_items)]
-    pub codes: Vec<CodesAnyOf>,
+    pub codes: Vec<CodeAnyOf>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -11473,14 +11669,14 @@ mod unique_items {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, json_schema_rs_macro::ToJsonSchema)]
-pub enum CodesVariant1 {
+pub enum CodeVariant1 {
     #[json_schema(value = "a")]
     A,
     #[json_schema(value = 1.5)]
     N1Point5,
 }
 
-impl Serialize for CodesVariant1 {
+impl Serialize for CodeVariant1 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let value: serde_json::Value = match self {
             Self::A => serde_json::json!("a"),
@@ -11490,7 +11686,7 @@ impl Serialize for CodesVariant1 {
     }
 }
 
-impl<'de> Deserialize<'de> for CodesVariant1 {
+impl<'de> Deserialize<'de> for CodeVariant1 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
         if json_schema_rs::json_equal(&value, &serde_json::json!("a")) {
@@ -11499,24 +11695,24 @@ impl<'de> Deserialize<'de> for CodesVariant1 {
         if json_schema_rs::json_equal(&value, &serde_json::json!(1.5)) {
             return Ok(Self::N1Point5);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a CodesVariant1 value")))
+        Err(serde::de::Error::custom(format!("{value} is not a CodeVariant1 value")))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
-pub enum CodesAnyOf {
+pub enum CodeAnyOf {
     Integer(i64),
-    Variant1(CodesVariant1),
+    Variant1(CodeVariant1),
 }
 
-json_schema_rs::deserialize_untagged!(CodesAnyOf { Integer(i64 = with(json_schema_rs::integer::deserialize)), Variant1(CodesVariant1) });
+json_schema_rs::deserialize_untagged!(CodeAnyOf { Integer(i64 = with(json_schema_rs::integer::deserialize)), Variant1(CodeVariant1) });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(deserialize_with = "unique_items::required")]
     #[json_schema(unique_items)]
-    pub codes: HashSet<CodesAnyOf>,
+    pub codes: HashSet<CodeAnyOf>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -11647,18 +11843,18 @@ pub struct Pair {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
-pub enum PairsAnyOf {
+pub enum PairAnyOf {
     Pair(Pair),
     String(String),
 }
 
-json_schema_rs::deserialize_untagged!(PairsAnyOf { Pair(Pair), String(String) });
+json_schema_rs::deserialize_untagged!(PairAnyOf { Pair(Pair), String(String) });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(deserialize_with = "unique_items::required")]
     #[json_schema(unique_items)]
-    pub pairs: HashSet<PairsAnyOf>,
+    pub pairs: HashSet<PairAnyOf>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -11843,7 +12039,7 @@ mod unique_items {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Groups {
+pub struct Group {
     #[serde(deserialize_with = "unique_items::required")]
     #[json_schema(unique_items)]
     pub tags: HashSet<String>,
@@ -11852,7 +12048,7 @@ pub struct Groups {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[json_schema(unique_items)]
-    pub groups: Vec<Groups>,
+    pub groups: Vec<Group>,
     #[serde(flatten)]
     pub additional: BTreeMap<String, serde_json::Value>,
 }
@@ -12162,25 +12358,25 @@ pub enum XVariant0 {
 json_schema_rs::self_validating!(XVariant0, TYPE_VALIDATORS, 0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
-pub enum XVariant1 {
+pub enum XB {
     #[serde(rename = "b")]
     B,
 }
 
-json_schema_rs::self_validating!(XVariant1, TYPE_VALIDATORS, 1);
+json_schema_rs::self_validating!(XB, TYPE_VALIDATORS, 1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
 #[json_schema(one_of)]
 pub enum XOneOf {
     Variant0(XVariant0),
-    Variant1(XVariant1),
+    Variant1(XB),
     Integer(i64),
 }
 
 json_schema_rs::deserialize_union!(XOneOf, TYPE_VALIDATORS, OneOf, Some(2), [0, 1, 3], |value| {
     0 => <XVariant0 as Deserialize>::deserialize(value).map(Self::Variant0),
-    1 => <XVariant1 as Deserialize>::deserialize(value).map(Self::Variant1),
+    1 => <XB as Deserialize>::deserialize(value).map(Self::Variant1),
     _ => json_schema_rs::integer::deserialize::<_, i64>(value).map(Self::Integer),
 });
 
