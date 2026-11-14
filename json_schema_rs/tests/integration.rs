@@ -1743,7 +1743,7 @@ fn main() {
         ("Ada", Some(36_u8), Some(0.5_f64), Some(10_i64), vec!["abc", "xyz"]),
         serde_json::json!({"name": "Ada", "age": 36, "ratio": 0.5, "step": 10, "codes": ["abc", "xyz"]}),
         [true; 9],
-        "root: string has 1 code points, minLength is 2\nroot: string \"a\" does not match pattern \"^[A-Z]\"".to_string(),
+        "string has 1 code points, minLength is 2\nstring \"a\" does not match pattern \"^[A-Z]\"".to_string(),
         (Some("abc".to_string()), Some("Bob".to_string()), true, true, true),
         serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1817,7 +1817,15 @@ fn library_errors(instance: &serde_json::Value) -> String {
     match json_schema_rs::validate(&schema, instance) {
         Ok(()) => String::new(),
         Err(json_schema_rs::ValidateError::Instance(errors)) => {
-            errors.iter().map(ToString::to_string).collect::<Vec<String>>().join("\n")
+            // As a generated type prints them: no location for the value itself.
+            errors
+                .iter()
+                .map(|error| match error.instance_location.as_str() {
+                    "" => error.kind.to_string(),
+                    location => format!("{location}: {}", error.kind),
+                })
+                .collect::<Vec<String>>()
+                .join("\n")
         }
         Err(e) => panic!("schema error: {e}"),
     }

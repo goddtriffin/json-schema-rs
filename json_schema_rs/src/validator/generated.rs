@@ -291,7 +291,9 @@ pub enum TypeValidationError {
     NonFinite(f64),
 }
 
-/// Prints every problem, one per line.
+/// Prints every problem, one per line. A location is a JSON Pointer within the value the type
+/// read (the whole document for `TryFrom<serde_json::Value>`); a problem with the value itself
+/// has none.
 impl fmt::Display for TypeValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -300,7 +302,12 @@ impl fmt::Display for TypeValidationError {
                     if index > 0 {
                         writeln!(f)?;
                     }
-                    write!(f, "{error}")?;
+                    let location: &str = error.instance_location.as_str();
+                    if location.is_empty() {
+                        write!(f, "{}", error.kind)?;
+                    } else {
+                        write!(f, "{location}: {}", error.kind)?;
+                    }
                 }
                 Ok(())
             }
@@ -2163,6 +2170,27 @@ mod tests {
             kind: UnionMatch::OneOf,
             matched: 2,
         }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn invalid_display_names_no_location_for_the_value_itself() {
+        let expected: String =
+            "expected string, got number\n/a: expected string, got number".to_string();
+        let expected_string = |location: JsonPointer| {
+            ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
+                },
+                location,
+                JsonPointer::root(),
+            )
+        };
+        let actual: String = TypeValidationError::Invalid(vec![
+            expected_string(JsonPointer::root()),
+            expected_string(JsonPointer::root().push("a")),
+        ])
         .to_string();
         assert_eq!(expected, actual);
     }

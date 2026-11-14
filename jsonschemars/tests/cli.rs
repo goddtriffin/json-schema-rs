@@ -2601,7 +2601,7 @@ impl<'de> Deserialize<'de> for Level {
         if json_schema_rs::json_equal(&value, &serde_json::json!(true)) {
             return Ok(Self::True);
         }
-        Err(serde::de::Error::custom(format!("{value} is not a Level value")))
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "\"high\", 1, 2.5, true")))
     }
 }
 
