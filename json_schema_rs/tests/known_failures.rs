@@ -14,10 +14,11 @@
 //! Official-suite failures are tracked separately in `suite_xfail.json`.
 
 use json_schema_rs::{
-    CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchemaSettings, Schema, ValidateError,
-    ValidationError, ValidationErrorKind, generate_rust, validate,
+    CodeGenInput, CodeGenSettings, GenerateRustOutput, JsonPointer, JsonSchemaSettings, Schema,
+    ValidateError, ValidationError, ValidationErrorKind, generate_rust, validate,
 };
-use serde_json::json;
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -49,10 +50,6 @@ fn unexpected_pass_message(issue: u32) -> String {
 }
 
 /// Runs `body`, which asserts the correct behaviour for `issue`; passes while `body` panics.
-#[expect(
-    dead_code,
-    reason = "no open validator, parser or codegen bug has a known-failing test; remove this when adding one"
-)]
 fn known_failure(issue: u32, body: impl FnOnce()) {
     let expected: Outcome = Outcome::Failed;
     let actual: Outcome = match catch_unwind(AssertUnwindSafe(body)) {
@@ -466,4 +463,34 @@ fn in_place_ref_loop_schema_accepts_matching_branch() {
     let expected: bool = true;
     let actual: bool = is_valid(IN_PLACE_LOOP_SCHEMA, r#""hi""#);
     assert_eq!(expected, actual);
+}
+
+// --- #186: generated types ignore a custom metaschema's `$vocabulary` ---
+
+/// The generated static embeds the custom metaschema the schema's `$schema` names, so its
+/// format-assertion vocabulary applies as it does in the library validator.
+#[test]
+fn generated_static_embeds_a_custom_metaschema() {
+    known_failure(186, || {
+        let meta: Value = json!({
+            "$id": "https://example.com/meta",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$vocabulary": {
+                "https://json-schema.org/draft/2020-12/vocab/core": true,
+                "https://json-schema.org/draft/2020-12/vocab/format-assertion": true
+            },
+            "$dynamicAnchor": "meta"
+        });
+        let schema: Schema =
+            parse(r#"{"$schema": "https://example.com/meta", "type": "string", "format": "ipv4"}"#);
+        let documents: BTreeMap<String, Value> =
+            BTreeMap::from([("https://example.com/meta".to_string(), meta)]);
+        let input: CodeGenInput<'_> = CodeGenInput::new().schema(&schema).retriever(documents);
+        let output: GenerateRustOutput =
+            json_schema_rs::generate_rust(input, &CodeGenSettings::default()).expect("generates");
+        let code: String = String::from_utf8(output.per_schema[0].clone()).expect("UTF-8");
+        let expected: bool = true;
+        let actual: bool = code.contains(r#"uri: "https://example.com/meta""#);
+        assert_eq!(expected, actual);
+    });
 }

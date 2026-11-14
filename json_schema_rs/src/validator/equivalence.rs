@@ -449,6 +449,37 @@ mod tests {
     }
 
     #[test]
+    fn every_hand_written_keyword_value_tells_subschemas_apart() {
+        // One pair per keyword `node_shape` writes by hand (not through `Debug`): each pair
+        // differs only in that keyword's value.
+        let pairs: [(Value, Value); 11] = [
+            (json!({"type": "string"}), json!({"type": "integer"})),
+            (
+                json!({"type": ["string", "null"]}),
+                json!({"type": "string"}),
+            ),
+            (json!({"minLength": 1}), json!({"minLength": 2})),
+            (json!({"maxLength": 1}), json!({"maxLength": 2})),
+            (json!({"minItems": 1}), json!({"minItems": 2})),
+            (json!({"maxItems": 1}), json!({"maxItems": 2})),
+            (json!({"minProperties": 1}), json!({"minProperties": 2})),
+            (json!({"maxProperties": 1}), json!({"maxProperties": 2})),
+            (json!({"required": ["a"]}), json!({"required": ["b"]})),
+            (json!({"required": ["a", "b"]}), json!({"required": ["ab"]})),
+            (json!({"uniqueItems": true}), json!({"not": false})),
+        ];
+        let expected: Vec<bool> = vec![false; pairs.len()];
+        let actual: Vec<bool> = pairs
+            .iter()
+            .map(|(a, b)| {
+                let document: Value = json!({"properties": {"a": a, "b": b}});
+                equivalent(&document, "/properties/a", "/properties/b")
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn references_to_the_same_target_are_equivalent() {
         let document: Value = json!({
             "$defs": {"T": {"type": "string"}},
