@@ -285,6 +285,10 @@ pub(crate) struct NameProposal {
     pub(crate) origin: (usize, String),
     /// The unsanitized name text.
     pub(crate) text: String,
+    /// The provisional name of the nearest named type the node was reached from (the object
+    /// whose property it is, the union it is a variant of), unsanitized: what a name that
+    /// collides is qualified with before it is numbered.
+    pub(crate) qualifier: Option<String>,
 }
 
 /// How strongly a name is wanted (lower wins).

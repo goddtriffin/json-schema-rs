@@ -92,6 +92,9 @@ struct Context {
     origin: String,
     /// The property key (or derived text) the node is reached under, if any.
     key_name: Option<String>,
+    /// The provisional name of the nearest named type the node is reached from (see
+    /// [`NameProposal::qualifier`]).
+    parent: Option<String>,
     /// Whether this is the root of a schema (proposes `Root`).
     is_root: bool,
 }
@@ -383,6 +386,7 @@ impl<'r> Builder<'_, 'r> {
                 schema_index: self.schema_index,
                 origin: String::new(),
                 key_name: None,
+                parent: None,
                 is_root: true,
             },
         )?;
@@ -410,6 +414,7 @@ impl<'r> Builder<'_, 'r> {
                         schema_index: self.schema_index,
                         origin: pointer,
                         key_name: None,
+                        parent: None,
                         is_root: false,
                     },
                 )?;
@@ -450,7 +455,7 @@ impl<'r> Builder<'_, 'r> {
                 self.graph.targets[id.index()] = Some(target);
                 self.sources.insert(id, sources);
             }
-            self.add_intrinsic_proposals(id, &flat);
+            self.add_intrinsic_proposals(id, &flat, context.parent.as_deref());
             self.queue.push((id, flat, request.mask, context.clone()));
             id
         };
@@ -518,7 +523,7 @@ impl<'r> Builder<'_, 'r> {
     }
 
     /// Proposals from the conjunction itself: the `$defs` key of its first schema, its title.
-    fn add_intrinsic_proposals(&mut self, id: TypeId, flat: &Flat<'r>) {
+    fn add_intrinsic_proposals(&mut self, id: TypeId, flat: &Flat<'r>, qualifier: Option<&str>) {
         let Some(first) = flat.conjuncts.first() else {
             return;
         };
@@ -528,6 +533,7 @@ impl<'r> Builder<'_, 'r> {
                 tier: NameTier::Definition,
                 origin: origin.clone(),
                 text: name,
+                qualifier: qualifier.map(str::to_string),
             });
         }
         let title: Option<String> = flat
@@ -544,6 +550,7 @@ impl<'r> Builder<'_, 'r> {
                 tier,
                 origin,
                 text: title,
+                qualifier: qualifier.map(str::to_string),
             });
         }
     }
@@ -559,6 +566,7 @@ impl<'r> Builder<'_, 'r> {
                 tier,
                 origin: origin.clone(),
                 text: key.clone(),
+                qualifier: context.parent.clone(),
             });
         }
         if context.is_root {
@@ -566,6 +574,7 @@ impl<'r> Builder<'_, 'r> {
                 tier: NameTier::Root,
                 origin,
                 text: "Root".to_string(),
+                qualifier: None,
             });
         }
     }
@@ -908,7 +917,8 @@ impl<'r> Builder<'_, 'r> {
                         &Context {
                             schema_index: self.schema_index,
                             origin: pointer,
-                            key_name: context.key_name.clone(),
+                            key_name: context.key_name.as_deref().map(singular),
+                            parent: context.parent.clone(),
                             is_root: false,
                         },
                     )?
@@ -950,6 +960,7 @@ impl<'r> Builder<'_, 'r> {
                         schema_index: self.schema_index,
                         origin: pointer,
                         key_name: Some(key.clone()),
+                        parent: Some(parent_name(flat, context)),
                         is_root: false,
                     },
                 )?
@@ -982,6 +993,7 @@ impl<'r> Builder<'_, 'r> {
                     schema_index: self.schema_index,
                     origin: pointer,
                     key_name: Some(format!("{base}_Value")),
+                    parent: context.parent.clone(),
                     is_root: false,
                 },
             )?)
@@ -1095,6 +1107,7 @@ impl<'r> Builder<'_, 'r> {
                         schema_index: self.schema_index,
                         origin: value.pointer.clone(),
                         key_name: context.key_name.clone(),
+                        parent: context.parent.clone(),
                         is_root: false,
                     },
                 )?;
@@ -1104,7 +1117,8 @@ impl<'r> Builder<'_, 'r> {
         let base_name: String = base_name(flat, context);
         let mut variants: Vec<Variant> = Vec::new();
         let mut combined_done: bool = false;
-        for ((i, branch), strings) in live.into_iter().zip(string_values) {
+        let labels: Vec<String> = variant_labels(&base_name, &live, &string_values);
+        for (((i, branch), strings), label) in live.into_iter().zip(string_values).zip(labels) {
             // Combined string branches have no single schema location to validate against, so
             // self-validating unions keep one variant per branch.
             if string_branches >= 2 && strings.is_some() && !self.settings.self_validating {
@@ -1122,6 +1136,7 @@ impl<'r> Builder<'_, 'r> {
                         schema_index: self.schema_index,
                         origin: branch.pointer.clone(),
                         key_name: Some(format!("{base_name}_Variant{i}")),
+                        parent: Some(parent_name(flat, context)),
                         is_root: false,
                     },
                 );
@@ -1146,7 +1161,8 @@ impl<'r> Builder<'_, 'r> {
                 &Context {
                     schema_index: self.schema_index,
                     origin,
-                    key_name: Some(format!("{base_name}_Variant{i}")),
+                    key_name: Some(format!("{base_name}_{label}")),
+                    parent: Some(parent_name(flat, context)),
                     is_root: false,
                 },
             )?;
@@ -1215,6 +1231,7 @@ impl<'r> Builder<'_, 'r> {
                 schema_index: self.schema_index,
                 origin,
                 key_name: context.key_name.clone(),
+                parent: context.parent.clone(),
                 is_root: context.is_root,
             },
         )?;
@@ -1296,6 +1313,110 @@ fn base_name(flat: &Flat<'_>, context: &Context) -> String {
                 .filter(|c| !c.skips(skip::ANNOTATIONS))
                 .find_map(|c| non_empty(c.schema.title.as_deref()))
         })
+        .unwrap_or_else(|| "Root".to_string())
+}
+
+/// What each union variant is named after (appended to the union's base name), in order of
+/// preference: the branch's one string (`const`, or a one-value `enum`: `ParserFlow`) unless it
+/// repeats the union's name; a property
+/// it requires that no other branch requires (`AwsAuthOidcRoleArn`); a JSON type no other branch
+/// has (`AddSshKeysObject`); else its position (`StepVariant1`).
+fn variant_labels(
+    base: &str,
+    live: &[(usize, Conjunct<'_>)],
+    strings: &[Option<Vec<Value>>],
+) -> Vec<String> {
+    let letters = |text: &str| -> String {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let required: Vec<&[String]> = live
+        .iter()
+        .map(|(_, c)| c.schema.required.as_deref().unwrap_or_default())
+        .collect();
+    let single_type: Vec<Option<JsonType>> = live
+        .iter()
+        .map(|(_, c)| c.schema.type_.and_then(TypeSet::single))
+        .collect();
+    live.iter()
+        .enumerate()
+        .map(|(at, (index, _))| {
+            // A string that repeats the union's name (`"checkout"` in `checkout`) says nothing.
+            if let Some([Value::String(value)]) = strings[at].as_deref()
+                && value.chars().any(char::is_alphanumeric)
+                && letters(value) != letters(base)
+            {
+                return value.clone();
+            }
+            let own_required = required[at].iter().find(|key| {
+                key.chars().any(char::is_alphanumeric)
+                    && required
+                        .iter()
+                        .enumerate()
+                        .all(|(other, keys)| other == at || !keys.contains(key))
+            });
+            if let Some(key) = own_required {
+                return key.clone();
+            }
+            if let Some(ty) = single_type[at]
+                && single_type
+                    .iter()
+                    .enumerate()
+                    .all(|(other, t)| other == at || *t != Some(ty))
+            {
+                return ty.as_str().to_string();
+            }
+            format!("Variant{index}")
+        })
+        .collect()
+}
+
+/// The singular of an English plural property key, for the type of its array's items (`roles`
+/// → `role`, `policies` → `policy`, `addresses` → `address`, `aliases` → `alias`); a key that
+/// does not look plural
+/// is kept.
+fn singular(key: &str) -> String {
+    let lower: String = key.to_ascii_lowercase();
+    let strip = |n: usize, add: &str| -> String { format!("{}{add}", &key[..key.len() - n]) };
+    if lower.ends_with("iases") || lower.ends_with("statuses") {
+        strip(2, "")
+    } else if lower.len() > 3 && lower.ends_with("ies") {
+        strip(3, "y")
+    } else if lower.ends_with("sses")
+        || lower.ends_with("shes")
+        || lower.ends_with("ches")
+        || lower.ends_with("xes")
+        || lower.ends_with("zes")
+    {
+        strip(2, "")
+    } else if lower.len() > 1
+        && lower.ends_with('s')
+        && !lower.ends_with("ss")
+        && !lower.ends_with("us")
+        && !lower.ends_with("is")
+    {
+        strip(1, "")
+    } else {
+        key.to_string()
+    }
+}
+
+/// The provisional name of the type `flat` builds, as its children's qualifier (see
+/// [`NameProposal::qualifier`]): in the order its own name is chosen, the `$defs` key, the title,
+/// then the key it is reached under.
+fn parent_name(flat: &Flat<'_>, context: &Context) -> String {
+    flat.conjuncts
+        .first()
+        .and_then(|c| definition_name(&c.pointer))
+        .or_else(|| {
+            flat.conjuncts
+                .iter()
+                .filter(|c| !c.skips(skip::ANNOTATIONS))
+                .find_map(|c| non_empty(c.schema.title.as_deref()))
+        })
+        .or_else(|| context.key_name.clone())
         .unwrap_or_else(|| "Root".to_string())
 }
 
@@ -1953,4 +2074,43 @@ pub(crate) fn integer_width_for_range(lo: i128, hi: i128) -> Option<IntWidth> {
         .into_iter()
         .find(|&(_, min, max)| lo >= min && hi <= max)
         .map(|(width, _, _)| width)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::singular;
+
+    #[test]
+    fn singular_turns_english_plurals_into_singulars() {
+        let keys: [&str; 12] = [
+            "roles",
+            "policies",
+            "addresses",
+            "matchExpressions",
+            "hostAliases",
+            "statuses",
+            "boxes",
+            "patches",
+            "status",
+            "analysis",
+            "data",
+            "s",
+        ];
+        let expected: Vec<&str> = vec![
+            "role",
+            "policy",
+            "address",
+            "matchExpression",
+            "hostAlias",
+            "status",
+            "box",
+            "patch",
+            "status",
+            "analysis",
+            "data",
+            "s",
+        ];
+        let actual: Vec<String> = keys.iter().map(|key| singular(key)).collect();
+        assert_eq!(expected, actual);
+    }
 }

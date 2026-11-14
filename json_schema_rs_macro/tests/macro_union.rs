@@ -19,9 +19,9 @@ fn anyof_ref_and_string_branches_pick_matching_variant() {
         .pets
         .iter()
         .map(|pet| match pet {
-            schema_0::PetsAnyOf::Cat(_) => "cat",
-            schema_0::PetsAnyOf::Dog(_) => "dog",
-            schema_0::PetsAnyOf::String(_) => "string",
+            schema_0::PetAnyOf::Cat(_) => "cat",
+            schema_0::PetAnyOf::Dog(_) => "dog",
+            schema_0::PetAnyOf::String(_) => "string",
         })
         .collect();
     assert_eq!(expected, actual);
@@ -45,8 +45,8 @@ fn oneof_const_discriminator_picks_matching_variant() {
         .shapes
         .iter()
         .map(|shape| match shape {
-            schema_1::ShapesOneOf::Circle(_) => "circle",
-            schema_1::ShapesOneOf::Square(_) => "square",
+            schema_1::ShapeOneOf::Circle(_) => "circle",
+            schema_1::ShapeOneOf::Square(_) => "square",
         })
         .collect();
     assert_eq!(expected, actual);
@@ -85,8 +85,8 @@ fn nullable_anyof_is_option_and_type_array_is_union() {
 fn union_types_json_schema_round_trip() {
     use json_schema_rs::{JsonSchema, Schema, ToJsonSchema};
     let expected: Vec<JsonSchema> = vec![
-        schema_0::PetsAnyOf::json_schema().expect("schema"),
-        schema_1::ShapesOneOf::json_schema().expect("schema"),
+        schema_0::PetAnyOf::json_schema().expect("schema"),
+        schema_1::ShapeOneOf::json_schema().expect("schema"),
         schema_2::Amount::json_schema().expect("schema"),
     ];
     let actual: Vec<JsonSchema> = expected
