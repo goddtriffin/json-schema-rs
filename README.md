@@ -234,7 +234,9 @@ enum with no variants).
 
 Structurally identical types are deduplicated by default (one generated
 type per shape; types used by several schemas go in a shared buffer that each
-per-schema buffer imports as `super::shared::Name`). Use
+per-schema buffer imports as `super::shared::Name`). Self-validating types
+merge when their schemas validate the same, wherever they sit: two documents
+that define the same `Address` share one type. Use
 `CodeGenSettings::builder().dedupe_mode(DedupeMode::Disabled).build()` to turn
 this off, or `DedupeMode::Functional` to compare only functional fields (see
 [design.md](design.md)). Use

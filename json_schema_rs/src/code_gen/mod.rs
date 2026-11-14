@@ -8,6 +8,8 @@ mod doc_text;
 mod embedded_prune;
 mod error;
 mod input;
+#[cfg(test)]
+mod merge_check_tests;
 mod rust_backend;
 mod rust_validators;
 mod settings;
