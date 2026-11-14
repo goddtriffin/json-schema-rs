@@ -19,8 +19,8 @@ pub(crate) fn read_schema_from_reader<R: Read>(
     Schema::new_from_slice(&buf, schema_settings).map_err(|e| e.to_string())
 }
 
-/// Reads and parses a schema document (`-` is stdin), which may be a boolean schema, printing
-/// its dialect warnings to stderr.
+/// Reads and parses a schema document (`-` is stdin), which may be a boolean schema. Its dialect
+/// warnings are printed once every document is read ([`print_dialect_warnings`]).
 pub(crate) fn read_schema_from_path(
     path: &PathBuf,
     schema_settings: &JsonSchemaSettings,
@@ -32,14 +32,43 @@ pub(crate) fn read_schema_from_path(
         read_schema_from_reader(f, schema_settings)?
     };
     if let Some(object) = schema.as_object() {
-        let warnings: Vec<DialectWarning> = resolve_dialect(object, schema_settings)
-            .map_err(|e| e.to_string())?
-            .warnings;
-        for warning in warnings {
+        resolve_dialect(object, schema_settings).map_err(|e| e.to_string())?;
+    }
+    Ok(schema)
+}
+
+/// Prints each document's dialect warnings to stderr (`warning: <path>: ...`). Documents are
+/// (path, schema, the `file:` URI it was read from). An unknown `$schema` that names one of the
+/// documents (by that URI or its root `$id`) is no warning: the registry reads that document as a
+/// custom metaschema.
+pub(crate) fn print_dialect_warnings(
+    documents: &[(&Path, &Schema, Option<&str>)],
+    schema_settings: &JsonSchemaSettings,
+) {
+    let known: BTreeSet<&str> = documents
+        .iter()
+        .flat_map(|(_, schema, uri)| {
+            let id: Option<&str> = schema.as_object().and_then(|o| o.id.as_deref());
+            uri.iter().copied().chain(id)
+        })
+        .map(|uri| uri.trim_end_matches('#'))
+        .collect();
+    for (path, schema, _) in documents {
+        let Some(object) = schema.as_object() else {
+            continue;
+        };
+        let Ok(resolved) = resolve_dialect(object, schema_settings) else {
+            continue;
+        };
+        for warning in resolved.warnings {
+            if let DialectWarning::UnknownSchemaUri { uri, .. } = &warning
+                && known.contains(uri.trim_end_matches('#'))
+            {
+                continue;
+            }
             eprintln!("warning: {}: {warning}", display_schema_path(path));
         }
     }
-    Ok(schema)
 }
 
 /// How a schema path is shown in messages (`stdin` for `-`).
