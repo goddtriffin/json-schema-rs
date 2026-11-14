@@ -682,9 +682,56 @@ fn dialect_settings_tokens(settings: Option<DialectSettings>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EmbeddedSet, FileRebase, OwnedDocument, embedding};
-    use crate::validator::EmbeddedDocumentKind;
+    use super::{EmbeddedSet, FileRebase, OwnedDocument, compile, embedded_sets, embedding};
+    use crate::json_schema::{JsonSchemaSettings, Registry, Schema};
+    use crate::validator::{CompiledEntries, EmbeddedDocumentKind};
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    /// The embedded documents carry a custom metaschema, so the static validates with its
+    /// vocabularies (here format assertion), as the library does.
+    #[test]
+    fn embedded_documents_validate_with_a_custom_metaschemas_vocabularies() {
+        let meta: Value = json!({
+            "$id": "https://example.com/meta",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$vocabulary": {
+                "https://json-schema.org/draft/2020-12/vocab/core": true,
+                "https://json-schema.org/draft/2020-12/vocab/applicator": true,
+                "https://json-schema.org/draft/2020-12/vocab/validation": true,
+                "https://json-schema.org/draft/2020-12/vocab/format-assertion": true
+            },
+            "$dynamicAnchor": "meta"
+        });
+        let schema: Schema = Schema::new_from_serde_value(
+            &json!({"$schema": "https://example.com/meta", "type": "string", "format": "ipv4"}),
+            &JsonSchemaSettings::default(),
+        )
+        .expect("parses");
+        let documents: BTreeMap<String, Value> =
+            BTreeMap::from([("https://example.com/meta".to_string(), meta)]);
+        let registry: Registry<'_> = Registry::builder()
+            .retriever(documents)
+            .build(&schema)
+            .expect("builds");
+        let sets: Vec<EmbeddedSet> =
+            embedded_sets(&[registry], &JsonSchemaSettings::default()).expect("embeds");
+        #[expect(
+            clippy::redundant_closure_for_method_calls,
+            reason = "the method path is bound to one `TypeValidators` lifetime; the closure is not"
+        )]
+        let (compiled, nodes): CompiledEntries = compile(
+            sets[0].settings,
+            &sets[0].documents,
+            &[vec!["json-schema:///#".to_string()]],
+            |v| v.compile(),
+        )
+        .expect("compiles");
+        let expected: bool = false;
+        let actual: bool = compiled.is_valid_at(&nodes[0], &json!("boom"));
+        assert_eq!(expected, actual);
+    }
 
     fn rebased(uris: &[&str], uri: &str) -> String {
         FileRebase::new(uris.iter().copied()).apply(uri)

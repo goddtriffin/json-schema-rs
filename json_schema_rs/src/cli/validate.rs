@@ -13,7 +13,8 @@
 use super::CliFailure;
 use super::retrieval::{CliRetriever, RefRetrieval};
 use super::utils::{
-    display_schema_path, read_payload_from_path, read_payload_from_reader, read_schema_from_path,
+    display_schema_path, print_dialect_warnings, read_payload_from_path, read_payload_from_reader,
+    read_schema_from_path,
 };
 use json_schema_rs::{
     CompiledSchema, JsonSchemaSettings, Registry, RegistryBuilder, Schema, file_uri,
@@ -89,6 +90,19 @@ fn read_documents(
             Ok(document) => resources.push(document),
             Err(e) => report(path, &e),
         }
+    }
+    if let Some(schema) = &schema {
+        let documents: Vec<(&Path, &Schema, Option<&str>)> =
+            std::iter::once((schema_path.as_path(), schema))
+                .chain(
+                    resource_paths
+                        .iter()
+                        .map(PathBuf::as_path)
+                        .zip(resources.iter()),
+                )
+                .map(|(path, document)| (path, &document.schema, document.uri.as_deref()))
+                .collect();
+        print_dialect_warnings(&documents, settings);
     }
     match schema {
         Some(schema) if failed == 0 => Ok((schema, resources)),

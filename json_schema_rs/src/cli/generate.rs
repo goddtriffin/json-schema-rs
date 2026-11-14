@@ -2,7 +2,8 @@
 
 use super::retrieval::{CliRetriever, RefRetrieval};
 use super::utils::{
-    collect_schema_entries, display_schema_path, read_schema_from_path, write_mod_rs_files,
+    collect_schema_entries, display_schema_path, print_dialect_warnings, read_schema_from_path,
+    write_mod_rs_files,
 };
 use clap::ArgMatches;
 use json_schema_rs::{
@@ -58,6 +59,14 @@ pub(crate) fn run_generate(
     }
 
     let (schemas, output_relatives): (Vec<Schema>, Vec<PathBuf>) = successful.into_iter().unzip();
+    let uris: Vec<Option<String>> = entries.iter().map(|(path, _)| file_uri(path)).collect();
+    let documents: Vec<(&Path, &Schema, Option<&str>)> = entries
+        .iter()
+        .zip(&schemas)
+        .zip(&uris)
+        .map(|(((path, _), schema), uri)| (path.as_path(), schema, uri.as_deref()))
+        .collect();
+    print_dialect_warnings(&documents, schema_settings);
     // Each file is retrieved from its own `file:` URI, so its relative `$ref`s reach its
     // siblings, and the other inputs reach it by that URI or its `$id`.
     let mut input: CodeGenInput<'_> = CodeGenInput::new()
