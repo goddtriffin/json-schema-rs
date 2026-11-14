@@ -31,7 +31,7 @@ BENCHMARK_ISOLATED := json_schema_rs_benchmark/isolated/Cargo.toml
 
 # Every feature except `arbitrary-precision`, which changes how every number is parsed and
 # compared (exact beyond 64 bits). `make test` runs the workspace in both builds.
-FEATURES_WITHOUT_ARBITRARY_PRECISION := json-schema-rs/uuid,json-schema-rs/http,json-schema-rs/indexmap,json-schema-rs-macro/uuid,json-schema-rs-macro/indexmap,jsonschemars/uuid,jsonschemars/http,jsonschemars/indexmap
+FEATURES_WITHOUT_ARBITRARY_PRECISION := json-schema-rs/uuid,json-schema-rs/chrono,json-schema-rs-macro/chrono,jsonschemars/chrono,json-schema-rs/http,json-schema-rs/indexmap,json-schema-rs-macro/uuid,json-schema-rs-macro/indexmap,jsonschemars/uuid,jsonschemars/http,jsonschemars/indexmap
 
 .PHONY: test
 test: ## runs tests twice: every feature but arbitrary-precision (64-bit numbers), then all features (exact big numbers)

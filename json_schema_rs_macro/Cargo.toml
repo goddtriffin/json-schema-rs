@@ -18,6 +18,7 @@ proc-macro = true
 
 [features]
 uuid = ["dep:uuid", "json-schema-rs/uuid"]
+chrono = ["json-schema-rs/chrono"]
 indexmap = ["json-schema-rs/indexmap"]
 # Codegen inside the macro reads schema numbers exactly beyond 64 bits.
 arbitrary-precision = ["json-schema-rs/arbitrary-precision"]
@@ -34,6 +35,8 @@ syn = { workspace = true, features = ["full", "visit-mut"] }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Generated `chrono` fields (the `chrono` feature).
+chrono.workspace = true
 # Generated `IndexSet` fields derive serde.
 indexmap = { workspace = true, features = ["serde"] }
 # Line and column of spans outside a compiler run, so unit tests can check where an error points.

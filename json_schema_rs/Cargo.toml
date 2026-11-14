@@ -21,6 +21,10 @@ workspace = true
 
 [features]
 uuid = ["dep:uuid"]
+# Codegen types `format: "date-time"` as `chrono::DateTime<chrono::FixedOffset>` and `"date"` as
+# `chrono::NaiveDate`, and `ToJsonSchema` covers them. Off by default: generated code then needs
+# no extra crate.
+chrono = ["dep:chrono"]
 # Retrieve `http:` / `https:` documents a `$ref` names (`HttpRetriever`, the CLI's
 # `--cgs-allow-remote-refs`). Off by default: no network access unless asked for.
 http = ["dep:reqwest"]
@@ -34,6 +38,7 @@ indexmap = ["dep:indexmap"]
 arbitrary-precision = ["serde_json/arbitrary_precision", "dep:num-bigint"]
 
 [dependencies]
+chrono = { workspace = true, optional = true }
 # RFC 3986 / 3987 URI parsing, reference resolution and normalisation for `$id` / `$ref`.
 fluent-uri.workspace = true
 heck.workspace = true

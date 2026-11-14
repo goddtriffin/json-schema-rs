@@ -235,7 +235,7 @@ pub fn run() {
                         .long("cgs-format-types")
                         .value_name("MODE")
                         .value_parser(["typed", "follow-dialect"])
-                        .help("Codegen Settings: when format \"uuid\" becomes uuid::Uuid (with the `uuid` feature): typed = always, even where 2019-09 / 2020-12 only annotate formats (a deliberate divergence); follow-dialect = only where the dialect asserts the format, else String (default: typed)"),
+                        .help("Codegen Settings: when a format with a Rust type gets it (uuid: uuid::Uuid with the `uuid` feature; date-time / date: chrono types with the `chrono` feature; ipv4 / ipv6: std::net): typed = always, even where 2019-09 / 2020-12 only annotate formats (a deliberate divergence); follow-dialect = only where the dialect asserts the format, else String (default: typed)"),
                 )
                 .args(retrieval::retrieval_args()),
         )

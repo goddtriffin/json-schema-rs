@@ -613,6 +613,22 @@ impl<'a> TypeValidators<'a> {
         T::from_instance(instance)
     }
 
+    /// For a generated constrained newtype over a type parsed from a string (`uuid::Uuid`, the
+    /// `chrono` and `std::net` types of a `format`): validates the string `value` serializes to.
+    ///
+    /// # Errors
+    ///
+    /// [`TypeValidationError::Json`] when `value` does not serialize; otherwise every error the
+    /// schema's validator reports.
+    pub fn validate_parsed<T: Serialize>(
+        &self,
+        index: usize,
+        value: &T,
+    ) -> Result<(), TypeValidationError> {
+        let instance: Value = serde_json::to_value(value)?;
+        self.validate(index, &instance)
+    }
+
     /// For a generated constrained newtype's `Deserialize`: `value` when the deserialization is
     /// trusted (see the module docs, *Trusted deserialization*), else
     /// [`TypeValidators::validate_newtype`].
@@ -1024,8 +1040,9 @@ macro_rules! self_validating {
 /// - `constrained_newtype!(integer, Age, u8, VALIDATORS, 0)`: wraps an integer read by JSON
 ///   Schema's integer rule (draft 6 on: `1.0` is the integer 1; see
 ///   [`json_schema_rs::integer`](crate::integer)).
-/// - `constrained_newtype!(uuid, Id, VALIDATORS, 0)`: wraps `uuid::Uuid`, validated as the
-///   string read (and, for `TryFrom<Uuid>`, the string it serializes to).
+/// - `constrained_newtype!(parsed, Id, Uuid, VALIDATORS, 0)`: wraps a type parsed from a string
+///   (`uuid::Uuid`, `chrono::NaiveDate`, `std::net::Ipv4Addr`, ...), validated as the string read,
+///   before it is parsed (and, for `TryFrom`, as the string it serializes to).
 ///
 /// ```
 /// use json_schema_rs::{EmbeddedDocument, EmbeddedDocumentKind, TypeValidators};
@@ -1141,30 +1158,34 @@ macro_rules! constrained_newtype {
         $crate::constrained_newtype!(@as_ref, $name, $inner);
         $crate::constrained_newtype!(@readers, $name, $inner);
     };
-    (uuid, $name:ident, $validators:ident, $index:expr) => {
-        impl TryFrom<::uuid::Uuid> for $name {
+    (parsed, $name:ident, $inner:ty, $validators:ident, $index:expr) => {
+        impl TryFrom<$inner> for $name {
             type Error = $crate::TypeValidationError;
 
             /// Validates `value` (as the string it serializes to) against the schema: every error
             /// the schema's validator reports.
-            fn try_from(value: ::uuid::Uuid) -> Result<Self, Self::Error> {
-                $validators.validate_newtype($index, value.to_string())?;
+            fn try_from(value: $inner) -> Result<Self, Self::Error> {
+                $validators.validate_parsed($index, &value)?;
                 Ok(Self(value))
             }
         }
 
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                // The string as read, before it is parsed.
+                // The string as read, validated before it is parsed.
                 let text: String = $validators
                     .read_newtype($index, <String as ::serde::Deserialize>::deserialize(deserializer)?)
                     .map_err(::serde::de::Error::custom)?;
-                ::uuid::Uuid::parse_str(&text).map(Self).map_err(::serde::de::Error::custom)
+                <$inner as ::serde::Deserialize>::deserialize(
+                    ::serde::de::IntoDeserializer::<::serde::de::value::Error>::into_deserializer(text),
+                )
+                .map(Self)
+                .map_err(::serde::de::Error::custom)
             }
         }
 
-        $crate::constrained_newtype!(@as_ref, $name, ::uuid::Uuid);
-        $crate::constrained_newtype!(@readers, $name, ::uuid::Uuid);
+        $crate::constrained_newtype!(@as_ref, $name, $inner);
+        $crate::constrained_newtype!(@readers, $name, $inner);
     };
     (@as_ref, $name:ident, $inner:ty) => {
         impl AsRef<$inner> for $name {

@@ -71,5 +71,7 @@ syn = "3.0.10"
 tempfile = "3.27.0"
 typify = { version = "0.8.0", default-features = false }
 url = "2.5.8"
+# `format: "date-time"` / `"date"` types (the `chrono` feature); no clock or time zone database.
+chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 uuid = { version = "1.29.2", features = ["serde", "v4"] }
 valico = "4.0.0"

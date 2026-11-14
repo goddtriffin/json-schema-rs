@@ -1305,14 +1305,46 @@ impl ToJsonSchema for HandWrittenExample {
     }
 }
 
+/// A string with `format`.
+fn formatted_string(format: &str) -> JsonSchema {
+    JsonSchema {
+        type_: Some(JsonType::String.into()),
+        format: Some(format.to_string()),
+        ..Default::default()
+    }
+}
+
 #[cfg(feature = "uuid")]
 impl ToJsonSchema for uuid::Uuid {
     fn json_schema() -> ReverseCodeGenResult {
-        Ok(JsonSchema {
-            type_: Some(JsonType::String.into()),
-            format: Some("uuid".to_string()),
-            ..Default::default()
-        })
+        Ok(formatted_string("uuid"))
+    }
+}
+
+/// Any time zone: `chrono` serializes every `DateTime` as RFC 3339 with its offset.
+#[cfg(feature = "chrono")]
+impl<Tz: chrono::TimeZone> ToJsonSchema for chrono::DateTime<Tz> {
+    fn json_schema() -> ReverseCodeGenResult {
+        Ok(formatted_string("date-time"))
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl ToJsonSchema for chrono::NaiveDate {
+    fn json_schema() -> ReverseCodeGenResult {
+        Ok(formatted_string("date"))
+    }
+}
+
+impl ToJsonSchema for std::net::Ipv4Addr {
+    fn json_schema() -> ReverseCodeGenResult {
+        Ok(formatted_string("ipv4"))
+    }
+}
+
+impl ToJsonSchema for std::net::Ipv6Addr {
+    fn json_schema() -> ReverseCodeGenResult {
+        Ok(formatted_string("ipv6"))
     }
 }
 
@@ -1655,6 +1687,54 @@ mod tests {
             Ok(r#"{"type":"string","format":"uuid"}"#.to_string());
         let actual: Result<String, Vec<ReverseCodeGenError>> =
             serialized(uuid::Uuid::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn fixed_offset_date_time_json_schema() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":"string","format":"date-time"}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(chrono::DateTime::<chrono::FixedOffset>::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn utc_date_time_json_schema() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":"string","format":"date-time"}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(chrono::DateTime::<chrono::Utc>::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn naive_date_json_schema() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":"string","format":"date"}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(chrono::NaiveDate::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ipv4_addr_json_schema() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":"string","format":"ipv4"}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(std::net::Ipv4Addr::json_schema());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ipv6_addr_json_schema() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r#"{"type":"string","format":"ipv6"}"#.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(std::net::Ipv6Addr::json_schema());
         assert_eq!(expected, actual);
     }
 
