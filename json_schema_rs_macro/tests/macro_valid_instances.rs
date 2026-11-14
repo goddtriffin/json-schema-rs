@@ -56,7 +56,7 @@ fn pattern_property_beside_additional_properties_schema_deserializes() {
     let root: schema_1::Root = serde_json::from_str(r#"{"x-a":5}"#).unwrap();
     let expected: BTreeMap<String, serde_json::Value> =
         BTreeMap::from([("x-a".to_string(), serde_json::json!(5))]);
-    let actual: BTreeMap<String, serde_json::Value> = root;
+    let actual: BTreeMap<String, serde_json::Value> = root.0;
     assert_eq!(expected, actual);
 }
 
@@ -88,7 +88,7 @@ fn pattern_property_beside_additional_properties_false_try_from_rejects_unmatche
 fn items_beside_prefix_items_deserializes_each_position() {
     let root: schema_3::Root = serde_json::from_str(r#"[1,"a"]"#).unwrap();
     let expected: Vec<serde_json::Value> = vec![serde_json::json!(1), serde_json::json!("a")];
-    let actual: Vec<serde_json::Value> = root;
+    let actual: Vec<serde_json::Value> = root.0;
     assert_eq!(expected, actual);
 }
 

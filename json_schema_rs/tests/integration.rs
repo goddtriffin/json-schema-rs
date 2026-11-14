@@ -1399,6 +1399,73 @@ fn mod_rs_content_by_dir(output_relatives: &[PathBuf]) -> BTreeMap<PathBuf, BTre
 /// template (with `compile_test` standing for the package name).
 type ScenarioFiles = (Vec<u8>, Vec<(PathBuf, Vec<u8>)>, &'static str);
 
+/// Build+deserialize scenarios every build runs.
+const SCENARIOS: &[&str] = &[
+    "kitchen_sink",
+    "boolean_basic",
+    "type_array_with_null",
+    "boolean_subschemas",
+    "boolean_roots",
+    "round_trip",
+    "enum_non_rust_compliant",
+    "enum_variants",
+    "nested_modules",
+    "multi_schema",
+    "hyphenated_paths",
+    "dedupe_two_identical",
+    "dedupe_across_documents",
+    "custom_metaschema",
+    "nullable_fields",
+    "dedupe_nested_output",
+    "model_name_source_property_key",
+    "defs_ref",
+    "deep_nesting",
+    "allof_merged",
+    "oneof_union",
+    "additional_properties_false",
+    "additional_properties_schema",
+    "string_pattern",
+    "default_round_trip",
+    "unique_items_round_trip",
+    "unique_items_sets",
+    "unique_items_generated_item_sets",
+    "examples_annotation",
+    "deprecated_property",
+    "self_reference_root",
+    "self_reference_defs",
+    "mutual_recursion_defs",
+    "large_values_boxed",
+    "anyof_ref_and_string_union",
+    "oneof_const_discriminated",
+    "nullable_anyof_option",
+    "nullable_one_of_union",
+    "string_branches_one_variant",
+    "type_array_integer_number",
+    "nullable_absent_vs_null",
+    "unknown_keys_captured",
+    "unknown_keys_dropped",
+    "non_string_enum",
+    "flatten_single_entry_combinators",
+    "self_validating",
+    "self_validating_error_variant",
+    "constrained_newtypes",
+    "cross_file_refs",
+    "then_only_property_any_value",
+    "then_else_shared_property",
+    "pattern_properties_untyped_additional_map",
+    "pattern_properties_additional_false_open_map",
+    "pattern_properties_typed_unnamed_keys",
+    "root_array_newtype",
+    "root_integer_map_newtype",
+    "prefix_items_untyped_items",
+    "integer_accepts_zero_fraction",
+    "integer_draft4_lexical",
+    "format_types_follow_dialect",
+    "ip_formats",
+    "doc_markup",
+    "derived_traits",
+];
+
 /// Build+deserialize scenarios that need the `indexmap` feature.
 #[cfg(feature = "indexmap")]
 const INDEXMAP_SCENARIOS: &[&str] = &[
@@ -2056,6 +2123,48 @@ fn main() {
         Root::try_from(instance).is_ok(),
         Root::try_from(serde_json::json!({"x-a": -1})).is_err(),
         Root::try_from(serde_json::json!({"tags": {"y-a": "s"}})).is_err(),
+    );
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
+            "root_array_newtype" => (
+                // A root array is a newtype with `validate` and `TryFrom`: no parent checks its
+                // `maxItems`.
+                r#"{"type":"array","maxItems":2,"items":{"type":"string"}}"#,
+                default_code_gen.clone(),
+                r#"fn main() {
+    use compile_test::Root;
+    let root: Root = serde_json::from_value(serde_json::json!(["a", "b", "c"])).unwrap();
+    let expected: (Vec<String>, bool, bool, bool) = (
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        true,
+        true,
+        true,
+    );
+    let actual: (Vec<String>, bool, bool, bool) = (
+        root.0.clone(),
+        root.validate().is_err(),
+        Root::try_from(serde_json::json!(["a", "b"])).is_ok(),
+        Root::try_from(serde_json::json!(["a", "b", "c"])).is_err(),
+    );
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
+            "root_integer_map_newtype" => (
+                // A root map is a newtype that reads its integer values by the integer rule and
+                // checks the key names its `patternProperties` allow.
+                r#"{"type":"object","patternProperties":{"^x-":{"type":"integer"}},"additionalProperties":false}"#,
+                default_code_gen.clone(),
+                r#"fn main() {
+    use compile_test::Root;
+    use std::collections::BTreeMap;
+    let expected: (Option<BTreeMap<String, i64>>, bool) =
+        (Some(BTreeMap::from([("x-a".to_string(), 1)])), true);
+    let actual: (Option<BTreeMap<String, i64>>, bool) = (
+        Root::try_from(serde_json::json!({"x-a": 1.0})).ok().map(|root| root.0),
+        Root::try_from(serde_json::json!({"b": 1})).is_err(),
     );
     assert_eq!(expected, actual);
 }
@@ -3431,74 +3540,13 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
     let scenarios_dir = workspace_root.path().join("scenarios");
     fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let scenario_list: Vec<&str> = [
-        "kitchen_sink",
-        "boolean_basic",
-        "type_array_with_null",
-        "boolean_subschemas",
-        "boolean_roots",
-        "round_trip",
-        "enum_non_rust_compliant",
-        "enum_variants",
-        "nested_modules",
-        "multi_schema",
-        "hyphenated_paths",
-        "dedupe_two_identical",
-        "dedupe_across_documents",
-        "custom_metaschema",
-        "nullable_fields",
-        "dedupe_nested_output",
-        "model_name_source_property_key",
-        "defs_ref",
-        "deep_nesting",
-        "allof_merged",
-        "oneof_union",
-        "additional_properties_false",
-        "additional_properties_schema",
-        "string_pattern",
-        "default_round_trip",
-        "unique_items_round_trip",
-        "unique_items_sets",
-        "unique_items_generated_item_sets",
-        "examples_annotation",
-        "deprecated_property",
-        "self_reference_root",
-        "self_reference_defs",
-        "mutual_recursion_defs",
-        "large_values_boxed",
-        "anyof_ref_and_string_union",
-        "oneof_const_discriminated",
-        "nullable_anyof_option",
-        "nullable_one_of_union",
-        "string_branches_one_variant",
-        "type_array_integer_number",
-        "nullable_absent_vs_null",
-        "unknown_keys_captured",
-        "unknown_keys_dropped",
-        "non_string_enum",
-        "flatten_single_entry_combinators",
-        "self_validating",
-        "self_validating_error_variant",
-        "constrained_newtypes",
-        "cross_file_refs",
-        "then_only_property_any_value",
-        "then_else_shared_property",
-        "pattern_properties_untyped_additional_map",
-        "pattern_properties_additional_false_open_map",
-        "pattern_properties_typed_unnamed_keys",
-        "prefix_items_untyped_items",
-        "integer_accepts_zero_fraction",
-        "integer_draft4_lexical",
-        "format_types_follow_dialect",
-        "ip_formats",
-        "doc_markup",
-        "derived_traits",
-    ]
-    .into_iter()
-    .chain(INDEXMAP_SCENARIOS.iter().copied())
-    .chain(CHRONO_SCENARIOS.iter().copied())
-    .chain(UUID_SCENARIOS.iter().copied())
-    .collect();
+    let scenario_list: Vec<&str> = SCENARIOS
+        .iter()
+        .copied()
+        .chain(INDEXMAP_SCENARIOS.iter().copied())
+        .chain(CHRONO_SCENARIOS.iter().copied())
+        .chain(UUID_SCENARIOS.iter().copied())
+        .collect();
 
     for name in &scenario_list {
         let package_name: String = format!("compile_test_{name}");

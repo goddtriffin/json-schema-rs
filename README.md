@@ -276,9 +276,10 @@ integer types accept `1.0` and `2e0` (fields, items, map values, union variants 
 newtypes read through `json_schema_rs::integer`); draft 4 accepts only numbers written as
 integers. A fraction, or a number the Rust type cannot hold, fails to deserialize. An
 integer without both bounds is `i64`: a valid integer beyond its range (`2^63`) fails to
-deserialize; give the schema `minimum` / `maximum` for a wider type (`u64`). A type alias of
-a std type (`pub type Root = Vec<i64>;`) deserializes through serde's own impl; read it
-through `json_schema_rs::integer::Integer<Root>` to apply the rule.
+deserialize; give the schema `minimum` / `maximum` for a wider type (`u64`). With
+self-validating types off, a root map or array is a type alias of a std type
+(`pub type Root = Vec<i64>;`) that deserializes through serde's own impl; read it through
+`json_schema_rs::integer::Integer<Root>` to apply the rule.
 
 **Typed formats (a deliberate divergence).** Codegen gives a format with a Rust type that
 type in every draft: `uuid` → `uuid::Uuid` (the `uuid` feature), `date-time` →
@@ -298,7 +299,8 @@ the spec either way.
 through this library's validator, with the same errors (`ValidationError`s) it gives:
 every generated struct, enum and union gets `validate(&self)` and
 `TryFrom<serde_json::Value>` (validate, then deserialize), from one
-`json_schema_rs::self_validating!` line per type, and an `anyOf` / `oneOf` union
+`json_schema_rs::self_validating!` line per type (a root map or array is a newtype,
+`pub struct Root(pub Vec<String>);`, so it gets them too), and an `anyOf` / `oneOf` union
 deserializes into a variant whose branch the value satisfies (`oneOf`: exactly one branch,
 so a value two branches accept is an error), not the first variant serde can fill.
 Constraints the Rust type cannot express (`minLength`, `pattern`, `maximum`,
