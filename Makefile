@@ -31,7 +31,7 @@ BENCHMARK_ISOLATED := json_schema_rs_benchmark/isolated/Cargo.toml
 
 # Every feature except `arbitrary-precision`, which changes how every number is parsed and
 # compared (exact beyond 64 bits). `make test` runs the workspace in both builds.
-FEATURES_WITHOUT_ARBITRARY_PRECISION := json-schema-rs/uuid,json-schema-rs/http,json-schema-rs/indexmap,json-schema-rs-macro/uuid,json-schema-rs-macro/indexmap
+FEATURES_WITHOUT_ARBITRARY_PRECISION := json-schema-rs/uuid,json-schema-rs/http,json-schema-rs/indexmap,json-schema-rs-macro/uuid,json-schema-rs-macro/indexmap,jsonschemars/uuid,jsonschemars/http,jsonschemars/indexmap
 
 .PHONY: test
 test: ## runs tests twice: every feature but arbitrary-precision (64-bit numbers), then all features (exact big numbers)
@@ -63,11 +63,13 @@ vendor_specs: ## download and vendor all JSON Schema specs from json-schema.org 
 	./specs/download.sh
 
 .PHONY: publish_dry_run
-publish_dry_run: ## dry run of publishing workspace crates to crates.io (order: main first, macro second)
+publish_dry_run: ## dry run of publishing workspace crates to crates.io (order: library, macro, CLI)
 	cargo publish --package json-schema-rs --dry-run
 	cargo package --package json-schema-rs --list
 	cargo publish --package json-schema-rs-macro --dry-run
 	cargo package --package json-schema-rs-macro --list
+	cargo publish --package jsonschemars --dry-run
+	cargo package --package jsonschemars --list
 
 .PHONY: research_clone
 research_clone: ## clone or update competitor repos into research/repos/<lang>/<name>/ at their latest upstream version (includes BelfordZ crate, latest from crates.io); REFRESH=1 to force re-download BelfordZ

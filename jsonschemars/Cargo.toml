@@ -1,0 +1,37 @@
+[package]
+name = "jsonschemars"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Command-line tool for json-schema-rs: generate Rust types from JSON Schema and validate JSON against a schema."
+license-file.workspace = true
+keywords = ["json", "schema", "json-schema", "cli", "codegen"]
+categories = ["command-line-utilities", "parsing"]
+exclude.workspace = true
+
+[[bin]]
+name = "jsonschemars"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+uuid = ["json-schema-rs/uuid"]
+# `--allow-remote-refs`: retrieve `http:` / `https:` documents a `$ref` names.
+http = ["json-schema-rs/http"]
+# `--cgs-unique-items index-set`.
+indexmap = ["json-schema-rs/indexmap"]
+arbitrary-precision = ["json-schema-rs/arbitrary-precision"]
+
+[dependencies]
+clap.workspace = true
+json-schema-rs.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

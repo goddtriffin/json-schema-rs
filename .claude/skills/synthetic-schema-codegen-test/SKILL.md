@@ -74,7 +74,7 @@ For each issue category, append an entry with a **minimal viable example
 
 ## Key Files
 
-- CLI: [json_schema_rs/src/cli/generate.rs](json_schema_rs/src/cli/generate.rs)
+- CLI: [jsonschemars/src/cli/generate.rs](jsonschemars/src/cli/generate.rs)
 - Rust backend:
   [json_schema_rs/src/code_gen/rust_backend.rs](json_schema_rs/src/code_gen/rust_backend.rs)
 - Design: [design.md](design.md)

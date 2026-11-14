@@ -539,15 +539,12 @@ println!("{}", serde_json::to_string_pretty(&output)?);
 
 ## Running the binary
 
-Build and run the CLI:
-
-**Build:**
+The CLI is its own crate, `jsonschemars`, so the library's users never build its
+dependencies:
 
 ```bash
-cargo build --release
+cargo install jsonschemars
 ```
-
-The binary is at `target/release/jsonschemars`.
 
 **Generate code from one or more JSON Schemas.** The `generate` command takes
 one or more INPUTs (file paths, directory paths—recursively searched for `.json`
@@ -570,7 +567,7 @@ A `$ref` to another file resolves against the referring file's path (or its
 is read only from inside `--file-root DIR` (default: the current directory).
 `http:` / `https:` documents are fetched only with `--allow-remote-refs`,
 which needs the binary built with the `http` feature
-(`cargo install json-schema-rs --features http`).
+(`cargo install jsonschemars --features http`).
 
 **Validate a JSON payload against a schema** (schema via `-s`, payload from
 stdin or `-p`):

@@ -90,7 +90,7 @@ main() {
     export CARGO_PROFILE_DEV_DEBUG=0
     echo "==> building"
     CARGO_TARGET_DIR="${SMOKE_DIR}" cargo build --manifest-path "${REPO_ROOT}/Cargo.toml" \
-        -p json-schema-rs --bin jsonschemars \
+        -p jsonschemars --bin jsonschemars \
         -p json-schema-rs-benchmark --bin heap_profile --bin gen_fixtures --bin list_fixtures
     "${BIN_DIR}/gen_fixtures" --output "${GENERATED_FIXTURES}"
     export BENCH_FIXTURE_ROOTS="${COMMITTED_FIXTURES}:${GENERATED_FIXTURES}"
