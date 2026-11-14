@@ -67,8 +67,10 @@ pub enum UniqueItemsType {
     IndexSet,
 }
 
-/// Whether a `format` codegen has a Rust type for (`uuid` → `uuid::Uuid`, with the `uuid`
-/// feature) gets that type when the schema's dialect only annotates formats.
+/// Whether a `format` codegen has a Rust type for gets that type when the schema's dialect only
+/// annotates formats. The typed formats: `uuid` → `uuid::Uuid` (the `uuid` feature),
+/// `date-time` → `chrono::DateTime<chrono::FixedOffset>` and `date` → `chrono::NaiveDate` (the
+/// `chrono` feature), `ipv4` / `ipv6` → `std::net::Ipv4Addr` / `Ipv6Addr`.
 ///
 /// The default, [`Typed`](FormatTypes::Typed), **deliberately diverges from drafts 2019-09 and
 /// 2020-12**, where `format` is an annotation by default and any string satisfies

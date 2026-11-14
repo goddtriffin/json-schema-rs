@@ -280,13 +280,18 @@ deserialize; give the schema `minimum` / `maximum` for a wider type (`u64`). A t
 a std type (`pub type Root = Vec<i64>;`) deserializes through serde's own impl; read it
 through `json_schema_rs::integer::Integer<Root>` to apply the rule.
 
-**`format: "uuid"` is a `Uuid` (a deliberate divergence).** With the `uuid` feature,
-codegen emits `uuid::Uuid` for `format: "uuid"` in every draft, so a string that is not a
-UUID fails to deserialize. In 2019-09 and 2020-12 `format` is only an annotation by
-default, so the schema itself accepts any string there; we diverge on purpose, since a
-schema author who writes `uuid` means a UUID. `.format_types(FormatTypes::FollowDialect)`
-(`--cgs-format-types follow-dialect`) is the spec-exact choice: `Uuid` only where the
-dialect asserts formats (`format_mode` `Assertion`), else `String`. The validator follows
+**Typed formats (a deliberate divergence).** Codegen gives a format with a Rust type that
+type in every draft: `uuid` → `uuid::Uuid` (the `uuid` feature), `date-time` →
+`chrono::DateTime<chrono::FixedOffset>` and `date` → `chrono::NaiveDate` (the `chrono`
+feature), `ipv4` / `ipv6` → `std::net::Ipv4Addr` / `Ipv6Addr`. A string that is not one fails
+to deserialize. In 2019-09 and 2020-12 `format` is only an annotation by default, so the
+schema itself accepts any string there; we diverge on purpose, since a schema author who
+writes `uuid` means a UUID. `.format_types(FormatTypes::FollowDialect)`
+(`--cgs-format-types follow-dialect`) is the spec-exact choice: the typed field only where
+the dialect asserts formats (`format_mode` `Assertion`), else `String`. Where the dialect
+asserts, the field is also checked against the format's exact grammar, which the parsers
+are looser than (`Uuid` accepts `{...}`, `chrono` an unpadded `2024-1-5`). `time` and `uri`
+stay `String`: no crate's type accepts exactly what the format does. The validator follows
 the spec either way.
 
 **Self-validating types (on by default).** Generated types enforce their whole schema

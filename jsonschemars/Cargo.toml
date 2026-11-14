@@ -22,6 +22,8 @@ workspace = true
 
 [features]
 uuid = ["json-schema-rs/uuid"]
+# `format: "date-time"` / `"date"` become `chrono` types.
+chrono = ["json-schema-rs/chrono"]
 # `--allow-remote-refs`: retrieve `http:` / `https:` documents a `$ref` names.
 http = ["json-schema-rs/http"]
 # `--cgs-unique-items index-set`.

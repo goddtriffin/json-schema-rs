@@ -716,14 +716,11 @@ impl<'r> Builder<'_, 'r> {
         let facts = || Facts::of(flat, mask, self.registry, self.conditionals);
         let constrained: bool = match node {
             TypeNode::Boolean => beyond_shape(),
-            TypeNode::String {
-                format,
-                constraints,
-            } => {
+            TypeNode::String { constraints, .. } => {
                 constraints.min_length.is_some_and(|n| n > 0)
                     || constraints.max_length.is_some()
                     || constraints.pattern.is_some()
-                    || self.checks_format(flat, *format)
+                    || self.checks_format(flat)
                     || beyond_shape()
             }
             TypeNode::Integer(width, _) => {
@@ -774,8 +771,8 @@ impl<'r> Builder<'_, 'r> {
         })
     }
 
-    /// The string format whose Rust type the node gets: `uuid` with
-    /// [`FormatTypes::Typed`](crate::FormatTypes::Typed), or with
+    /// The string format whose Rust type the node gets: with
+    /// [`FormatTypes::Typed`](crate::FormatTypes::Typed) wherever a conjunct names it, with
     /// [`FormatTypes::FollowDialect`](crate::FormatTypes::FollowDialect) only where a conjunct's
     /// dialect asserts it.
     fn string_format(&self, flat: &Flat<'r>, facts: &Facts<'r>) -> StringFormat {
@@ -784,10 +781,12 @@ impl<'r> Builder<'_, 'r> {
             return format;
         }
         let asserted: bool = flat.conjuncts.iter().any(|c| {
-            c.schema.format.as_deref() == Some("uuid") && {
-                let dialect: Dialect = self.registry.dialect(c.scope);
-                dialect.format_mode == FormatMode::Assertion && dialect.defines_format("uuid")
-            }
+            c.schema.format.as_deref().is_some_and(|name| {
+                StringFormat::of(name) == format && {
+                    let dialect: Dialect = self.registry.dialect(c.scope);
+                    dialect.format_mode == FormatMode::Assertion && dialect.defines_format(name)
+                }
+            })
         });
         if asserted {
             format
@@ -813,13 +812,11 @@ impl<'r> Builder<'_, 'r> {
         }
     }
 
-    /// Whether validating a string of `format` checks a `format` keyword of the conjunction: its
-    /// dialect asserts formats and defines the named one (`uuid` with a UUID type is the type's
-    /// own check).
-    fn checks_format(&self, flat: &Flat<'r>, format: StringFormat) -> bool {
-        if cfg!(feature = "uuid") && format == StringFormat::Uuid {
-            return false;
-        }
+    /// Whether validating a string checks a `format` keyword of the conjunction: its dialect
+    /// asserts formats and defines the named one. A typed format is checked too: its type's
+    /// parser accepts strings the format does not (`uuid::Uuid` reads `{...}` and `urn:uuid:`
+    /// forms, `chrono` an unpadded `1963-6-19`).
+    fn checks_format(&self, flat: &Flat<'r>) -> bool {
         flat.conjuncts.iter().any(|c| {
             c.schema.format.as_deref().is_some_and(|name| {
                 let dialect: Dialect = self.registry.dialect(c.scope);
@@ -2028,10 +2025,9 @@ impl<'r> Facts<'r> {
     }
 
     fn string_format(&self) -> StringFormat {
-        match self.format.as_deref() {
-            Some("uuid") => StringFormat::Uuid,
-            _ => StringFormat::Plain,
-        }
+        self.format
+            .as_deref()
+            .map_or(StringFormat::Plain, StringFormat::of)
     }
 }
 

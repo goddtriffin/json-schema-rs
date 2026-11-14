@@ -1139,16 +1139,43 @@ fn temp_crate_cargo_toml_with_reverse_codegen() -> String {
     temp_crate_cargo_toml_with_reverse_codegen_named("compile_test")
 }
 
-/// With the `indexmap` feature, temp crates can hold `IndexSet` fields: generated code needs the
-/// `indexmap` crate (with `serde`) and the derive needs `json-schema-rs`'s `indexmap` feature.
-#[cfg(feature = "indexmap")]
-const INDEXMAP_JSON_SCHEMA_RS_FEATURES: &str = ", features = [\"indexmap\"]";
-#[cfg(not(feature = "indexmap"))]
-const INDEXMAP_JSON_SCHEMA_RS_FEATURES: &str = "";
-#[cfg(feature = "indexmap")]
-const INDEXMAP_DEPENDENCY: &str = "indexmap = { version = \"2\", features = [\"serde\"] }\n";
-#[cfg(not(feature = "indexmap"))]
-const INDEXMAP_DEPENDENCY: &str = "";
+/// The `json-schema-rs` features and the dependencies a temp crate needs for this build's
+/// optional-feature scenarios: generated `IndexSet`, `chrono` and `Uuid` fields need their crate
+/// (with `serde`), and their `ToJsonSchema` impls need `json-schema-rs`'s feature of that name.
+fn optional_feature_dependencies() -> (String, String) {
+    let optional: [(bool, &str, &str); 3] = [
+        (
+            cfg!(feature = "indexmap"),
+            "indexmap",
+            "indexmap = { version = \"2\", features = [\"serde\"] }\n",
+        ),
+        (
+            cfg!(feature = "chrono"),
+            "chrono",
+            "chrono = { version = \"0.4\", default-features = false, features = [\"serde\"] }\n",
+        ),
+        (
+            cfg!(feature = "uuid"),
+            "uuid",
+            "uuid = { version = \"1\", features = [\"serde\"] }\n",
+        ),
+    ];
+    let enabled: Vec<&(bool, &str, &str)> = optional.iter().filter(|(on, _, _)| *on).collect();
+    let features: String = if enabled.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<String> = enabled
+            .iter()
+            .map(|(_, name, _)| format!("\"{name}\""))
+            .collect();
+        format!(", features = [{}]", names.join(", "))
+    };
+    let dependencies: String = enabled
+        .iter()
+        .map(|(_, _, dependency)| *dependency)
+        .collect();
+    (features, dependencies)
+}
 
 /// Cargo.toml content for a workspace member with the given package name.
 fn temp_crate_cargo_toml_with_reverse_codegen_named(package_name: &str) -> String {
@@ -1159,6 +1186,7 @@ fn temp_crate_cargo_toml_with_reverse_codegen_named(package_name: &str) -> Strin
         .expect("workspace root");
     let json_schema_rs_path = workspace_root.join("json_schema_rs");
     let macro_path = workspace_root.join("json_schema_rs_macro");
+    let (features, dependencies): (String, String) = optional_feature_dependencies();
     format!(
         r#"[package]
 name = "{}"
@@ -1181,9 +1209,9 @@ json-schema-rs-macro = {{ path = "{}" }}
         package_name,
         package_name,
         json_schema_rs_path.display(),
-        INDEXMAP_JSON_SCHEMA_RS_FEATURES,
+        features,
         macro_path.display(),
-        INDEXMAP_DEPENDENCY,
+        dependencies,
     )
 }
 
@@ -1379,6 +1407,18 @@ const INDEXMAP_SCENARIOS: &[&str] = &[
 ];
 #[cfg(not(feature = "indexmap"))]
 const INDEXMAP_SCENARIOS: &[&str] = &[];
+
+/// Build+deserialize scenarios that need the `chrono` feature.
+#[cfg(feature = "chrono")]
+const CHRONO_SCENARIOS: &[&str] = &["chrono_formats"];
+#[cfg(not(feature = "chrono"))]
+const CHRONO_SCENARIOS: &[&str] = &[];
+
+/// Build+deserialize scenarios that need the `uuid` feature.
+#[cfg(feature = "uuid")]
+const UUID_SCENARIOS: &[&str] = &["uuid_asserted"];
+#[cfg(not(feature = "uuid"))]
+const UUID_SCENARIOS: &[&str] = &[];
 
 /// One `pub mod <name> { ... }` per `(name, setting)`, each holding the code generated for a
 /// required `uniqueItems` string array with that `UniqueItemsType`.
@@ -2072,6 +2112,58 @@ fn main() {
     let validated: bool = compile_test::Root::try_from(instance.clone()).is_ok();
     let expected: (serde_json::Value, bool) = (instance, true);
     let actual: (serde_json::Value, bool) = (serde_json::to_value(&root).unwrap(), validated);
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
+            "ip_formats" => (
+                // Annotated (2020-12): the `std::net` types. Asserted (a draft 7 `$defs`
+                // resource): a `parsed` newtype, checked by the validator, then parsed.
+                r##"{"type":"object","properties":{"v4":{"type":"string","format":"ipv4"},"v6":{"type":"string","format":"ipv6"},"checked":{"$ref":"#/$defs/Checked"}},"required":["v4"],"$defs":{"Checked":{"$schema":"http://json-schema.org/draft-07/schema#","$id":"https://example.com/checked","type":"string","format":"ipv4"}}}"##,
+                default_code_gen.clone(),
+                r#"fn main() {
+    let instance: serde_json::Value =
+        serde_json::json!({"v4": "192.168.0.1", "v6": "::1", "checked": "10.0.0.1"});
+    let root: compile_test::Root = serde_json::from_value(instance.clone()).unwrap();
+    let checked: compile_test::Checked = compile_test::Checked::try_from(
+        "10.0.0.1".parse::<std::net::Ipv4Addr>().unwrap(),
+    )
+    .unwrap();
+    let not_an_address: bool =
+        serde_json::from_value::<compile_test::Root>(serde_json::json!({"v4": "1.2.3"})).is_err();
+    let checked_not_an_address: bool = serde_json::from_value::<compile_test::Root>(
+        serde_json::json!({"v4": "1.2.3.4", "checked": "256.0.0.1"}),
+    )
+    .is_err();
+    let expected: (serde_json::Value, std::net::Ipv4Addr, bool, bool) =
+        (instance, std::net::Ipv4Addr::new(10, 0, 0, 1), true, true);
+    let actual: (serde_json::Value, std::net::Ipv4Addr, bool, bool) = (
+        serde_json::to_value(&root).unwrap(),
+        *checked.as_ref(),
+        not_an_address,
+        checked_not_an_address,
+    );
+    assert_eq!(expected, actual);
+}
+"#,
+            ),
+            #[cfg(feature = "chrono")]
+            "chrono_formats" => (
+                // `date-time` keeps its offset and a leap second; draft 7 asserts `date`, so an
+                // unpadded date `chrono` alone would parse is rejected.
+                r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"at":{"type":"string","format":"date-time"},"on":{"type":"string","format":"date"}},"required":["at"]}"#,
+                default_code_gen.clone(),
+                r#"fn main() {
+    let instance: serde_json::Value =
+        serde_json::json!({"at": "1998-12-31T15:59:60.123-08:00", "on": "2024-01-05"});
+    let root: compile_test::Root = serde_json::from_value(instance.clone()).unwrap();
+    let unpadded_rejected: bool = serde_json::from_value::<compile_test::Root>(
+        serde_json::json!({"at": "2024-01-05T00:00:00Z", "on": "2024-1-5"}),
+    )
+    .is_err();
+    let expected: (serde_json::Value, bool) = (instance, true);
+    let actual: (serde_json::Value, bool) =
+        (serde_json::to_value(&root).unwrap(), unpadded_rejected);
     assert_eq!(expected, actual);
 }
 "#,
@@ -3219,6 +3311,33 @@ fn main() {
 "#;
             (lib_rs.into_bytes(), extra, main_rs)
         }
+        #[cfg(feature = "uuid")]
+        "uuid_asserted" => {
+            // Formats asserted (2020-12 with `format_mode` set): the field is a `parsed` newtype,
+            // so the braced form `Uuid` alone parses is rejected.
+            let schema_json: &str = r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}"#;
+            let schema_settings: json_schema_rs::JsonSchemaSettings =
+                json_schema_rs::JsonSchemaSettings::builder()
+                    .format_mode(json_schema_rs::FormatMode::Assertion)
+                    .build();
+            let schema: Schema =
+                Schema::new_from_str(schema_json, &schema_settings).expect("parse schema");
+            let output = generate_rust(&[schema], default_code_gen).expect("generate");
+            let main_rs: &str = r#"fn main() {
+    let instance: serde_json::Value =
+        serde_json::json!({"id": "2eb8aa08-aa98-11ea-b4aa-73b441d16380"});
+    let root: compile_test::Root = serde_json::from_value(instance.clone()).unwrap();
+    let braced_rejected: bool = serde_json::from_value::<compile_test::Root>(
+        serde_json::json!({"id": "{2eb8aa08-aa98-11ea-b4aa-73b441d16380}"}),
+    )
+    .is_err();
+    let expected: (serde_json::Value, bool) = (instance, true);
+    let actual: (serde_json::Value, bool) = (serde_json::to_value(&root).unwrap(), braced_rejected);
+    assert_eq!(expected, actual);
+}
+"#;
+            (output.per_schema[0].clone(), vec![], main_rs)
+        }
         _ => type_graph_scenario(scenario_name, default_code_gen),
     };
 
@@ -3327,11 +3446,14 @@ fn generated_rust_build_and_deserialize_all_scenarios() {
         "integer_accepts_zero_fraction",
         "integer_draft4_lexical",
         "format_types_follow_dialect",
+        "ip_formats",
         "doc_markup",
         "derived_traits",
     ]
     .into_iter()
     .chain(INDEXMAP_SCENARIOS.iter().copied())
+    .chain(CHRONO_SCENARIOS.iter().copied())
+    .chain(UUID_SCENARIOS.iter().copied())
     .collect();
 
     for name in &scenario_list {

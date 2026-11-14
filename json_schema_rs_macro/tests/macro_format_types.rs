@@ -1,7 +1,8 @@
 //! Integration test: `json_schema_to_rust!` `format_types` setting. By default `format: "uuid"`
 //! is a `Uuid` even where the dialect only annotates formats (2019-09 and 2020-12, a deliberate
 //! divergence from those drafts); `format_types = FollowDialect` keeps such a field a `String`
-//! unless the dialect asserts formats. Only compiled with the `uuid` feature.
+//! unless the dialect asserts formats, where it is a newtype checked against the format before
+//! it is parsed. Only compiled with the `uuid` feature.
 #![cfg(feature = "uuid")]
 
 mod typed {
@@ -64,6 +65,6 @@ fn follow_dialect_assertion_holds_uuid() {
         serde_json::from_str(r#"{"id":"550e8400-e29b-41d4-a716-446655440000"}"#).unwrap();
     let expected: Option<uuid::Uuid> =
         Some(uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap());
-    let actual: Option<uuid::Uuid> = root.id;
+    let actual: Option<uuid::Uuid> = root.id.as_ref().map(|id| *id.as_ref());
     assert_eq!(expected, actual);
 }

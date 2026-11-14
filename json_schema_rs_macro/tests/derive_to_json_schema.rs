@@ -3576,3 +3576,57 @@ fn derived_enum_rename_all_schema_accepts_the_serialized_value() {
     let actual: bool = json_schema_rs::validate(&schema, &instance).is_ok();
     assert_eq!(expected, actual);
 }
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithAddresses {
+    v4: std::net::Ipv4Addr,
+    v6: std::net::Ipv6Addr,
+}
+
+/// `std::net` address fields are inlined `ipv4` / `ipv6` strings.
+#[test]
+fn derive_ip_address_fields_json_schema() {
+    let expected: Vec<(String, Option<String>)> = vec![
+        ("v4".to_string(), Some("ipv4".to_string())),
+        ("v6".to_string(), Some("ipv6".to_string())),
+    ];
+    let actual: Vec<(String, Option<String>)> = WithAddresses::json_schema()
+        .expect("schema")
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            let p: &JsonSchema = property.as_object().expect("schema object");
+            (key.clone(), p.format.clone())
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "chrono")]
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct WithDates {
+    at: chrono::DateTime<chrono::Utc>,
+    on: chrono::NaiveDate,
+}
+
+/// `chrono` fields are inlined `date-time` / `date` strings, for any time zone.
+#[cfg(feature = "chrono")]
+#[test]
+fn derive_chrono_fields_json_schema() {
+    let expected: Vec<(String, Option<String>)> = vec![
+        ("at".to_string(), Some("date-time".to_string())),
+        ("on".to_string(), Some("date".to_string())),
+    ];
+    let actual: Vec<(String, Option<String>)> = WithDates::json_schema()
+        .expect("schema")
+        .properties
+        .iter()
+        .map(|(key, property)| {
+            let p: &JsonSchema = property.as_object().expect("schema object");
+            (key.clone(), p.format.clone())
+        })
+        .collect();
+    assert_eq!(expected, actual);
+}

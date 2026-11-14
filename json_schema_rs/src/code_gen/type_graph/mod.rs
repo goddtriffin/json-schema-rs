@@ -60,8 +60,44 @@ impl IntWidth {
 pub(crate) enum StringFormat {
     /// Any string.
     Plain,
-    /// `format: "uuid"` (a UUID type when the `uuid` feature is on, else a plain string).
+    /// `format: "uuid"`: `uuid::Uuid` (the `uuid` feature).
     Uuid,
+    /// `format: "date-time"`: `chrono::DateTime<chrono::FixedOffset>` (the `chrono` feature).
+    DateTime,
+    /// `format: "date"`: `chrono::NaiveDate` (the `chrono` feature).
+    Date,
+    /// `format: "ipv4"`: `std::net::Ipv4Addr`.
+    Ipv4,
+    /// `format: "ipv6"`: `std::net::Ipv6Addr`.
+    Ipv6,
+}
+
+impl StringFormat {
+    /// The format with a Rust type named `name`; [`StringFormat::Plain`] when there is none or
+    /// its crate's feature is off.
+    pub(crate) fn of(name: &str) -> Self {
+        match name {
+            "uuid" if cfg!(feature = "uuid") => Self::Uuid,
+            "date-time" if cfg!(feature = "chrono") => Self::DateTime,
+            "date" if cfg!(feature = "chrono") => Self::Date,
+            "ipv4" => Self::Ipv4,
+            "ipv6" => Self::Ipv6,
+            _ => Self::Plain,
+        }
+    }
+
+    /// The Rust type: a path, so no generated item name is taken by an import (a schema's
+    /// `DateTime` definition stays `DateTime`); `Uuid` is imported.
+    pub(crate) fn rust_type(self) -> &'static str {
+        match self {
+            Self::Plain => "String",
+            Self::Uuid => "Uuid",
+            Self::DateTime => "chrono::DateTime<chrono::FixedOffset>",
+            Self::Date => "chrono::NaiveDate",
+            Self::Ipv4 => "std::net::Ipv4Addr",
+            Self::Ipv6 => "std::net::Ipv6Addr",
+        }
+    }
 }
 
 /// String keywords carried to the generated code as metadata.
