@@ -1,5 +1,7 @@
 //! CLI entry and subcommand dispatch for jsonschemars.
 
+mod bundle;
+mod documents;
 mod generate;
 mod retrieval;
 mod utils;
@@ -179,7 +181,7 @@ fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
 #[expect(clippy::too_many_lines)]
 pub fn run() {
     let cmd = Command::new("jsonschemars")
-        .about("JSON Schema tooling: generate Rust types, validate JSON")
+        .about("JSON Schema tooling: generate Rust types, validate JSON, bundle schemas")
         .subcommand(
             Command::new("generate")
                 .about("Generate Rust from one or more JSON Schema files or directories")
@@ -340,6 +342,41 @@ pub fn run() {
                 )
                 .args(jss_args())
                 .args(retrieval::retrieval_args()),
+        )
+        .subcommand(
+            Command::new("bundle")
+                .about("Write one JSON Schema document that holds every document the schema references (2020-12 core §9.3)")
+                .arg(
+                    Arg::new("schema")
+                        .short('s')
+                        .long("schema")
+                        .value_name("FILE")
+                        .required_unless_present("schema_file")
+                        .conflicts_with("schema_file")
+                        .help("Path to the JSON Schema file. Use \"-\" for stdin."),
+                )
+                .arg(
+                    Arg::new("schema_file")
+                        .value_name("SCHEMA")
+                        .help("Path to the JSON Schema file, as an alternative to --schema"),
+                )
+                .arg(
+                    Arg::new("resource")
+                        .short('r')
+                        .long("resource")
+                        .value_name("FILE")
+                        .action(clap::ArgAction::Append)
+                        .help("A JSON Schema document the schema may reference, reached by its file: URI or its root $id. Repeatable."),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("FILE")
+                        .help("Write the bundle to this file (default: stdout)"),
+                )
+                .args(jss_args())
+                .args(retrieval::retrieval_args()),
         );
     let matches = cmd.get_matches();
 
@@ -396,8 +433,28 @@ pub fn run() {
                 )
             })
         }
+        Some(("bundle", bundle_m)) => {
+            let schema: PathBuf = bundle_m
+                .get_one::<String>("schema")
+                .or_else(|| bundle_m.get_one::<String>("schema_file"))
+                .map(|s| PathBuf::from(s.as_str()))
+                .expect("--schema or SCHEMA is required");
+            let resources: Vec<PathBuf> = bundle_m
+                .get_many::<String>("resource")
+                .map_or_default(|it| it.map(PathBuf::from).collect());
+            let output: Option<PathBuf> = bundle_m
+                .get_one::<String>("output")
+                .map(|s| PathBuf::from(s.as_str()));
+            bundle::run_bundle(
+                &schema,
+                &resources,
+                output.as_deref(),
+                &jss_settings(bundle_m),
+                &RefRetrieval::from_matches(bundle_m),
+            )
+        }
         _ => {
-            eprintln!("expected subcommand: generate or validate");
+            eprintln!("expected subcommand: generate, validate or bundle");
             std::process::exit(1);
         }
     };

@@ -180,7 +180,9 @@ evaluation depth (CLI `--regex-size-limit`, `--max-depth`). `.max_errors(Some(n)
 errors as they are taken (`.next()` costs about one error), and `error.masked()` displays an
 error without the instance's values, for logs of sensitive data (CLI `--masked`).
 `compiled.validate_with_defaults(&mut instance)` inserts the `default` of every missing
-property, then validates (CLI `--apply-defaults`); `validate` never changes the instance. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+property, then validates (CLI `--apply-defaults`); `validate` never changes the instance. `registry.bundle()` writes the schema and every document its
+references reach as one document, each embedded as a schema resource (2020-12 core §9.3;
+CLI `jsonschemars bundle`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
 bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),
@@ -697,6 +699,15 @@ codes: `0` the payload conforms; `1` it does not (one line per error on stderr,
 or the `--output` JSON on stdout);
 `2` no verdict, because a schema document or the payload could not be read or
 parsed, or the schema cannot be used (one `schema error:` line per problem).
+
+`jsonschemars bundle SCHEMA` (or `-s SCHEMA`) writes one schema document holding every
+document the schema references, so it needs no other files (`--resource`, `--file-root` and
+`--allow-remote-refs` as for `validate`; exit `0` written, `1` the output could not be
+written, `2` a document could not be read or the schema cannot be used):
+
+```bash
+jsonschemars bundle order.json -r vendored-customer.json -o order.bundle.json
+```
 
 To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of
 using the macro, use the library API from a `build.rs` script:

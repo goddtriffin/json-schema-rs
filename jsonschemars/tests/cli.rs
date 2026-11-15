@@ -5039,3 +5039,186 @@ fn cli_validate_output_verbose_reports_every_subschema() {
     );
     assert_eq!(expected, actual);
 }
+
+// --- bundle ---
+
+/// Runs `jsonschemars bundle <args>` from `cwd`; returns its exit code, stdout and stderr.
+fn cli_bundle_from(cwd: &Path, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(jsonschemars_bin())
+        .current_dir(cwd)
+        .arg("bundle")
+        .args(args)
+        .output()
+        .expect("run jsonschemars");
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// [`ORDER_REFS_CUSTOMER`] with `customer.json` embedded.
+const ORDER_BUNDLE: &str = r#"{
+  "$defs": {
+    "customer.json": {
+      "$id": "customer.json",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Customer",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "customer": {
+      "$ref": "customer.json"
+    }
+  },
+  "required": [
+    "customer"
+  ],
+  "title": "Order",
+  "type": "object"
+}
+"#;
+
+#[test]
+fn cli_bundle_embeds_a_sibling_file_and_prints_to_stdout() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let actual: (i32, String, String) = cli_bundle_from(&path, &["-s", "order.json"]);
+    let expected: (i32, String, String) = (0, ORDER_BUNDLE.to_string(), String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_bundle_writes_the_output_file() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let (code, stdout, stderr): (i32, String, String) =
+        cli_bundle_from(&path, &["-s", "order.json", "-o", "bundle.json"]);
+    let written: String = fs::read_to_string(path.join("bundle.json")).expect("read bundle");
+    let actual: (i32, String, String, String) = (code, stdout, stderr, written);
+    let expected: (i32, String, String, String) =
+        (0, String::new(), String::new(), ORDER_BUNDLE.to_string());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_bundle_embeds_a_resource_reached_by_its_root_id() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_WITH_ID),
+        ("vendored-customer.json", CUSTOMER_WITH_ID),
+    ]);
+    let actual: (i32, String, String) =
+        cli_bundle_from(&path, &["-s", "order.json", "-r", "vendored-customer.json"]);
+    let expected: (i32, String, String) = (
+        0,
+        r#"{
+  "$defs": {
+    "customer.json": {
+      "$id": "customer.json",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://example.com/schemas/order.json",
+  "properties": {
+    "customer": {
+      "$ref": "customer.json"
+    }
+  },
+  "required": [
+    "customer"
+  ],
+  "type": "object"
+}
+"#
+        .to_string(),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_bundle_reports_an_unresolvable_ref_with_no_bundle() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("order.json", ORDER_WITH_ID)]);
+    let actual: (i32, String, String) = cli_bundle_from(&path, &["-s", "order.json"]);
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "schema error: $ref \"customer.json\" at /properties/customer (\"https://example.com/schemas/customer.json\") does not resolve: could not retrieve \"https://example.com/schemas/customer.json\": remote retrieval is off (enable it with --allow-remote-refs)\nerror: the schema cannot be used: 1 problem(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_bundle_reports_an_unreadable_schema_with_no_bundle() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[]);
+    let actual: (i32, String, String) = cli_bundle_from(&path, &["-s", "missing.json"]);
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "error: missing.json: failed to open schema file: No such file or directory (os error 2)\nerror: schema ingestion failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_bundle_reports_an_unwritable_output_file() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let (code, stdout, _stderr): (i32, String, String) = cli_bundle_from(
+        &path,
+        &["-s", "order.json", "-o", "no-such-dir/bundle.json"],
+    );
+    let actual: (i32, String) = (code, stdout);
+    // The OS error text varies by platform; the exit code and the empty stdout do not.
+    let expected: (i32, String) = (1, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_bundle_takes_the_schema_as_a_positional_argument() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let actual: (i32, String, String) = cli_bundle_from(&path, &["order.json"]);
+    let expected: (i32, String, String) = (0, ORDER_BUNDLE.to_string(), String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_bundle_rejects_both_schema_forms() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let (code, stdout, _stderr): (i32, String, String) =
+        cli_bundle_from(&path, &["-s", "order.json", "order.json"]);
+    let actual: (i32, String) = (code, stdout);
+    let expected: (i32, String) = (2, String::new());
+    assert_eq!(expected, actual);
+}
