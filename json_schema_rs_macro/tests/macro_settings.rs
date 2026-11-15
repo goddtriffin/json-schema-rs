@@ -341,6 +341,74 @@ fn unique_items_hash_set_holds_items_in_hash_set() {
     assert_eq!(expected, actual);
 }
 
+// --- map_type ---
+
+mod map_type_hash_map {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"type":"object","properties":{"labels":{"type":"object","additionalProperties":{"type":"integer"}}},"additionalProperties":{"type":"string"}}"#,
+        map_type = HashMap
+    );
+}
+
+#[cfg(feature = "indexmap")]
+mod map_type_index_map {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"type":"object","properties":{"labels":{"type":"object","additionalProperties":{"type":"integer"}}},"additionalProperties":{"type":"string"}}"#,
+        map_type = IndexMap
+    );
+}
+
+mod map_type_default {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"type":"object","properties":{"labels":{"type":"object","additionalProperties":{"type":"integer"}}},"additionalProperties":{"type":"string"}}"#
+    );
+}
+
+#[test]
+fn map_type_hash_map_holds_entries_in_hash_map() {
+    let root: map_type_hash_map::schema_0::Root =
+        serde_json::from_value(serde_json::json!({"labels": {"b": 2, "a": 1.0}}))
+            .expect("deserialize");
+    let expected: Option<std::collections::HashMap<String, i64>> =
+        Some(std::collections::HashMap::from([
+            ("a".to_string(), 1),
+            ("b".to_string(), 2),
+        ]));
+    let actual: Option<std::collections::HashMap<String, i64>> = root.labels;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn map_type_hash_map_holds_unknown_keys_in_hash_map() {
+    let root: map_type_hash_map::schema_0::Root =
+        serde_json::from_value(serde_json::json!({"x": "1", "y": "2"})).expect("deserialize");
+    let expected: std::collections::HashMap<String, String> = std::collections::HashMap::from([
+        ("x".to_string(), "1".to_string()),
+        ("y".to_string(), "2".to_string()),
+    ]);
+    let actual: std::collections::HashMap<String, String> = root.additional;
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "indexmap")]
+#[test]
+fn map_type_index_map_keeps_key_order() {
+    let root: map_type_index_map::schema_0::Root =
+        serde_json::from_str(r#"{"labels":{"b":2,"a":1},"z":"1","y":"2"}"#).expect("deserialize");
+    let expected: &str = r#"{"labels":{"b":2,"a":1},"z":"1","y":"2"}"#;
+    let actual: String = serde_json::to_string(&root).expect("serialize");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn map_type_default_sorts_keys() {
+    let root: map_type_default::schema_0::Root =
+        serde_json::from_str(r#"{"labels":{"b":2,"a":1},"z":"1","y":"2"}"#).expect("deserialize");
+    let expected: &str = r#"{"labels":{"a":1,"b":2},"y":"2","z":"1"}"#;
+    let actual: String = serde_json::to_string(&root).expect("serialize");
+    assert_eq!(expected, actual);
+}
+
 // --- flatten_single_entry_combinators ---
 
 mod flatten_single_entry_enabled {

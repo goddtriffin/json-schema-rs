@@ -20,7 +20,8 @@ pub use input::CodeGenInput;
 pub use rust_backend::{RustBackend, generate_rust};
 pub use settings::{
     CodeGenSettings, CodeGenSettingsBuilder, CrateSpec, CrateVersion, DedupeMode, FormatTypes,
-    ModelNameSource, TypeConversion, TypePatch, UniqueItemsType, UnknownCrates, UnknownProperties,
+    MapType, ModelNameSource, TypeConversion, TypePatch, UniqueItemsType, UnknownCrates,
+    UnknownProperties,
 };
 
 /// Output of Rust code generation: optional shared buffer plus one buffer per input schema.

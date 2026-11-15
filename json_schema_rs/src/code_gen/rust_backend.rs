@@ -13,7 +13,7 @@ use super::GenerateRustOutput;
 use super::doc_text;
 use super::input::{CachingRetriever, CodeGenInput};
 use super::rust_validators::{self, BufferValidators, EmbeddedSet, Entry, UnionEntries};
-use super::settings::{CodeGenSettings, DedupeMode, TypePatch, UniqueItemsType};
+use super::settings::{CodeGenSettings, DedupeMode, MapType, TypePatch, UniqueItemsType};
 use super::type_graph::passes;
 use super::type_graph::{
     self, Annotations, EnumNode, Field, IntWidth, NameProposal, NameTier, Newtype,
@@ -145,13 +145,15 @@ enum Home {
 
 /// Names the Rust prelude, std collections or the generated code's imports already use: an
 /// item with one of these names would shadow it.
-const RESERVED_NAMES: [&str; 16] = [
+const RESERVED_NAMES: [&str; 18] = [
     "BTreeMap",
     "BTreeSet",
     "Box",
     "Deserialize",
     "Err",
+    "HashMap",
     "HashSet",
+    "IndexMap",
     "IndexSet",
     "None",
     "Ok",
@@ -221,6 +223,8 @@ struct Plan {
     root_aliases: Vec<Option<String>>,
     /// The set type for `uniqueItems` arrays, `None` for `Vec`.
     set_kind: Option<SetKind>,
+    /// The map type's name and `use` path for objects' string-keyed entries (`MapType`).
+    map: (&'static str, &'static str),
     /// Per node, whether it can be a set item (all `false` without a set type).
     set_item: Vec<bool>,
     /// The structs and unions that derive `Hash`, `Eq` and `Ord`.
@@ -328,7 +332,7 @@ impl Plan {
         let placed: Placement = Placement::new(graph.schemas.len(), candidates, names, &patched);
         let set_kind: Option<SetKind> = SetKind::from_setting(settings.unique_items);
         let set_item: Vec<bool> = if set_kind.is_some() {
-            set_item_nodes(graph)
+            set_item_nodes(graph, settings.map_type)
         } else {
             vec![false; graph.nodes.len()]
         };
@@ -338,6 +342,7 @@ impl Plan {
             items: placed.items,
             root_aliases: placed.root_aliases,
             set_kind,
+            map: map_names(settings.map_type),
             set_item,
             ord_items,
             eq_nodes,
@@ -952,8 +957,10 @@ fn render_type(
                 stack.push(Part::Node(*items));
             }
             TypeNode::Map { values } => {
-                imports.uses.insert("std::collections::BTreeMap");
-                out.push_str("BTreeMap<String, ");
+                let (name, path) = plan.map;
+                imports.uses.insert(path);
+                out.push_str(name);
+                out.push_str("<String, ");
                 stack.push(Part::Text(">"));
                 stack.push(Part::Node(*values));
             }
@@ -1088,11 +1095,13 @@ fn reaching(
 /// (parsing folds case and accepts several spellings, and `chrono` compares instants, so
 /// different strings are equal values), a struct that
 /// drops unknown keys (two objects differing only there would be equal) or keeps them as
-/// `serde_json::Value`, a struct with a set field (sets ignore order, arrays do not), and a
+/// `serde_json::Value`, a struct with a set field (sets ignore order, arrays do not), a map
+/// (or a struct keeping unknown keys in one) of a `MapType` without `Hash` and `Ord`, and a
 /// union where one branch reaches an integer type and another a whole number in an enum: `1`
 /// and `1.0` are equal JSON, but the integer type rejects `1.0`, so they can deserialize to
 /// different variants.
-fn set_item_nodes(graph: &TypeGraph) -> Vec<bool> {
+fn set_item_nodes(graph: &TypeGraph, map_type: MapType) -> Vec<bool> {
+    let ordered_maps: bool = map_type == MapType::BTreeMap;
     let mut parents: Vec<Vec<TypeId>> = vec![Vec::new(); graph.nodes.len()];
     for (i, node) in graph.nodes.iter().enumerate() {
         let id: TypeId = TypeId(u32::try_from(i).expect("fewer than 2^32 nodes"));
@@ -1112,8 +1121,10 @@ fn set_item_nodes(graph: &TypeGraph) -> Vec<bool> {
                 true
             }
             TypeNode::String { format, .. } => *format != StringFormat::Plain,
+            TypeNode::Map { .. } => !ordered_maps,
             TypeNode::Object(o) => {
                 (!o.deny_unknown && o.additional.is_none())
+                    || (!ordered_maps && o.additional.is_some())
                     || o.fields
                         .iter()
                         .any(|f| unique_field_items(graph, f).is_some())
@@ -1130,6 +1141,16 @@ fn set_item_nodes(graph: &TypeGraph) -> Vec<bool> {
     };
     let unusable: Vec<bool> = reaching(graph, &parents, blocked);
     unusable.into_iter().map(|u| !u).collect()
+}
+
+/// The name and `use` path of a map type.
+fn map_names(map_type: MapType) -> (&'static str, &'static str) {
+    match map_type {
+        MapType::BTreeMap => ("BTreeMap", "std::collections::BTreeMap"),
+        MapType::HashMap => ("HashMap", "std::collections::HashMap"),
+        #[cfg(feature = "indexmap")]
+        MapType::IndexMap => ("IndexMap", "indexmap::IndexMap"),
+    }
 }
 
 /// The structs and unions that derive `Hash`, `Eq` and `Ord`: those a set field's item type
@@ -1570,7 +1591,8 @@ fn render_fields(
     }
     if let Some(additional) = object.additional {
         let value: String = rust_type(graph, plan, home, additional, imports);
-        imports.uses.insert("std::collections::BTreeMap");
+        let (map, path) = plan.map;
+        imports.uses.insert(path);
         // The map's values read by the integer rule (see [`reads_integers`]): with `flatten`,
         // `json_schema_rs_macro::Deserialize` reads each value through the `deserialize_with`.
         let attrs: String = if reads_integers(graph, plan, additional) {
@@ -1580,13 +1602,13 @@ fn render_fields(
         };
         let attrs: String = match schema_type(graph, plan, home, additional, imports) {
             Some(schema) => {
-                format!("{attrs}    #[json_schema(with = \"BTreeMap<String, {schema}>\")]\n")
+                format!("{attrs}    #[json_schema(with = \"{map}<String, {schema}>\")]\n")
             }
             None => attrs,
         };
         out.push(RenderedField {
             name: names.last().expect("additional field name").clone(),
-            ty: format!("BTreeMap<String, {value}>"),
+            ty: format!("{map}<String, {value}>"),
             attrs,
             default_accessor: None,
         });
@@ -2912,8 +2934,8 @@ mod tests {
     use super::CodeGenError;
     use super::{CodeGenBackend, CodeGenInput, RustBackend, generate_rust};
     use crate::code_gen::settings::{
-        CodeGenSettings, DedupeMode, FormatTypes, ModelNameSource, TypePatch, UniqueItemsType,
-        UnknownProperties,
+        CodeGenSettings, DedupeMode, FormatTypes, MapType, ModelNameSource, TypePatch,
+        UniqueItemsType, UnknownProperties,
     };
     use crate::json_schema::{
         FormatMode, JsonSchema, JsonSchemaSettings, JsonType, RegistryError, Schema,
@@ -15812,6 +15834,276 @@ pub struct Root {
 }
 
 "#.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    // --- map type ---
+
+    /// The per-schema buffer for one schema generated with `map_type` and `unique_items`.
+    fn generate_with_map_type(
+        schema_json: &str,
+        map_type: MapType,
+        unique_items: UniqueItemsType,
+    ) -> String {
+        let schema: Schema = Schema::try_from(schema_json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .self_validating(false)
+            .map_type(map_type)
+            .unique_items(unique_items)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        String::from_utf8(output.per_schema[0].clone()).unwrap()
+    }
+
+    /// A struct with a map property and typed unknown keys.
+    const MAPS_SCHEMA: &str = r#"{"type":"object","properties":{"labels":{"type":"object","additionalProperties":{"type":"integer"}}},"additionalProperties":{"type":"string"}}"#;
+
+    /// `HashMap` holds a map property's entries and a struct's unknown keys.
+    #[test]
+    fn hash_map_type_emits_hash_map_for_maps_and_unknown_keys() {
+        let actual: String =
+            generate_with_map_type(MAPS_SCHEMA, MapType::HashMap, UniqueItemsType::Vec);
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub labels: Option<HashMap<String, i64>>,
+    #[serde(flatten)]
+    pub additional: HashMap<String, String>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// `IndexMap` holds a map property's entries and a struct's unknown keys.
+    #[cfg(feature = "indexmap")]
+    #[test]
+    fn index_map_type_emits_index_map_for_maps_and_unknown_keys() {
+        let actual: String =
+            generate_with_map_type(MAPS_SCHEMA, MapType::IndexMap, UniqueItemsType::Vec);
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use indexmap::IndexMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub labels: Option<IndexMap<String, i64>>,
+    #[serde(flatten)]
+    pub additional: IndexMap<String, String>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A root that is only a map becomes an alias of the map type.
+    #[test]
+    fn hash_map_type_emits_hash_map_root_alias() {
+        let actual: String = generate_with_map_type(
+            r#"{"type":"object","additionalProperties":{"type":"string"}}"#,
+            MapType::HashMap,
+            UniqueItemsType::Vec,
+        );
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use std::collections::HashMap;
+
+pub type Root = HashMap<String, String>;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A struct keeping unknown keys in a `BTreeMap` derives `Hash` and `Ord`, so it is a set
+    /// item.
+    #[test]
+    fn btree_map_type_keeps_struct_with_unknown_keys_a_set_item() {
+        let actual: String =
+            generate_with_map_type(POINTS_SCHEMA, MapType::BTreeMap, UniqueItemsType::BTreeSet);
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
+/// Deserializes `uniqueItems` arrays into sets: a duplicate item is an error, never dropped.
+mod unique_items {
+    use serde::Deserialize;
+
+    /// A set that reports whether an inserted item was new.
+    pub(super) trait UniqueSet: Default {
+        type Item;
+        fn with_capacity(capacity: usize) -> Self;
+        fn insert_new(&mut self, item: Self::Item) -> bool;
+    }
+
+    impl<T: Ord> UniqueSet for std::collections::BTreeSet<T> {
+        type Item = T;
+        fn with_capacity(_capacity: usize) -> Self {
+            Self::new()
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+
+    struct Visitor<S>(std::marker::PhantomData<S>);
+
+    impl<'de, S> serde::de::Visitor<'de> for Visitor<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        type Value = S;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array with unique items")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<S, A::Error> {
+            let mut set: S = S::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+            let mut index: usize = 0;
+            while let Some(item) = seq.next_element()? {
+                if !set.insert_new(item) {
+                    return Err(serde::de::Error::custom(format_args!(
+                        "duplicate item at index {index} of an array with uniqueItems"
+                    )));
+                }
+                index += 1;
+            }
+            Ok(set)
+        }
+    }
+
+    /// An array read into the set `S`.
+    struct Unique<S>(S);
+
+    impl<'de, S> Deserialize<'de> for Unique<S>
+    where
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer
+                .deserialize_seq(Visitor(std::marker::PhantomData))
+                .map(Unique)
+        }
+    }
+
+    pub(super) fn required<'de, D, S>(deserializer: D) -> Result<S, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: Deserialize<'de>,
+    {
+        Unique::deserialize(deserializer).map(|unique: Unique<S>| unique.0)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Tag {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Point {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<Tag>,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub x: i64,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub y: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(deserialize_with = "unique_items::required")]
+    #[json_schema(unique_items)]
+    pub points: BTreeSet<Point>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A struct keeping unknown keys in a `HashMap` has no `Hash` or `Ord`, so the
+    /// `uniqueItems` array of it stays a `Vec`.
+    #[test]
+    fn hash_map_type_keeps_struct_with_unknown_keys_out_of_sets() {
+        let actual: String =
+            generate_with_map_type(POINTS_SCHEMA, MapType::HashMap, UniqueItemsType::BTreeSet);
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Tag {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: HashMap<String, bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Point {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<Tag>,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub x: i64,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub y: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[json_schema(unique_items)]
+    pub points: Vec<Point>,
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A map item has no `Hash` or `Ord` as a `HashMap`, so its `uniqueItems` array stays a
+    /// `Vec`.
+    #[test]
+    fn hash_map_type_keeps_map_items_out_of_sets() {
+        let actual: String = generate_with_map_type(
+            r#"{"type":"object","properties":{"rows":{"type":"array","items":{"type":"object","additionalProperties":{"type":"string"}},"uniqueItems":true}},"required":["rows"]}"#,
+            MapType::HashMap,
+            UniqueItemsType::BTreeSet,
+        );
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[json_schema(unique_items)]
+    pub rows: Vec<HashMap<String, String>>,
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+";
         assert_eq!(expected, actual);
     }
 }

@@ -293,7 +293,12 @@ A set applies to a property whose value is the array when Rust equality is JSON
 equality for the item type: strings, integers, booleans, generated enums, and generated
 structs and unions built from these (which then derive `Hash`, `Eq` and `Ord`; a struct
 needs `additionalProperties: false` or a typed `additionalProperties`). Anything else
-(floats, any value, `Uuid`, a struct with a set field) stays `Vec`. `.flatten_single_entry_combinators(true)`
+(floats, any value, `Uuid`, a struct with a set field) stays `Vec`. Maps (an object with
+no properties, and a struct's flattened unknown keys) are `BTreeMap<String, T>` by
+default, with sorted, machine-independent output; `.map_type(MapType::HashMap)`
+(`--cgs-map-type hash-map`) or `IndexMap` (`index-map`, instance key order kept; the same
+`indexmap` requirements as `IndexSet`) picks another map. A struct holding a `HashMap` or
+`IndexMap` has no `Hash` / `Ord`, so it stays out of `uniqueItems` sets. `.flatten_single_entry_combinators(true)`
 (`--cgs-flatten-single-entry-combinators`) generates an `anyOf` / `oneOf` with exactly
 one entry as that entry's type instead of a one-variant enum (off by default, so the
 derive gives the combinator back); `#[json_schema(flatten_single_entry)]` on a
@@ -519,7 +524,8 @@ json_schema_to_rust!(
 - Codegen: `model_name_source = TitleFirst|PropertyKeyFirst`,
   `dedupe_mode = Disabled|Functional|Full`, `unknown_properties = Capture|Drop`,
   `unique_items = Vec|HashSet|BTreeSet|IndexSet` (`IndexSet` needs the macro's
-  `indexmap` feature), `flatten_single_entry_combinators`, `self_validating`,
+  `indexmap` feature), `map_type = BTreeMap|HashMap|IndexMap` (`IndexMap` needs the
+  same feature), `flatten_single_entry_combinators`, `self_validating`,
   `constrained_newtypes`, `format_types = Typed|FollowDialect`,
   `extra_derives = [schemars::JsonSchema]`, `extra_attrs = [non_exhaustive]`,
   `patch = { Veg = { rename = "Vegetable", derives = [Hash], attrs = [..] } }`,
@@ -535,7 +541,7 @@ json_schema_to_rust!(
   every file a `$ref` reads.
 
 An unknown setting, an unknown value, a setting given twice and
-`unique_items = IndexSet` without the `indexmap` feature are compile errors at
+`unique_items = IndexSet` or `map_type = IndexMap` without the `indexmap` feature are compile errors at
 the offending token, all reported at once.
 
 Editing a schema file the macro read (a path input, or a file one of its `$ref`s

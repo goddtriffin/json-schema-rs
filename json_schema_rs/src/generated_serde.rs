@@ -127,6 +127,15 @@ pub mod __private {
         }
     }
 
+    #[cfg(feature = "indexmap")]
+    impl<V, S: BuildHasher + Default> AdditionalProperties for indexmap::IndexMap<String, V, S> {
+        type Value = V;
+
+        fn insert(&mut self, key: String, value: V) {
+            Self::insert(self, key, value);
+        }
+    }
+
     /// An object key: the index of the struct's field it names, else the key itself.
     pub enum Key<'de> {
         /// The struct's field at this index (in declaration order).
