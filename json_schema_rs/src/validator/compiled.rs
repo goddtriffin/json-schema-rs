@@ -777,6 +777,9 @@ pub struct CompiledSchema {
     /// [`CompiledSchemaBuilder::annotations`]); empty unless they were asked for. Cold: read
     /// only by the trace.
     pub(crate) annotations: IntMap<NodeId, NodeAnnotations>,
+    /// Each node's `default` value, when it has one (see
+    /// [`CompiledSchema::validate_with_defaults`]). Cold: read only when defaults are applied.
+    pub(crate) defaults: IntMap<NodeId, Value>,
 }
 
 /// The annotations a schema object produces when it passes.
@@ -1472,7 +1475,7 @@ impl CompiledSchema {
 
     /// Calls `visit` on `node` and every schema it applies in place to the same instance
     /// through `$ref` and `allOf`, each once.
-    fn in_place_closure(&self, node: NodeId, mut visit: impl FnMut(NodeId)) {
+    pub(crate) fn in_place_closure(&self, node: NodeId, mut visit: impl FnMut(NodeId)) {
         let applies_more =
             |keyword: &Keyword| matches!(keyword, Keyword::Ref { .. } | Keyword::AllOf(_));
         if !self.node(node).keywords.iter().any(applies_more) {
@@ -1543,6 +1546,15 @@ enum Source<'r> {
     Bool(bool),
     Typed(&'r JsonSchema),
     Raw(&'r Map<String, Value>),
+}
+
+/// The `default` of the schema object `source`, if it has one.
+fn default_of(source: Source<'_>) -> Option<Value> {
+    match source {
+        Source::Bool(_) => None,
+        Source::Typed(schema) => schema.default_value.clone(),
+        Source::Raw(object) => object.get("default").cloned(),
+    }
 }
 
 impl<'r> Source<'r> {
@@ -1733,6 +1745,8 @@ struct Compiler<'r, 'a> {
     /// Whether to keep each node's annotations (see [`CompiledSchemaBuilder::annotations`]).
     collect_annotations: bool,
     annotations: IntMap<NodeId, NodeAnnotations>,
+    /// See [`CompiledSchema::defaults`].
+    defaults: IntMap<NodeId, Value>,
     /// The custom keywords compiled so far, by [`CustomKeywordId`].
     custom_keywords: Vec<CompiledCustomKeyword>,
     errors: Vec<CompileError>,
@@ -1861,6 +1875,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             located: None,
             collect_annotations: false,
             annotations: IntMap::default(),
+            defaults: IntMap::default(),
         }
     }
 
@@ -1992,6 +2007,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             max_depth: self.max_depth,
             max_errors: self.max_errors,
             annotations: self.annotations,
+            defaults: self.defaults,
         };
         compiled.add_discriminators(&unions);
         Ok(compiled)
@@ -2168,6 +2184,9 @@ impl<'r, 'a> Compiler<'r, 'a> {
                     },
                 );
             }
+        }
+        if !siblings_ignored && let Some(value) = default_of(pending.source) {
+            self.defaults.insert(pending.id, value);
         }
         let has_unevaluated: bool = keywords.iter().any(|k| {
             matches!(
