@@ -394,6 +394,11 @@ pub fn run() {
             "dereference",
             "Write the schema with every reference replaced by its target, for tools that do not resolve references (a recursive reference becomes a JSON Pointer to its ancestor)",
             "Write the dereferenced schema to this file (default: stdout)",
+        ))
+        .subcommand(transform_command(
+            "canonicalize",
+            "Write the schema in one normal form (sorted keywords, deduplicated `type`, `enum` and `required`, no assertions that accept everything, `{}` as `true`), keeping its verdicts, annotations and references",
+            "Write the canonical schema to this file (default: stdout)",
         ));
     let matches = cmd.get_matches();
 
@@ -450,11 +455,11 @@ pub fn run() {
                 )
             })
         }
-        Some((name @ ("bundle" | "dereference"), transform_m)) => {
-            let transform: Transform = if name == "bundle" {
-                Transform::Bundle
-            } else {
-                Transform::Dereference
+        Some((name @ ("bundle" | "dereference" | "canonicalize"), transform_m)) => {
+            let transform: Transform = match name {
+                "bundle" => Transform::Bundle,
+                "dereference" => Transform::Dereference,
+                _ => Transform::Canonicalize,
             };
             let schema: PathBuf = transform_m
                 .get_one::<String>("schema")
@@ -477,7 +482,9 @@ pub fn run() {
             )
         }
         _ => {
-            eprintln!("expected subcommand: generate, validate, bundle or dereference");
+            eprintln!(
+                "expected subcommand: generate, validate, bundle, dereference or canonicalize"
+            );
             std::process::exit(1);
         }
     };

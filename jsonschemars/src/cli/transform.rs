@@ -1,7 +1,8 @@
-//! `jsonschemars bundle` and `jsonschemars dereference`: one schema document made from the
-//! schema and every document it references. `bundle` embeds them (2020-12 core §9.3, see
-//! `Registry::bundle`); `dereference` replaces every reference by its target (see
-//! `Registry::dereference`).
+//! `jsonschemars bundle`, `jsonschemars dereference` and `jsonschemars canonicalize`: one
+//! schema document made from the schema. `bundle` embeds every document it references
+//! (2020-12 core §9.3, see `Registry::bundle`); `dereference` replaces every reference by its
+//! target (see `Registry::dereference`); `canonicalize` rewrites the schema into one normal
+//! form (see `Registry::canonicalize`).
 //!
 //! The schema and its `--resource`s are read as `validate` reads them; any other document a
 //! `$ref` names is retrieved from inside `--file-root` (or over HTTP with
@@ -25,6 +26,8 @@ pub(crate) enum Transform {
     Bundle,
     /// [`Registry::dereference`].
     Dereference,
+    /// [`Registry::canonicalize`].
+    Canonicalize,
 }
 
 impl Transform {
@@ -32,6 +35,7 @@ impl Transform {
         match self {
             Transform::Bundle => "bundle",
             Transform::Dereference => "dereferenced schema",
+            Transform::Canonicalize => "canonical schema",
         }
     }
 }
@@ -65,6 +69,7 @@ pub(crate) fn run_transform(
     let result: serde_json::Value = match transform {
         Transform::Bundle => registry.bundle().map_err(|e| e.to_string()),
         Transform::Dereference => registry.dereference().map_err(|e| e.to_string()),
+        Transform::Canonicalize => registry.canonicalize().map_err(|e| e.to_string()),
     }
     .map_err(|e| no_verdict(format!("failed to build the {noun}: {e}")))?;
     let mut json: String = serde_json::to_string_pretty(&result)

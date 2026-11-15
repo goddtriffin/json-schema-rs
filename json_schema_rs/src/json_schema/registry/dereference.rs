@@ -448,7 +448,7 @@ impl Registry<'_> {
     }
 
     /// The JSON of document `index`, serialized once.
-    fn document_value<'v>(
+    pub(super) fn document_value<'v>(
         &self,
         documents: &'v mut [Option<Value>],
         index: usize,
@@ -509,7 +509,7 @@ fn push_all_of(object: &mut Map<String, Value>, schema: Value) -> usize {
 
 /// The paths (relative to `object`) of every subschema directly under it, by `dialect`'s
 /// keyword table.
-fn subschema_paths(object: &Map<String, Value>, dialect: Dialect) -> Vec<Vec<String>> {
+pub(super) fn subschema_paths(object: &Map<String, Value>, dialect: Dialect) -> Vec<Vec<String>> {
     let mut paths: Vec<Vec<String>> = Vec::new();
     for (key, value) in object {
         let Some(position) = dialect.keyword(key).and_then(|k| k.subschemas) else {
@@ -540,7 +540,7 @@ fn child(base: &[String], segments: &[&str]) -> Vec<String> {
 }
 
 /// The value at `path` in `value`.
-fn at_mut<'v>(value: &'v mut Value, path: &[String]) -> Option<&'v mut Value> {
+pub(super) fn at_mut<'v>(value: &'v mut Value, path: &[String]) -> Option<&'v mut Value> {
     let mut current: &mut Value = value;
     for segment in path {
         current = match current {
