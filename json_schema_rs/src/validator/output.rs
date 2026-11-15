@@ -246,7 +246,7 @@ impl CompiledSchema {
                     instance_location: locations.instance_location.clone(),
                     value: value.clone(),
                 }),
-                TraceKind::Subschema { .. } | TraceKind::Error(_) => None,
+                TraceKind::Subschema { .. } | TraceKind::Error(_) | TraceKind::Pass(_) => None,
             })
             .collect())
     }
@@ -276,7 +276,7 @@ fn kept(trace: &TraceRecord) -> Vec<bool> {
                     valid, annotates, ..
                 } => *valid && *annotates,
                 TraceKind::Annotation { .. } => true,
-                TraceKind::Error(_) => false,
+                TraceKind::Error(_) | TraceKind::Pass(_) => false,
             };
         kept.push(keep);
     }
@@ -315,6 +315,7 @@ fn annotation_unit(unit: &TraceUnit) -> OutputUnit {
             valid, locations, ..
         } => located(*valid, locations),
         TraceKind::Error(error) => error_unit(error),
+        TraceKind::Pass(locations) => located(true, locations),
         TraceKind::Annotation {
             value, locations, ..
         } => OutputUnit {
@@ -1049,6 +1050,12 @@ mod tests {
                 },
                 {
                     "valid": true,
+                    "keywordLocation": "/properties",
+                    "instanceLocation": "",
+                    "annotation": ["a", "b"]
+                },
+                {
+                    "valid": true,
                     "keywordLocation": "/anyOf/0/title",
                     "instanceLocation": "",
                     "annotation": "Yes"
@@ -1130,6 +1137,12 @@ mod tests {
                 },
                 {
                     "valid": true,
+                    "keywordLocation": "/properties",
+                    "instanceLocation": "",
+                    "annotation": ["a", "b"]
+                },
+                {
+                    "valid": true,
                     "keywordLocation": "/anyOf/0/title",
                     "instanceLocation": "",
                     "annotation": "Yes"
@@ -1184,6 +1197,11 @@ mod tests {
                             "keywordLocation": "/properties/a/x-widget",
                             "instanceLocation": "/a",
                             "annotation": "slider"
+                        },
+                        {
+                            "valid": true,
+                            "keywordLocation": "/properties/a/minimum",
+                            "instanceLocation": "/a"
                         }
                     ]
                 },
@@ -1206,6 +1224,7 @@ mod tests {
                         }]
                     }]
                 },
+                note("/properties", "", &json!(["a", "b"])),
                 {
                     "valid": true,
                     "keywordLocation": "/anyOf/0",
@@ -1344,6 +1363,13 @@ mod tests {
                 value: json!("B"),
             },
             Annotation {
+                keyword: "properties".to_string(),
+                keyword_location: ptr("/properties"),
+                absolute_keyword_location: None,
+                instance_location: ptr(""),
+                value: json!(["a", "b"]),
+            },
+            Annotation {
                 keyword: "title".to_string(),
                 keyword_location: ptr("/anyOf/0/title"),
                 absolute_keyword_location: None,
@@ -1426,6 +1452,331 @@ mod tests {
             }),
             &json!({"a b": 1}),
             OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// An annotation unit of the `basic` output.
+    fn note(keyword_location: &str, instance_location: &str, annotation: &Value) -> Value {
+        json!({
+            "valid": true,
+            "keywordLocation": keyword_location,
+            "instanceLocation": instance_location,
+            "annotation": annotation
+        })
+    }
+
+    /// The `basic` output of a valid instance with `annotations`.
+    fn noted(annotations: &[Value]) -> Value {
+        json!({"valid": true, "annotations": annotations})
+    }
+
+    #[test]
+    fn properties_annotates_the_names_it_evaluated() {
+        let expected: Value = noted(&[note("/properties", "", &json!(["a"]))]);
+        let actual: Value = render_annotating(
+            &json!({"properties": {"a": {"minimum": 0}, "z": {}}}),
+            &json!({"a": 1, "b": 2}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn pattern_properties_annotates_the_names_it_matched() {
+        let expected: Value = noted(&[note("/patternProperties", "", &json!(["x1", "x2"]))]);
+        let actual: Value = render_annotating(
+            &json!({"patternProperties": {"^x": {"type": "integer"}}}),
+            &json!({"x1": 1, "y": 2, "x2": 3}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_annotates_the_names_left_over() {
+        let expected: Value = noted(&[
+            note("/properties", "", &json!(["a"])),
+            note("/additionalProperties", "", &json!(["b", "c"])),
+        ]);
+        let actual: Value = render_annotating(
+            &json!({"properties": {"a": {}}, "additionalProperties": {"type": "integer"}}),
+            &json!({"a": "s", "b": 2, "c": 3}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_properties_false_annotates_no_names() {
+        let expected: Value = noted(&[
+            note("/properties", "", &json!(["a"])),
+            note("/additionalProperties", "", &json!([])),
+        ]);
+        let actual: Value = render_annotating(
+            &json!({"properties": {"a": {}}, "additionalProperties": false}),
+            &json!({"a": 1}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn prefix_items_covering_every_item_annotates_true() {
+        let expected: Value = noted(&[note("/prefixItems", "", &json!(true))]);
+        let actual: Value = render_annotating(
+            &json!({"prefixItems": [{}, {}, {}]}),
+            &json!([1, 2]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn prefix_items_annotates_its_largest_index_and_items_true() {
+        let expected: Value = noted(&[
+            note("/prefixItems", "", &json!(1)),
+            note("/items", "", &json!(true)),
+        ]);
+        let actual: Value = render_annotating(
+            &json!({"prefixItems": [{}, {}], "items": {"type": "integer"}}),
+            &json!(["a", "b", 3]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn items_annotates_true() {
+        let expected: Value = noted(&[note("/items", "", &json!(true))]);
+        let actual: Value = render_annotating(
+            &json!({"items": {"type": "integer"}}),
+            &json!([1, 2]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn items_on_an_empty_array_annotates_nothing() {
+        let expected: Value = json!({"valid": true});
+        let actual: Value = render_annotating(
+            &json!({"items": {"type": "integer"}}),
+            &json!([]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn items_array_in_draft_2019_09_annotates_its_largest_index_and_additional_items() {
+        let expected: Value = noted(&[
+            note("/items", "", &json!(0)),
+            note("/additionalItems", "", &json!(true)),
+        ]);
+        let actual: Value = render_annotating(
+            &json!({
+                "$schema": "https://json-schema.org/draft/2019-09/schema",
+                "items": [{}],
+                "additionalItems": {"type": "integer"}
+            }),
+            &json!(["a", 2]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn contains_annotates_the_indexes_it_matched() {
+        let expected: Value = noted(&[note("/contains", "", &json!([0, 2]))]);
+        let actual: Value = render_annotating(
+            &json!({"contains": {"type": "integer"}}),
+            &json!([1, "b", 3]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn contains_in_draft_2019_09_annotates_nothing() {
+        let expected: Value = json!({"valid": true});
+        let actual: Value = render_annotating(
+            &json!({
+                "$schema": "https://json-schema.org/draft/2019-09/schema",
+                "contains": {"type": "integer"}
+            }),
+            &json!([1, "b", 3]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unevaluated_properties_annotates_the_names_no_sibling_evaluated() {
+        let expected: Value = noted(&[
+            note("/allOf/0/properties", "", &json!(["a"])),
+            note("/unevaluatedProperties", "", &json!(["b"])),
+        ]);
+        let actual: Value = render_annotating(
+            &json!({
+                "allOf": [{"properties": {"a": {}}}],
+                "unevaluatedProperties": {"type": "integer"}
+            }),
+            &json!({"a": "s", "b": 2}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unevaluated_items_annotates_true() {
+        let expected: Value = noted(&[
+            note("/prefixItems", "", &json!(0)),
+            note("/unevaluatedItems", "", &json!(true)),
+        ]);
+        let actual: Value = render_annotating(
+            &json!({"prefixItems": [{}], "unevaluatedItems": {"type": "integer"}}),
+            &json!(["a", 2]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unevaluated_items_with_every_item_evaluated_annotates_nothing() {
+        let expected: Value = noted(&[note("/prefixItems", "", &json!(true))]);
+        let actual: Value = render_annotating(
+            &json!({"prefixItems": [{}], "unevaluatedItems": false}),
+            &json!(["a"]),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn applicators_in_draft_7_annotate_nothing() {
+        let expected: Value = json!({"valid": true});
+        let actual: Value = render_annotating(
+            &json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "properties": {"a": {}},
+                "items": {}
+            }),
+            &json!({"a": 1}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn applicator_annotations_of_a_failed_branch_are_dropped() {
+        let expected: Value = noted(&[note("/anyOf/1/properties", "", &json!(["a"]))]);
+        let actual: Value = render_annotating(
+            &json!({"anyOf": [
+                {"properties": {"a": {"type": "string"}}},
+                {"properties": {"a": {"type": "integer"}}}
+            ]}),
+            &json!({"a": 1}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn verbose_reports_passing_assertions_and_applicator_annotations() {
+        let expected: Value = json!({
+            "valid": true,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "annotations": [
+                {
+                    "valid": true,
+                    "keywordLocation": "/type",
+                    "instanceLocation": ""
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/required",
+                    "instanceLocation": ""
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/a",
+                    "instanceLocation": "/a",
+                    "annotations": [{
+                        "valid": true,
+                        "keywordLocation": "/properties/a/minimum",
+                        "instanceLocation": "/a"
+                    }]
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties",
+                    "instanceLocation": "",
+                    "annotation": ["a"]
+                }
+            ]
+        });
+        let actual: Value = render_annotating(
+            &json!({"type": "object", "properties": {"a": {"minimum": 0}}, "required": ["a"]}),
+            &json!({"a": 1}),
+            OutputFormat::Verbose,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn verbose_without_the_setting_reports_passing_assertions_only() {
+        let expected: Value = json!({
+            "valid": true,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "annotations": [{
+                "valid": true,
+                "keywordLocation": "/properties/a",
+                "instanceLocation": "/a",
+                "annotations": [{
+                    "valid": true,
+                    "keywordLocation": "/properties/a/minimum",
+                    "instanceLocation": "/a"
+                }]
+            }]
+        });
+        let actual: Value = render(
+            &json!({"properties": {"a": {"minimum": 0}}}),
+            &json!({"a": 1}),
+            OutputFormat::Verbose,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn verbose_reports_both_content_keywords_passing() {
+        let expected: Value = json!({
+            "valid": true,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "annotations": [
+                {
+                    "valid": true,
+                    "keywordLocation": "/contentEncoding",
+                    "instanceLocation": ""
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/contentMediaType",
+                    "instanceLocation": ""
+                }
+            ]
+        });
+        let actual: Value = render(
+            &json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "contentEncoding": "base64",
+                "contentMediaType": "application/json"
+            }),
+            &json!("e30="),
+            OutputFormat::Verbose,
         );
         assert_eq!(expected, actual);
     }

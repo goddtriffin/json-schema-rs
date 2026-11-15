@@ -21,8 +21,8 @@
 
 use super::compiled::{
     CompiledCustomKeyword, CompiledSchema, Contains, CustomKeywordId, DynamicRef, EnumId, EnumList,
-    Keyword, KnownProperties, Kw, Node, NodeId, Pattern, Pick, PrefixItems, RegexId, Required,
-    Union, UserFormat, UserFormatId,
+    Keyword, KnownProperties, Kw, Node, NodeAnnotations, NodeId, Pattern, Pick, PrefixItems,
+    RegexId, Required, Union, UserFormat, UserFormatId,
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
@@ -320,6 +320,10 @@ pub(crate) struct TraceRecord {
     pub(crate) units: Vec<TraceUnit>,
     /// The subschema unit being evaluated.
     current: Option<usize>,
+    /// Whether the applicators of the schema object being entered annotate (see
+    /// [`NodeAnnotations::applicators`]): set by [`CompiledSchema::eval_traced`] and read
+    /// once, before any nested evaluation, by [`CompiledSchema::keywords_traced`].
+    applicators: bool,
 }
 
 /// One unit of the trace, under the subschema unit `parent` (`None` for the root).
@@ -340,6 +344,8 @@ pub(crate) enum TraceKind {
     },
     /// An error of a keyword of the parent subschema.
     Error(ValidationError),
+    /// An assertion keyword of the parent subschema that passed.
+    Pass(UnitLocations),
     /// An annotation of a keyword of the parent subschema.
     Annotation {
         keyword: Box<str>,
@@ -358,6 +364,18 @@ pub(crate) struct UnitLocations {
     pub(crate) instance_location: JsonPointer,
     pub(crate) keyword_location: JsonPointer,
     pub(crate) absolute_keyword_location: Option<String>,
+}
+
+/// The names of the members of `object` whose positions `at` accepts, in member order.
+fn names_at(object: &Map<String, Value>, at: impl Fn(usize) -> bool) -> Value {
+    Value::Array(
+        object
+            .keys()
+            .enumerate()
+            .filter(|(i, _)| at(*i))
+            .map(|(_, key)| Value::String(key.clone()))
+            .collect(),
+    )
 }
 
 /// Returns the JSON type name of the value for use in "got" error messages.
@@ -748,8 +766,10 @@ impl CompiledSchema {
             },
         });
         let outer: Option<usize> = trace.current.replace(unit);
-        if let Some(annotations) = self.annotations.get(&id) {
+        let node_annotations: Option<&NodeAnnotations> = self.annotations.get(&id);
+        if let Some(annotations) = node_annotations {
             for annotation in annotations
+                .keywords
                 .iter()
                 .filter(|a| !a.strings_only || instance.is_string())
             {
@@ -764,6 +784,7 @@ impl CompiledSchema {
                 });
             }
         }
+        cx.trace().applicators = node_annotations.is_some_and(|a| a.applicators);
         let valid: bool = self.eval_node::<Trace>(id, instance, location, cx, evaluated);
         let trace: &mut TraceRecord = cx.trace();
         trace.current = outer;
@@ -793,9 +814,10 @@ impl CompiledSchema {
             self.depth_exceeded(location, cx);
             return false;
         }
-        // A leaf that passes is valid in both modes (it records nothing); one that fails is
-        // evaluated again below in collect mode, which builds its errors.
-        if node.leaf {
+        // A leaf that passes is valid in the verdict and collect modes (it records nothing); one
+        // that fails is evaluated again below in collect mode, which builds its errors. The
+        // trace records every keyword that passes, so it evaluates each.
+        if node.leaf && !M::TRACE {
             if self.leaf_valid(&node.keywords, instance) {
                 return true;
             }
@@ -985,12 +1007,233 @@ impl CompiledSchema {
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
+        if M::TRACE {
+            return self.keywords_traced(node, at, cx, evaluated);
+        }
         each!(M, node.keywords.iter(), |keyword| self.keyword::<M>(
             keyword,
             at,
             cx,
             evaluated.as_deref_mut()
         ))
+    }
+
+    /// [`CompiledSchema::keywords`] in the trace mode: every keyword, each assertion that passes
+    /// recorded as a unit, and, where the node's applicators annotate, each applicator's
+    /// annotation (2020-12 core §10.2–§10.3, §11): the names or indexes it applied a subschema
+    /// to, recorded after the subschemas' units.
+    #[inline(never)]
+    fn keywords_traced(
+        &self,
+        node: &Node,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        mut evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let applicators: bool = cx.trace().applicators;
+        let mut valid: bool = true;
+        for keyword in &node.keywords {
+            let passed: bool = if applicators {
+                self.keyword_annotated(keyword, at, cx, evaluated.as_deref_mut())
+            } else {
+                self.keyword::<Trace>(keyword, at, cx, evaluated.as_deref_mut())
+            };
+            if passed {
+                self.record_pass(keyword, at, cx);
+            }
+            valid &= passed;
+        }
+        valid
+    }
+
+    /// Evaluates `keyword` in the trace mode and records its annotation when it is an applicator
+    /// that annotates the instance.
+    fn keyword_annotated(
+        &self,
+        keyword: &Keyword,
+        at: At<'_, '_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        match (keyword, at.instance) {
+            (
+                Keyword::Properties(_)
+                | Keyword::ClosedProperties(_)
+                | Keyword::PatternProperties(_)
+                | Keyword::AdditionalProperties { .. }
+                | Keyword::NoAdditionalProperties(_),
+                Value::Object(object),
+            ) => {
+                // What this keyword alone evaluated, then added to its siblings'.
+                let mut own: Evaluated = Evaluated::default();
+                let passed: bool = self.keyword::<Trace>(keyword, at, cx, Some(&mut own));
+                let names =
+                    |marked: &Evaluated| -> Value { names_at(object, |i| marked.contains(i)) };
+                match keyword {
+                    Keyword::Properties(_) => {
+                        self.annotate(cx, at, Kw::Properties.as_str(), names(&own));
+                    }
+                    Keyword::ClosedProperties(_) => {
+                        self.annotate(cx, at, Kw::Properties.as_str(), names(&own));
+                        let unknown: Value = names_at(object, |i| !own.contains(i));
+                        self.annotate(cx, at, Kw::AdditionalProperties.as_str(), unknown);
+                    }
+                    Keyword::PatternProperties(_) => {
+                        self.annotate(cx, at, Kw::PatternProperties.as_str(), names(&own));
+                    }
+                    Keyword::AdditionalProperties { .. } => {
+                        self.annotate(cx, at, Kw::AdditionalProperties.as_str(), names(&own));
+                    }
+                    // `additionalProperties: false` evaluates no member it allows.
+                    _ => self.annotate(
+                        cx,
+                        at,
+                        Kw::AdditionalProperties.as_str(),
+                        Value::Array(Vec::new()),
+                    ),
+                }
+                if let Some(evaluated) = evaluated {
+                    evaluated.merge(&own);
+                }
+                passed
+            }
+            (Keyword::Contains(contains), Value::Array(_)) if contains.annotates => {
+                let mut own: Evaluated = Evaluated::default();
+                let passed: bool = self.keyword::<Trace>(keyword, at, cx, Some(&mut own));
+                let indexes: Value = Value::Array(
+                    (0..at.instance.as_array().map_or(0, Vec::len))
+                        .filter(|i| own.contains(*i))
+                        .map(Value::from)
+                        .collect(),
+                );
+                self.annotate(cx, at, Kw::Contains.as_str(), indexes);
+                if let Some(evaluated) = evaluated {
+                    evaluated.merge(&own);
+                }
+                passed
+            }
+            (Keyword::UnevaluatedProperties(_), Value::Object(object)) => {
+                let seen: Option<&Evaluated> = evaluated.as_deref();
+                let unevaluated: Value =
+                    names_at(object, |i| !seen.is_some_and(|seen| seen.contains(i)));
+                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+                self.annotate(cx, at, Kw::UnevaluatedProperties.as_str(), unevaluated);
+                passed
+            }
+            (Keyword::UnevaluatedItems(_), Value::Array(items)) => {
+                let seen: Option<&Evaluated> = evaluated.as_deref();
+                let applied: bool =
+                    (0..items.len()).any(|i| !seen.is_some_and(|seen| seen.contains(i)));
+                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+                if applied {
+                    self.annotate(cx, at, Kw::UnevaluatedItems.as_str(), Value::Bool(true));
+                }
+                passed
+            }
+            (Keyword::Items { keyword: name, .. }, Value::Array(items)) => {
+                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+                if !items.is_empty() {
+                    self.annotate(cx, at, name.as_str(), Value::Bool(true));
+                }
+                passed
+            }
+            (Keyword::PrefixItems(tuple), Value::Array(items)) => {
+                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+                self.annotate_prefix_items(tuple, items.len(), at, cx);
+                passed
+            }
+            _ => self.keyword::<Trace>(keyword, at, cx, evaluated),
+        }
+    }
+
+    /// Records the annotations of `prefixItems` (2020-12; `items` as an array before it) and of
+    /// the keyword for the items after the prefix, on an array of `len` items.
+    fn annotate_prefix_items(
+        &self,
+        tuple: &PrefixItems,
+        len: usize,
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) {
+        let PrefixItems {
+            prefix,
+            rest,
+            prefix_keyword,
+            rest_keyword,
+        } = tuple;
+        if len > 0 && !prefix.is_empty() {
+            // The largest index it applied to, or `true` when that was every index.
+            let largest: Value = if len <= prefix.len() {
+                Value::Bool(true)
+            } else {
+                Value::from(prefix.len() - 1)
+            };
+            self.annotate(cx, at, prefix_keyword.as_str(), largest);
+        }
+        if rest.is_some() && len > prefix.len() {
+            self.annotate(cx, at, rest_keyword.as_str(), Value::Bool(true));
+        }
+    }
+
+    /// Records the annotation `value` of `keyword` of the subschema being evaluated.
+    fn annotate(&self, cx: &mut Context, at: At<'_, '_>, keyword: &str, value: Value) {
+        let locations: UnitLocations = self.locations(at.location, Some(keyword));
+        let trace: &mut TraceRecord = cx.trace();
+        let parent: Option<usize> = trace.current;
+        trace.units.push(TraceUnit {
+            parent,
+            kind: TraceKind::Annotation {
+                keyword: keyword.into(),
+                value,
+                locations,
+            },
+        });
+    }
+
+    /// Records that `keyword`, which passed, did, when it is an assertion: an applicator's
+    /// outcome is its subschemas' units.
+    fn record_pass(&self, keyword: &Keyword, at: At<'_, '_>, cx: &mut Context) {
+        let mut names: [Option<&str>; 2] = [None, None];
+        match keyword {
+            Keyword::Type { .. } => names[0] = Some(Kw::Type.as_str()),
+            Keyword::Const(_) => names[0] = Some(Kw::Const.as_str()),
+            Keyword::Enum(_) => names[0] = Some(Kw::Enum.as_str()),
+            Keyword::Minimum(_) => names[0] = Some(Kw::Minimum.as_str()),
+            Keyword::Maximum(_) => names[0] = Some(Kw::Maximum.as_str()),
+            Keyword::ExclusiveMinimum(_) => names[0] = Some(Kw::ExclusiveMinimum.as_str()),
+            Keyword::ExclusiveMaximum(_) => names[0] = Some(Kw::ExclusiveMaximum.as_str()),
+            Keyword::MultipleOf(_) => names[0] = Some(Kw::MultipleOf.as_str()),
+            Keyword::MinLength(_) => names[0] = Some(Kw::MinLength.as_str()),
+            Keyword::MaxLength(_) => names[0] = Some(Kw::MaxLength.as_str()),
+            Keyword::Pattern(_) => names[0] = Some(Kw::Pattern.as_str()),
+            Keyword::Format(_) | Keyword::UserFormat(_) => names[0] = Some(Kw::Format.as_str()),
+            Keyword::Content(content) => {
+                if content.encoding.is_some() {
+                    names[0] = Some(Kw::ContentEncoding.as_str());
+                }
+                if content.media_type.is_some() {
+                    names[1] = Some(Kw::ContentMediaType.as_str());
+                }
+            }
+            Keyword::Custom(id) => names[0] = Some(&self.custom_keyword(*id).name),
+            Keyword::MinItems(_) => names[0] = Some(Kw::MinItems.as_str()),
+            Keyword::MaxItems(_) => names[0] = Some(Kw::MaxItems.as_str()),
+            Keyword::UniqueItems => names[0] = Some(Kw::UniqueItems.as_str()),
+            Keyword::Required(_) => names[0] = Some(Kw::Required.as_str()),
+            Keyword::MinProperties(_) => names[0] = Some(Kw::MinProperties.as_str()),
+            Keyword::MaxProperties(_) => names[0] = Some(Kw::MaxProperties.as_str()),
+            Keyword::DependentRequired { keyword, .. } => names[0] = Some(keyword.as_str()),
+            _ => {}
+        }
+        for name in names.into_iter().flatten() {
+            let locations: UnitLocations = self.locations(at.location, Some(name));
+            let trace: &mut TraceRecord = cx.trace();
+            let parent: Option<usize> = trace.current;
+            trace.units.push(TraceUnit {
+                parent,
+                kind: TraceKind::Pass(locations),
+            });
+        }
     }
 
     /// Dispatches one keyword. Each keyword is its own function, so a recursive evaluation

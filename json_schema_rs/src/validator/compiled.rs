@@ -773,7 +773,17 @@ pub struct CompiledSchema {
     /// The annotations each node produces when it passes (see
     /// [`CompiledSchemaBuilder::annotations`]); empty unless they were asked for. Cold: read
     /// only by the trace.
-    pub(crate) annotations: IntMap<NodeId, Box<[NodeAnnotation]>>,
+    pub(crate) annotations: IntMap<NodeId, NodeAnnotations>,
+}
+
+/// The annotations a schema object produces when it passes.
+#[derive(Debug, PartialEq)]
+pub(crate) struct NodeAnnotations {
+    /// Its annotation keywords' values.
+    pub(crate) keywords: Box<[NodeAnnotation]>,
+    /// Whether its applicators annotate what they applied to (2019-09 core §7.7; the earlier
+    /// drafts define no annotations of applicators).
+    pub(crate) applicators: bool,
 }
 
 /// An annotation a schema object produces when it passes: its keyword and value.
@@ -1702,7 +1712,7 @@ struct Compiler<'r, 'a> {
     custom_definitions: Vec<CustomKeywordDefinition>,
     /// Whether to keep each node's annotations (see [`CompiledSchemaBuilder::annotations`]).
     collect_annotations: bool,
-    annotations: IntMap<NodeId, Box<[NodeAnnotation]>>,
+    annotations: IntMap<NodeId, NodeAnnotations>,
     /// The custom keywords compiled so far, by [`CustomKeywordId`].
     custom_keywords: Vec<CompiledCustomKeyword>,
     errors: Vec<CompileError>,
@@ -2122,10 +2132,19 @@ impl<'r, 'a> Compiler<'r, 'a> {
             self.lower_custom(pending.source, pending.location, &mut keywords);
         }
         if self.collect_annotations && !siblings_ignored {
-            let annotations: Vec<NodeAnnotation> = self.node_annotations(pending.source, dialect);
-            if !annotations.is_empty() {
-                self.annotations
-                    .insert(pending.id, annotations.into_boxed_slice());
+            let keywords: Vec<NodeAnnotation> = self.node_annotations(pending.source, dialect);
+            let applicators: bool = matches!(
+                dialect.spec_version,
+                SpecVersion::Draft201909 | SpecVersion::Draft202012
+            );
+            if applicators || !keywords.is_empty() {
+                self.annotations.insert(
+                    pending.id,
+                    NodeAnnotations {
+                        keywords: keywords.into_boxed_slice(),
+                        applicators,
+                    },
+                );
             }
         }
         let has_unevaluated: bool = keywords.iter().any(|k| {
