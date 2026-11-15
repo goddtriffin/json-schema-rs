@@ -314,6 +314,13 @@ pub enum ValidationErrorKind {
         /// The invalid instance (for user-facing context).
         value: Value,
     },
+    /// The instance does not satisfy a custom keyword (see `CompiledSchemaBuilder::keyword`).
+    Custom {
+        /// The keyword.
+        keyword: String,
+        /// The message the keyword's `CustomKeyword::validate` returned.
+        message: String,
+    },
     /// The string instance is not in the encoding `contentEncoding` names (only where the
     /// content keywords are asserted: see `ContentMode`).
     InvalidContentEncoding {
@@ -556,6 +563,7 @@ impl fmt::Display for ValidationErrorKind {
                 Value::String(s) => write!(f, "string \"{s}\" is not a valid {format}"),
                 _ => write!(f, "{value} is not a valid {format}"),
             },
+            ValidationErrorKind::Custom { message, .. } => f.write_str(message),
             ValidationErrorKind::InvalidContentEncoding {
                 encoding, value, ..
             } => {

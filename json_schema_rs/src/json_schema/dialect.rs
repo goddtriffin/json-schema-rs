@@ -547,6 +547,21 @@ impl Dialect {
         table.as_slice()
     }
 
+    /// Whether some draft (4 to 2020-12; drafts before 4 follow draft 4) defines the keyword
+    /// `name`.
+    #[must_use]
+    pub(crate) fn is_standard_keyword(name: &str) -> bool {
+        [
+            &DRAFT4_TABLE,
+            &DRAFT6_TABLE,
+            &DRAFT7_TABLE,
+            &DRAFT201909_TABLE,
+            &DRAFT202012_TABLE,
+        ]
+        .into_iter()
+        .any(|table| table.binary_search_by(|k| k.name.cmp(name)).is_ok())
+    }
+
     /// The keyword named `name`, when this dialect defines it.
     #[must_use]
     pub fn keyword(&self, name: &str) -> Option<&'static Keyword> {

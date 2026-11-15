@@ -160,7 +160,10 @@ by default in drafts 4/6/7 and annotation-only in 2019-09/2020-12 (override with
 `--jss-format-mode`); an unknown format is ignored unless `--jss-unknown-formats reject`
 makes it a schema error wherever formats are asserted. User-defined formats are
 registered with `CompiledSchema::builder().format(name, |s: &str| ...)` (strings) or
-`.value_format(name, |v: &Value| ...)` (any instance type, e.g. `int32`). `contentEncoding` (`base64`) and
+`.value_format(name, |v: &Value| ...)` (any instance type, e.g. `int32`). Custom keywords are
+defined with `CompiledSchema::builder().keyword(name, |value: &Value| ...)`, which builds a
+`CustomKeyword` from each occurrence's value at compile time; a custom metaschema's vocabulary
+for them is declared with `Registry::builder().vocabulary(uri)`. `contentEncoding` (`base64`) and
 `contentMediaType` (`application/json` and any `+json` type) are asserted by default in
 draft 7, which allows it, and annotation-only in 2019-09/2020-12, which must not decode
 content by default (override with `--jss-content-mode`); other encodings and media types,

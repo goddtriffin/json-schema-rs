@@ -210,6 +210,10 @@ fn node_shape(schema: &CompiledSchema, index: usize, out: &mut String, edges: &m
             Keyword::UserFormat(id) => {
                 let _ = write!(out, "UserFormat({:?})", schema.user_format(*id).name);
             }
+            Keyword::Custom(id) => {
+                let custom = schema.custom_keyword(*id);
+                let _ = write!(out, "Custom({:?}, {})", custom.name, custom.value);
+            }
             Keyword::NoAdditionalProperties(known) => {
                 out.push_str("NoAdditionalProperties");
                 known_shape(schema, known, out);

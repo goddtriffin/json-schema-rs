@@ -59,6 +59,22 @@ pub enum CompileError {
         /// The format name.
         format: String,
     },
+    /// A custom keyword's factory (see [`CompiledSchemaBuilder::keyword`]) refused the
+    /// keyword's value.
+    InvalidCustomKeyword {
+        /// JSON Pointer to the schema object holding the keyword, within its document.
+        location: String,
+        /// The keyword.
+        keyword: String,
+        /// Why the factory refused it.
+        reason: String,
+    },
+    /// A custom keyword registered under the name of a keyword some JSON Schema draft defines:
+    /// the standard keyword always wins, so the custom one could never run.
+    StandardKeywordName {
+        /// The keyword.
+        keyword: String,
+    },
     /// A `$ref` the registry does not know: the schema was not part of the registry it was
     /// compiled from.
     UnknownRef {
@@ -103,6 +119,15 @@ impl fmt::Display for CompileError {
             CompileError::UnknownFormat { location, format } => {
                 write!(f, "{}: unknown format \"{format}\"", at(location))
             }
+            CompileError::InvalidCustomKeyword {
+                location,
+                keyword,
+                reason,
+            } => write!(f, "{}: invalid \"{keyword}\": {reason}", at(location)),
+            CompileError::StandardKeywordName { keyword } => write!(
+                f,
+                "custom keyword \"{keyword}\" is a standard JSON Schema keyword"
+            ),
             CompileError::UnknownRef { location, ref_str } => write!(
                 f,
                 "{}: $ref \"{ref_str}\" is not in the schema's registry",
@@ -145,6 +170,10 @@ pub(crate) struct PropertiesId(u32);
 /// The index of a user-defined format in a [`CompiledSchema`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UserFormatId(u32);
+
+/// The index of a compiled custom keyword in a [`CompiledSchema`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CustomKeywordId(u32);
 
 /// A keyword's name, for the keyword locations of errors (one byte, so the evaluator's location
 /// frames stay small).
@@ -282,6 +311,64 @@ impl fmt::Debug for UserFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UserFormat")
             .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A keyword the user defines (see [`CompiledSchemaBuilder::keyword`]), built once per schema
+/// object that has it, from the keyword's value, and asked about each instance that object
+/// applies to.
+///
+/// A custom keyword is an assertion on the instance alone: it applies no subschema and
+/// produces no annotation.
+pub trait CustomKeyword: Send + Sync {
+    /// Checks `instance`: `Err` carries the message of the
+    /// [`ValidationErrorKind::Custom`](super::ValidationErrorKind::Custom) error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error message when `instance` does not satisfy the keyword.
+    fn validate(&self, instance: &Value) -> Result<(), String>;
+
+    /// Whether `instance` satisfies the keyword. [`CompiledSchema::is_valid`] and the branches
+    /// of `anyOf`, `oneOf`, `not`, `if` and `contains` call this rather than
+    /// [`validate`](Self::validate); override it when the message costs something to build.
+    fn is_valid(&self, instance: &Value) -> bool {
+        self.validate(instance).is_ok()
+    }
+}
+
+/// Builds a [`CustomKeyword`] from the keyword's value, or says why the value is invalid.
+type KeywordFactory = Arc<dyn Fn(&Value) -> Result<Box<dyn CustomKeyword>, String> + Send + Sync>;
+
+/// A keyword the user registered with [`CompiledSchemaBuilder::keyword`].
+#[derive(Clone)]
+struct CustomKeywordDefinition {
+    name: Box<str>,
+    factory: KeywordFactory,
+}
+
+impl fmt::Debug for CustomKeywordDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CustomKeywordDefinition")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A custom keyword compiled for one schema object.
+pub(crate) struct CompiledCustomKeyword {
+    pub(crate) name: Box<str>,
+    /// The keyword's value: two schema objects with the same name and value validate alike.
+    pub(crate) value: Value,
+    pub(crate) keyword: Box<dyn CustomKeyword>,
+}
+
+impl fmt::Debug for CompiledCustomKeyword {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompiledCustomKeyword")
+            .field("name", &self.name)
+            .field("value", &self.value)
             .finish_non_exhaustive()
     }
 }
@@ -579,6 +666,10 @@ pub(crate) enum Keyword {
     },
     UnevaluatedProperties(NodeId),
     UnevaluatedItems(NodeId),
+    /// A keyword the user defined. Last, so every built-in keyword keeps its discriminant:
+    /// placed among the leaf keywords, it renumbered the rest and the evaluator's dispatch
+    /// compiled differently (the `generated/deep-nesting` validation ran 3-4% slower).
+    Custom(CustomKeywordId),
 }
 
 impl Keyword {
@@ -601,6 +692,7 @@ impl Keyword {
                 | Keyword::Pattern(_)
                 | Keyword::Format(_)
                 | Keyword::UserFormat(_)
+                | Keyword::Custom(_)
         )
     }
 }
@@ -636,6 +728,8 @@ pub struct CompiledSchema {
     pub(crate) target_uris: IntMap<NodeId, Box<str>>,
     /// The user-defined formats, by [`UserFormatId`].
     pub(crate) user_formats: Box<[UserFormat]>,
+    /// The custom keywords, by [`CustomKeywordId`].
+    pub(crate) custom_keywords: Box<[CompiledCustomKeyword]>,
     /// Whether any node has an `anyOf` / `oneOf`: without one there is no union choice to
     /// record.
     pub(crate) has_unions: bool,
@@ -677,6 +771,7 @@ pub(crate) fn maps_are_sorted() -> bool {
 #[derive(Debug, Clone, Default)]
 pub struct CompiledSchemaBuilder {
     formats: Vec<UserFormat>,
+    keywords: Vec<CustomKeywordDefinition>,
 }
 
 impl CompiledSchemaBuilder {
@@ -728,6 +823,69 @@ impl CompiledSchemaBuilder {
         self.register(name.into(), FormatCheck::Value(Arc::new(check)))
     }
 
+    /// Defines the keyword `name`: wherever a schema object has it, `factory` builds a
+    /// [`CustomKeyword`] from its value once, at compile time, and that keyword then checks
+    /// every instance the schema object applies to. A value `factory` refuses is a
+    /// [`CompileError::InvalidCustomKeyword`]. The keyword runs in every draft and whatever
+    /// vocabularies the metaschema lists, but not beside a `$ref` where the draft ignores
+    /// `$ref`'s siblings (drafts 4 to 7). A metaschema that requires the vocabulary the keyword
+    /// belongs to needs it declared with
+    /// [`RegistryBuilder::vocabulary`](crate::RegistryBuilder::vocabulary).
+    /// `name` cannot be a keyword of any JSON Schema draft
+    /// ([`CompileError::StandardKeywordName`]), and defining a name twice keeps the last
+    /// factory. Strict parsing rejects the keyword as unknown: parse such schemas with strict
+    /// mode off.
+    ///
+    /// ```
+    /// use json_schema_rs::{
+    ///     CompiledSchema, CustomKeyword, JsonSchemaSettings, Registry, Schema,
+    /// };
+    /// use serde_json::{Value, json};
+    ///
+    /// /// `"maxDecimals": n`: a number has at most `n` digits after the decimal point.
+    /// struct MaxDecimals(usize);
+    ///
+    /// impl CustomKeyword for MaxDecimals {
+    ///     fn validate(&self, instance: &Value) -> Result<(), String> {
+    ///         let Value::Number(n) = instance else { return Ok(()) };
+    ///         let text: String = n.to_string();
+    ///         let decimals: usize = text.split_once('.').map_or(0, |(_, d)| d.len());
+    ///         if decimals <= self.0 {
+    ///             Ok(())
+    ///         } else {
+    ///             Err(format!("{n} has more than {} decimals", self.0))
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// let settings = JsonSchemaSettings::default();
+    /// let schema = Schema::new_from_serde_value(&json!({"maxDecimals": 2}), &settings).unwrap();
+    /// let registry = Registry::new(&schema).unwrap();
+    /// let compiled = CompiledSchema::builder()
+    ///     .keyword("maxDecimals", |value: &Value| -> Result<Box<dyn CustomKeyword>, String> {
+    ///         let n: u64 = value.as_u64().ok_or("expected a non-negative integer")?;
+    ///         Ok(Box::new(MaxDecimals(usize::try_from(n).map_err(|e| e.to_string())?)))
+    ///     })
+    ///     .build(&registry)
+    ///     .unwrap();
+    /// assert!(compiled.is_valid(&json!(1.25)));
+    /// assert!(!compiled.is_valid(&json!(1.125)));
+    /// ```
+    #[must_use]
+    pub fn keyword(
+        mut self,
+        name: impl Into<String>,
+        factory: impl Fn(&Value) -> Result<Box<dyn CustomKeyword>, String> + Send + Sync + 'static,
+    ) -> Self {
+        let name: Box<str> = name.into().into_boxed_str();
+        self.keywords.retain(|keyword| keyword.name != name);
+        self.keywords.push(CustomKeywordDefinition {
+            name,
+            factory: Arc::new(factory),
+        });
+        self
+    }
+
     fn register(mut self, name: String, check: FormatCheck) -> Self {
         let name: Box<str> = name.into_boxed_str();
         self.formats.retain(|format| format.name != name);
@@ -744,6 +902,18 @@ impl CompiledSchemaBuilder {
     pub fn build(&self, registry: &Registry<'_>) -> Result<CompiledSchema, CompileErrors> {
         let mut compiler: Compiler<'_, '_> = Compiler::new(registry);
         compiler.user_formats.clone_from(&self.formats);
+        let standard: Vec<CompileError> = self
+            .keywords
+            .iter()
+            .filter(|keyword| Dialect::is_standard_keyword(&keyword.name))
+            .map(|keyword| CompileError::StandardKeywordName {
+                keyword: keyword.name.to_string(),
+            })
+            .collect();
+        if let Some(errors) = ErrorList::from_vec(standard) {
+            return Err(errors);
+        }
+        compiler.custom_definitions.clone_from(&self.keywords);
         compiler.compile()
     }
 }
@@ -840,7 +1010,7 @@ impl CompiledSchema {
     /// Whether `self` and `other` validate every instance identically, with the same errors,
     /// judged by their compiled form: the same nodes in the same order (resources matched one
     /// to one), keywords, patterns, `enum` and `properties` lists, dynamic targets and user
-    /// formats, and target URIs equal after `map_uri` maps each of `self`'s. Two compilations of
+    /// formats, custom keywords, and target URIs equal after `map_uri` maps each of `self`'s. Two compilations of
     /// one schema whose documents differ only in what no compiled node reads (and in URIs
     /// `map_uri` accounts for) compare equal.
     pub(crate) fn same_validation(
@@ -855,6 +1025,12 @@ impl CompiledSchema {
             || self.properties != other.properties
             || self.uses_dynamic_scope != other.uses_dynamic_scope
             || self.sorted_maps != other.sorted_maps
+            || self.custom_keywords.len() != other.custom_keywords.len()
+            || self
+                .custom_keywords
+                .iter()
+                .zip(other.custom_keywords.iter())
+                .any(|(a, b)| a.name != b.name || a.value != b.value)
             || self.user_formats.len() != other.user_formats.len()
             || self
                 .user_formats
@@ -933,6 +1109,10 @@ impl CompiledSchema {
 
     pub(crate) fn user_format(&self, id: UserFormatId) -> &UserFormat {
         &self.user_formats[id.0 as usize]
+    }
+
+    pub(crate) fn custom_keyword(&self, id: CustomKeywordId) -> &CompiledCustomKeyword {
+        &self.custom_keywords[id.0 as usize]
     }
 
     /// Gives every `anyOf` / `oneOf` of the nodes `unions` whose branches are told apart by
@@ -1265,6 +1445,10 @@ struct Compiler<'r, 'a> {
     target_uris: IntMap<NodeId, Box<str>>,
     /// The user-defined formats (see [`CompiledSchemaBuilder::format`]).
     user_formats: Vec<UserFormat>,
+    /// The custom keywords (see [`CompiledSchemaBuilder::keyword`]).
+    custom_definitions: Vec<CustomKeywordDefinition>,
+    /// The custom keywords compiled so far, by [`CustomKeywordId`].
+    custom_keywords: Vec<CompiledCustomKeyword>,
     errors: Vec<CompileError>,
     /// When recording (see [`CompiledSchema::with_entries_located`]): every (scope, location
     /// entry) a node was requested for.
@@ -1378,6 +1562,8 @@ impl<'r, 'a> Compiler<'r, 'a> {
             uses_dynamic_scope: false,
             target_uris: IntMap::default(),
             user_formats: Vec::new(),
+            custom_definitions: Vec::new(),
+            custom_keywords: Vec::new(),
             errors: Vec::new(),
             located: None,
         }
@@ -1506,6 +1692,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             sorted_maps: self.sorted_maps,
             target_uris: self.target_uris,
             user_formats: self.user_formats.into_boxed_slice(),
+            custom_keywords: self.custom_keywords.into_boxed_slice(),
             has_unions: !unions.is_empty(),
         };
         compiled.add_discriminators(&unions);
@@ -1656,13 +1843,18 @@ impl<'r, 'a> Compiler<'r, 'a> {
         }
         let dialect: Dialect = self.registry.dialect(scope);
         let mut parts: Parts<'r> = self.read_parts(pending.source, dialect, pending.location);
-        if parts.ref_.is_some() && dialect.ref_siblings == RefSiblings::Ignored {
+        let siblings_ignored: bool =
+            parts.ref_.is_some() && dialect.ref_siblings == RefSiblings::Ignored;
+        if siblings_ignored {
             parts = Parts {
                 ref_: parts.ref_,
                 ..Parts::default()
             };
         }
-        let keywords: Vec<Keyword> = self.lower(&parts, dialect, scope, pending.location);
+        let mut keywords: Vec<Keyword> = self.lower(&parts, dialect, scope, pending.location);
+        if !self.custom_definitions.is_empty() && !siblings_ignored {
+            self.lower_custom(pending.source, pending.location, &mut keywords);
+        }
         let has_unevaluated: bool = keywords.iter().any(|k| {
             matches!(
                 k,
@@ -2457,6 +2649,53 @@ impl<'r, 'a> Compiler<'r, 'a> {
             }
             Some(_) | None => {}
         }
+    }
+
+    /// Compiles the custom keywords `source` has, before `unevaluated*` (which stays last).
+    #[cold]
+    #[inline(never)]
+    fn lower_custom(&mut self, source: Source<'r>, location: usize, out: &mut Vec<Keyword>) {
+        let at: usize = out
+            .iter()
+            .position(|k| {
+                matches!(
+                    k,
+                    Keyword::UnevaluatedProperties(_) | Keyword::UnevaluatedItems(_)
+                )
+            })
+            .unwrap_or(out.len());
+        let mut compiled: Vec<Keyword> = Vec::new();
+        for index in 0..self.custom_definitions.len() {
+            let definition: &CustomKeywordDefinition = &self.custom_definitions[index];
+            let Some(value) = source.raw(&definition.name) else {
+                continue;
+            };
+            match (definition.factory)(value) {
+                Ok(keyword) => {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "fewer than u32::MAX custom keywords fit in memory"
+                    )]
+                    let id: CustomKeywordId = CustomKeywordId(self.custom_keywords.len() as u32);
+                    self.custom_keywords.push(CompiledCustomKeyword {
+                        name: definition.name.clone(),
+                        value: value.clone(),
+                        keyword,
+                    });
+                    compiled.push(Keyword::Custom(id));
+                }
+                Err(reason) => {
+                    let keyword: String = definition.name.to_string();
+                    let location: String = self.location_string(location);
+                    self.errors.push(CompileError::InvalidCustomKeyword {
+                        location,
+                        keyword,
+                        reason,
+                    });
+                }
+            }
+        }
+        out.splice(at..at, compiled);
     }
 
     /// Compiles a `$dynamicRef`: dynamic when its initial target declares the `$dynamicAnchor`

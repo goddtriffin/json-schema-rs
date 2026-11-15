@@ -19,7 +19,9 @@ mod simple_pattern;
 mod tests_keywords;
 mod value_ref;
 
-pub use compiled::{CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder};
+pub use compiled::{
+    CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, CustomKeyword,
+};
 pub(crate) use compiled::{CompiledEntries, NodeId};
 pub(crate) use equivalence::validation_classes;
 pub use error::{
