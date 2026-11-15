@@ -396,12 +396,13 @@ mod tests {
     #[test]
     fn setting_without_value_is_an_error() {
         let expected: Vec<(String, usize, usize)> = vec![(
-            "expected a setting value: `true`, `false` or a variant name".to_string(),
+            "expected a setting value: `true`, `false`, a variant name, a string, `[..]` or `{..}`"
+                .to_string(),
             1,
             38,
         )];
         let actual: Vec<(String, usize, usize)> =
-            expansion_errors(r##"r#"{"type":"string"}"#, dedupe_mode = "Full""##);
+            expansion_errors(r##"r#"{"type":"string"}"#, dedupe_mode = 3"##);
         assert_eq!(expected, actual);
     }
 
@@ -540,7 +541,8 @@ mod tests {
             (
                 "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
-                 `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
+                 `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, `extra_attrs`, \
+                 `patch`, `disallow_unknown_fields`, \
                  `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),

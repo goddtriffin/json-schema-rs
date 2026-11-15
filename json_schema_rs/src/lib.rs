@@ -21,7 +21,7 @@ pub mod validator;
 pub use code_gen::{
     CodeGenBackend, CodeGenError, CodeGenInput, CodeGenResult, CodeGenSettings,
     CodeGenSettingsBuilder, DedupeMode, FormatTypes, GenerateRustOutput, ModelNameSource,
-    RustBackend, UniqueItemsType, UnknownProperties, generate_rust,
+    RustBackend, TypePatch, UniqueItemsType, UnknownProperties, generate_rust,
 };
 pub use error_list::ErrorList;
 pub use json_pointer::{JsonPointer, JsonPointerError};

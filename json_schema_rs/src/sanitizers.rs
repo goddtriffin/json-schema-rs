@@ -34,6 +34,11 @@ fn is_rust_keyword_field(s: &str) -> bool {
     RUST_KEYWORDS_FIELD.contains(&s)
 }
 
+/// Whether `s` is a Rust keyword, `Self` included: no type can be named it.
+pub(crate) fn is_rust_keyword(s: &str) -> bool {
+    is_rust_keyword_field(s) || s == RUST_KEYWORD_TYPE_SELF
+}
+
 /// Sanitize a JSON property key to a Rust field identifier (`snake_case`).
 /// Replaces `-` with `_`; invalid chars → `_`; converts camelCase/PascalCase to `snake_case` via heck.
 /// Empty input becomes `"empty"`; leading digit becomes `field_{s}`; single `_` becomes `"empty"`;

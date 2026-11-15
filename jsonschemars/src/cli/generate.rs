@@ -8,8 +8,9 @@ use super::utils::{
 use clap::ArgMatches;
 use json_schema_rs::{
     CodeGenInput, CodeGenSettings, DedupeMode, FormatTypes, JsonSchemaSettings, ModelNameSource,
-    Schema, UniqueItemsType, UnknownProperties, file_uri, generate_rust,
+    Schema, TypePatch, UniqueItemsType, UnknownProperties, file_uri, generate_rust,
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -117,15 +118,62 @@ pub(crate) fn run_generate(
     Ok(())
 }
 
-/// Codegen settings from the `--cgs-*` flags. Fails for `--cgs-unique-items index-set` when
-/// `jsonschemars` is built without the `indexmap` feature.
-#[cfg_attr(
-    feature = "indexmap",
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "fails only without the `indexmap` feature"
-    )
-)]
+/// The patches of a `--cgs-patch` file: a JSON object of type names to objects with
+/// `rename` (a string), `derives` and `attrs` (arrays of strings).
+fn read_patches(path: &Path) -> Result<BTreeMap<String, TypePatch>, String> {
+    let fail = |reason: String| format!("--cgs-patch {}: {reason}", path.display());
+    let text: String = fs::read_to_string(path).map_err(|e| fail(e.to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| fail(e.to_string()))?;
+    let serde_json::Value::Object(entries) = value else {
+        return Err(fail(
+            "expected an object of type names to patches".to_string(),
+        ));
+    };
+    let strings =
+        |name: &str, field: &str, value: &serde_json::Value| -> Result<Vec<String>, String> {
+            value
+                .as_array()
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .map(|item| item.as_str().map(str::to_string))
+                        .collect::<Option<Vec<String>>>()
+                })
+                .ok_or_else(|| fail(format!("`{name}.{field}` must be an array of strings")))
+        };
+    let mut patches: BTreeMap<String, TypePatch> = BTreeMap::new();
+    for (name, fields) in entries {
+        let serde_json::Value::Object(fields) = fields else {
+            return Err(fail(format!("the patch for `{name}` must be an object")));
+        };
+        let mut type_patch: TypePatch = TypePatch::default();
+        for (field, value) in &fields {
+            match field.as_str() {
+                "rename" => {
+                    type_patch.rename = Some(
+                        value
+                            .as_str()
+                            .ok_or_else(|| fail(format!("`{name}.rename` must be a string")))?
+                            .to_string(),
+                    );
+                }
+                "derives" => type_patch.derives = strings(&name, field, value)?,
+                "attrs" => type_patch.attrs = strings(&name, field, value)?,
+                _ => {
+                    return Err(fail(format!(
+                        "unknown field `{name}.{field}`; expected `rename`, `derives` or `attrs`"
+                    )));
+                }
+            }
+        }
+        patches.insert(name, type_patch);
+    }
+    Ok(patches)
+}
+
+/// Codegen settings from the `--cgs-*` flags. Fails when the `--cgs-patch` file cannot be read
+/// or is malformed, and for `--cgs-unique-items index-set` when `jsonschemars` is built without
+/// the `indexmap` feature.
 pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings, String> {
     let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
     let mut b = CodeGenSettings::builder()
@@ -160,6 +208,19 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
             "follow-dialect" => FormatTypes::FollowDialect,
             _ => FormatTypes::Typed,
         });
+    }
+    let many = |name: &str| -> Vec<String> {
+        matches
+            .get_many::<String>(name)
+            .map_or_else(Vec::new, |values| values.cloned().collect())
+    };
+    b = b
+        .extra_derives(many("cgs-derive"))
+        .extra_attrs(many("cgs-attr"));
+    if let Some(path) = flag("cgs-patch") {
+        for (name, patch) in read_patches(Path::new(path))? {
+            b = b.patch(name, patch);
+        }
     }
     if let Some(kind) = flag("cgs-unique-items") {
         b = b.unique_items(match kind {
