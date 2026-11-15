@@ -43,6 +43,8 @@ pub use reverse_code_gen::{
     ReverseCodeGenError, ReverseCodeGenResult, SchemaGenerator, ToJsonSchema,
 };
 pub use validated::Validated;
+#[cfg(feature = "linear-regex")]
+pub use validator::RegexEngine;
 pub use validator::{
     BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, CustomKeyword,
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError, FlagOutput,

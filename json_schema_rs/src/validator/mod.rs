@@ -12,6 +12,8 @@ mod error;
 mod eval;
 mod format;
 mod generated;
+#[cfg(feature = "linear-regex")]
+mod linear_regex;
 mod name_index;
 mod output;
 mod simple_pattern;
@@ -19,6 +21,8 @@ mod simple_pattern;
 mod tests_keywords;
 mod value_ref;
 
+#[cfg(feature = "linear-regex")]
+pub use compiled::RegexEngine;
 pub use compiled::{
     CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, CustomKeyword,
 };

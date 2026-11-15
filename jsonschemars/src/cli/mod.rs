@@ -7,8 +7,9 @@ mod validate;
 
 use clap::{Arg, ArgMatches, Command};
 use json_schema_rs::{
-    ContentMode, ExclusiveBounds, FormatMode, IntegerSemantics, JsonSchemaSettings,
-    MetaschemaCheck, RefSiblings, SpecVersion, UnknownFormats, UnknownSchemaUri,
+    CompiledSchemaBuilder, ContentMode, ExclusiveBounds, FormatMode, IntegerSemantics,
+    JsonSchemaSettings, MetaschemaCheck, RefSiblings, SpecVersion, UnknownFormats,
+    UnknownSchemaUri,
 };
 use retrieval::RefRetrieval;
 use std::path::PathBuf;
@@ -287,6 +288,27 @@ pub fn run() {
                         .action(clap::ArgAction::Append)
                         .help("A JSON Schema document the schema may reference, reached by its file: URI or its root $id. Repeatable."),
                 )
+                .arg(
+                    Arg::new("regex-engine")
+                        .long("regex-engine")
+                        .value_name("ENGINE")
+                        .value_parser(["ecma", "linear"])
+                        .help("The engine for pattern and patternProperties: ecma = ECMA-262 as the spec requires (backtracking); linear = linear-time matching for untrusted schemas, refusing backreferences and lookaround (linear needs the `linear-regex` feature; default: ecma)"),
+                )
+                .arg(
+                    Arg::new("regex-size-limit")
+                        .long("regex-size-limit")
+                        .value_name("BYTES")
+                        .value_parser(clap::value_parser!(usize))
+                        .help("The most memory one pattern may compile to under --regex-engine linear; a larger pattern is a schema error (needs the `linear-regex` feature; default: no limit)"),
+                )
+                .arg(
+                    Arg::new("max-depth")
+                        .long("max-depth")
+                        .value_name("LEVELS")
+                        .value_parser(clap::value_parser!(usize))
+                        .help("How deeply evaluation may nest subschemas before the instance fails; at most the built-in stack guard (default: the guard, 2048 levels in a release build)"),
+                )
                 .args(jss_args())
                 .args(retrieval::retrieval_args()),
         );
@@ -333,7 +355,16 @@ pub fn run() {
                 .map_or_default(|it| it.map(PathBuf::from).collect());
             let schema_settings: JsonSchemaSettings = jss_settings(val_m);
             let retrieval: RefRetrieval = RefRetrieval::from_matches(val_m);
-            validate::run_validate(&schema, payload, &resources, &schema_settings, &retrieval)
+            validate::compile_options(val_m).and_then(|compile: CompiledSchemaBuilder| {
+                validate::run_validate(
+                    &schema,
+                    payload,
+                    &resources,
+                    &schema_settings,
+                    &retrieval,
+                    &compile,
+                )
+            })
         }
         _ => {
             eprintln!("expected subcommand: generate or validate");

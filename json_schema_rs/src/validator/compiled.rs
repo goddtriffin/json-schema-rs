@@ -9,7 +9,10 @@
 
 use super::content::{Content, ContentCodecs, Decoder, MediaTypeCheck};
 use super::ecma_regex;
+use super::eval::DEPTH_LIMIT;
 use super::format::Format;
+#[cfg(feature = "linear-regex")]
+use super::linear_regex;
 use super::name_index::{NameIndex, PropertyTable};
 use super::simple_pattern::SimplePattern;
 use crate::error_list::ErrorList;
@@ -31,7 +34,9 @@ use std::sync::{Arc, OnceLock};
 /// A problem that keeps a schema from compiling, with its location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
-    /// A `pattern` or `patternProperties` key that is not a valid ECMA-262 regular expression.
+    /// A `pattern` or `patternProperties` key that is not a valid ECMA-262 regular expression,
+    /// or that the chosen regular expression engine cannot run (a backreference or lookaround
+    /// under the linear engine, or a pattern over its size limit).
     InvalidPattern {
         /// JSON Pointer to the pattern within its document: the `pattern` keyword
         /// (`/properties/a/pattern`), or the `patternProperties` key (`/patternProperties/(`).
@@ -373,11 +378,37 @@ impl fmt::Debug for CompiledCustomKeyword {
     }
 }
 
+/// The engine that runs `pattern` and `patternProperties` (see
+/// [`CompiledSchemaBuilder::regex_engine`]). Needs the `linear-regex` feature.
+#[cfg(feature = "linear-regex")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum RegexEngine {
+    /// ECMA-262 regular expressions, as the specification requires: every pattern a schema may
+    /// hold compiles. A backtracking engine, so a crafted pattern can take time exponential in
+    /// the length of the string it matches.
+    #[default]
+    Ecma,
+    /// A linear-time engine (the `regex` crate): matching takes time linear in the length of
+    /// the string whatever the pattern, so an untrusted schema cannot stall validation with a
+    /// pathological pattern. It matches what ECMA-262 matches, but refuses the patterns it
+    /// cannot run in linear time, those with a backreference (`\1`, `\k<name>`) or lookaround
+    /// (`(?=`, `(?!`, `(?<=`, `(?<!`), with [`CompileError::InvalidPattern`].
+    Linear,
+}
+
+/// A compiled regular expression, in the engine it was compiled for.
+#[derive(Debug)]
+pub(crate) enum Matcher {
+    Ecma(regress::Regex),
+    #[cfg(feature = "linear-regex")]
+    Linear(regex::Regex),
+}
+
 /// A compiled regular expression and its source.
 #[derive(Debug)]
 pub(crate) struct Pattern {
     pub(crate) source: String,
-    pub(crate) regex: regress::Regex,
+    pub(crate) regex: Matcher,
     /// The greedy matcher, when the pattern is in the subset it decides exactly.
     pub(crate) simple: Option<SimplePattern>,
 }
@@ -399,7 +430,11 @@ impl Pattern {
             .and_then(|simple| simple.is_match(text))
         {
             Some(matched) => matched,
-            None => self.regex.find(text).is_some(),
+            None => match &self.regex {
+                Matcher::Ecma(regex) => regex.find(text).is_some(),
+                #[cfg(feature = "linear-regex")]
+                Matcher::Linear(regex) => regex.is_match(text),
+            },
         }
     }
 }
@@ -733,6 +768,8 @@ pub struct CompiledSchema {
     /// Whether any node has an `anyOf` / `oneOf`: without one there is no union choice to
     /// record.
     pub(crate) has_unions: bool,
+    /// How deep evaluation may nest (see [`CompiledSchemaBuilder::max_depth`]).
+    pub(crate) max_depth: usize,
 }
 
 /// Whether [`serde_json::Map`] iterates its keys in sorted (byte) order: it does unless some
@@ -773,6 +810,11 @@ pub struct CompiledSchemaBuilder {
     formats: Vec<UserFormat>,
     keywords: Vec<CustomKeywordDefinition>,
     content: ContentCodecs,
+    #[cfg(feature = "linear-regex")]
+    regex_engine: RegexEngine,
+    #[cfg(feature = "linear-regex")]
+    regex_size_limit: Option<usize>,
+    max_depth: Option<usize>,
 }
 
 impl CompiledSchemaBuilder {
@@ -993,6 +1035,55 @@ impl CompiledSchemaBuilder {
         self
     }
 
+    /// Runs `pattern` and `patternProperties` with `engine`: [`RegexEngine::Ecma`] (the
+    /// default) as the specification requires, or [`RegexEngine::Linear`] for schemas from
+    /// untrusted sources, which no pattern can make slow. The `regex` format always checks its
+    /// strings as ECMA-262, whatever the engine: it only parses them.
+    ///
+    /// ```
+    /// use json_schema_rs::{CompiledSchema, RegexEngine, Registry, Schema};
+    /// use serde_json::json;
+    ///
+    /// let schema: Schema = serde_json::from_value(json!({ "pattern": "^(a+)+$" })).unwrap();
+    /// let registry: Registry<'_> = Registry::new(&schema).unwrap();
+    /// let compiled: CompiledSchema = CompiledSchema::builder()
+    ///     .regex_engine(RegexEngine::Linear)
+    ///     .build(&registry)
+    ///     .unwrap();
+    /// assert!(!compiled.is_valid(&json!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab")));
+    /// ```
+    #[cfg(feature = "linear-regex")]
+    #[must_use]
+    pub fn regex_engine(mut self, engine: RegexEngine) -> Self {
+        self.regex_engine = engine;
+        self
+    }
+
+    /// Caps the memory each pattern may compile to under [`RegexEngine::Linear`], in bytes
+    /// (`None`, the default, sets no cap). A pattern over the cap is refused with
+    /// [`CompileError::InvalidPattern`], so an untrusted schema cannot make compiling it use
+    /// unbounded memory (`a{1000}{1000}`). The cap does not apply to [`RegexEngine::Ecma`].
+    #[cfg(feature = "linear-regex")]
+    #[must_use]
+    pub fn regex_size_limit(mut self, limit: Option<usize>) -> Self {
+        self.regex_size_limit = limit;
+        self
+    }
+
+    /// Caps how deeply evaluation may nest subschemas (`None`, the default, keeps the built-in
+    /// guard). An instance that needs more depth fails with
+    /// [`ValidationErrorKind::DepthLimitExceeded`] carrying the limit. The built-in guard,
+    /// which keeps evaluation from overflowing the stack (512 levels in debug builds, 2048 in
+    /// release builds), is also the most a limit can raise it to: a larger one is lowered to
+    /// it.
+    ///
+    /// [`ValidationErrorKind::DepthLimitExceeded`]: crate::ValidationErrorKind::DepthLimitExceeded
+    #[must_use]
+    pub fn max_depth(mut self, limit: Option<usize>) -> Self {
+        self.max_depth = limit;
+        self
+    }
+
     fn register(mut self, name: String, check: FormatCheck) -> Self {
         let name: Box<str> = name.into_boxed_str();
         self.formats.retain(|format| format.name != name);
@@ -1010,6 +1101,14 @@ impl CompiledSchemaBuilder {
         let mut compiler: Compiler<'_, '_> = Compiler::new(registry);
         compiler.user_formats.clone_from(&self.formats);
         compiler.content_codecs.clone_from(&self.content);
+        #[cfg(feature = "linear-regex")]
+        {
+            compiler.regex_engine = self.regex_engine;
+            compiler.regex_size_limit = self.regex_size_limit;
+        }
+        compiler.max_depth = self
+            .max_depth
+            .map_or(DEPTH_LIMIT, |limit| limit.min(DEPTH_LIMIT));
         let standard: Vec<CompileError> = self
             .keywords
             .iter()
@@ -1556,6 +1655,14 @@ struct Compiler<'r, 'a> {
     /// The content encodings and media types the user registered or removed (see
     /// [`CompiledSchemaBuilder::content_encoding`]).
     content_codecs: ContentCodecs,
+    /// See [`CompiledSchemaBuilder::regex_engine`].
+    #[cfg(feature = "linear-regex")]
+    regex_engine: RegexEngine,
+    /// See [`CompiledSchemaBuilder::regex_size_limit`].
+    #[cfg(feature = "linear-regex")]
+    regex_size_limit: Option<usize>,
+    /// See [`CompiledSchemaBuilder::max_depth`].
+    max_depth: usize,
     /// The custom keywords (see [`CompiledSchemaBuilder::keyword`]).
     custom_definitions: Vec<CustomKeywordDefinition>,
     /// The custom keywords compiled so far, by [`CustomKeywordId`].
@@ -1674,6 +1781,11 @@ impl<'r, 'a> Compiler<'r, 'a> {
             target_uris: IntMap::default(),
             user_formats: Vec::new(),
             content_codecs: ContentCodecs::default(),
+            #[cfg(feature = "linear-regex")]
+            regex_engine: RegexEngine::Ecma,
+            #[cfg(feature = "linear-regex")]
+            regex_size_limit: None,
+            max_depth: DEPTH_LIMIT,
             custom_definitions: Vec::new(),
             custom_keywords: Vec::new(),
             errors: Vec::new(),
@@ -1806,6 +1918,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             user_formats: self.user_formats.into_boxed_slice(),
             custom_keywords: self.custom_keywords.into_boxed_slice(),
             has_unions: !unions.is_empty(),
+            max_depth: self.max_depth,
         };
         compiled.add_discriminators(&unions);
         Ok(compiled)
@@ -2278,7 +2391,15 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if let Some(id) = self.pattern_ids.get(pattern) {
             return Some(*id);
         }
-        match ecma_regex::compile(pattern) {
+        let compiled: Result<Matcher, String> = match ecma_regex::compile(pattern) {
+            #[cfg(feature = "linear-regex")]
+            Ok(_) if self.regex_engine == RegexEngine::Linear => {
+                linear_regex::compile(pattern, self.regex_size_limit).map(Matcher::Linear)
+            }
+            Ok(regex) => Ok(Matcher::Ecma(regex)),
+            Err(error) => Err(error.to_string()),
+        };
+        match compiled {
             Ok(regex) => {
                 #[expect(
                     clippy::cast_possible_truncation,
@@ -2302,7 +2423,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
                 self.errors.push(CompileError::InvalidPattern {
                     location,
                     pattern: pattern.to_string(),
-                    reason: error.to_string(),
+                    reason: error,
                 });
                 None
             }

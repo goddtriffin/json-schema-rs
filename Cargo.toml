@@ -58,6 +58,8 @@ peak_alloc = "0.3.0"
 prettyplease = "0.3.0"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
+# Without its default features: the members enable only the Unicode tables and engines they use.
+regex = { version = "1.13.1", default-features = false }
 regress = "0.12.0"
 reqwest = "0.13.5"
 schemafy_lib = "0.6.0"

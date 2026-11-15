@@ -16,8 +16,12 @@ use super::utils::{
     display_schema_path, print_dialect_warnings, read_payload_from_path, read_payload_from_reader,
     read_schema_from_path,
 };
+use clap::ArgMatches;
+#[cfg(feature = "linear-regex")]
+use json_schema_rs::RegexEngine;
 use json_schema_rs::{
-    CompiledSchema, JsonSchemaSettings, Registry, RegistryBuilder, Schema, file_uri,
+    CompiledSchema, CompiledSchemaBuilder, JsonSchemaSettings, Registry, RegistryBuilder, Schema,
+    file_uri,
 };
 use std::fmt;
 use std::io;
@@ -112,12 +116,49 @@ fn read_documents(
     }
 }
 
+/// The compile options from `--regex-engine`, `--regex-size-limit` and `--max-depth`. The
+/// first two need the `linear-regex` feature; without it, using them is a no-verdict failure.
+#[cfg_attr(
+    feature = "linear-regex",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fails only without the `linear-regex` feature"
+    )
+)]
+pub(crate) fn compile_options(matches: &ArgMatches) -> Result<CompiledSchemaBuilder, CliFailure> {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().max_depth(matches.get_one::<usize>("max-depth").copied());
+    let engine: Option<&str> = matches
+        .get_one::<String>("regex-engine")
+        .map(String::as_str);
+    let size_limit: Option<usize> = matches.get_one::<usize>("regex-size-limit").copied();
+    #[cfg(feature = "linear-regex")]
+    {
+        let engine: RegexEngine = match engine {
+            Some("linear") => RegexEngine::Linear,
+            _ => RegexEngine::Ecma,
+        };
+        Ok(builder.regex_engine(engine).regex_size_limit(size_limit))
+    }
+    #[cfg(not(feature = "linear-regex"))]
+    {
+        if engine == Some("linear") || size_limit.is_some() {
+            return Err(no_verdict(
+                "--regex-engine linear and --regex-size-limit need jsonschemars built with the `linear-regex` feature"
+                    .to_string(),
+            ));
+        }
+        Ok(builder)
+    }
+}
+
 pub(crate) fn run_validate(
     schema_path: &PathBuf,
     payload_path: Option<PathBuf>,
     resource_paths: &[PathBuf],
     schema_settings: &JsonSchemaSettings,
     retrieval: &RefRetrieval,
+    compile: &CompiledSchemaBuilder,
 ) -> Result<(), CliFailure> {
     let (schema, resources): (Document, Vec<Document>) =
         read_documents(schema_path, resource_paths, schema_settings)?;
@@ -143,8 +184,9 @@ pub(crate) fn run_validate(
     let registry: Registry<'_> = builder
         .build(&schema.schema)
         .map_err(|errors| schema_problems(errors.iter()))?;
-    let compiled: CompiledSchema =
-        CompiledSchema::new(&registry).map_err(|errors| schema_problems(errors.iter()))?;
+    let compiled: CompiledSchema = compile
+        .build(&registry)
+        .map_err(|errors| schema_problems(errors.iter()))?;
     match compiled.validate(&instance) {
         Ok(()) => Ok(()),
         Err(errors) => {

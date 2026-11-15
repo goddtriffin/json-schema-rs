@@ -3409,6 +3409,99 @@ fn cli_validate_skips_the_metaschema_check_by_default() {
     assert_eq!(expected, actual);
 }
 
+// --- CLI: untrusted-schema limits (`--regex-engine`, `--regex-size-limit`, `--max-depth`) ---
+
+#[test]
+fn cli_validate_ecma_engine_runs_backreference_by_default() {
+    let (_path, actual): (String, (i32, String)) =
+        run_cli_validate(r#"{"pattern":"^(a)\\1$"}"#, r#""aa""#, &[]);
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "linear-regex")]
+#[test]
+fn cli_validate_linear_engine_refuses_backreference() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"pattern":"^(a)\\1$"}"#,
+        r#""aa""#,
+        &["--regex-engine", "linear"],
+    );
+    let expected: (i32, String) = (
+        2,
+        "schema error: /pattern: invalid regular expression \"^(a)\\1$\": backreferences are not supported by the linear engine\nerror: the schema cannot be used: 1 problem(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "linear-regex")]
+#[test]
+fn cli_validate_linear_engine_rejects_mismatch() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"pattern":"^(a+)+$"}"#,
+        r#""aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab""#,
+        &["--regex-engine", "linear"],
+    );
+    let expected: (i32, String) = (
+        1,
+        "root: string \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\" does not match pattern \"^(a+)+$\"\nerror: validation failed with 1 error(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "linear-regex")]
+#[test]
+fn cli_validate_regex_size_limit_refuses_large_pattern() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"pattern":"a{1000}"}"#,
+        r#""a""#,
+        &["--regex-engine", "linear", "--regex-size-limit", "100"],
+    );
+    let expected: (i32, String) = (
+        2,
+        "schema error: /pattern: invalid regular expression \"a{1000}\": the compiled pattern exceeds the size limit of 100 bytes\nerror: the schema cannot be used: 1 problem(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(not(feature = "linear-regex"))]
+#[test]
+fn cli_validate_linear_engine_needs_linear_regex_feature() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"pattern":"^a$"}"#,
+        r#""a""#,
+        &["--regex-engine", "linear"],
+    );
+    let expected: (i32, String) = (
+        2,
+        "error: --regex-engine linear and --regex-size-limit need jsonschemars built with the `linear-regex` feature\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_max_depth_rejects_deep_instance() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r##"{"items":{"$ref":"#"}}"##,
+        "[[[]]]",
+        &["--max-depth", "4"],
+    );
+    let expected: (i32, String) = (
+        1,
+        "/0/0: evaluation nested deeper than 4 levels\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_max_depth_accepts_shallow_instance() {
+    let (_path, actual): (String, (i32, String)) =
+        run_cli_validate(r##"{"items":{"$ref":"#"}}"##, "[[]]", &["--max-depth", "4"]);
+    let expected: (i32, String) = (0, String::new());
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn cli_generate_metaschema_check_rejects_a_nonconforming_schema() {
     let temp_dir = tempfile::tempdir().expect("temp dir");

@@ -233,6 +233,8 @@ struct Context {
     /// Where union choices are recorded, when they are.
     choices: Option<UnionChoices>,
     errors: Vec<ValidationError>,
+    /// Starts at `DEPTH_LIMIT - max_depth`, so the guard compares with the constant whatever
+    /// the limit in force (see [`CompiledSchema::context`]).
     depth: usize,
     /// Schema resources entered, outermost first (only when a dynamic reference needs them).
     dynamic_scope: Vec<Scope>,
@@ -357,7 +359,7 @@ impl CompiledSchema {
     /// `self.validate(instance).is_ok()`.
     #[must_use]
     pub fn is_valid(&self, instance: &Value) -> bool {
-        let mut cx: Context = Context::default();
+        let mut cx: Context = self.context();
         self.eval::<false>(self.root, instance, &Location::ROOT, &mut cx, None)
             && cx.depth_exceeded.is_none()
     }
@@ -366,7 +368,7 @@ impl CompiledSchema {
     /// [`CompiledSchema::with_entries`]): [`CompiledSchema::is_valid`] at each, stopping at the
     /// first that fails.
     pub(crate) fn is_valid_at(&self, nodes: &[NodeId], instance: &Value) -> bool {
-        let mut cx: Context = Context::default();
+        let mut cx: Context = self.context();
         nodes.iter().all(|id| {
             self.eval::<false>(*id, instance, &Location::ROOT, &mut cx, None)
                 && cx.depth_exceeded.is_none()
@@ -394,7 +396,7 @@ impl CompiledSchema {
     ///
     /// Returns `Err(errors)` when the instance does not conform to the schema.
     pub fn validate(&self, instance: &Value) -> ValidationResult {
-        let mut cx: Context = Context::default();
+        let mut cx: Context = self.context();
         let valid: bool = self.eval::<true>(self.root, instance, &Location::ROOT, &mut cx, None);
         if let Some(error) = cx.depth_exceeded {
             return Err(vec![error]);
@@ -420,7 +422,7 @@ impl CompiledSchema {
     ) -> (ValidationResult, UnionChoices) {
         let mut cx: Context = Context {
             choices: (!self.uses_dynamic_scope).then(UnionChoices::default),
-            ..Context::default()
+            ..self.context()
         };
         let mut valid: bool = true;
         for id in nodes {
@@ -431,8 +433,17 @@ impl CompiledSchema {
         (Self::collected(valid, cx), choices)
     }
 
+    /// A fresh evaluation state. Its depth starts `max_depth` levels below the guard, so a lower
+    /// limit costs the hot path nothing: the check stays a compare with a constant.
+    fn context(&self) -> Context {
+        Context {
+            depth: DEPTH_LIMIT - self.max_depth,
+            ..Context::default()
+        }
+    }
+
     pub(crate) fn validate_at(&self, nodes: &[NodeId], instance: &Value) -> ValidationResult {
-        let mut cx: Context = Context::default();
+        let mut cx: Context = self.context();
         let mut valid: bool = true;
         for id in nodes {
             valid &= self.eval::<true>(*id, instance, &Location::ROOT, &mut cx, None);
@@ -720,7 +731,9 @@ impl CompiledSchema {
         cx.depth_exceeded = Some(self.error_at(
             location,
             None,
-            ValidationErrorKind::DepthLimitExceeded { limit: DEPTH_LIMIT },
+            ValidationErrorKind::DepthLimitExceeded {
+                limit: self.max_depth,
+            },
         ));
     }
 
