@@ -12,6 +12,8 @@ FAILURES=""
 
 # Git competitors: clone, or hard-reset an existing clone to the latest commit of the remote's
 # default branch (lang, dir, url). Clones are read-only research copies, so local state is discarded.
+# Clones are shallow (only the latest commit): the research reads the current source, and full
+# histories cost gigabytes (one competitor's alone is several).
 git_clone_or_pull() {
 	lang="$1"
 	dir="$2"
@@ -22,13 +24,13 @@ git_clone_or_pull() {
 	if [ -d "$LANG_REPOS/$dir/.git" ]; then
 		if ! (cd "$LANG_REPOS/$dir" &&
 			git remote set-url origin "$url" &&
-			git fetch --prune origin &&
 			git remote set-head origin --auto &&
+			git fetch --depth 1 --prune origin &&
 			git reset --hard origin/HEAD); then
 			FAILURES="$FAILURES $lang/$dir"
 		fi
 	else
-		if ! git clone "$url" "$LANG_REPOS/$dir"; then
+		if ! git clone --depth 1 "$url" "$LANG_REPOS/$dir"; then
 			FAILURES="$FAILURES $lang/$dir"
 		fi
 	fi
