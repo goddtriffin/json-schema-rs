@@ -5442,3 +5442,458 @@ fn cli_canonicalize_of_a_missing_reference_target_reports_it_with_no_output() {
     let expected: (i32, String) = (2, String::new());
     assert_eq!(expected, actual);
 }
+
+// --- CLI validate: several payloads, `$schema` in the payload, YAML, `--errors-only` ---
+
+/// Runs `jsonschemars validate <args>` from `cwd` with nothing on stdin: the exit code, stdout
+/// and stderr.
+fn cli_validate_args(cwd: &Path, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(jsonschemars_bin())
+        .current_dir(cwd)
+        .arg("validate")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run jsonschemars");
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8(output.stdout).expect("utf8 stdout"),
+        String::from_utf8(output.stderr).expect("utf8 stderr"),
+    )
+}
+
+/// A schema that requires `name` to be a string.
+const NAMED: &str =
+    r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#;
+
+#[test]
+fn cli_validate_several_payloads_prefix_each_error_with_the_payload() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"name":"a"}"#),
+        ("b.json", r#"{"name":1}"#),
+        ("c.json", "{}"),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s", "s.json", "-p", "a.json", "-p", "b.json", "-p", "c.json",
+        ],
+    );
+    let expected: (i32, String, String) = (
+        1,
+        String::new(),
+        "b.json: /name: expected string, got number\nc.json: root: missing required property \"name\"\nerror: 2 payload(s) failed validation with 2 error(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_several_conforming_payloads_exit_zero() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"name":"a"}"#),
+        ("b.json", r#"{"name":"b"}"#),
+    ]);
+    let actual: (i32, String, String) =
+        cli_validate_args(&path, &["-s", "s.json", "-p", "a.json", "-p", "b.json"]);
+    let expected: (i32, String, String) = (0, String::new(), String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_several_payloads_output_prints_an_array_of_records() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"name":"a"}"#),
+        ("b.json", r#"{"name":1}"#),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s", "s.json", "-p", "a.json", "-p", "b.json", "--output", "flag",
+        ],
+    );
+    let expected: (i32, String, String) = (
+        1,
+        r#"[
+  {
+    "instance": "a.json",
+    "output": {
+      "valid": true
+    }
+  },
+  {
+    "instance": "b.json",
+    "output": {
+      "valid": false
+    }
+  }
+]
+"#
+        .to_string(),
+        "error: 1 payload(s) failed validation\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_errors_only_leaves_out_conforming_payloads() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"name":"a"}"#),
+        ("b.json", r#"{"name":1}"#),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s",
+            "s.json",
+            "-p",
+            "a.json",
+            "-p",
+            "b.json",
+            "--output",
+            "flag",
+            "--errors-only",
+        ],
+    );
+    let expected: (i32, String, String) = (
+        1,
+        r#"[
+  {
+    "instance": "b.json",
+    "output": {
+      "valid": false
+    }
+  }
+]
+"#
+        .to_string(),
+        "error: 1 payload(s) failed validation\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_errors_only_prints_nothing_for_one_conforming_payload() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("s.json", NAMED), ("a.json", r#"{"name":"a"}"#)]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s",
+            "s.json",
+            "-p",
+            "a.json",
+            "--output",
+            "flag",
+            "--errors-only",
+        ],
+    );
+    let expected: (i32, String, String) = (0, String::new(), String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_errors_only_needs_output() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("s.json", NAMED), ("a.json", r#"{"name":"a"}"#)]);
+    let (code, _, stderr): (i32, String, String) =
+        cli_validate_args(&path, &["-s", "s.json", "-p", "a.json", "--errors-only"]);
+    let actual: (i32, Option<String>) = (code, stderr.lines().next().map(str::to_string));
+    let expected: (i32, Option<String>) = (
+        2,
+        Some("error: the following required arguments were not provided:".to_string()),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_several_payloads_report_the_unreadable_one_and_exit_two() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"name":1}"#),
+        ("b.json", "{"),
+    ]);
+    let actual: (i32, String, String) =
+        cli_validate_args(&path, &["-s", "s.json", "-p", "a.json", "-p", "b.json"]);
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "a.json: /name: expected string, got number\nerror: b.json: invalid JSON payload: EOF while parsing an object at line 1 column 1\nerror: 1 payload(s) could not be validated\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_apply_defaults_takes_one_payload() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"name":"a"}"#),
+        ("b.json", r#"{"name":"b"}"#),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s",
+            "s.json",
+            "-p",
+            "a.json",
+            "-p",
+            "b.json",
+            "--apply-defaults",
+        ],
+    );
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "error: --apply-defaults validates one payload, and prints it with its defaults\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_without_schema_reads_the_schema_the_payload_names() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"$schema":"s.json","name":"a"}"#),
+        ("b.json", r#"{"$schema":"./s.json","name":1}"#),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(&path, &["-p", "a.json", "-p", "b.json"]);
+    let expected: (i32, String, String) = (
+        1,
+        String::new(),
+        "b.json: /name: expected string, got number\nerror: 1 payload(s) failed validation with 1 error(s)\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_without_schema_resolves_the_payload_schema_against_the_payload_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(dir.path().join("data")).expect("create data dir");
+    fs::write(dir.path().join("s.json"), NAMED).expect("write schema");
+    fs::write(dir.path().join("data/a.json"), r#"{"$schema":"../s.json"}"#).expect("write payload");
+    let actual: (i32, String, String) = cli_validate_args(dir.path(), &["-p", "data/a.json"]);
+    let expected: (i32, String, String) = (
+        1,
+        String::new(),
+        "root: missing required property \"name\"\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_without_schema_checks_a_schema_against_its_metaschema() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[(
+        "a.json",
+        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","minLength":-1}"#,
+    )]);
+    let actual: (i32, String, String) = cli_validate_args(&path, &["-p", "a.json"]);
+    let expected: (i32, String, String) = (
+        1,
+        String::new(),
+        "/minLength: value -1 is below minimum 0\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_without_schema_reports_a_payload_that_names_none() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("a.json", r#"{"name":"a"}"#)]);
+    let actual: (i32, String, String) = cli_validate_args(&path, &["-p", "a.json"]);
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "error: the payload has no `$schema` property naming its schema; pass one with --schema\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_without_schema_reports_a_missing_schema_file() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("a.json", r#"{"$schema":"missing.json"}"#)]);
+    let (code, _, stderr): (i32, String, String) = cli_validate_args(&path, &["-p", "a.json"]);
+    let actual: (i32, Option<String>) = (code, stderr.lines().last().map(str::to_string));
+    let expected: (i32, Option<String>) = (
+        2,
+        Some("error: the schema cannot be used: 1 problem(s)".to_string()),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_reads_yaml_schema_and_payload() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        (
+            "s.yaml",
+            "type: object\nproperties:\n  name:\n    type: string\nrequired: [name]\n",
+        ),
+        ("a.yml", "name: 7\n"),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(&path, &["-s", "s.yaml", "-p", "a.yml"]);
+    let expected: (i32, String, String) = (
+        1,
+        String::new(),
+        "/name: expected string, got number\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_reports_invalid_yaml_payload() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("s.json", NAMED), ("a.yaml", "name: [unclosed\n")]);
+    let (code, _, stderr): (i32, String, String) =
+        cli_validate_args(&path, &["-s", "s.json", "-p", "a.yaml"]);
+    let actual: (i32, bool) = (code, stderr.starts_with("error: invalid YAML payload: "));
+    let expected: (i32, bool) = (2, true);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_json_extension_is_not_read_as_yaml() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("s.json", NAMED), ("a.json", "name: a\n")]);
+    let (code, _, stderr): (i32, String, String) =
+        cli_validate_args(&path, &["-s", "s.json", "-p", "a.json"]);
+    let actual: (i32, bool) = (code, stderr.starts_with("error: invalid JSON payload: "));
+    let expected: (i32, bool) = (2, true);
+    assert_eq!(expected, actual);
+}
+
+// --- CLI: HTTP client options ---
+
+#[test]
+fn cli_validate_timeout_needs_allow_remote_refs() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("s.json", NAMED), ("a.json", r#"{"name":"a"}"#)]);
+    let (code, _, stderr): (i32, String, String) =
+        cli_validate_args(&path, &["-s", "s.json", "-p", "a.json", "--timeout", "5"]);
+    let actual: (i32, Option<String>) = (code, stderr.lines().next().map(str::to_string));
+    let expected: (i32, Option<String>) = (
+        2,
+        Some("error: the following required arguments were not provided:".to_string()),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_timeout_rejects_a_negative_number() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("s.json", NAMED), ("a.json", r#"{"name":"a"}"#)]);
+    let (code, _, stderr): (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s",
+            "s.json",
+            "-p",
+            "a.json",
+            "--allow-remote-refs",
+            "--timeout=-1",
+        ],
+    );
+    let actual: (i32, Option<String>) = (code, stderr.lines().next().map(str::to_string));
+    let expected: (i32, Option<String>) = (
+        2,
+        Some("error: invalid value '-1' for '--timeout <SECONDS>': \"-1\" is not a non-negative, finite number of seconds".to_string()),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(not(feature = "http"))]
+#[test]
+fn cli_validate_http_options_without_http_feature_error() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("s.json", NAMED), ("a.json", r#"{"name":"a"}"#)]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s",
+            "s.json",
+            "-p",
+            "a.json",
+            "--allow-remote-refs",
+            "-k",
+            "--timeout",
+            "5",
+        ],
+    );
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "error: --allow-remote-refs needs jsonschemars built with the `http` feature\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn cli_validate_http_options_configure_the_retrieval() {
+    let base: String = serve_json_on_loopback(CUSTOMER);
+    let order: String = format!(
+        r#"{{"type":"object","properties":{{"customer":{{"$ref":"{base}/customer.json"}}}},"required":["customer"]}}"#
+    );
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", &order),
+        ("a.json", r#"{"customer":{"name":7}}"#),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s",
+            "order.json",
+            "-p",
+            "a.json",
+            "--allow-remote-refs",
+            "--insecure",
+            "--connect-timeout",
+            "5",
+            "--timeout",
+            "10.5",
+        ],
+    );
+    let expected: (i32, String, String) = (
+        1,
+        String::new(),
+        "/customer/name: expected string, got number\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn cli_validate_cacert_that_is_not_pem_errors() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("s.json", NAMED),
+        ("a.json", r#"{"name":"a"}"#),
+        ("ca.pem", "not a certificate"),
+    ]);
+    let actual: (i32, String, String) = cli_validate_args(
+        &path,
+        &[
+            "-s",
+            "s.json",
+            "-p",
+            "a.json",
+            "--allow-remote-refs",
+            "--cacert",
+            "ca.pem",
+        ],
+    );
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "error: --cacert ca.pem holds no certificate\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}

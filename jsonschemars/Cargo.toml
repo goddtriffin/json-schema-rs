@@ -25,7 +25,7 @@ uuid = ["json-schema-rs/uuid"]
 # `format: "date-time"` / `"date"` become `chrono` types.
 chrono = ["json-schema-rs/chrono"]
 # `--allow-remote-refs`: retrieve `http:` / `https:` documents a `$ref` names.
-http = ["json-schema-rs/http"]
+http = ["json-schema-rs/http", "dep:reqwest"]
 # `--cgs-unique-items index-set`.
 indexmap = ["json-schema-rs/indexmap"]
 # `--regex-engine linear` and `--regex-size-limit`.
@@ -35,6 +35,9 @@ arbitrary-precision = ["json-schema-rs/arbitrary-precision"]
 [dependencies]
 clap.workspace = true
 json-schema-rs.workspace = true
+reqwest = { workspace = true, optional = true, features = ["blocking"] }
+serde.workspace = true
+serde-saphyr.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

@@ -22,11 +22,17 @@ pub(crate) fn read_schema_from_reader<R: Read>(
 /// Reads and parses a schema document (`-` is stdin), which may be a boolean schema. Its dialect
 /// warnings are printed once every document is read ([`print_dialect_warnings`]).
 pub(crate) fn read_schema_from_path(
-    path: &PathBuf,
+    path: &Path,
     schema_settings: &JsonSchemaSettings,
 ) -> Result<Schema, String> {
     let schema: Schema = if path.as_os_str() == "-" {
         read_schema_from_reader(io::stdin(), schema_settings)?
+    } else if is_yaml(path) {
+        let bytes: Vec<u8> =
+            fs::read(path).map_err(|e| format!("failed to open schema file: {e}"))?;
+        let value: serde_json::Value =
+            serde_saphyr::from_slice(&bytes).map_err(|e| format!("invalid YAML schema: {e}"))?;
+        Schema::new_from_serde_value(&value, schema_settings).map_err(|e| e.to_string())?
     } else {
         let f = File::open(path).map_err(|e| format!("failed to open schema file: {e}"))?;
         read_schema_from_reader(f, schema_settings)?
@@ -87,9 +93,22 @@ pub(crate) fn read_payload_from_reader<R: Read>(mut r: R) -> Result<serde_json::
     serde_json::from_slice(&buf).map_err(|e| format!("invalid JSON payload: {e}"))
 }
 
-pub(crate) fn read_payload_from_path(path: &PathBuf) -> Result<serde_json::Value, String> {
-    let f = File::open(path).map_err(|e| format!("failed to open payload file: {e}"))?;
-    read_payload_from_reader(f)
+/// Reads a payload file: YAML when its extension is `.yaml` or `.yml` ([`is_yaml`]), else JSON.
+pub(crate) fn read_payload_from_path(path: &Path) -> Result<serde_json::Value, String> {
+    let bytes: Vec<u8> = fs::read(path).map_err(|e| format!("failed to open payload file: {e}"))?;
+    if is_yaml(path) {
+        serde_saphyr::from_slice(&bytes).map_err(|e| format!("invalid YAML payload: {e}"))
+    } else {
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid JSON payload: {e}"))
+    }
+}
+
+/// Whether a document file is read as YAML: its extension is `.yaml` or `.yml`, in any case.
+/// Every other file, and stdin, is JSON.
+pub(crate) fn is_yaml(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"))
 }
 
 /// Recursively find all `.json` files under `dir`. Returns (`input_path`, `output_relative`) for each,

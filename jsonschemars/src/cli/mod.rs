@@ -314,15 +314,15 @@ pub fn run() {
                         .short('s')
                         .long("schema")
                         .value_name("FILE")
-                        .required(true)
-                        .help("Path to the JSON Schema file. Use \"-\" for stdin."),
+                        .help("Path to the JSON Schema file (YAML when it ends in .yaml or .yml). Use \"-\" for stdin. If omitted, each payload's `$schema` property names its schema, resolved against the payload's file"),
                 )
                 .arg(
                     Arg::new("payload")
                         .short('p')
                         .long("payload")
                         .value_name("FILE")
-                        .help("Path to the JSON payload to validate. If omitted, read from stdin."),
+                        .action(clap::ArgAction::Append)
+                        .help("Path to a JSON payload to validate (YAML when it ends in .yaml or .yml). Repeatable; each payload gets its own verdict. If omitted, one payload is read from stdin."),
                 )
                 .arg(
                     Arg::new("resource")
@@ -380,7 +380,14 @@ pub fn run() {
                         .long("output")
                         .value_name("FORMAT")
                         .value_parser(["flag", "basic", "detailed", "verbose"])
-                        .help("Print the result to stdout as JSON in a standard output format (2020-12 core §12): flag = the verdict; basic = a flat list of errors, or of the annotations of a valid payload; detailed = the same nested by schema structure; verbose = every subschema evaluated (default: one line per error on stderr)"),
+                        .help("Print the result to stdout as JSON in a standard output format (2020-12 core §12): flag = the verdict; basic = a flat list of errors, or of the annotations of a valid payload; detailed = the same nested by schema structure; verbose = every subschema evaluated. With several payloads, a JSON array of {\"instance\": FILE, \"output\": ...} (default: one line per error on stderr)"),
+                )
+                .arg(
+                    Arg::new("errors-only")
+                        .long("errors-only")
+                        .action(clap::ArgAction::SetTrue)
+                        .requires("output")
+                        .help("With --output, leave out the output of every payload that conforms"),
                 )
                 .args(jss_args())
                 .args(retrieval::retrieval_args()),
@@ -431,13 +438,12 @@ pub fn run() {
                 .map_err(CliFailure::from)
         }
         Some(("validate", val_m)) => {
-            let schema: PathBuf = val_m
+            let schema: Option<PathBuf> = val_m
                 .get_one::<String>("schema")
-                .map(|s| PathBuf::from(s.as_str()))
-                .expect("required --schema");
-            let payload: Option<PathBuf> = val_m
-                .get_one::<String>("payload")
                 .map(|s| PathBuf::from(s.as_str()));
+            let payloads: Vec<PathBuf> = val_m
+                .get_many::<String>("payload")
+                .map_or_default(|it| it.map(PathBuf::from).collect());
             let resources: Vec<PathBuf> = val_m
                 .get_many::<String>("resource")
                 .map_or_default(|it| it.map(PathBuf::from).collect());
@@ -445,9 +451,11 @@ pub fn run() {
             let retrieval: RefRetrieval = RefRetrieval::from_matches(val_m);
             validate::compile_options(val_m).and_then(|compile: CompiledSchemaBuilder| {
                 validate::run_validate(
-                    &schema,
-                    payload,
-                    &resources,
+                    &validate::Inputs {
+                        schema: schema.as_deref(),
+                        payloads: &payloads,
+                        resources: &resources,
+                    },
                     &schema_settings,
                     &retrieval,
                     &compile,
