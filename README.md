@@ -167,7 +167,10 @@ for them is declared with `Registry::builder().vocabulary(uri)`. `contentEncodin
 `contentMediaType` (`application/json` and any `+json` type) are asserted by default in
 draft 7, which allows it, and annotation-only in 2019-09/2020-12, which must not decode
 content by default (override with `--jss-content-mode`); other encodings and media types,
-and `contentSchema`, are annotations. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+and `contentSchema`, are annotations. Encodings and media types are added with
+`CompiledSchema::builder().content_encoding(name, |s: &str| ...)` (the decoded bytes, or
+`None`) and `.content_media_type(name, |content: &[u8]| ...)`, and built-in ones removed
+with `.without_content_encoding(name)` / `.without_content_media_type(name)`. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
 bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),

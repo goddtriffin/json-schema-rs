@@ -5,8 +5,8 @@
 use super::ValidationErrorKind;
 use super::eval::DEPTH_LIMIT;
 use super::{
-    CompileError, CompileErrors, CompiledSchema, CustomKeyword, SchemaError, ValidateError,
-    ValidationError, ValidationResult, validate, validate_usable,
+    CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, CustomKeyword, SchemaError,
+    ValidateError, ValidationError, ValidationResult, validate, validate_usable,
 };
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
@@ -4871,5 +4871,279 @@ fn custom_keyword_same_value_is_same_validation() {
         a.same_validation(&b, str::to_string),
         a.same_validation(&c, str::to_string),
     );
+    assert_eq!(expected, actual);
+}
+
+// --- Custom content encodings and media types ---
+
+/// Decodes hexadecimal (two digits per byte, either case), or `None` for a string that is not.
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// Whether `content` is UTF-8 text without a double quote (a toy CSV check).
+fn plain_csv(content: &[u8]) -> bool {
+    std::str::from_utf8(content).is_ok_and(|text| !text.contains('"'))
+}
+
+/// A draft 7 schema (content keywords asserted) compiled with `builder`.
+fn compile_content(json: &str, builder: &CompiledSchemaBuilder) -> CompiledSchema {
+    let schema: JsonSchema = schema_in(json, SpecVersion::Draft07);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    builder.build(&registry).expect("compile")
+}
+
+/// The builder with the `hex` encoding.
+fn with_hex() -> CompiledSchemaBuilder {
+    CompiledSchema::builder().content_encoding("hex", decode_hex)
+}
+
+/// `value` failing `contentEncoding: encoding` at the root.
+fn encoding_error(encoding: &str, value: &str) -> ValidationResult {
+    Err(vec![ValidationError::new(
+        ValidationErrorKind::InvalidContentEncoding {
+            encoding: encoding.to_string(),
+            value: value.to_string(),
+        },
+        root(),
+        kl("/contentEncoding"),
+    )])
+}
+
+/// `value` failing `contentMediaType: media_type` at the root.
+fn media_type_error(media_type: &str, value: &str) -> ValidationResult {
+    Err(vec![ValidationError::new(
+        ValidationErrorKind::InvalidContentMediaType {
+            media_type: media_type.to_string(),
+            value: value.to_string(),
+        },
+        root(),
+        kl("/contentMediaType"),
+    )])
+}
+
+#[test]
+fn custom_content_encoding_accepts_decodable_string() {
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &with_hex());
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("7b7D"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_encoding_rejects_undecodable_string() {
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &with_hex());
+    let expected: ValidationResult = encoding_error("hex", "7g");
+    let actual: ValidationResult = compiled.validate(&json!("7g"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_encoding_name_is_case_insensitive() {
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"HEX"}"#, &with_hex());
+    let expected: ValidationResult = encoding_error("HEX", "7g");
+    let actual: ValidationResult = compiled.validate(&json!("7g"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_encoding_is_decoded_for_the_media_type() {
+    let compiled: CompiledSchema = compile_content(
+        r#"{"contentEncoding":"hex","contentMediaType":"application/json"}"#,
+        &with_hex(),
+    );
+    let expected: (bool, ValidationResult) = (true, media_type_error("application/json", "7b"));
+    let actual: (bool, ValidationResult) = (
+        compiled.is_valid(&json!("7b7d")),
+        compiled.validate(&json!("7b")),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_encoding_ignores_non_strings() {
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &with_hex());
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(17));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_encoding_is_an_annotation_where_content_is_not_asserted() {
+    let schema: JsonSchema = schema_in(r#"{"contentEncoding":"hex"}"#, SpecVersion::Draft202012);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let compiled: CompiledSchema = with_hex().build(&registry).expect("compile");
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("zz"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_encoding_replaces_built_in_encoding() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().content_encoding("base64", |s: &str| Some(s.as_bytes().to_vec()));
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"base64"}"#, &builder);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("not base64!"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_encoding_registered_twice_keeps_the_last() {
+    let builder: CompiledSchemaBuilder = CompiledSchema::builder()
+        .content_encoding("hex", |_: &str| None)
+        .content_encoding("HEX", decode_hex);
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &builder);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("00"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn without_content_encoding_makes_built_in_encoding_an_annotation() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().without_content_encoding("Base64");
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"base64"}"#, &builder);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("not base64!"));
+    assert_eq!(expected, actual);
+}
+
+/// A media type under an encoding that is no longer decoded cannot be read, so it is not
+/// checked either.
+#[test]
+fn without_content_encoding_leaves_media_type_beside_it_unchecked() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().without_content_encoding("base64");
+    let compiled: CompiledSchema = compile_content(
+        r#"{"contentEncoding":"base64","contentMediaType":"application/json"}"#,
+        &builder,
+    );
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("ezp9Cg=="));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn without_content_encoding_removes_a_registered_encoding() {
+    let builder: CompiledSchemaBuilder = with_hex().without_content_encoding("hex");
+    let compiled: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &builder);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("zz"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_media_type_accepts_matching_content() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().content_media_type("text/csv", plain_csv);
+    let compiled: CompiledSchema = compile_content(r#"{"contentMediaType":"text/csv"}"#, &builder);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("a,b\n1,2"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_media_type_rejects_other_content() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().content_media_type("text/csv", plain_csv);
+    let compiled: CompiledSchema = compile_content(r#"{"contentMediaType":"text/csv"}"#, &builder);
+    let expected: ValidationResult = media_type_error("text/csv", "a,\"b");
+    let actual: ValidationResult = compiled.validate(&json!("a,\"b"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_media_type_matches_without_parameters_and_case() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().content_media_type("text/csv; header=present", plain_csv);
+    let compiled: CompiledSchema = compile_content(
+        r#"{"contentMediaType":"Text/CSV; charset=utf-8"}"#,
+        &builder,
+    );
+    let expected: ValidationResult = media_type_error("Text/CSV; charset=utf-8", "\"");
+    let actual: ValidationResult = compiled.validate(&json!("\""));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_media_type_checks_decoded_content() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().content_media_type("text/csv", plain_csv);
+    let compiled: CompiledSchema = compile_content(
+        r#"{"contentEncoding":"base64","contentMediaType":"text/csv"}"#,
+        &builder,
+    );
+    // `ImEi` is base64 for `"a"`.
+    let expected: ValidationResult = media_type_error("text/csv", "ImEi");
+    let actual: ValidationResult = compiled.validate(&json!("ImEi"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_content_media_type_replaces_built_in_json_check() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().content_media_type("application/json", |c: &[u8]| c == b"{:}");
+    let compiled: CompiledSchema =
+        compile_content(r#"{"contentMediaType":"application/json"}"#, &builder);
+    let expected: (bool, ValidationResult) = (true, media_type_error("application/json", "{}"));
+    let actual: (bool, ValidationResult) = (
+        compiled.is_valid(&json!("{:}")),
+        compiled.validate(&json!("{}")),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn without_content_media_type_makes_built_in_json_an_annotation() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().without_content_media_type("application/json");
+    let compiled: CompiledSchema =
+        compile_content(r#"{"contentMediaType":"application/json"}"#, &builder);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!("{:}"));
+    assert_eq!(expected, actual);
+}
+
+/// Removing `application/json` removes that one media type: other `+json` types keep the
+/// built-in check.
+#[test]
+fn without_content_media_type_keeps_json_suffix_types_checked() {
+    let builder: CompiledSchemaBuilder =
+        CompiledSchema::builder().without_content_media_type("application/json");
+    let compiled: CompiledSchema =
+        compile_content(r#"{"contentMediaType":"application/geo+json"}"#, &builder);
+    let expected: ValidationResult = media_type_error("application/geo+json", "{:}");
+    let actual: ValidationResult = compiled.validate(&json!("{:}"));
+    assert_eq!(expected, actual);
+}
+
+/// Compilations from one builder share its codecs and compare equal; a different builder's
+/// codec is a different check.
+#[test]
+fn custom_content_codecs_compare_by_registration() {
+    let builder: CompiledSchemaBuilder = with_hex();
+    let a: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &builder);
+    let b: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &builder);
+    let c: CompiledSchema = compile_content(r#"{"contentEncoding":"hex"}"#, &with_hex());
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        a.same_validation(&b, str::to_string),
+        a.same_validation(&c, str::to_string),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn compiled_schema_builder_debug_lists_content_codecs() {
+    let builder: CompiledSchemaBuilder = with_hex().without_content_media_type("Application/JSON");
+    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] } }"#;
+    let actual: String = format!("{builder:?}");
     assert_eq!(expected, actual);
 }

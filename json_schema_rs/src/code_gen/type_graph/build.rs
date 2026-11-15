@@ -26,7 +26,7 @@ use crate::json_schema::{
     RefSiblings, Registry, Schema, SchemaRef, Scope, TypeSet,
 };
 use crate::number;
-use crate::validator::content::Content;
+use crate::validator::content::{Content, ContentCodecs};
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1696,7 +1696,12 @@ fn asserts_content(s: &JsonSchema, dialect: Dialect) -> bool {
             .and_then(|_| s.extensions.get(name))
             .and_then(Value::as_str)
     };
-    Content::lower(read("contentEncoding"), read("contentMediaType")).is_some()
+    Content::lower(
+        read("contentEncoding"),
+        read("contentMediaType"),
+        &ContentCodecs::default(),
+    )
+    .is_some()
 }
 
 /// Whether `s` has `keyword` (one the model keeps raw, such as `patternProperties` or

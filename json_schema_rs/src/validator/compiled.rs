@@ -7,7 +7,7 @@
 //! definition, a recursive schema) is compiled once. Regular expressions are compiled once per
 //! distinct pattern.
 
-use super::content::Content;
+use super::content::{Content, ContentCodecs, Decoder, MediaTypeCheck};
 use super::ecma_regex;
 use super::format::Format;
 use super::name_index::{NameIndex, PropertyTable};
@@ -772,6 +772,7 @@ pub(crate) fn maps_are_sorted() -> bool {
 pub struct CompiledSchemaBuilder {
     formats: Vec<UserFormat>,
     keywords: Vec<CustomKeywordDefinition>,
+    content: ContentCodecs,
 }
 
 impl CompiledSchemaBuilder {
@@ -886,6 +887,112 @@ impl CompiledSchemaBuilder {
         self
     }
 
+    /// Registers the content encoding `name` (case-insensitive), decoded by `decode`, which
+    /// returns the bytes a string encodes, or `None` when the string is not in the encoding.
+    /// Like `base64` it is checked only where the content keywords are asserted
+    /// (`ContentMode::Assertion`, the default in draft 7), on strings: a string `decode`
+    /// refuses fails `contentEncoding`, and what it returns is what `contentMediaType` checks.
+    /// It replaces the built-in encoding of the same name, and registering a name twice keeps
+    /// the last decoder.
+    ///
+    /// ```
+    /// use json_schema_rs::{CompiledSchema, ContentMode, JsonSchemaSettings, Registry, Schema};
+    /// use serde_json::json;
+    ///
+    /// let settings = JsonSchemaSettings::builder().content_mode(ContentMode::Assertion).build();
+    /// let schema = Schema::new_from_serde_value(
+    ///     &json!({"contentEncoding": "hex", "contentMediaType": "application/json"}),
+    ///     &settings,
+    /// )
+    /// .unwrap();
+    /// let registry = Registry::new(&schema).unwrap();
+    ///
+    /// /// Two hexadecimal digits per byte, or `None`.
+    /// fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    ///     if s.len() % 2 != 0 {
+    ///         return None;
+    ///     }
+    ///     (0..s.len())
+    ///         .step_by(2)
+    ///         .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+    ///         .collect()
+    /// }
+    ///
+    /// let compiled = CompiledSchema::builder()
+    ///     .content_encoding("hex", decode_hex)
+    ///     .build(&registry)
+    ///     .unwrap();
+    /// assert!(compiled.is_valid(&json!("7b7d"))); // `{}`
+    /// assert!(!compiled.is_valid(&json!("7b"))); // `{`: not JSON
+    /// assert!(!compiled.is_valid(&json!("zz"))); // not hex
+    /// ```
+    #[must_use]
+    pub fn content_encoding(
+        mut self,
+        name: impl AsRef<str>,
+        decode: impl Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static,
+    ) -> Self {
+        let decode: Decoder = Arc::new(decode);
+        self.content.set_encoding(name.as_ref(), Some(decode));
+        self
+    }
+
+    /// Stops checking the content encoding `name` (case-insensitive): `contentEncoding` naming
+    /// it is an annotation, and so is a `contentMediaType` beside it (the content cannot be
+    /// read). Removes a built-in encoding (`base64`) or one registered earlier.
+    #[must_use]
+    pub fn without_content_encoding(mut self, name: impl AsRef<str>) -> Self {
+        self.content.set_encoding(name.as_ref(), None);
+        self
+    }
+
+    /// Registers the content media type `name`, checked by `check`, which answers whether the
+    /// content (the string's bytes, decoded first when `contentEncoding` names an encoding) is
+    /// a document of the media type. Matched by type and subtype, case-insensitive and without
+    /// parameters (`application/xml; charset=utf-8` is `application/xml`). Checked only where
+    /// the content keywords are asserted (`ContentMode::Assertion`), on strings. It replaces
+    /// the built-in check for that one media type (`application/json`, or a `+json` type
+    /// named exactly), and registering a media type twice keeps the last check.
+    ///
+    /// ```
+    /// use json_schema_rs::{CompiledSchema, ContentMode, JsonSchemaSettings, Registry, Schema};
+    /// use serde_json::json;
+    ///
+    /// let settings = JsonSchemaSettings::builder().content_mode(ContentMode::Assertion).build();
+    /// let schema =
+    ///     Schema::new_from_serde_value(&json!({"contentMediaType": "text/csv"}), &settings)
+    ///         .unwrap();
+    /// let registry = Registry::new(&schema).unwrap();
+    /// let compiled = CompiledSchema::builder()
+    ///     .content_media_type("text/csv", |content: &[u8]| {
+    ///         std::str::from_utf8(content).is_ok_and(|text| !text.contains('"'))
+    ///     })
+    ///     .build(&registry)
+    ///     .unwrap();
+    /// assert!(compiled.is_valid(&json!("a,b\n1,2")));
+    /// assert!(!compiled.is_valid(&json!("a,\"b")));
+    /// ```
+    #[must_use]
+    pub fn content_media_type(
+        mut self,
+        name: impl AsRef<str>,
+        check: impl Fn(&[u8]) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        let check: MediaTypeCheck = Arc::new(check);
+        self.content.set_media_type(name.as_ref(), Some(check));
+        self
+    }
+
+    /// Stops checking the content media type `name` (matched as in
+    /// [`content_media_type`](Self::content_media_type)): `contentMediaType` naming it is an
+    /// annotation. Removes the built-in check of that one media type (`application/json`, or
+    /// a `+json` type named exactly) or one registered earlier.
+    #[must_use]
+    pub fn without_content_media_type(mut self, name: impl AsRef<str>) -> Self {
+        self.content.set_media_type(name.as_ref(), None);
+        self
+    }
+
     fn register(mut self, name: String, check: FormatCheck) -> Self {
         let name: Box<str> = name.into_boxed_str();
         self.formats.retain(|format| format.name != name);
@@ -902,6 +1009,7 @@ impl CompiledSchemaBuilder {
     pub fn build(&self, registry: &Registry<'_>) -> Result<CompiledSchema, CompileErrors> {
         let mut compiler: Compiler<'_, '_> = Compiler::new(registry);
         compiler.user_formats.clone_from(&self.formats);
+        compiler.content_codecs.clone_from(&self.content);
         let standard: Vec<CompileError> = self
             .keywords
             .iter()
@@ -1445,6 +1553,9 @@ struct Compiler<'r, 'a> {
     target_uris: IntMap<NodeId, Box<str>>,
     /// The user-defined formats (see [`CompiledSchemaBuilder::format`]).
     user_formats: Vec<UserFormat>,
+    /// The content encodings and media types the user registered or removed (see
+    /// [`CompiledSchemaBuilder::content_encoding`]).
+    content_codecs: ContentCodecs,
     /// The custom keywords (see [`CompiledSchemaBuilder::keyword`]).
     custom_definitions: Vec<CustomKeywordDefinition>,
     /// The custom keywords compiled so far, by [`CustomKeywordId`].
@@ -1562,6 +1673,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             uses_dynamic_scope: false,
             target_uris: IntMap::default(),
             user_formats: Vec::new(),
+            content_codecs: ContentCodecs::default(),
             custom_definitions: Vec::new(),
             custom_keywords: Vec::new(),
             errors: Vec::new(),
@@ -2332,7 +2444,11 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if let Some(name) = parts.format {
             self.lower_format(name, dialect, location, &mut out);
         }
-        if let Some(content) = Content::lower(parts.content_encoding, parts.content_media_type) {
+        if let Some(content) = Content::lower(
+            parts.content_encoding,
+            parts.content_media_type,
+            &self.content_codecs,
+        ) {
             out.push(Keyword::Content(Box::new(content)));
         }
         out.extend(parts.min_items.map(Keyword::MinItems));
