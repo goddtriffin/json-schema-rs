@@ -26,11 +26,12 @@ use super::compiled::{
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
+use super::instance::{Instance, InstanceObject, InstanceRef, type_name};
 use super::name_index::PropertyTable;
 use crate::json_pointer::{self, JsonPointer};
 use crate::json_schema::{JsonType, Scope, TypeSet};
 use crate::number::{self, JsonEqKey};
-use serde_json::{Map, Number, Value};
+use serde_json::{Number, Value};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -220,8 +221,8 @@ impl UnionChoices {
 }
 
 /// The key of `union`'s choice for `instance` in [`UnionChoices`]: their addresses.
-pub(crate) fn choice_key(instance: &Value, union: &Union) -> (usize, usize) {
-    (std::ptr::from_ref(instance) as usize, union_address(union))
+pub(crate) fn choice_key<I: Instance>(instance: &I, union: &Union) -> (usize, usize) {
+    (std::ptr::from_ref(instance).addr(), union_address(union))
 }
 
 /// `union`'s half of a [`UnionChoices`] key.
@@ -353,9 +354,9 @@ pub(crate) struct TraceRecord {
 
 /// The errors of an instance, found as they are taken (see [`CompiledSchema::iter_errors`]).
 #[derive(Debug)]
-pub struct ErrorIter<'a> {
+pub struct ErrorIter<'a, I> {
     schema: &'a CompiledSchema,
-    instance: &'a Value,
+    instance: &'a I,
     state: ErrorIterState,
 }
 
@@ -370,7 +371,7 @@ enum ErrorIterState {
     Rest(std::vec::IntoIter<ValidationError>),
 }
 
-impl Iterator for ErrorIter<'_> {
+impl<I: Instance> Iterator for ErrorIter<'_, I> {
     type Item = ValidationError;
 
     fn next(&mut self) -> Option<ValidationError> {
@@ -457,27 +458,15 @@ pub(crate) struct UnitLocations {
 }
 
 /// The names of the members of `object` whose positions `at` accepts, in member order.
-fn names_at(object: &Map<String, Value>, at: impl Fn(usize) -> bool) -> Value {
+fn names_at<I: Instance>(object: &I::Object, at: impl Fn(usize) -> bool) -> Value {
     Value::Array(
         object
-            .keys()
+            .iter()
             .enumerate()
             .filter(|(i, _)| at(*i))
-            .map(|(_, key)| Value::String(key.clone()))
+            .map(|(_, (key, _))| Value::String(key.to_string()))
             .collect(),
     )
-}
-
-/// Returns the JSON type name of the value for use in "got" error messages.
-fn json_type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
 }
 
 /// Serializes a JSON value to a string for error display. Never truncates.
@@ -487,8 +476,8 @@ fn value_to_display_string(v: &Value) -> String {
 
 /// The error for an instance that `type` rejects: the single-type variant for a set of one,
 /// [`ValidationErrorKind::ExpectedType`] otherwise.
-fn type_mismatch(expected: TypeSet, instance: &Value) -> ValidationErrorKind {
-    let got: String = json_type_name(instance).to_string();
+fn type_mismatch<I: Instance>(expected: TypeSet, instance: &I) -> ValidationErrorKind {
+    let got: String = type_name(instance).to_string();
     match expected.single() {
         Some(JsonType::Object) => ValidationErrorKind::ExpectedObject { got },
         Some(JsonType::String) => ValidationErrorKind::ExpectedString { got },
@@ -507,7 +496,7 @@ fn type_mismatch(expected: TypeSet, instance: &Value) -> ValidationErrorKind {
 const UNIQUE_ITEMS_PAIRWISE_MAX: usize = 15;
 
 /// The first element of `items` equal (by [`number::json_equal`]) to an earlier one.
-fn first_duplicate(items: &[Value]) -> Option<&Value> {
+fn first_duplicate<I: Instance>(items: &[I]) -> Option<&I> {
     if items.len() <= UNIQUE_ITEMS_PAIRWISE_MAX {
         return items.iter().enumerate().find_map(|(j, later)| {
             items[..j]
@@ -516,7 +505,7 @@ fn first_duplicate(items: &[Value]) -> Option<&Value> {
                 .then_some(later)
         });
     }
-    let mut seen: HashSet<JsonEqKey<'_>> = HashSet::with_capacity(items.len());
+    let mut seen: HashSet<JsonEqKey<'_, I>> = HashSet::with_capacity(items.len());
     items.iter().find(|item| !seen.insert(JsonEqKey(item)))
 }
 
@@ -527,11 +516,11 @@ const MERGE_RATIO: usize = 4;
 
 /// Whether the object (its keys in sorted order) has every one of the sorted, distinct `names`:
 /// one walk over both.
-fn contains_all_names(object: &Map<String, Value>, names: &[Box<str>]) -> bool {
-    let mut keys: serde_json::map::Keys<'_> = object.keys();
+fn contains_all_names<I: Instance>(object: &I::Object, names: &[Box<str>]) -> bool {
+    let mut keys = object.iter().map(|(key, _)| key);
     'names: for name in names {
         for key in keys.by_ref() {
-            match key.as_str().cmp(name) {
+            match key.cmp(name) {
                 Ordering::Less => {}
                 Ordering::Equal => continue 'names,
                 Ordering::Greater => return false,
@@ -571,30 +560,37 @@ macro_rules! each {
 }
 
 /// The shared inputs of a keyword check.
-#[derive(Clone, Copy)]
-struct At<'i, 'l> {
-    instance: &'i Value,
+struct At<'i, 'l, I> {
+    instance: &'i I,
     location: &'l Location<'l>,
 }
+
+impl<I> Clone for At<'_, '_, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<I> Copy for At<'_, '_, I> {}
 
 impl CompiledSchema {
     /// Whether `instance` is valid against the schema. Stops at the first failing keyword and
     /// allocates nothing for errors, so it is the fastest check; equal to
     /// `self.validate(instance).is_ok()`.
     #[must_use]
-    pub fn is_valid(&self, instance: &Value) -> bool {
+    pub fn is_valid<I: Instance>(&self, instance: &I) -> bool {
         let mut cx: Context = self.context();
-        self.eval::<Verdict>(self.root, instance, &Location::ROOT, &mut cx, None)
+        self.eval::<Verdict, _>(self.root, instance, &Location::ROOT, &mut cx, None)
             && cx.depth_exceeded.is_none()
     }
 
     /// Whether `instance` is valid against every node of `nodes` (entry points from
     /// [`CompiledSchema::with_entries`]): [`CompiledSchema::is_valid`] at each, stopping at the
     /// first that fails.
-    pub(crate) fn is_valid_at(&self, nodes: &[NodeId], instance: &Value) -> bool {
+    pub(crate) fn is_valid_at<I: Instance>(&self, nodes: &[NodeId], instance: &I) -> bool {
         let mut cx: Context = self.context();
         nodes.iter().all(|id| {
-            self.eval::<Verdict>(*id, instance, &Location::ROOT, &mut cx, None)
+            self.eval::<Verdict, _>(*id, instance, &Location::ROOT, &mut cx, None)
                 && cx.depth_exceeded.is_none()
         })
     }
@@ -614,9 +610,13 @@ impl CompiledSchema {
 
     /// Evaluates `instance` in the trace mode: its verdict, the trace, and the depth guard's
     /// error when it fired.
-    pub(crate) fn trace(&self, instance: &Value) -> (bool, TraceRecord, Option<ValidationError>) {
+    pub(crate) fn trace<I: Instance>(
+        &self,
+        instance: &I,
+    ) -> (bool, TraceRecord, Option<ValidationError>) {
         let mut cx: Context = self.context();
-        let valid: bool = self.eval::<Trace>(self.root, instance, &Location::ROOT, &mut cx, None);
+        let valid: bool =
+            self.eval::<Trace, _>(self.root, instance, &Location::ROOT, &mut cx, None);
         let trace: TraceRecord = cx.trace.map_or_else(TraceRecord::default, |trace| *trace);
         (valid, trace, cx.depth_exceeded)
     }
@@ -635,12 +635,13 @@ impl CompiledSchema {
     /// # Errors
     ///
     /// Returns `Err(errors)` when the instance does not conform to the schema.
-    pub fn validate(&self, instance: &Value) -> ValidationResult {
+    pub fn validate<I: Instance>(&self, instance: &I) -> ValidationResult {
         if let Some(limit) = self.max_errors {
             return self.validate_limited(instance, limit.get());
         }
         let mut cx: Context = self.context();
-        let valid: bool = self.eval::<Collect>(self.root, instance, &Location::ROOT, &mut cx, None);
+        let valid: bool =
+            self.eval::<Collect, _>(self.root, instance, &Location::ROOT, &mut cx, None);
         if let Some(error) = cx.depth_exceeded {
             return Err(vec![error]);
         }
@@ -652,12 +653,13 @@ impl CompiledSchema {
     }
 
     /// [`CompiledSchema::validate`] ending at the `limit`-th error.
-    fn validate_limited(&self, instance: &Value, limit: usize) -> ValidationResult {
+    fn validate_limited<I: Instance>(&self, instance: &I, limit: usize) -> ValidationResult {
         let mut cx: Context = Context {
             limit,
             ..self.context()
         };
-        let valid: bool = self.eval::<Limited>(self.root, instance, &Location::ROOT, &mut cx, None);
+        let valid: bool =
+            self.eval::<Limited, _>(self.root, instance, &Location::ROOT, &mut cx, None);
         if let Some(error) = cx.depth_exceeded {
             cx.errors.push(error);
         }
@@ -694,7 +696,7 @@ impl CompiledSchema {
     /// assert_eq!(vec!["/0: expected string, got number", "/1: expected string, got number"], first);
     /// ```
     #[must_use]
-    pub fn iter_errors<'a>(&'a self, instance: &'a Value) -> ErrorIter<'a> {
+    pub fn iter_errors<'a, I: Instance>(&'a self, instance: &'a I) -> ErrorIter<'a, I> {
         ErrorIter {
             schema: self,
             instance,
@@ -709,10 +711,10 @@ impl CompiledSchema {
     /// [`CompiledSchema::validate_at`], also giving the branch each `anyOf` / `oneOf` chose for
     /// each value it was evaluated on. Nothing is recorded when a dynamic reference is in play:
     /// the same union at the same value can then decide differently in different scopes.
-    pub(crate) fn validate_recording_at(
+    pub(crate) fn validate_recording_at<I: Instance>(
         &self,
         nodes: &[NodeId],
-        instance: &Value,
+        instance: &I,
     ) -> (ValidationResult, UnionChoices) {
         let mut cx: Context = Context {
             choices: (!self.uses_dynamic_scope).then(UnionChoices::default),
@@ -720,7 +722,7 @@ impl CompiledSchema {
         };
         let mut valid: bool = true;
         for id in nodes {
-            valid &= self.eval::<Collect>(*id, instance, &Location::ROOT, &mut cx, None);
+            valid &= self.eval::<Collect, _>(*id, instance, &Location::ROOT, &mut cx, None);
         }
         let mut choices: UnionChoices = cx.choices.take().unwrap_or_default();
         choices.finish();
@@ -736,11 +738,15 @@ impl CompiledSchema {
         }
     }
 
-    pub(crate) fn validate_at(&self, nodes: &[NodeId], instance: &Value) -> ValidationResult {
+    pub(crate) fn validate_at<I: Instance>(
+        &self,
+        nodes: &[NodeId],
+        instance: &I,
+    ) -> ValidationResult {
         let mut cx: Context = self.context();
         let mut valid: bool = true;
         for id in nodes {
-            valid &= self.eval::<Collect>(*id, instance, &Location::ROOT, &mut cx, None);
+            valid &= self.eval::<Collect, _>(*id, instance, &Location::ROOT, &mut cx, None);
         }
         Self::collected(valid, cx)
     }
@@ -880,10 +886,10 @@ impl CompiledSchema {
     /// Evaluates node `id` against `instance` at `location`, adding the members / items it
     /// evaluates to `evaluated` when asked to.
     #[inline]
-    fn eval<M: Mode>(
+    fn eval<M: Mode, I: Instance>(
         &self,
         id: NodeId,
-        instance: &Value,
+        instance: &I,
         location: &Location<'_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
@@ -894,16 +900,16 @@ impl CompiledSchema {
         if M::LIMITED && cx.stopped {
             return false;
         }
-        self.eval_node::<M>(id, instance, location, cx, evaluated)
+        self.eval_node::<M, _>(id, instance, location, cx, evaluated)
     }
 
     /// [`CompiledSchema::eval`] in the trace mode: records the subschema's unit and its
     /// annotations, then evaluates it with every unit it makes under its own.
     #[inline(never)]
-    fn eval_traced(
+    fn eval_traced<I: Instance>(
         &self,
         id: NodeId,
-        instance: &Value,
+        instance: &I,
         location: &Location<'_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
@@ -928,7 +934,7 @@ impl CompiledSchema {
             for annotation in annotations
                 .keywords
                 .iter()
-                .filter(|a| !a.strings_only || instance.is_string())
+                .filter(|a| !a.strings_only || matches!(instance.view(), InstanceRef::String(_)))
             {
                 let locations: UnitLocations = self.locations(location, Some(&annotation.keyword));
                 cx.trace().units.push(TraceUnit {
@@ -942,7 +948,7 @@ impl CompiledSchema {
             }
         }
         cx.trace().applicators = node_annotations.is_some_and(|a| a.applicators);
-        let valid: bool = self.eval_node::<Trace>(id, instance, location, cx, evaluated);
+        let valid: bool = self.eval_node::<Trace, _>(id, instance, location, cx, evaluated);
         let trace: &mut TraceRecord = cx.trace();
         trace.current = outer;
         if let TraceKind::Subschema { valid: passed, .. } = &mut trace.units[unit].kind {
@@ -952,10 +958,10 @@ impl CompiledSchema {
     }
 
     /// [`CompiledSchema::eval`] outside the trace's bookkeeping.
-    fn eval_node<M: Mode>(
+    fn eval_node<M: Mode, I: Instance>(
         &self,
         id: NodeId,
-        instance: &Value,
+        instance: &I,
         location: &Location<'_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
@@ -987,11 +993,11 @@ impl CompiledSchema {
         if entered {
             cx.dynamic_scope.push(node.scope);
         }
-        let at: At<'_, '_> = At { instance, location };
+        let at: At<'_, '_, I> = At { instance, location };
         let valid: bool = if node.has_unevaluated {
-            self.keywords_with_unevaluated::<M>(node, at, cx, evaluated)
+            self.keywords_with_unevaluated::<M, _>(node, at, cx, evaluated)
         } else {
-            self.keywords::<M>(node, at, cx, evaluated)
+            self.keywords::<M, _>(node, at, cx, evaluated)
         };
         if entered {
             cx.dynamic_scope.pop();
@@ -1006,7 +1012,12 @@ impl CompiledSchema {
     /// building the child's location; they still call `eval` for a node that is not a leaf, and
     /// in collect mode for a leaf that fails, to record its errors.
     #[inline]
-    fn leaf_verdict<M: Mode>(&self, id: NodeId, instance: &Value, cx: &Context) -> Option<bool> {
+    fn leaf_verdict<M: Mode, I: Instance>(
+        &self,
+        id: NodeId,
+        instance: &I,
+        cx: &Context,
+    ) -> Option<bool> {
         if M::TRACE {
             return None;
         }
@@ -1018,10 +1029,10 @@ impl CompiledSchema {
     /// [`CompiledSchema::leaf_verdict`] on each of `instances`: whether all of them pass, when
     /// node `id` is a leaf.
     #[inline]
-    fn leaf_verdict_all<M: Mode>(
+    fn leaf_verdict_all<M: Mode, I: Instance>(
         &self,
         id: NodeId,
-        instances: &[Value],
+        instances: &[I],
         cx: &Context,
     ) -> Option<bool> {
         if M::TRACE {
@@ -1035,7 +1046,7 @@ impl CompiledSchema {
     /// Whether `instance` passes every keyword of a leaf node (see [`Node::leaf`]): the same
     /// verdicts as [`CompiledSchema::keyword`], without its dispatch or error reporting.
     #[inline(never)]
-    fn leaf_valid(&self, keywords: &[Keyword], instance: &Value) -> bool {
+    fn leaf_valid<I: Instance>(&self, keywords: &[Keyword], instance: &I) -> bool {
         keywords
             .iter()
             .all(|keyword| self.leaf_keyword(keyword, std::iter::once(instance)))
@@ -1048,7 +1059,7 @@ impl CompiledSchema {
     ///
     /// [`leaf_valid`]: CompiledSchema::leaf_valid
     #[inline(never)]
-    fn leaf_valid_all(&self, keywords: &[Keyword], instances: &[Value]) -> bool {
+    fn leaf_valid_all<I: Instance>(&self, keywords: &[Keyword], instances: &[I]) -> bool {
         keywords
             .iter()
             .all(|keyword| self.leaf_keyword(keyword, instances.iter()))
@@ -1056,10 +1067,10 @@ impl CompiledSchema {
 
     /// Whether each of `instances` passes `keyword`, one of a leaf node's.
     #[inline]
-    fn leaf_keyword<'v>(
+    fn leaf_keyword<'v, I: Instance + 'v>(
         &self,
         keyword: &Keyword,
-        mut instances: impl Iterator<Item = &'v Value>,
+        mut instances: impl Iterator<Item = &'v I>,
     ) -> bool {
         match keyword {
             Keyword::False => instances.next().is_none(),
@@ -1068,54 +1079,54 @@ impl CompiledSchema {
                 integer_semantics,
             } => instances.all(|instance| types.matches(instance, *integer_semantics)),
             Keyword::Const(expected) => {
-                instances.all(|instance| number::json_equal(instance, expected))
+                instances.all(|instance| number::json_equal(instance, &**expected))
             }
             Keyword::Enum(id) => {
                 let list: &EnumList = self.enum_list(*id);
                 instances.all(|instance| list.contains(instance))
             }
-            Keyword::Minimum(minimum) => instances.all(|instance| match instance {
-                Value::Number(n) => number::cmp_num(n, minimum) != Ordering::Less,
+            Keyword::Minimum(minimum) => instances.all(|instance| match instance.view() {
+                InstanceRef::Number(n) => number::cmp_num(&n, minimum) != Ordering::Less,
                 _ => true,
             }),
-            Keyword::Maximum(maximum) => instances.all(|instance| match instance {
-                Value::Number(n) => number::cmp_num(n, maximum) != Ordering::Greater,
+            Keyword::Maximum(maximum) => instances.all(|instance| match instance.view() {
+                InstanceRef::Number(n) => number::cmp_num(&n, maximum) != Ordering::Greater,
                 _ => true,
             }),
-            Keyword::ExclusiveMinimum(minimum) => instances.all(|instance| match instance {
-                Value::Number(n) => number::cmp_num(n, minimum) == Ordering::Greater,
+            Keyword::ExclusiveMinimum(minimum) => instances.all(|instance| match instance.view() {
+                InstanceRef::Number(n) => number::cmp_num(&n, minimum) == Ordering::Greater,
                 _ => true,
             }),
-            Keyword::ExclusiveMaximum(maximum) => instances.all(|instance| match instance {
-                Value::Number(n) => number::cmp_num(n, maximum) == Ordering::Less,
+            Keyword::ExclusiveMaximum(maximum) => instances.all(|instance| match instance.view() {
+                InstanceRef::Number(n) => number::cmp_num(&n, maximum) == Ordering::Less,
                 _ => true,
             }),
-            Keyword::MultipleOf(multiple_of) => instances.all(|instance| match instance {
-                Value::Number(n) => number::is_multiple_of(n, multiple_of),
+            Keyword::MultipleOf(multiple_of) => instances.all(|instance| match instance.view() {
+                InstanceRef::Number(n) => number::is_multiple_of(&n, multiple_of),
                 _ => true,
             }),
             // Lengths count code points; a code point takes one to four bytes.
-            Keyword::MinLength(min_length) => instances.all(|instance| match instance {
-                Value::String(s) => {
+            Keyword::MinLength(min_length) => instances.all(|instance| match instance.view() {
+                InstanceRef::String(s) => {
                     s.len() as u64 / 4 >= *min_length || s.chars().count() as u64 >= *min_length
                 }
                 _ => true,
             }),
-            Keyword::MaxLength(max_length) => instances.all(|instance| match instance {
-                Value::String(s) => {
+            Keyword::MaxLength(max_length) => instances.all(|instance| match instance.view() {
+                InstanceRef::String(s) => {
                     s.len() as u64 <= *max_length || s.chars().count() as u64 <= *max_length
                 }
                 _ => true,
             }),
             Keyword::Pattern(id) => {
                 let pattern: &Pattern = self.pattern(*id);
-                instances.all(|instance| match instance {
-                    Value::String(s) => pattern.is_match(s),
+                instances.all(|instance| match instance.view() {
+                    InstanceRef::String(s) => pattern.is_match(s),
                     _ => true,
                 })
             }
-            Keyword::Format(format) => instances.all(|instance| match instance {
-                Value::String(s) => format.is_valid(s),
+            Keyword::Format(format) => instances.all(|instance| match instance.view() {
+                InstanceRef::String(s) => format.is_valid(s),
                 _ => true,
             }),
             Keyword::UserFormat(id) => {
@@ -1142,32 +1153,32 @@ impl CompiledSchema {
     /// The keywords of a node with `unevaluated*`, which reads every sibling's annotations, so
     /// they are collected here and passed on only when the node passes.
     #[inline(never)]
-    fn keywords_with_unevaluated<M: Mode>(
+    fn keywords_with_unevaluated<M: Mode, I: Instance>(
         &self,
         node: &Node,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let mut local: Evaluated = Evaluated::default();
-        let valid: bool = self.keywords::<M>(node, at, cx, Some(&mut local));
+        let valid: bool = self.keywords::<M, _>(node, at, cx, Some(&mut local));
         if valid && let Some(parent) = evaluated {
             parent.merge(&local);
         }
         valid
     }
 
-    fn keywords<M: Mode>(
+    fn keywords<M: Mode, I: Instance>(
         &self,
         node: &Node,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         if M::TRACE {
             return self.keywords_traced(node, at, cx, evaluated);
         }
-        each!(M, node.keywords.iter(), |keyword| self.keyword::<M>(
+        each!(M, node.keywords.iter(), |keyword| self.keyword::<M, _>(
             keyword,
             at,
             cx,
@@ -1180,10 +1191,10 @@ impl CompiledSchema {
     /// annotation (2020-12 core §10.2–§10.3, §11): the names or indexes it applied a subschema
     /// to, recorded after the subschemas' units.
     #[inline(never)]
-    fn keywords_traced(
+    fn keywords_traced<I: Instance>(
         &self,
         node: &Node,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -1193,7 +1204,7 @@ impl CompiledSchema {
             let passed: bool = if applicators {
                 self.keyword_annotated(keyword, at, cx, evaluated.as_deref_mut())
             } else {
-                self.keyword::<Trace>(keyword, at, cx, evaluated.as_deref_mut())
+                self.keyword::<Trace, _>(keyword, at, cx, evaluated.as_deref_mut())
             };
             if passed {
                 self.record_pass(keyword, at, cx);
@@ -1205,34 +1216,34 @@ impl CompiledSchema {
 
     /// Evaluates `keyword` in the trace mode and records its annotation when it is an applicator
     /// that annotates the instance.
-    fn keyword_annotated(
+    fn keyword_annotated<I: Instance>(
         &self,
         keyword: &Keyword,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        match (keyword, at.instance) {
+        match (keyword, at.instance.view()) {
             (
                 Keyword::Properties(_)
                 | Keyword::ClosedProperties(_)
                 | Keyword::PatternProperties(_)
                 | Keyword::AdditionalProperties { .. }
                 | Keyword::NoAdditionalProperties(_),
-                Value::Object(object),
+                InstanceRef::Object(object),
             ) => {
                 // What this keyword alone evaluated, then added to its siblings'.
                 let mut own: Evaluated = Evaluated::default();
-                let passed: bool = self.keyword::<Trace>(keyword, at, cx, Some(&mut own));
+                let passed: bool = self.keyword::<Trace, _>(keyword, at, cx, Some(&mut own));
                 let names =
-                    |marked: &Evaluated| -> Value { names_at(object, |i| marked.contains(i)) };
+                    |marked: &Evaluated| -> Value { names_at::<I>(object, |i| marked.contains(i)) };
                 match keyword {
                     Keyword::Properties(_) => {
                         self.annotate(cx, at, Kw::Properties.as_str(), names(&own));
                     }
                     Keyword::ClosedProperties(_) => {
                         self.annotate(cx, at, Kw::Properties.as_str(), names(&own));
-                        let unknown: Value = names_at(object, |i| !own.contains(i));
+                        let unknown: Value = names_at::<I>(object, |i| !own.contains(i));
                         self.annotate(cx, at, Kw::AdditionalProperties.as_str(), unknown);
                     }
                     Keyword::PatternProperties(_) => {
@@ -1254,11 +1265,11 @@ impl CompiledSchema {
                 }
                 passed
             }
-            (Keyword::Contains(contains), Value::Array(_)) if contains.annotates => {
+            (Keyword::Contains(contains), InstanceRef::Array(items)) if contains.annotates => {
                 let mut own: Evaluated = Evaluated::default();
-                let passed: bool = self.keyword::<Trace>(keyword, at, cx, Some(&mut own));
+                let passed: bool = self.keyword::<Trace, _>(keyword, at, cx, Some(&mut own));
                 let indexes: Value = Value::Array(
-                    (0..at.instance.as_array().map_or(0, Vec::len))
+                    (0..items.len())
                         .filter(|i| own.contains(*i))
                         .map(Value::from)
                         .collect(),
@@ -1269,47 +1280,47 @@ impl CompiledSchema {
                 }
                 passed
             }
-            (Keyword::UnevaluatedProperties(_), Value::Object(object)) => {
+            (Keyword::UnevaluatedProperties(_), InstanceRef::Object(object)) => {
                 let seen: Option<&Evaluated> = evaluated.as_deref();
                 let unevaluated: Value =
-                    names_at(object, |i| !seen.is_some_and(|seen| seen.contains(i)));
-                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+                    names_at::<I>(object, |i| !seen.is_some_and(|seen| seen.contains(i)));
+                let passed: bool = self.keyword::<Trace, _>(keyword, at, cx, evaluated);
                 self.annotate(cx, at, Kw::UnevaluatedProperties.as_str(), unevaluated);
                 passed
             }
-            (Keyword::UnevaluatedItems(_), Value::Array(items)) => {
+            (Keyword::UnevaluatedItems(_), InstanceRef::Array(items)) => {
                 let seen: Option<&Evaluated> = evaluated.as_deref();
                 let applied: bool =
                     (0..items.len()).any(|i| !seen.is_some_and(|seen| seen.contains(i)));
-                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+                let passed: bool = self.keyword::<Trace, _>(keyword, at, cx, evaluated);
                 if applied {
                     self.annotate(cx, at, Kw::UnevaluatedItems.as_str(), Value::Bool(true));
                 }
                 passed
             }
-            (Keyword::Items { keyword: name, .. }, Value::Array(items)) => {
-                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+            (Keyword::Items { keyword: name, .. }, InstanceRef::Array(items)) => {
+                let passed: bool = self.keyword::<Trace, _>(keyword, at, cx, evaluated);
                 if !items.is_empty() {
                     self.annotate(cx, at, name.as_str(), Value::Bool(true));
                 }
                 passed
             }
-            (Keyword::PrefixItems(tuple), Value::Array(items)) => {
-                let passed: bool = self.keyword::<Trace>(keyword, at, cx, evaluated);
+            (Keyword::PrefixItems(tuple), InstanceRef::Array(items)) => {
+                let passed: bool = self.keyword::<Trace, _>(keyword, at, cx, evaluated);
                 self.annotate_prefix_items(tuple, items.len(), at, cx);
                 passed
             }
-            _ => self.keyword::<Trace>(keyword, at, cx, evaluated),
+            _ => self.keyword::<Trace, _>(keyword, at, cx, evaluated),
         }
     }
 
     /// Records the annotations of `prefixItems` (2020-12; `items` as an array before it) and of
     /// the keyword for the items after the prefix, on an array of `len` items.
-    fn annotate_prefix_items(
+    fn annotate_prefix_items<I: Instance>(
         &self,
         tuple: &PrefixItems,
         len: usize,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) {
         let PrefixItems {
@@ -1333,7 +1344,13 @@ impl CompiledSchema {
     }
 
     /// Records the annotation `value` of `keyword` of the subschema being evaluated.
-    fn annotate(&self, cx: &mut Context, at: At<'_, '_>, keyword: &str, value: Value) {
+    fn annotate<I: Instance>(
+        &self,
+        cx: &mut Context,
+        at: At<'_, '_, I>,
+        keyword: &str,
+        value: Value,
+    ) {
         let locations: UnitLocations = self.locations(at.location, Some(keyword));
         let trace: &mut TraceRecord = cx.trace();
         let parent: Option<usize> = trace.current;
@@ -1349,7 +1366,7 @@ impl CompiledSchema {
 
     /// Records that `keyword`, which passed, did, when it is an assertion: an applicator's
     /// outcome is its subschemas' units.
-    fn record_pass(&self, keyword: &Keyword, at: At<'_, '_>, cx: &mut Context) {
+    fn record_pass<I: Instance>(&self, keyword: &Keyword, at: At<'_, '_, I>, cx: &mut Context) {
         let mut names: [Option<&str>; 2] = [None, None];
         match keyword {
             Keyword::Type { .. } => names[0] = Some(Kw::Type.as_str()),
@@ -1399,58 +1416,59 @@ impl CompiledSchema {
         clippy::too_many_lines,
         reason = "one arm per keyword; the closed enum is matched exhaustively"
     )]
-    fn keyword<M: Mode>(
+    fn keyword<M: Mode, I: Instance>(
         &self,
         keyword: &Keyword,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        match (keyword, at.instance) {
-            (Keyword::False, _) => self.false_schema::<M>(at, cx),
+        match (keyword, at.instance.view()) {
+            (Keyword::False, _) => self.false_schema::<M, _>(at, cx),
             (
                 Keyword::Type {
                     types,
                     integer_semantics,
                 },
-                instance,
+                _,
             ) => {
-                types.matches(instance, *integer_semantics) || self.type_error::<M>(*types, at, cx)
+                types.matches(at.instance, *integer_semantics)
+                    || self.type_error::<M, _>(*types, at, cx)
             }
-            (Keyword::Const(expected), _) => self.const_check::<M>(expected, at, cx),
-            (Keyword::Enum(id), _) => self.enum_check::<M>(*id, at, cx),
+            (Keyword::Const(expected), _) => self.const_check::<M, _>(expected, at, cx),
+            (Keyword::Enum(id), _) => self.enum_check::<M, _>(*id, at, cx),
             (
                 Keyword::Minimum(_)
                 | Keyword::Maximum(_)
                 | Keyword::ExclusiveMinimum(_)
                 | Keyword::ExclusiveMaximum(_)
                 | Keyword::MultipleOf(_),
-                Value::Number(n),
-            ) => self.numeric::<M>(keyword, n, at, cx),
+                InstanceRef::Number(n),
+            ) => self.numeric::<M, _>(keyword, &n, at, cx),
             (
                 Keyword::MinLength(_)
                 | Keyword::MaxLength(_)
                 | Keyword::Pattern(_)
                 | Keyword::Format(_)
                 | Keyword::Content(_),
-                Value::String(s),
-            ) => self.string::<M>(keyword, s, at, cx),
-            (Keyword::UserFormat(id), instance) => {
-                self.user_format_check::<M>(*id, instance, at, cx)
+                InstanceRef::String(s),
+            ) => self.string::<M, _>(keyword, s, at, cx),
+            (Keyword::UserFormat(id), _) => {
+                self.user_format_check::<M, _>(*id, at.instance, at, cx)
             }
-            (Keyword::Custom(id), instance) => self.custom_check::<M>(*id, instance, at, cx),
+            (Keyword::Custom(id), _) => self.custom_check::<M, _>(*id, at.instance, at, cx),
             (
                 Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems,
-                Value::Array(items),
-            ) => self.array_assertion::<M>(keyword, items, at, cx),
+                InstanceRef::Array(items),
+            ) => self.array_assertion::<M, _>(keyword, items, at, cx),
             (
                 Keyword::Required(_)
                 | Keyword::MinProperties(_)
                 | Keyword::MaxProperties(_)
                 | Keyword::DependentRequired { .. }
                 | Keyword::NoAdditionalProperties(_),
-                Value::Object(object),
-            ) => self.object_assertion::<M>(keyword, object, at, cx),
+                InstanceRef::Object(object),
+            ) => self.object_assertion::<M, _>(keyword, object, at, cx),
             (
                 Keyword::Ref {
                     target,
@@ -1458,7 +1476,7 @@ impl CompiledSchema {
                     ref_str,
                 },
                 _,
-            ) => self.follow::<M>(*target, *keyword, ref_str, at, cx, evaluated),
+            ) => self.follow::<M, _>(*target, *keyword, ref_str, at, cx, evaluated),
             (Keyword::DynamicRef(dynamic), _) => {
                 let DynamicRef {
                     fallback,
@@ -1466,7 +1484,7 @@ impl CompiledSchema {
                     ref_str,
                 } = &**dynamic;
                 let target: NodeId = self.dynamic_target(*fallback, anchor, cx);
-                self.follow::<M>(target, Kw::DynamicRef, ref_str, at, cx, evaluated)
+                self.follow::<M, _>(target, Kw::DynamicRef, ref_str, at, cx, evaluated)
             }
             (Keyword::RecursiveRef { fallback, ref_str }, _) => {
                 let target: NodeId = cx
@@ -1474,34 +1492,34 @@ impl CompiledSchema {
                     .iter()
                     .find_map(|scope| self.recursive_anchors.get(scope).copied())
                     .unwrap_or(*fallback);
-                self.follow::<M>(target, Kw::RecursiveRef, ref_str, at, cx, evaluated)
+                self.follow::<M, _>(target, Kw::RecursiveRef, ref_str, at, cx, evaluated)
             }
-            (Keyword::Properties(id), Value::Object(object)) => {
-                self.properties::<M>(self.property_table(*id), object, at, cx, evaluated)
+            (Keyword::Properties(id), InstanceRef::Object(object)) => {
+                self.properties::<M, _>(self.property_table(*id), object, at, cx, evaluated)
             }
-            (Keyword::ClosedProperties(id), Value::Object(object)) => {
-                self.closed_properties::<M>(self.property_table(*id), object, at, cx, evaluated)
+            (Keyword::ClosedProperties(id), InstanceRef::Object(object)) => {
+                self.closed_properties::<M, _>(self.property_table(*id), object, at, cx, evaluated)
             }
-            (Keyword::PatternProperties(patterns), Value::Object(object)) => {
-                self.pattern_properties::<M>(patterns, object, at, cx, evaluated)
+            (Keyword::PatternProperties(patterns), InstanceRef::Object(object)) => {
+                self.pattern_properties::<M, _>(patterns, object, at, cx, evaluated)
             }
-            (Keyword::AdditionalProperties { node, known }, Value::Object(object)) => {
-                self.additional_properties::<M>(*node, known, object, at, cx, evaluated)
+            (Keyword::AdditionalProperties { node, known }, InstanceRef::Object(object)) => {
+                self.additional_properties::<M, _>(*node, known, object, at, cx, evaluated)
             }
-            (Keyword::PropertyNames(node), Value::Object(object)) => {
-                self.property_names::<M>(*node, object, at, cx)
+            (Keyword::PropertyNames(node), InstanceRef::Object(object)) => {
+                self.property_names::<M, _>(*node, object, at, cx)
             }
             (
                 Keyword::DependentSchemas {
                     dependencies,
                     keyword,
                 },
-                Value::Object(object),
-            ) => self.dependent_schemas::<M>(dependencies, *keyword, object, at, cx, evaluated),
-            (Keyword::UnevaluatedProperties(node), Value::Object(object)) => {
-                self.unevaluated_properties::<M>(*node, object, at, cx, evaluated)
+                InstanceRef::Object(object),
+            ) => self.dependent_schemas::<M, _>(dependencies, *keyword, object, at, cx, evaluated),
+            (Keyword::UnevaluatedProperties(node), InstanceRef::Object(object)) => {
+                self.unevaluated_properties::<M, _>(*node, object, at, cx, evaluated)
             }
-            (Keyword::Items { node, keyword }, Value::Array(items)) => self.items::<M>(
+            (Keyword::Items { node, keyword }, InstanceRef::Array(items)) => self.items::<M, _>(
                 &[],
                 Some(*node),
                 (*keyword, *keyword),
@@ -1510,14 +1528,14 @@ impl CompiledSchema {
                 cx,
                 evaluated,
             ),
-            (Keyword::PrefixItems(tuple), Value::Array(items)) => {
+            (Keyword::PrefixItems(tuple), InstanceRef::Array(items)) => {
                 let PrefixItems {
                     prefix,
                     rest,
                     prefix_keyword,
                     rest_keyword,
                 } = &**tuple;
-                self.items::<M>(
+                self.items::<M, _>(
                     prefix,
                     *rest,
                     (*prefix_keyword, *rest_keyword),
@@ -1527,16 +1545,16 @@ impl CompiledSchema {
                     evaluated,
                 )
             }
-            (Keyword::Contains(contains), Value::Array(items)) => {
-                self.contains::<M>(contains, items, at, cx, evaluated)
+            (Keyword::Contains(contains), InstanceRef::Array(items)) => {
+                self.contains::<M, _>(contains, items, at, cx, evaluated)
             }
-            (Keyword::UnevaluatedItems(node), Value::Array(items)) => {
-                self.unevaluated_items::<M>(*node, items, at, cx, evaluated)
+            (Keyword::UnevaluatedItems(node), InstanceRef::Array(items)) => {
+                self.unevaluated_items::<M, _>(*node, items, at, cx, evaluated)
             }
-            (Keyword::AllOf(nodes), _) => self.all_of::<M>(nodes, at, cx, evaluated),
-            (Keyword::AnyOf(union), _) => self.any_of::<M>(union, at, cx, evaluated),
-            (Keyword::OneOf(union), _) => self.one_of::<M>(union, at, cx, evaluated),
-            (Keyword::Not(node), _) => self.not::<M>(*node, at, cx),
+            (Keyword::AllOf(nodes), _) => self.all_of::<M, _>(nodes, at, cx, evaluated),
+            (Keyword::AnyOf(union), _) => self.any_of::<M, _>(union, at, cx, evaluated),
+            (Keyword::OneOf(union), _) => self.one_of::<M, _>(union, at, cx, evaluated),
+            (Keyword::Not(node), _) => self.not::<M, _>(*node, at, cx),
             (
                 Keyword::IfThenElse {
                     condition,
@@ -1544,7 +1562,7 @@ impl CompiledSchema {
                     otherwise,
                 },
                 _,
-            ) => self.if_then_else::<M>(*condition, *then, *otherwise, at, cx, evaluated),
+            ) => self.if_then_else::<M, _>(*condition, *then, *otherwise, at, cx, evaluated),
             // Type-specific keywords ignore instances of other types.
             (
                 Keyword::Minimum(_)
@@ -1584,11 +1602,11 @@ impl CompiledSchema {
     /// Checks a user-defined format against an instance of any type. Kept out of line: the
     /// keyword is rare, and inlining it into the dispatch slows every other keyword.
     #[inline(never)]
-    fn user_format_check<M: Mode>(
+    fn user_format_check<M: Mode, I: Instance>(
         &self,
         id: UserFormatId,
-        instance: &Value,
-        at: At<'_, '_>,
+        instance: &I,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         let format: &UserFormat = self.user_format(id);
@@ -1601,7 +1619,7 @@ impl CompiledSchema {
                 Kw::Format,
                 ValidationErrorKind::InvalidFormat {
                     format: format.name.to_string(),
-                    value: instance.clone(),
+                    value: instance.to_value().into_owned(),
                 }
             )
     }
@@ -1610,31 +1628,31 @@ impl CompiledSchema {
     /// [`leaf_keyword`](Self::leaf_keyword)). Out of line, so the hot leaf check that every
     /// leaf node runs keeps its size when no custom keyword is defined.
     #[inline(never)]
-    fn custom_leaf<'v>(
+    fn custom_leaf<'v, I: Instance + 'v>(
         &self,
         id: CustomKeywordId,
-        mut instances: impl Iterator<Item = &'v Value>,
+        mut instances: impl Iterator<Item = &'v I>,
     ) -> bool {
         let custom: &CompiledCustomKeyword = self.custom_keyword(id);
-        instances.all(|instance| custom.keyword.is_valid(instance))
+        instances.all(|instance| custom.keyword.is_valid(&instance.to_value()))
     }
 
     /// Checks a custom keyword: [`CustomKeyword::is_valid`](super::CustomKeyword::is_valid) in
     /// the verdict mode, [`CustomKeyword::validate`](super::CustomKeyword::validate) in the
     /// collect mode. Kept out of line like [`user_format_check`](Self::user_format_check).
     #[inline(never)]
-    fn custom_check<M: Mode>(
+    fn custom_check<M: Mode, I: Instance>(
         &self,
         id: CustomKeywordId,
-        instance: &Value,
-        at: At<'_, '_>,
+        instance: &I,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         let custom: &CompiledCustomKeyword = self.custom_keyword(id);
         if !M::ALL {
-            return custom.keyword.is_valid(instance);
+            return custom.keyword.is_valid(&instance.to_value());
         }
-        match custom.keyword.validate(instance) {
+        match custom.keyword.validate(&instance.to_value()) {
             Ok(()) => true,
             Err(message) => {
                 self.report_custom::<M>(cx, at.location, custom, message);
@@ -1666,31 +1684,31 @@ impl CompiledSchema {
 
     /// Evaluates a subschema at the same instance, entered through `location`; its
     /// annotations count only when it passes.
-    fn in_place<M: Mode>(
+    fn in_place<M: Mode, I: Instance>(
         &self,
         id: NodeId,
-        instance: &Value,
+        instance: &I,
         location: &Location<'_>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         match evaluated {
-            None => self.eval::<M>(id, instance, location, cx, None),
-            Some(parent) => self.in_place_annotated::<M>(id, instance, location, cx, parent),
+            None => self.eval::<M, _>(id, instance, location, cx, None),
+            Some(parent) => self.in_place_annotated::<M, _>(id, instance, location, cx, parent),
         }
     }
 
     #[inline(never)]
-    fn in_place_annotated<M: Mode>(
+    fn in_place_annotated<M: Mode, I: Instance>(
         &self,
         id: NodeId,
-        instance: &Value,
+        instance: &I,
         location: &Location<'_>,
         cx: &mut Context,
         parent: &mut Evaluated,
     ) -> bool {
         let mut sub: Evaluated = Evaluated::default();
-        let ok: bool = self.eval::<M>(id, instance, location, cx, Some(&mut sub));
+        let ok: bool = self.eval::<M, _>(id, instance, location, cx, Some(&mut sub));
         if ok {
             parent.merge(&sub);
         }
@@ -1700,12 +1718,12 @@ impl CompiledSchema {
     /// Follows a reference (`keyword`) to `target` in place, failing with
     /// [`ValidationErrorKind::RefCycle`] when `target` is already being evaluated at this
     /// instance location.
-    fn follow<M: Mode>(
+    fn follow<M: Mode, I: Instance>(
         &self,
         target: NodeId,
         keyword: Kw,
         ref_str: &str,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -1757,7 +1775,7 @@ impl CompiledSchema {
                 }
             );
         }
-        self.in_place::<M>(target, at.instance, &entered, cx, evaluated)
+        self.in_place::<M, _>(target, at.instance, &entered, cx, evaluated)
     }
 
     /// How many distinct resources in the dynamic scope declare a dynamic anchor a dynamic
@@ -1793,14 +1811,19 @@ impl CompiledSchema {
             .unwrap_or(fallback)
     }
 
-    fn false_schema<M: Mode>(&self, at: At<'_, '_>, cx: &mut Context) -> bool {
+    fn false_schema<M: Mode, I: Instance>(&self, at: At<'_, '_, I>, cx: &mut Context) -> bool {
         if M::ALL {
             self.report::<M>(cx, at.location, None, || ValidationErrorKind::FalseSchema);
         }
         false
     }
 
-    fn type_error<M: Mode>(&self, types: TypeSet, at: At<'_, '_>, cx: &mut Context) -> bool {
+    fn type_error<M: Mode, I: Instance>(
+        &self,
+        types: TypeSet,
+        at: At<'_, '_, I>,
+        cx: &mut Context,
+    ) -> bool {
         fail!(
             M,
             self,
@@ -1811,7 +1834,12 @@ impl CompiledSchema {
         )
     }
 
-    fn const_check<M: Mode>(&self, expected: &Value, at: At<'_, '_>, cx: &mut Context) -> bool {
+    fn const_check<M: Mode, I: Instance>(
+        &self,
+        expected: &Value,
+        at: At<'_, '_, I>,
+        cx: &mut Context,
+    ) -> bool {
         number::json_equal(at.instance, expected)
             || fail!(
                 M,
@@ -1821,12 +1849,17 @@ impl CompiledSchema {
                 Kw::Const,
                 ValidationErrorKind::NotConst {
                     expected: value_to_display_string(expected),
-                    actual: value_to_display_string(at.instance),
+                    actual: value_to_display_string(&at.instance.to_value()),
                 }
             )
     }
 
-    fn enum_check<M: Mode>(&self, id: EnumId, at: At<'_, '_>, cx: &mut Context) -> bool {
+    fn enum_check<M: Mode, I: Instance>(
+        &self,
+        id: EnumId,
+        at: At<'_, '_, I>,
+        cx: &mut Context,
+    ) -> bool {
         self.enum_list(id).contains(at.instance)
             || fail!(
                 M,
@@ -1835,17 +1868,17 @@ impl CompiledSchema {
                 at.location,
                 Kw::Enum,
                 ValidationErrorKind::NotInEnum {
-                    invalid_value: value_to_display_string(at.instance),
+                    invalid_value: value_to_display_string(&at.instance.to_value()),
                     allowed: self.enum_display(id).to_vec(),
                 }
             )
     }
 
-    fn numeric<M: Mode>(
+    fn numeric<M: Mode, I: Instance>(
         &self,
         keyword: &Keyword,
         n: &Number,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         match keyword {
@@ -1923,11 +1956,11 @@ impl CompiledSchema {
         }
     }
 
-    fn string<M: Mode>(
+    fn string<M: Mode, I: Instance>(
         &self,
         keyword: &Keyword,
         s: &str,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         // Lengths count Unicode code points; a string has at most as many as it has bytes.
@@ -1998,18 +2031,18 @@ impl CompiledSchema {
                         }
                     )
             }
-            Keyword::Content(content) => self.content::<M>(content, s, at, cx),
+            Keyword::Content(content) => self.content::<M, _>(content, s, at, cx),
             _ => true,
         }
     }
 
     /// `contentEncoding` / `contentMediaType` on string `s`: a string that does not decode fails
     /// its encoding; a decoded one that is not of the media type fails the media type.
-    fn content<M: Mode>(
+    fn content<M: Mode, I: Instance>(
         &self,
         content: &Content,
         s: &str,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         match content.check(s) {
@@ -2039,11 +2072,11 @@ impl CompiledSchema {
         }
     }
 
-    fn array_assertion<M: Mode>(
+    fn array_assertion<M: Mode, I: Instance>(
         &self,
         keyword: &Keyword,
-        items: &[Value],
-        at: At<'_, '_>,
+        items: &[I],
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         let count: u64 = items.len() as u64;
@@ -2085,7 +2118,7 @@ impl CompiledSchema {
                     at.location,
                     Kw::UniqueItems,
                     ValidationErrorKind::DuplicateArrayItems {
-                        duplicate_value: value_to_display_string(duplicate),
+                        duplicate_value: value_to_display_string(&duplicate.to_value()),
                     }
                 ),
             },
@@ -2104,16 +2137,16 @@ impl CompiledSchema {
                 .any(|id| self.pattern(*id).is_match(name))
     }
 
-    fn object_assertion<M: Mode>(
+    fn object_assertion<M: Mode, I: Instance>(
         &self,
         keyword: &Keyword,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         let count: u64 = object.len() as u64;
         match keyword {
-            Keyword::Required(required) => self.required::<M>(required, object, at, cx),
+            Keyword::Required(required) => self.required::<M, _>(required, object, at, cx),
             Keyword::MinProperties(min_properties) => {
                 count >= *min_properties
                     || fail!(
@@ -2149,9 +2182,9 @@ impl CompiledSchema {
                 M,
                 dependencies
                     .iter()
-                    .filter(|(name, _)| object.contains_key(&**name))
+                    .filter(|(name, _)| object.contains_key(name))
                     .flat_map(|(name, required)| required.iter().map(move |r| (name, r))),
-                |(name, property)| object.contains_key(&**property)
+                |(name, property)| object.contains_key(property)
                     || fail!(
                         M,
                         self,
@@ -2165,7 +2198,8 @@ impl CompiledSchema {
                     )
             ),
             Keyword::NoAdditionalProperties(known) => {
-                each!(M, object.keys(), |key| self.is_known(known, key)
+                each!(M, object.iter().map(|(key, _)| key), |key| self
+                    .is_known(known, key)
                     || fail!(
                         M,
                         self,
@@ -2173,7 +2207,7 @@ impl CompiledSchema {
                         &at.location.key(key, Via::None),
                         Kw::AdditionalProperties,
                         ValidationErrorKind::DisallowedAdditionalProperty {
-                            property: key.clone(),
+                            property: key.to_string(),
                         }
                     ))
             }
@@ -2184,20 +2218,20 @@ impl CompiledSchema {
     /// `required`: decided against the object's sorted keys in one pass when the maps are
     /// sorted and the object is not much larger than the list; errors are built in schema order,
     /// by looking each name up.
-    fn required<M: Mode>(
+    fn required<M: Mode, I: Instance>(
         &self,
         required: &Required,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         let Required { names, sorted } = required;
-        if self.sorted_maps {
+        if self.sorted_maps && <I::Object as InstanceObject<I>>::SORTED_KEYS {
             // More distinct names than members: some name is missing.
             let decided: Option<bool> = if sorted.len() > object.len() {
                 Some(false)
             } else if object.len() <= MERGE_RATIO * sorted.len() {
-                Some(contains_all_names(object, sorted))
+                Some(contains_all_names::<I>(object, sorted))
             } else {
                 None
             };
@@ -2207,7 +2241,7 @@ impl CompiledSchema {
                 Some(false) | None => {}
             }
         }
-        each!(M, names.iter(), |name| object.contains_key(&**name)
+        each!(M, names.iter(), |name| object.contains_key(name)
             || fail!(
                 M,
                 self,
@@ -2220,11 +2254,11 @@ impl CompiledSchema {
             ))
     }
 
-    fn properties<M: Mode>(
+    fn properties<M: Mode, I: Instance>(
         &self,
         table: &PropertyTable,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2234,7 +2268,7 @@ impl CompiledSchema {
         // the members', and errors follow the names whenever the object has at least as many
         // members as the list has names.
         let by_name: bool = evaluated.is_none()
-            && if self.sorted_maps {
+            && if self.sorted_maps && <I::Object as InstanceObject<I>>::SORTED_KEYS {
                 object.len() > MERGE_RATIO * table.len()
             } else {
                 table.len() <= object.len()
@@ -2244,11 +2278,11 @@ impl CompiledSchema {
                 M,
                 table
                     .iter()
-                    .filter_map(|(name, node)| object.get_key_value(name).map(|kv| (kv, node))),
-                |((key, value), node)| match self.leaf_verdict::<M>(node, value, cx) {
+                    .filter_map(|(name, node)| object.get(name).map(|value| ((name, value), node))),
+                |((key, value), node)| match self.leaf_verdict::<M, _>(node, value, cx) {
                     Some(true) => true,
                     Some(false) if !M::ALL => false,
-                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
+                    _ => self.eval::<M, _>(node, value, &at.location.key(key, via), cx, None),
                 }
             );
         }
@@ -2262,10 +2296,10 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                match self.leaf_verdict::<M>(node, value, cx) {
+                match self.leaf_verdict::<M, _>(node, value, cx) {
                     Some(true) => true,
                     Some(false) if !M::ALL => false,
-                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
+                    _ => self.eval::<M, _>(node, value, &at.location.key(key, via), cx, None),
                 }
             }
         )
@@ -2278,11 +2312,11 @@ impl CompiledSchema {
     /// any member, what evaluating them left behind (the depth guard's error, recorded union
     /// choices) is undone. An unknown member is only noted, not a reason to stop: a branch out of
     /// the per-member loop cost the valid path as much as the second lookup did.
-    fn closed_properties<M: Mode>(
+    fn closed_properties<M: Mode, I: Instance>(
         &self,
         table: &PropertyTable,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2306,15 +2340,15 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                match self.leaf_verdict::<M>(node, value, cx) {
+                match self.leaf_verdict::<M, _>(node, value, cx) {
                     Some(true) => true,
                     Some(false) if !M::ALL => false,
-                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
+                    _ => self.eval::<M, _>(node, value, &at.location.key(key, via), cx, None),
                 }
             }
         ) && !unknown;
         if !valid {
-            self.closed_properties_failed::<M>(
+            self.closed_properties_failed::<M, _>(
                 table,
                 object,
                 at,
@@ -2330,11 +2364,11 @@ impl CompiledSchema {
     /// errors and of recorded choices before the walk, and whether the depth guard had fired.
     #[cold]
     #[inline(never)]
-    fn closed_properties_failed<M: Mode>(
+    fn closed_properties_failed<M: Mode, I: Instance>(
         &self,
         table: &PropertyTable,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         start: (bool, usize, usize, bool),
     ) {
@@ -2347,13 +2381,17 @@ impl CompiledSchema {
                 // They precede the `properties` errors, so the limited mode builds them even
                 // when those reached its limit.
                 cx.stopped = M::LIMITED && cx.errors.len() >= cx.limit;
-                for key in object.keys().filter(|key| !table.contains(key)) {
+                for key in object
+                    .iter()
+                    .map(|(key, _)| key)
+                    .filter(|key| !table.contains(key))
+                {
                     self.report::<M>(
                         cx,
                         &at.location.key(key, Via::None),
                         Some(Kw::AdditionalProperties),
                         || ValidationErrorKind::DisallowedAdditionalProperty {
-                            property: key.clone(),
+                            property: key.to_string(),
                         },
                     );
                 }
@@ -2363,7 +2401,12 @@ impl CompiledSchema {
             return;
         }
         // The walk stopped at its first failure; an unknown member may lie past it.
-        if unknown || object.keys().any(|key| !table.contains(key)) {
+        if unknown
+            || object
+                .iter()
+                .map(|(key, _)| key)
+                .any(|key| !table.contains(key))
+        {
             if !depth_exceeded {
                 cx.depth_exceeded = None;
             }
@@ -2373,11 +2416,11 @@ impl CompiledSchema {
         }
     }
 
-    fn pattern_properties<M: Mode>(
+    fn pattern_properties<M: Mode, I: Instance>(
         &self,
         patterns: &[(RegexId, NodeId)],
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2392,17 +2435,17 @@ impl CompiledSchema {
                     evaluated.mark(i);
                 }
                 let child: Location<'_> = at.location.key(key, Via::Pattern(pattern));
-                self.eval::<M>(*node, value, &child, cx, None)
+                self.eval::<M, _>(*node, value, &child, cx, None)
             }
         )
     }
 
-    fn additional_properties<M: Mode>(
+    fn additional_properties<M: Mode, I: Instance>(
         &self,
         node: NodeId,
         known: &KnownProperties,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2417,31 +2460,31 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                match self.leaf_verdict::<M>(node, value, cx) {
+                match self.leaf_verdict::<M, _>(node, value, cx) {
                     Some(true) => true,
                     Some(false) if !M::ALL => false,
-                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
+                    _ => self.eval::<M, _>(node, value, &at.location.key(key, via), cx, None),
                 }
             }
         )
     }
 
-    fn property_names<M: Mode>(
+    fn property_names<M: Mode, I: Instance>(
         &self,
         node: NodeId,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
     ) -> bool {
         // One buffer holds each name in turn, so names are not allocated one by one.
         let mut name: Value = Value::String(String::new());
-        each!(M, object.keys(), |key| {
+        each!(M, object.iter().map(|(key, _)| key), |key| {
             if let Value::String(buffer) = &mut name {
                 buffer.clear();
                 buffer.push_str(key);
             }
             let child: Location<'_> = at.location.key(key, Via::Keyword(Kw::PropertyNames));
-            self.eval::<M::Branch>(node, &name, &child, cx, None)
+            self.eval::<M::Branch, _>(node, &name, &child, cx, None)
                 || fail!(
                     M,
                     self,
@@ -2449,18 +2492,18 @@ impl CompiledSchema {
                     &at.location.key(key, Via::None),
                     Kw::PropertyNames,
                     ValidationErrorKind::InvalidPropertyName {
-                        property: key.clone(),
+                        property: key.to_string(),
                     }
                 )
         })
     }
 
-    fn dependent_schemas<M: Mode>(
+    fn dependent_schemas<M: Mode, I: Instance>(
         &self,
         dependencies: &[(Box<str>, NodeId)],
         keyword: Kw,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2468,19 +2511,19 @@ impl CompiledSchema {
             M,
             dependencies
                 .iter()
-                .filter(|(name, _)| object.contains_key(&**name)),
+                .filter(|(name, _)| object.contains_key(name)),
             |(name, node)| {
                 let branch: Location<'_> = at.location.in_place(Via::Name(keyword, name));
-                self.in_place::<M>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
+                self.in_place::<M, _>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
             }
         )
     }
 
-    fn unevaluated_properties<M: Mode>(
+    fn unevaluated_properties<M: Mode, I: Instance>(
         &self,
         node: NodeId,
-        object: &Map<String, Value>,
-        at: At<'_, '_>,
+        object: &I::Object,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2501,14 +2544,14 @@ impl CompiledSchema {
                         &at.location.key(key, Via::None),
                         Kw::UnevaluatedProperties,
                         ValidationErrorKind::DisallowedUnevaluatedProperty {
-                            property: key.clone(),
+                            property: key.to_string(),
                         }
                     )
                 } else {
                     let child: Location<'_> = at
                         .location
                         .key(key, Via::Keyword(Kw::UnevaluatedProperties));
-                    self.eval::<M>(node, value, &child, cx, None)
+                    self.eval::<M, _>(node, value, &child, cx, None)
                 }
             }
         );
@@ -2524,13 +2567,13 @@ impl CompiledSchema {
         clippy::too_many_arguments,
         reason = "the tuple, its spellings, and the shared evaluation state"
     )]
-    fn items<M: Mode>(
+    fn items<M: Mode, I: Instance>(
         &self,
         prefix: &[NodeId],
         rest: Option<NodeId>,
         keywords: (Kw, Kw),
-        items: &[Value],
-        at: At<'_, '_>,
+        items: &[I],
+        at: At<'_, '_, I>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2539,7 +2582,7 @@ impl CompiledSchema {
         // each taken once; the general path below runs only when they fail in collect mode, to
         // build the errors, and for the prefix.
         let valid: bool = if let ([], Some(rest)) = (prefix, rest)
-            && let Some(valid) = self.leaf_verdict_all::<M>(rest, items, cx)
+            && let Some(valid) = self.leaf_verdict_all::<M, _>(rest, items, cx)
             && (valid || !M::ALL)
         {
             valid
@@ -2553,10 +2596,10 @@ impl CompiledSchema {
                         Some(node) => Some((i, item, *node, Via::Member(prefix_keyword))),
                         None => rest.map(|node| (i, item, node, Via::Keyword(rest_keyword))),
                     }),
-                |(i, item, node, via)| match self.leaf_verdict::<M>(node, item, cx) {
+                |(i, item, node, via)| match self.leaf_verdict::<M, _>(node, item, cx) {
                     Some(true) => true,
                     Some(false) if !M::ALL => false,
-                    _ => self.eval::<M>(node, item, &at.location.index(i, via), cx, None),
+                    _ => self.eval::<M, _>(node, item, &at.location.index(i, via), cx, None),
                 }
             )
         };
@@ -2572,11 +2615,11 @@ impl CompiledSchema {
         valid
     }
 
-    fn contains<M: Mode>(
+    fn contains<M: Mode, I: Instance>(
         &self,
         contains: &Contains,
-        items: &[Value],
-        at: At<'_, '_>,
+        items: &[I],
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2591,7 +2634,7 @@ impl CompiledSchema {
         let mut match_count: u64 = 0;
         for (i, item) in items.iter().enumerate() {
             let child: Location<'_> = at.location.index(i, Via::Keyword(Kw::Contains));
-            if self.eval::<M::Branch>(*node, item, &child, cx, None) {
+            if self.eval::<M::Branch, _>(*node, item, &child, cx, None) {
                 match_count += 1;
                 if annotating && let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
@@ -2630,11 +2673,11 @@ impl CompiledSchema {
         }
     }
 
-    fn unevaluated_items<M: Mode>(
+    fn unevaluated_items<M: Mode, I: Instance>(
         &self,
         node: NodeId,
-        items: &[Value],
-        at: At<'_, '_>,
+        items: &[I],
+        at: At<'_, '_, I>,
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2646,7 +2689,7 @@ impl CompiledSchema {
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| !seen.is_some_and(|e| e.contains(*i))),
-            |(i, item)| self.eval::<M>(node, item, &at.location.index(i, via), cx, None)
+            |(i, item)| self.eval::<M, _>(node, item, &at.location.index(i, via), cx, None)
         );
         if let Some(evaluated) = evaluated {
             evaluated.mark_all();
@@ -2654,16 +2697,16 @@ impl CompiledSchema {
         valid
     }
 
-    fn all_of<M: Mode>(
+    fn all_of<M: Mode, I: Instance>(
         &self,
         nodes: &[NodeId],
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         each!(M, nodes.iter().enumerate(), |(i, node)| {
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AllOf, index_u32(i)));
-            self.in_place::<M>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
+            self.in_place::<M, _>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
         })
     }
 
@@ -2672,9 +2715,12 @@ impl CompiledSchema {
     /// Only objects and arrays: a generated union reads a recorded choice for no other value
     /// (see `ValueRef`).
     #[inline]
-    fn record_choice(union: &Union, instance: &Value, branch: usize, cx: &mut Context) {
+    fn record_choice<I: Instance>(union: &Union, instance: &I, branch: usize, cx: &mut Context) {
         if let Some(choices) = cx.choices.as_mut()
-            && matches!(instance, Value::Object(_) | Value::Array(_))
+            && matches!(
+                instance.view(),
+                InstanceRef::Object(_) | InstanceRef::Array(_)
+            )
         {
             choices
                 .0
@@ -2683,17 +2729,17 @@ impl CompiledSchema {
     }
 
     /// The one branch of `union` that `instance` can pass, when its discriminator decides it.
-    fn pick(union: &Union, instance: &Value) -> Pick {
-        match (&union.discriminator, instance) {
-            (Some(discriminator), Value::Object(object)) => discriminator.pick(object),
+    fn pick<I: Instance>(union: &Union, instance: &I) -> Pick {
+        match (&union.discriminator, instance.view()) {
+            (Some(discriminator), InstanceRef::Object(object)) => discriminator.pick::<I>(object),
             _ => Pick::Undecided,
         }
     }
 
-    fn any_of<M: Mode>(
+    fn any_of<M: Mode, I: Instance>(
         &self,
         union: &Union,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2706,7 +2752,7 @@ impl CompiledSchema {
             if let Pick::Branch(i) = pick {
                 let branch: Location<'_> =
                     at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
-                if self.in_place::<M::Branch>(
+                if self.in_place::<M::Branch, _>(
                     nodes[i],
                     at.instance,
                     &branch,
@@ -2724,8 +2770,13 @@ impl CompiledSchema {
         let mut matched: bool = false;
         for (i, node) in nodes.iter().enumerate() {
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
-            if self.in_place::<M::Branch>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
-            {
+            if self.in_place::<M::Branch, _>(
+                *node,
+                at.instance,
+                &branch,
+                cx,
+                evaluated.as_deref_mut(),
+            ) {
                 if !matched {
                     Self::record_choice(union, at.instance, i, cx);
                 }
@@ -2738,15 +2789,15 @@ impl CompiledSchema {
             }
         }
         if !matched && M::ALL {
-            self.no_match::<M>(Kw::AnyOf, nodes, at, cx);
+            self.no_match::<M, _>(Kw::AnyOf, nodes, at, cx);
         }
         matched
     }
 
-    fn one_of<M: Mode>(
+    fn one_of<M: Mode, I: Instance>(
         &self,
         union: &Union,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
@@ -2759,7 +2810,7 @@ impl CompiledSchema {
                 let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
                 let branch: Location<'_> =
                     at.location.in_place(Via::Index(Kw::OneOf, index_u32(i)));
-                if self.eval::<M::Branch>(nodes[i], at.instance, &branch, cx, wants) {
+                if self.eval::<M::Branch, _>(nodes[i], at.instance, &branch, cx, wants) {
                     if let Some(parent) = evaluated.as_deref_mut() {
                         parent.merge(&sub);
                     }
@@ -2777,7 +2828,7 @@ impl CompiledSchema {
             let mut sub: Evaluated = Evaluated::default();
             let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::OneOf, index_u32(i)));
-            if self.eval::<M::Branch>(*node, at.instance, &branch, cx, wants) {
+            if self.eval::<M::Branch, _>(*node, at.instance, &branch, cx, wants) {
                 match_count += 1;
                 if first.is_none() {
                     first = Some((i, sub));
@@ -2800,7 +2851,7 @@ impl CompiledSchema {
             }
             0 => {
                 if M::ALL {
-                    self.no_match::<M>(Kw::OneOf, nodes, at, cx);
+                    self.no_match::<M, _>(Kw::OneOf, nodes, at, cx);
                 }
                 false
             }
@@ -2824,7 +2875,13 @@ impl CompiledSchema {
     /// already holds every branch's errors under the branch, so its error has no causes.
     #[cold]
     #[inline(never)]
-    fn no_match<M: Mode>(&self, keyword: Kw, nodes: &[NodeId], at: At<'_, '_>, cx: &mut Context) {
+    fn no_match<M: Mode, I: Instance>(
+        &self,
+        keyword: Kw,
+        nodes: &[NodeId],
+        at: At<'_, '_, I>,
+        cx: &mut Context,
+    ) {
         if M::LIMITED && cx.stopped {
             return;
         }
@@ -2840,7 +2897,7 @@ impl CompiledSchema {
         let outer: Vec<ValidationError> = std::mem::take(&mut cx.errors);
         for (i, node) in nodes.iter().enumerate() {
             let branch: Location<'_> = at.location.in_place(Via::Index(keyword, index_u32(i)));
-            self.eval::<Collect>(*node, at.instance, &branch, cx, None);
+            self.eval::<Collect, _>(*node, at.instance, &branch, cx, None);
         }
         let causes: Vec<ValidationError> = std::mem::replace(&mut cx.errors, outer);
         self.report::<M>(cx, at.location, Some(keyword), || {
@@ -2851,9 +2908,9 @@ impl CompiledSchema {
         });
     }
 
-    fn not<M: Mode>(&self, node: NodeId, at: At<'_, '_>, cx: &mut Context) -> bool {
+    fn not<M: Mode, I: Instance>(&self, node: NodeId, at: At<'_, '_, I>, cx: &mut Context) -> bool {
         let branch: Location<'_> = at.location.in_place(Via::Keyword(Kw::Not));
-        let matched: bool = self.eval::<M::Branch>(node, at.instance, &branch, cx, None);
+        let matched: bool = self.eval::<M::Branch, _>(node, at.instance, &branch, cx, None);
         // A branch cut short by the depth guard did not fail: it must not make `not` pass.
         if cx.depth_exceeded.is_some() {
             return false;
@@ -2869,17 +2926,17 @@ impl CompiledSchema {
             )
     }
 
-    fn if_then_else<M: Mode>(
+    fn if_then_else<M: Mode, I: Instance>(
         &self,
         condition: NodeId,
         then: Option<NodeId>,
         otherwise: Option<NodeId>,
-        at: At<'_, '_>,
+        at: At<'_, '_, I>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let branch: Location<'_> = at.location.in_place(Via::Keyword(Kw::If));
-        let passed: bool = self.in_place::<M::Branch>(
+        let passed: bool = self.in_place::<M::Branch, _>(
             condition,
             at.instance,
             &branch,
@@ -2894,7 +2951,7 @@ impl CompiledSchema {
         match node {
             Some(node) => {
                 let branch: Location<'_> = at.location.in_place(Via::Keyword(keyword));
-                self.in_place::<M>(node, at.instance, &branch, cx, evaluated)
+                self.in_place::<M, _>(node, at.instance, &branch, cx, evaluated)
             }
             None => true,
         }

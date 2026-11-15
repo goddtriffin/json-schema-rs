@@ -18,6 +18,7 @@
 use super::compiled::CompiledSchema;
 use super::error::{ValidationError, ValidationErrorKind};
 use super::eval::{TraceKind, TraceRecord, TraceUnit, UnitLocations};
+use super::instance::Instance;
 use crate::json_pointer::{self, JsonPointer};
 use serde::Serialize;
 use serde_json::Value;
@@ -160,7 +161,7 @@ impl CompiledSchema {
     /// [`CompiledSchemaBuilder::annotations`](crate::CompiledSchemaBuilder::annotations));
     /// `verbose` evaluates every subschema and reports each one.
     #[must_use]
-    pub fn evaluate(&self, instance: &Value, format: OutputFormat) -> Output {
+    pub fn evaluate<I: Instance>(&self, instance: &I, format: OutputFormat) -> Output {
         match format {
             OutputFormat::Flag => Output::Flag(FlagOutput {
                 valid: self.is_valid(instance),
@@ -220,7 +221,10 @@ impl CompiledSchema {
     ///
     /// Returns the errors of [`CompiledSchema::validate`] when the instance is invalid: an
     /// invalid instance has no annotations.
-    pub fn annotations(&self, instance: &Value) -> Result<Vec<Annotation>, Vec<ValidationError>> {
+    pub fn annotations<I: Instance>(
+        &self,
+        instance: &I,
+    ) -> Result<Vec<Annotation>, Vec<ValidationError>> {
         if self.annotations.is_empty() {
             return self.validate(instance).map(|()| Vec::new());
         }
@@ -253,7 +257,7 @@ impl CompiledSchema {
 
     /// The trace of a valid `instance`, when the schema keeps annotations (without them the
     /// trace of a valid instance holds nothing to report).
-    fn kept_trace(&self, instance: &Value) -> Option<TraceRecord> {
+    fn kept_trace<I: Instance>(&self, instance: &I) -> Option<TraceRecord> {
         if self.annotations.is_empty() {
             return None;
         }

@@ -179,6 +179,10 @@ evaluation depth (CLI `--regex-size-limit`, `--max-depth`). `.max_errors(Some(n)
 `validate` at its `n`-th error (CLI `--max-errors`), `compiled.iter_errors(&instance)` finds
 errors as they are taken (`.next()` costs about one error), and `error.masked()` displays an
 error without the instance's values, for logs of sensitive data (CLI `--masked`).
+Instances need not be `serde_json::Value`: every check (`is_valid`, `validate`,
+`iter_errors`, `evaluate`, `annotations`) takes any type that implements the `Instance`
+trait, so a document already held in another JSON tree (a `simd-json` value, a YAML or TOML
+tree, a language binding's objects) is validated without converting it first.
 `compiled.validate_with_defaults(&mut instance)` inserts the `default` of every missing
 property, then validates (CLI `--apply-defaults`); `validate` never changes the instance. `registry.bundle()` writes the schema and every document its
 references reach as one document, each embedded as a schema resource (2020-12 core §9.3;

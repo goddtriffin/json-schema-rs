@@ -11,6 +11,7 @@ use super::content::{Content, ContentCodecs, Decoder, MediaTypeCheck};
 use super::ecma_regex;
 use super::eval::DEPTH_LIMIT;
 use super::format::Format;
+use super::instance::{Instance, InstanceObject, InstanceRef};
 #[cfg(feature = "linear-regex")]
 use super::linear_regex;
 use super::name_index::{NameIndex, PropertyTable};
@@ -304,11 +305,13 @@ pub(crate) struct UserFormat {
 impl UserFormat {
     /// Whether `instance` is a member of the format: a string check passes every other type.
     #[inline(never)]
-    pub(crate) fn check(&self, instance: &Value) -> bool {
-        match (&self.check, instance) {
-            (FormatCheck::String(check), Value::String(s)) => check(s),
-            (FormatCheck::String(_), _) => true,
-            (FormatCheck::Value(check), _) => check(instance),
+    pub(crate) fn check<I: Instance>(&self, instance: &I) -> bool {
+        match &self.check {
+            FormatCheck::String(check) => match instance.view() {
+                InstanceRef::String(s) => check(s),
+                _ => true,
+            },
+            FormatCheck::Value(check) => check(&instance.to_value()),
         }
     }
 }
@@ -535,13 +538,14 @@ impl Union {
 
 impl Discriminator {
     /// The branch `object` can pass, by its value of the discriminator's property.
-    pub(crate) fn pick(&self, object: &Map<String, Value>) -> Pick {
-        let Some(Value::String(value)) = object.get(&*self.property) else {
+    pub(crate) fn pick<I: Instance>(&self, object: &I::Object) -> Pick {
+        let Some(InstanceRef::String(value)) = object.get(&self.property).map(Instance::view)
+        else {
             return Pick::Undecided;
         };
         match self
             .values
-            .binary_search_by(|(pinned, _)| (**pinned).cmp(value.as_str()))
+            .binary_search_by(|(pinned, _)| (**pinned).cmp(value))
         {
             Ok(at) => Pick::Branch(self.values[at].1 as usize),
             Err(_) => Pick::NoBranch,
@@ -586,9 +590,9 @@ impl EnumList {
 
     /// Whether `instance` equals one of the values (by JSON equality).
     #[inline]
-    pub(crate) fn contains(&self, instance: &Value) -> bool {
-        match instance {
-            Value::String(string) => match &self.strings {
+    pub(crate) fn contains<I: Instance>(&self, instance: &I) -> bool {
+        match instance.view() {
+            InstanceRef::String(string) => match &self.strings {
                 Some(index) => index
                     .find(string, |position| {
                         self.values[position].as_str().unwrap_or_default()

@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn json_eq_key_integers_beyond_u64_round_to_one_f64() {
         let values: Vec<Value> = vec![value("18446744073709551616"), value("18446744073709551617")];
-        let set: HashSet<JsonEqKey<'_>> = values.iter().map(JsonEqKey).collect();
+        let set: HashSet<JsonEqKey<'_, Value>> = values.iter().map(JsonEqKey).collect();
         let expected: usize = 1;
         let actual: usize = set.len();
         assert_eq!(expected, actual);

@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn json_eq_key_keeps_two_pow_64_and_its_successor_apart() {
         let values: Vec<Value> = vec![value(TWO_POW_64), value(TWO_POW_64_PLUS_ONE)];
-        let set: HashSet<JsonEqKey<'_>> = values.iter().map(JsonEqKey).collect();
+        let set: HashSet<JsonEqKey<'_, Value>> = values.iter().map(JsonEqKey).collect();
         let expected: usize = 2;
         let actual: usize = set.len();
         assert_eq!(expected, actual);
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn json_eq_key_merges_one_number_written_four_ways() {
         let values: Vec<Value> = ["1", "1.0", "1e0", "10e-1"].map(value).to_vec();
-        let set: HashSet<JsonEqKey<'_>> = values.iter().map(JsonEqKey).collect();
+        let set: HashSet<JsonEqKey<'_, Value>> = values.iter().map(JsonEqKey).collect();
         let expected: usize = 1;
         let actual: usize = set.len();
         assert_eq!(expected, actual);

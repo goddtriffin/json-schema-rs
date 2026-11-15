@@ -36,54 +36,58 @@ pub(crate) use float::{
     non_negative_integer,
 };
 
-use serde_json::Value;
+use crate::validator::{Instance, InstanceObject, InstanceRef};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
 /// Whether two JSON values are equal as JSON Schema defines it (`const`, `enum`, `uniqueItems`):
 /// numbers by mathematical value (`1 == 1.0`), objects regardless of key order, arrays element by
-/// element. Iterative, so deep values cannot overflow the stack.
+/// element. The two may be of different [`Instance`] representations. Iterative, so deep values
+/// cannot overflow the stack.
 #[must_use]
-pub fn json_equal(a: &Value, b: &Value) -> bool {
+pub fn json_equal<A: Instance, B: Instance>(a: &A, b: &B) -> bool {
     // Scalars (the common `const` / `enum` case) compare directly, without the work stack.
-    match (a, b) {
-        (Value::Null, Value::Null) => return true,
-        (Value::Bool(p), Value::Bool(q)) => return p == q,
-        (Value::Number(p), Value::Number(q)) => return cmp_num(p, q) == Ordering::Equal,
-        (Value::String(p), Value::String(q)) => return p == q,
-        (Value::Array(_), Value::Array(_)) | (Value::Object(_), Value::Object(_)) => {}
+    match (a.view(), b.view()) {
+        (InstanceRef::Null, InstanceRef::Null) => return true,
+        (InstanceRef::Bool(p), InstanceRef::Bool(q)) => return p == q,
+        (InstanceRef::Number(p), InstanceRef::Number(q)) => {
+            return cmp_num(&p, &q) == Ordering::Equal;
+        }
+        (InstanceRef::String(p), InstanceRef::String(q)) => return p == q,
+        (InstanceRef::Array(_), InstanceRef::Array(_))
+        | (InstanceRef::Object(_), InstanceRef::Object(_)) => {}
         _ => return false,
     }
-    let mut stack: Vec<(&Value, &Value)> = vec![(a, b)];
+    let mut stack: Vec<(&A, &B)> = vec![(a, b)];
     while let Some((x, y)) = stack.pop() {
-        match (x, y) {
-            (Value::Null, Value::Null) => {}
-            (Value::Bool(p), Value::Bool(q)) => {
+        match (x.view(), y.view()) {
+            (InstanceRef::Null, InstanceRef::Null) => {}
+            (InstanceRef::Bool(p), InstanceRef::Bool(q)) => {
                 if p != q {
                     return false;
                 }
             }
-            (Value::Number(p), Value::Number(q)) => {
-                if cmp_num(p, q) != Ordering::Equal {
+            (InstanceRef::Number(p), InstanceRef::Number(q)) => {
+                if cmp_num(&p, &q) != Ordering::Equal {
                     return false;
                 }
             }
-            (Value::String(p), Value::String(q)) => {
+            (InstanceRef::String(p), InstanceRef::String(q)) => {
                 if p != q {
                     return false;
                 }
             }
-            (Value::Array(p), Value::Array(q)) => {
+            (InstanceRef::Array(p), InstanceRef::Array(q)) => {
                 if p.len() != q.len() {
                     return false;
                 }
                 stack.extend(p.iter().zip(q.iter()));
             }
-            (Value::Object(p), Value::Object(q)) => {
+            (InstanceRef::Object(p), InstanceRef::Object(q)) => {
                 if p.len() != q.len() {
                     return false;
                 }
-                for (key, p_value) in p {
+                for (key, p_value) in p.iter() {
                     let Some(q_value) = q.get(key) else {
                         return false;
                     };
@@ -113,8 +117,8 @@ enum HashTag {
 }
 
 /// One step of [`json_hash`]'s walk: a value to hash, or an object key.
-enum HashItem<'a> {
-    Value(&'a Value),
+enum HashItem<'a, I> {
+    Value(&'a I),
     Key(&'a str),
 }
 
@@ -124,12 +128,12 @@ enum HashItem<'a> {
 /// agree), any other number by its `f64` bits (default build) or its normalised decimal
 /// (`arbitrary-precision`); an object's entries are hashed in key order, so
 /// insertion order does not matter. Iterative.
-pub(crate) fn json_hash<H: Hasher>(value: &Value, state: &mut H) {
+pub(crate) fn json_hash<I: Instance, H: Hasher>(value: &I, state: &mut H) {
     // The root is hashed without the stack, so a scalar never allocates.
-    let mut stack: Vec<HashItem<'_>> = Vec::new();
-    let mut next: Option<HashItem<'_>> = Some(HashItem::Value(value));
+    let mut stack: Vec<HashItem<'_, I>> = Vec::new();
+    let mut next: Option<HashItem<'_, I>> = Some(HashItem::Value(value));
     while let Some(item) = next.take().or_else(|| stack.pop()) {
-        let value: &Value = match item {
+        let value: &I = match item {
             HashItem::Key(key) => {
                 HashTag::Key.hash(state);
                 key.hash(state);
@@ -137,26 +141,26 @@ pub(crate) fn json_hash<H: Hasher>(value: &Value, state: &mut H) {
             }
             HashItem::Value(value) => value,
         };
-        match value {
-            Value::Null => HashTag::Null.hash(state),
-            Value::Bool(b) => {
+        match value.view() {
+            InstanceRef::Null => HashTag::Null.hash(state),
+            InstanceRef::Bool(b) => {
                 HashTag::Bool.hash(state);
                 b.hash(state);
             }
-            Value::Number(n) => hash_number(n, state),
-            Value::String(s) => {
+            InstanceRef::Number(n) => hash_number(&n, state),
+            InstanceRef::String(s) => {
                 HashTag::String.hash(state);
                 s.hash(state);
             }
-            Value::Array(items) => {
+            InstanceRef::Array(items) => {
                 HashTag::Array.hash(state);
                 items.len().hash(state);
                 stack.extend(items.iter().rev().map(HashItem::Value));
             }
-            Value::Object(map) => {
+            InstanceRef::Object(map) => {
                 HashTag::Object.hash(state);
                 map.len().hash(state);
-                let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+                let mut entries: Vec<(&str, &I)> = map.iter().collect();
                 entries.sort_unstable_by_key(|(key, _)| *key);
                 for (key, child) in entries.into_iter().rev() {
                     stack.push(HashItem::Value(child));
@@ -169,18 +173,26 @@ pub(crate) fn json_hash<H: Hasher>(value: &Value, state: &mut H) {
 
 /// A JSON value compared with [`json_equal`] and hashed with [`json_hash`], for hash sets keyed
 /// by mathematical JSON equality (`uniqueItems`).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct JsonEqKey<'a>(pub(crate) &'a Value);
+#[derive(Debug)]
+pub(crate) struct JsonEqKey<'a, I>(pub(crate) &'a I);
 
-impl PartialEq for JsonEqKey<'_> {
+impl<I> Clone for JsonEqKey<'_, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<I> Copy for JsonEqKey<'_, I> {}
+
+impl<I: Instance> PartialEq for JsonEqKey<'_, I> {
     fn eq(&self, other: &Self) -> bool {
         json_equal(self.0, other.0)
     }
 }
 
-impl Eq for JsonEqKey<'_> {}
+impl<I: Instance> Eq for JsonEqKey<'_, I> {}
 
-impl Hash for JsonEqKey<'_> {
+impl<I: Instance> Hash for JsonEqKey<'_, I> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         json_hash(self.0, state);
     }
@@ -544,7 +556,8 @@ mod tests {
     #[test]
     fn json_eq_key_finds_duplicates_by_value() {
         let values: Vec<Value> = vec![json!({"a": 1, "b": 2}), json!({"b": 2.0, "a": 1})];
-        let set: std::collections::HashSet<JsonEqKey<'_>> = values.iter().map(JsonEqKey).collect();
+        let set: std::collections::HashSet<JsonEqKey<'_, Value>> =
+            values.iter().map(JsonEqKey).collect();
         let expected: usize = 1;
         let actual: usize = set.len();
         assert_eq!(expected, actual);

@@ -50,8 +50,8 @@ pub use validator::RegexEngine;
 pub use validator::{
     Annotation, BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder,
     CustomKeyword, EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind,
-    EmbeddedSchemaError, ErrorIter, FlagOutput, MaskedValidationError, MaskedValidationErrorKind,
-    NewtypeValue, Output, OutputFormat, OutputUnit, SchemaError, TypeValidationError,
-    TypeValidators, UnionMatch, UnionVariants, ValidateError, ValidationError, ValidationErrorKind,
-    ValidationResult, validate,
+    EmbeddedSchemaError, ErrorIter, FlagOutput, Instance, InstanceObject, InstanceRef,
+    MaskedValidationError, MaskedValidationErrorKind, NewtypeValue, Output, OutputFormat,
+    OutputUnit, SchemaError, TypeValidationError, TypeValidators, UnionMatch, UnionVariants,
+    ValidateError, ValidationError, ValidationErrorKind, ValidationResult, validate,
 };
