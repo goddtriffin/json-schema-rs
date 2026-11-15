@@ -48,6 +48,8 @@ use std::fmt;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
+mod bundle;
+
 /// The base URI of a root document that has no retrieval URI and no absolute `$id`.
 pub const DEFAULT_BASE_URI: &str = "json-schema:///";
 
