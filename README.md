@@ -178,7 +178,9 @@ pattern's memory (same feature), and `.max_depth(Some(n))` caps
 evaluation depth (CLI `--regex-size-limit`, `--max-depth`). `.max_errors(Some(n))` ends
 `validate` at its `n`-th error (CLI `--max-errors`), `compiled.iter_errors(&instance)` finds
 errors as they are taken (`.next()` costs about one error), and `error.masked()` displays an
-error without the instance's values, for logs of sensitive data (CLI `--masked`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+error without the instance's values, for logs of sensitive data (CLI `--masked`).
+`compiled.validate_with_defaults(&mut instance)` inserts the `default` of every missing
+property, then validates (CLI `--apply-defaults`); `validate` never changes the instance. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
 bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),
@@ -673,6 +675,13 @@ one, and `--masked` prints each error without the payload's values
 
 ```bash
 jsonschemars validate -s schema.json --max-errors 1 --masked -p payload.json
+```
+
+`--apply-defaults` inserts the `default` of every missing property the schema lists
+before validating, and prints the payload with its defaults to stdout when it conforms:
+
+```bash
+jsonschemars validate -s config.schema.json --apply-defaults -p config.json > config.filled.json
 ```
 
 `--output FORMAT` prints the result to stdout as JSON in a standard output format:

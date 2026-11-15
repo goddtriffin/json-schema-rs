@@ -2094,7 +2094,7 @@ impl CompiledSchema {
     }
 
     /// Whether `name` is one `properties` or `patternProperties` covers.
-    fn is_known(&self, known: &KnownProperties, name: &str) -> bool {
+    pub(crate) fn is_known(&self, known: &KnownProperties, name: &str) -> bool {
         known
             .names
             .is_some_and(|id| self.property_table(id).contains(name))

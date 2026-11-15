@@ -3569,6 +3569,57 @@ fn cli_validate_max_errors_conflicts_with_output() {
 }
 
 #[test]
+fn cli_validate_apply_defaults_prints_payload_with_defaults() {
+    let actual: (i32, String, String) = run_cli_validate_streams(
+        r#"{"properties":{"port":{"type":"integer","default":8080},"host":{"type":"string"}}}"#,
+        r#"{"host": "a"}"#,
+        &["--apply-defaults"],
+    );
+    let expected: (i32, String, String) = (
+        0,
+        "{\n  \"host\": \"a\",\n  \"port\": 8080\n}\n".to_string(),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_apply_defaults_reports_errors_without_payload() {
+    let actual: (i32, String, String) = run_cli_validate_streams(
+        r#"{"properties":{"port":{"type":"string","default":8080}}}"#,
+        "{}",
+        &["--apply-defaults"],
+    );
+    let expected: (i32, String, String) = (
+        1,
+        String::new(),
+        "/port: expected string, got number\nerror: validation failed with 1 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_without_apply_defaults_prints_nothing() {
+    let actual: (i32, String, String) =
+        run_cli_validate_streams(r#"{"properties":{"port":{"default":8080}}}"#, "{}", &[]);
+    let expected: (i32, String, String) = (0, String::new(), String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_apply_defaults_conflicts_with_output() {
+    let (code, _stdout, _stderr): (i32, String, String) = run_cli_validate_streams(
+        r#"{"maximum":10}"#,
+        "5",
+        &["--apply-defaults", "--output", "basic"],
+    );
+    let expected: i32 = 2;
+    let actual: i32 = code;
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_generate_metaschema_check_rejects_a_nonconforming_schema() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let schema_path = temp_dir.path().join("schema.json");
@@ -4779,12 +4830,22 @@ fn run_cli_validate_output(
     payload_json: &str,
     format: &str,
 ) -> (i32, String, String) {
+    run_cli_validate_streams(schema_json, payload_json, &["--output", format])
+}
+
+/// Runs `validate` with `extra_args`, the payload on stdin: the exit code, stdout and stderr.
+fn run_cli_validate_streams(
+    schema_json: &str,
+    payload_json: &str,
+    extra_args: &[&str],
+) -> (i32, String, String) {
     let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
     std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
     schema_file.flush().expect("flush schema");
     let schema_path: String = schema_file.path().to_str().unwrap().to_string();
     let mut child = Command::new(jsonschemars_bin())
-        .args(["validate", "-s", schema_path.as_str(), "--output", format])
+        .args(["validate", "-s", schema_path.as_str()])
+        .args(extra_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

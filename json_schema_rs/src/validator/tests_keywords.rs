@@ -5701,3 +5701,217 @@ fn masked_error_keeps_instance_location() {
         .collect();
     assert_eq!(expected, actual);
 }
+
+// --- validate_with_defaults ---
+
+/// Validates `instance` against `schema` with defaults applied: the verdict and the instance
+/// as it was left.
+fn with_defaults(schema: &JsonSchema, mut instance: Value) -> (bool, Value) {
+    let verdict: bool = compile(schema)
+        .validate_with_defaults(&mut instance)
+        .is_ok();
+    (verdict, instance)
+}
+
+#[test]
+fn defaults_fill_missing_property() {
+    let expected: (bool, Value) = (true, json!({"a": 1}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"properties":{"a":{"type":"integer","default":1}}}"#),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_keep_present_property() {
+    let expected: (bool, Value) = (true, json!({"a": 2}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"properties":{"a":{"type":"integer","default":1}}}"#),
+        json!({"a": 2}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_fill_nested_object_that_is_present() {
+    let expected: (bool, Value) = (true, json!({"o": {"x": 1}}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"properties":{"o":{"properties":{"x":{"default":1}}}}}"#),
+        json!({"o": {}}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_skip_nested_object_that_is_missing() {
+    let expected: (bool, Value) = (true, json!({}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"properties":{"o":{"properties":{"x":{"default":1}}}}}"#),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_come_from_ref_target() {
+    let expected: (bool, Value) = (true, json!({"a": "x"}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r##"{"properties":{"a":{"$ref":"#/$defs/d"}},"$defs":{"d":{"default":"x"}}}"##),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_of_property_win_over_ref_target() {
+    let expected: (bool, Value) = (true, json!({"a": "own"}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(
+            r##"{"properties":{"a":{"$ref":"#/$defs/d","default":"own"}},"$defs":{"d":{"default":"x"}}}"##,
+        ),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+/// Before 2019-09 `$ref` ignores its siblings, `default` included.
+#[test]
+fn defaults_ignore_ref_sibling_in_draft7() {
+    let expected: (bool, Value) = (true, json!({}));
+    let actual: (bool, Value) = with_defaults(
+        &schema_in(
+            r##"{"properties":{"a":{"$ref":"#/definitions/d","default":1}},"definitions":{"d":{}}}"##,
+            SpecVersion::Draft07,
+        ),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_apply_through_all_of() {
+    let expected: (bool, Value) = (true, json!({"a": 1}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"allOf":[{"properties":{"a":{"default":1}}}]}"#),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_skip_any_of_branches() {
+    let expected: (bool, Value) = (true, json!({}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"anyOf":[{"properties":{"a":{"default":1}}}]}"#),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_skip_conditional_branches() {
+    let expected: (bool, Value) = (true, json!({}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"if":true,"then":{"properties":{"a":{"default":1}}}}"#),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_apply_to_every_item() {
+    let expected: (bool, Value) = (true, json!([{"a": 1}, {"a": 2}]));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"items":{"properties":{"a":{"default":1}}}}"#),
+        json!([{}, {"a": 2}]),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_apply_to_tuple_items_by_position() {
+    let expected: (bool, Value) = (true, json!([{"a": 1}, {"b": 2}, {"b": 2}]));
+    let actual: (bool, Value) = with_defaults(
+        &schema(
+            r#"{"prefixItems":[{"properties":{"a":{"default":1}}}],"items":{"properties":{"b":{"default":2}}}}"#,
+        ),
+        json!([{}, {}, {}]),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_leave_missing_tuple_items_missing() {
+    let expected: (bool, Value) = (true, json!([]));
+    let actual: (bool, Value) =
+        with_defaults(&schema(r#"{"prefixItems":[{"default":1}]}"#), json!([]));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_apply_through_pattern_properties() {
+    let expected: (bool, Value) = (true, json!({"x1": {"a": 1}, "y": {}}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"patternProperties":{"^x":{"properties":{"a":{"default":1}}}}}"#),
+        json!({"x1": {}, "y": {}}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_apply_through_additional_properties() {
+    let expected: (bool, Value) = (true, json!({"k": {}, "other": {"a": 1}}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(
+            r#"{"properties":{"k":{}},"additionalProperties":{"properties":{"a":{"default":1}}}}"#,
+        ),
+        json!({"k": {}, "other": {}}),
+    );
+    assert_eq!(expected, actual);
+}
+
+/// The instance is validated with its defaults in place, so a default the schema rejects is
+/// an error.
+#[test]
+fn defaults_that_do_not_conform_fail_validation() {
+    let expected: (bool, Value) = (false, json!({"a": 1}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(r#"{"properties":{"a":{"type":"string","default":1}}}"#),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_report_errors_of_instance_with_defaults() {
+    let mut instance: Value = json!({});
+    let expected: ValidationResult =
+        Err(vec![expected_string("/a", "/properties/a/type", "number")]);
+    let actual: ValidationResult = compile(&schema(
+        r#"{"properties":{"a":{"type":"string","default":1}}}"#,
+    ))
+    .validate_with_defaults(&mut instance);
+    assert_eq!(expected, actual);
+}
+
+/// A default is inserted whole: a recursive schema does not fill the inserted value in again.
+#[test]
+fn defaults_are_not_applied_inside_a_default() {
+    let expected: (bool, Value) = (true, json!({"a": {}}));
+    let actual: (bool, Value) = with_defaults(
+        &schema(
+            r##"{"$ref":"#/$defs/n","$defs":{"n":{"properties":{"a":{"$ref":"#/$defs/n","default":{}}}}}}"##,
+        ),
+        json!({}),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn defaults_leave_non_object_instance_unchanged() {
+    let expected: (bool, Value) = (true, json!(5));
+    let actual: (bool, Value) =
+        with_defaults(&schema(r#"{"properties":{"a":{"default":1}}}"#), json!(5));
+    assert_eq!(expected, actual);
+}

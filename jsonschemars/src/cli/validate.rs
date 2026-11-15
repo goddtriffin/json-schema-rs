@@ -165,18 +165,21 @@ pub(crate) fn compile_options(matches: &ArgMatches) -> Result<CompiledSchemaBuil
 /// How `validate` reports its verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Report {
-    /// One line per error on stderr, without the payload's values when `masked` (`--masked`).
-    Lines { masked: bool },
+    /// One line per error on stderr, without the payload's values when `masked` (`--masked`);
+    /// with `apply_defaults` (`--apply-defaults`), the payload with its defaults on stdout when
+    /// it conforms.
+    Lines { masked: bool, apply_defaults: bool },
     /// The output format `--output` names, on stdout.
     Output(OutputFormat),
 }
 
-/// How `--output` and `--masked` ask the verdict to be reported.
+/// How `--output`, `--masked` and `--apply-defaults` ask the verdict to be reported.
 pub(crate) fn report(matches: &ArgMatches) -> Report {
     match output_format(matches) {
         Some(format) => Report::Output(format),
         None => Report::Lines {
             masked: matches.get_flag("masked"),
+            apply_defaults: matches.get_flag("apply-defaults"),
         },
     }
 }
@@ -204,7 +207,7 @@ pub(crate) fn run_validate(
 ) -> Result<(), CliFailure> {
     let (schema, resources): (Document, Vec<Document>) =
         read_documents(schema_path, resource_paths, schema_settings)?;
-    let instance: serde_json::Value = match payload_path {
+    let mut instance: serde_json::Value = match payload_path {
         Some(p) => read_payload_from_path(&p),
         None => read_payload_from_reader(io::stdin()),
     }
@@ -229,13 +232,27 @@ pub(crate) fn run_validate(
     let compiled: CompiledSchema = compile
         .build(&registry)
         .map_err(|errors| schema_problems(errors.iter()))?;
-    let masked: bool = match report {
-        Report::Lines { masked } => masked,
+    let (masked, apply_defaults): (bool, bool) = match report {
+        Report::Lines {
+            masked,
+            apply_defaults,
+        } => (masked, apply_defaults),
         Report::Output(format) => {
             return report_output(&compiled, &instance, format);
         }
     };
-    match compiled.validate(&instance) {
+    let verdict: json_schema_rs::ValidationResult = if apply_defaults {
+        compiled.validate_with_defaults(&mut instance)
+    } else {
+        compiled.validate(&instance)
+    };
+    match verdict {
+        Ok(()) if apply_defaults => {
+            let json: String = serde_json::to_string_pretty(&instance)
+                .map_err(|e| no_verdict(format!("failed to serialize the payload: {e}")))?;
+            println!("{json}");
+            Ok(())
+        }
         Ok(()) => Ok(()),
         Err(errors) => {
             for e in &errors {

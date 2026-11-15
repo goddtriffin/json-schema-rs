@@ -6,6 +6,7 @@
 
 mod compiled;
 pub(crate) mod content;
+mod defaults;
 mod ecma_regex;
 mod equivalence;
 mod error;

@@ -325,6 +325,13 @@ pub fn run() {
                         .help("Print the errors without the payload's values (`/age: value is above maximum 10`), for logs of sensitive data"),
                 )
                 .arg(
+                    Arg::new("apply-defaults")
+                        .long("apply-defaults")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("output")
+                        .help("Insert the `default` of every missing property the schema lists before validating, and print the payload with its defaults to stdout when it conforms"),
+                )
+                .arg(
                     Arg::new("output")
                         .long("output")
                         .value_name("FORMAT")
