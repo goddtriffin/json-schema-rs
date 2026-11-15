@@ -1424,6 +1424,49 @@ impl ToJsonSchema for HandWrittenExample {
     }
 }
 
+/// The schema object `json` holds, for a type whose schema is written out as JSON (see
+/// [`schema_marker!`](crate::schema_marker)).
+///
+/// # Errors
+///
+/// [`ReverseCodeGenError::InvalidSchema`] when `json` is not a JSON Schema object.
+pub fn schema_from_json(json: &str) -> ReverseCodeGenResult {
+    serde_json::from_str::<JsonSchema>(json).map_err(|error: serde_json::Error| {
+        vec![ReverseCodeGenError::InvalidSchema {
+            json: json.to_string(),
+            reason: error.to_string(),
+        }]
+    })
+}
+
+/// A unit type whose [`ToJsonSchema`] is the schema written out as JSON: generated code names
+/// it in `#[json_schema(with = "...")]` for a field of a type converted from that schema
+/// (`CodeGenSettings::convert`), which has no impl of the crate's trait of its own.
+///
+/// ```
+/// use json_schema_rs::ToJsonSchema;
+///
+/// json_schema_rs::schema_marker!(Decimal, r#"{"type":"string","format":"decimal"}"#);
+///
+/// let expected: serde_json::Value = serde_json::json!({"type": "string", "format": "decimal"});
+/// let actual: serde_json::Value =
+///     serde_json::to_value(Decimal::json_schema().unwrap()).unwrap();
+/// assert_eq!(expected, actual);
+/// ```
+#[macro_export]
+macro_rules! schema_marker {
+    ($name:ident, $json:literal) => {
+        /// The JSON Schema of a converted type, for `ToJsonSchema`.
+        pub struct $name;
+
+        impl $crate::ToJsonSchema for $name {
+            fn json_schema() -> $crate::ReverseCodeGenResult {
+                $crate::reverse_code_gen::schema_from_json($json)
+            }
+        }
+    };
+}
+
 /// A string with `format`.
 fn formatted_string(format: &str) -> JsonSchema {
     JsonSchema {

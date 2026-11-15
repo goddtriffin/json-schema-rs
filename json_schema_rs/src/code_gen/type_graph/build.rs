@@ -415,6 +415,7 @@ pub(crate) fn build<'r>(
     let mut graph: TypeGraph = TypeGraph::default();
     let mut sources: TargetSources<'r> = HashMap::new();
     let mut memo: HashMap<(usize, NodeKey), TypeId> = HashMap::new();
+    let conversions: Vec<(Value, &str)> = conversion_keys(settings)?;
     let classes: Vec<usize> = if settings.validates() && registries.len() > 1 {
         registry_classes(registries)
     } else {
@@ -428,6 +429,7 @@ pub(crate) fn build<'r>(
             registry,
             raw,
             settings,
+            conversions: &conversions,
             schema_index: index,
             class: classes[index],
             queue: Vec::new(),
@@ -442,6 +444,81 @@ pub(crate) fn build<'r>(
     }
     sources.retain(|id, _| graph.targets[id.index()].is_some());
     Ok((graph, sources))
+}
+
+/// The top-level keywords a [`TypeConversion`](crate::TypeConversion) match ignores.
+const CONVERSION_IGNORED: [&str; 8] = [
+    "title",
+    "description",
+    "$comment",
+    "default",
+    "examples",
+    "deprecated",
+    "readOnly",
+    "writeOnly",
+];
+
+/// `schema` serialized as the parser models it, without its top-level annotations: what a
+/// [`TypeConversion`](crate::TypeConversion) compares.
+fn conversion_key(schema: &JsonSchema) -> Value {
+    let mut value: Value = serde_json::to_value(schema).unwrap_or(Value::Null);
+    if let Value::Object(map) = &mut value {
+        for key in CONVERSION_IGNORED {
+            map.remove(key);
+        }
+    }
+    value
+}
+
+/// `key` with `"null"` taken out of its `type` array (a single remaining type as a string), or
+/// `None` when its `type` is not an array of `"null"` and at least one other type.
+fn without_null_type(mut key: Value) -> Option<Value> {
+    let ty: &mut Value = key.get_mut("type")?;
+    let Value::Array(types) = ty else {
+        return None;
+    };
+    let before: usize = types.len();
+    types.retain(|t: &Value| t != "null");
+    if types.len() == before || types.is_empty() {
+        return None;
+    }
+    if let [single] = types.as_slice() {
+        *ty = single.clone();
+    }
+    Some(key)
+}
+
+/// Each of [`CodeGenSettings::conversions`] as its [`conversion_key`] and Rust type; a schema that
+/// does not parse, or a type that is not a Rust path, is an error.
+fn conversion_keys(settings: &CodeGenSettings) -> CodeGenResult<Vec<(Value, &str)>> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut out: Vec<(Value, &str)> = Vec::new();
+    for conversion in &settings.conversions {
+        if !crate::code_gen::rust_backend::is_rust_type(&conversion.rust_type) {
+            problems.push(format!(
+                "conversion type `{}` is not a Rust type",
+                conversion.rust_type
+            ));
+        }
+        match Schema::new_from_serde_value(&conversion.schema, &JsonSchemaSettings::default()) {
+            Ok(Schema::Object(schema)) => {
+                out.push((conversion_key(&schema), conversion.rust_type.as_str()));
+            }
+            Ok(Schema::Bool(_)) => problems.push(format!(
+                "conversion schema {} is a boolean schema, not an object",
+                conversion.schema
+            )),
+            Err(e) => problems.push(format!(
+                "conversion schema {} does not parse: {e}",
+                conversion.schema
+            )),
+        }
+    }
+    if problems.is_empty() {
+        Ok(out)
+    } else {
+        Err(CodeGenError::Customization(problems))
+    }
 }
 
 /// Per node with a validation target, the schema objects of its target (each with the scope it
@@ -486,6 +563,8 @@ struct Builder<'g, 'r> {
     registry: &'r Registry<'r>,
     raw: &'r RawSubschemas,
     settings: &'g CodeGenSettings,
+    /// [`CodeGenSettings::conversions`] as [`conversion_keys`] gives them.
+    conversions: &'g [(Value, &'g str)],
     schema_index: usize,
     /// See [`ValidationTarget::class`].
     class: usize,
@@ -957,6 +1036,32 @@ impl<'r> Builder<'_, 'r> {
         })
     }
 
+    /// The node of a subschema one of [`CodeGenSettings::conversions`] matches: the user's type
+    /// stands for the whole subschema, in an `Option` when only a `"null"` in its `type` array
+    /// keeps it from matching.
+    fn converted(&mut self, flat: &Flat<'r>) -> Option<TypeNode> {
+        let [conjunct] = flat.conjuncts.as_slice() else {
+            return None;
+        };
+        if self.conversions.is_empty() {
+            return None;
+        }
+        let key: Value = conversion_key(conjunct.schema);
+        if let Some(index) = self.conversions.iter().position(|(k, _)| *k == key) {
+            return Some(TypeNode::External {
+                path: self.conversions[index].1.to_string(),
+                conversion: Some(index),
+            });
+        }
+        let key: Value = without_null_type(key)?;
+        let index: usize = self.conversions.iter().position(|(k, _)| *k == key)?;
+        let inner: TypeId = self.graph.push(TypeNode::External {
+            path: self.conversions[index].1.to_string(),
+            conversion: Some(index),
+        });
+        Some(TypeNode::Option(inner))
+    }
+
     /// Builds the node for a reserved id.
     fn build_node(
         &mut self,
@@ -967,6 +1072,9 @@ impl<'r> Builder<'_, 'r> {
         let annotations: Annotations = annotations_of(flat);
         if flat.never {
             return Ok(uninhabited(annotations));
+        }
+        if let Some(node) = self.converted(flat) {
+            return Ok(node);
         }
         // A union keyword: one variant per branch, with the other conjuncts distributed in.
         if let Some((owner, kind, branches)) = first_union(flat) {

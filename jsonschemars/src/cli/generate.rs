@@ -172,7 +172,8 @@ fn read_patches(path: &Path) -> Result<BTreeMap<String, TypePatch>, String> {
 }
 
 /// Codegen settings from the `--cgs-*` flags. Fails when the `--cgs-patch` file cannot be read
-/// or is malformed, and for `--cgs-unique-items index-set` when `jsonschemars` is built without
+/// or is malformed, when a `--cgs-convert` or `--cgs-replace` is not `X=Y` (or its schema is not
+/// JSON), and for `--cgs-unique-items index-set` when `jsonschemars` is built without
 /// the `indexmap` feature.
 pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings, String> {
     let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
@@ -221,6 +222,20 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
         for (name, patch) in read_patches(Path::new(path))? {
             b = b.patch(name, patch);
         }
+    }
+    for value in many("cgs-convert") {
+        let (rust_type, schema) = value
+            .split_once('=')
+            .ok_or_else(|| format!("--cgs-convert {value}: expected TYPE=SCHEMA"))?;
+        let schema: serde_json::Value = serde_json::from_str(schema)
+            .map_err(|e| format!("--cgs-convert {value}: the schema is not JSON: {e}"))?;
+        b = b.convert(schema, rust_type);
+    }
+    for value in many("cgs-replace") {
+        let (name, rust_type) = value
+            .split_once('=')
+            .ok_or_else(|| format!("--cgs-replace {value}: expected NAME=TYPE"))?;
+        b = b.replace(name, rust_type);
     }
     if let Some(kind) = flag("cgs-unique-items") {
         b = b.unique_items(match kind {

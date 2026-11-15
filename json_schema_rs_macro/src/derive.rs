@@ -928,14 +928,14 @@ fn object_spec<'a>(
         }
         if serde_flag(&field.attrs, "flatten")? {
             let optional: bool = is_option_type(&field.ty);
-            let ty: Type = replace_self(
-                if optional {
-                    optional_inner_type(&field.ty)
-                } else {
-                    &field.ty
-                },
-                name,
-            );
+            let ty: Type = if let Some(with) = field_str_attr(field, "with")? {
+                parse_with(field, &with)?
+            } else if optional {
+                optional_inner_type(&field.ty).clone()
+            } else {
+                field.ty.clone()
+            };
+            let ty: Type = replace_self(&ty, name);
             flattens.push(quote! {
                 #support::FlattenSpec {
                     schema: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_flattened,
@@ -953,6 +953,22 @@ fn object_spec<'a>(
             closed: true,
         }
     })
+}
+
+/// The type named by a field's `#[json_schema(with = "Type")]`.
+fn parse_with(field: &Field, with: &str) -> SynResult<Type> {
+    syn::parse_str(with).map_err(|error: Error| {
+        Error::new_spanned(field, format!("json_schema(with = \"{with}\"): {error}"))
+    })
+}
+
+/// The type whose schema a variant's field has: its `#[json_schema(with = "Type")]`, else its
+/// own type.
+fn schema_type(field: &Field) -> SynResult<Type> {
+    match field_str_attr(field, "with")? {
+        Some(with) => parse_with(field, &with),
+        None => Ok(field.ty.clone()),
+    }
 }
 
 /// The constant `FieldSpec` expression of one (non-flattened) named field of type `name`.
@@ -998,9 +1014,7 @@ fn field_spec(
         quote! { #path }
     } else {
         let schema_ty: Type = if let Some(with) = field_str_attr(field, "with")? {
-            syn::parse_str(&with).map_err(|error: Error| {
-                Error::new_spanned(field, format!("json_schema(with = \"{with}\"): {error}"))
-            })?
+            parse_with(field, &with)?
         } else if strip_option {
             optional_inner_type(ty).clone()
         } else {
@@ -1377,7 +1391,7 @@ fn enum_spec_body(
         let shape: TokenStream2 = match &variant.fields {
             Fields::Unit => quote! { #support::VariantShape::Unit },
             Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                let ty: Type = replace_self(&unnamed.unnamed[0].ty, name);
+                let ty: Type = replace_self(&schema_type(&unnamed.unnamed[0])?, name);
                 quote! {
                     #support::VariantShape::Newtype {
                         schema: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with,
@@ -1389,8 +1403,8 @@ fn enum_spec_body(
                 let items: Vec<Type> = unnamed
                     .unnamed
                     .iter()
-                    .map(|field: &Field| replace_self(&field.ty, name))
-                    .collect();
+                    .map(|field: &Field| Ok(replace_self(&schema_type(field)?, name)))
+                    .collect::<SynResult<Vec<Type>>>()?;
                 quote! {
                     #support::VariantShape::Tuple(&[
                         #(<#items as ::json_schema_rs::ToJsonSchema>::json_schema_with),*

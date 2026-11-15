@@ -261,6 +261,14 @@ pub(crate) enum TypeNode {
     Object(ObjectNode),
     Enum(EnumNode),
     Union(UnionNode),
+    /// A type of the user's, as a Rust path: a subschema matched by a conversion or a named type
+    /// replaced (see [`CodeGenSettings::conversions`](crate::CodeGenSettings::conversions)).
+    External {
+        /// The type as written by the user.
+        path: String,
+        /// The index of the matching conversion in the settings; `None` for a replacement.
+        conversion: Option<usize>,
+    },
 }
 
 impl TypeNode {
@@ -282,7 +290,8 @@ impl TypeNode {
             | TypeNode::Integer(..)
             | TypeNode::Number
             | TypeNode::String { .. }
-            | TypeNode::Enum(_) => Vec::new(),
+            | TypeNode::Enum(_)
+            | TypeNode::External { .. } => Vec::new(),
             TypeNode::Array { items, .. } => vec![*items],
             TypeNode::Map { values } => vec![*values],
             TypeNode::Option(inner) | TypeNode::Box(inner) => vec![*inner],
@@ -301,7 +310,8 @@ impl TypeNode {
             | TypeNode::Integer(..)
             | TypeNode::Number
             | TypeNode::String { .. }
-            | TypeNode::Enum(_) => Vec::new(),
+            | TypeNode::Enum(_)
+            | TypeNode::External { .. } => Vec::new(),
             TypeNode::Array { items, .. } => vec![items],
             TypeNode::Map { values } => vec![values],
             TypeNode::Option(inner) | TypeNode::Box(inner) => vec![inner],
@@ -453,6 +463,7 @@ pub(crate) fn scalar_json_type(node: &TypeNode) -> Option<JsonType> {
         | TypeNode::Option(_)
         | TypeNode::Box(_)
         | TypeNode::Enum(_)
-        | TypeNode::Union(_) => None,
+        | TypeNode::Union(_)
+        | TypeNode::External { .. } => None,
     }
 }

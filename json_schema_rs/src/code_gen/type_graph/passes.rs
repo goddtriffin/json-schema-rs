@@ -160,7 +160,8 @@ fn local_signature(node: &TypeNode, mode: DedupeMode) -> String {
         | TypeNode::Array { .. }
         | TypeNode::Map { .. }
         | TypeNode::Option(_)
-        | TypeNode::Box(_) => {
+        | TypeNode::Box(_)
+        | TypeNode::External { .. } => {
             // Children are compared by class; drop them from the local text.
             let mut copy: TypeNode = node.clone();
             for child in copy.children_mut() {
@@ -449,7 +450,8 @@ fn value_size(graph: &TypeGraph, id: TypeId, sizes: &[Option<u64>]) -> u64 {
         TypeNode::Null => 0,
         TypeNode::Boolean | TypeNode::Enum(_) => 1,
         TypeNode::Integer(..) | TypeNode::Number | TypeNode::Box(_) => 8,
-        TypeNode::String { .. } | TypeNode::Map { .. } => 24,
+        // The user's type: sized like the `String` it most often stands for.
+        TypeNode::String { .. } | TypeNode::Map { .. } | TypeNode::External { .. } => 24,
         TypeNode::Array { unique, .. } => {
             if *unique {
                 56

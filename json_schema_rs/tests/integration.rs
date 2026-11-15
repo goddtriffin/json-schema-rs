@@ -1464,6 +1464,7 @@ const SCENARIOS: &[&str] = &[
     "ip_formats",
     "doc_markup",
     "derived_traits",
+    "converted_and_replaced_types",
 ];
 
 /// Build+deserialize scenarios that need the `indexmap` feature.
@@ -2374,6 +2375,59 @@ fn main() {
     assert_eq!(expected, actual);
 }
 "#,
+            ),
+            "converted_and_replaced_types" => (
+                // A conversion of a custom-format string (required, nullable, array items and
+                // additional properties) and a replaced definition; the generated types validate
+                // the JSON before converting it and describe the original subschemas.
+                r##"{"type":"object","properties":{"addr":{"type":"string","format":"dotted-quad"},"backup":{"type":["string","null"],"format":"dotted-quad"},"peers":{"type":"array","items":{"$ref":"#/$defs/Quad"}},"meta":{"$ref":"#/$defs/Meta"},"route":{"anyOf":[{"type":"string","format":"dotted-quad"},{"type":"integer"}]}},"required":["addr","backup"],"additionalProperties":{"type":"string","format":"dotted-quad"},"$defs":{"Quad":{"type":"string","format":"dotted-quad","description":"A peer."},"Meta":{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}}}"##,
+                CodeGenSettings {
+                    conversions: vec![json_schema_rs::TypeConversion {
+                        schema: serde_json::json!({"type": "string", "format": "dotted-quad"}),
+                        rust_type: "std::net::Ipv4Addr".to_string(),
+                    }],
+                    replacements: BTreeMap::from([(
+                        "Meta".to_string(),
+                        "BTreeMap<String, serde_json::Value>".to_string(),
+                    )]),
+                    ..default_code_gen.clone()
+                },
+                r##"fn main() {
+    use json_schema_rs::ToJsonSchema as _;
+    use std::net::Ipv4Addr;
+    let root: compile_test::Root = serde_json::from_str(
+        r#"{"addr":"10.0.0.1","backup":null,"peers":["10.0.0.2"],"meta":{"any":1},"route":"10.0.0.3","extra":"10.0.0.4"}"#,
+    )
+    .unwrap();
+    let rejected: bool = serde_json::from_str::<compile_test::Root>(r#"{"addr":"10.0.0.1"}"#).is_err();
+    let schema: serde_json::Value = serde_json::to_value(compile_test::Root::json_schema().unwrap()).unwrap();
+    let expected: (Ipv4Addr, Option<Ipv4Addr>, Vec<Ipv4Addr>, serde_json::Value, bool, Option<Ipv4Addr>, bool, serde_json::Value, serde_json::Value, serde_json::Value) = (
+        Ipv4Addr::new(10, 0, 0, 1),
+        None,
+        vec![Ipv4Addr::new(10, 0, 0, 2)],
+        serde_json::json!({"any": 1}),
+        true,
+        Some(Ipv4Addr::new(10, 0, 0, 4)),
+        true,
+        serde_json::json!({"format": "dotted-quad", "type": "string"}),
+        serde_json::json!({"format": "dotted-quad", "type": ["null", "string"]}),
+        serde_json::json!({"items": {"format": "dotted-quad", "type": "string"}, "type": "array"}),
+    );
+    let actual: (Ipv4Addr, Option<Ipv4Addr>, Vec<Ipv4Addr>, serde_json::Value, bool, Option<Ipv4Addr>, bool, serde_json::Value, serde_json::Value, serde_json::Value) = (
+        root.addr,
+        root.backup,
+        root.peers.clone().unwrap(),
+        serde_json::to_value(root.meta.clone().unwrap()).unwrap(),
+        matches!(root.route, Some(compile_test::RouteAnyOf::Ipv4Addr(ip)) if ip == Ipv4Addr::new(10, 0, 0, 3)),
+        root.additional.get("extra").copied(),
+        rejected,
+        schema["properties"]["addr"].clone(),
+        schema["properties"]["backup"].clone(),
+        schema["properties"]["peers"].clone(),
+    );
+    assert_eq!(expected, actual);
+}
+"##,
             ),
             _ => panic!("unknown scenario: {scenario_name}"),
         };
