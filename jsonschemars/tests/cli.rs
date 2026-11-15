@@ -4791,6 +4791,14 @@ fn cli_validate_output_basic_prints_the_annotations_of_a_valid_payload() {
       "keywordLocation": "/properties/a/title",
       "instanceLocation": "/a",
       "annotation": "A"
+    },
+    {
+      "valid": true,
+      "keywordLocation": "/properties",
+      "instanceLocation": "",
+      "annotation": [
+        "a"
+      ]
     }
   ]
 }
@@ -4832,6 +4840,14 @@ fn cli_validate_output_detailed_nests_the_annotations() {
           "instanceLocation": "/a",
           "annotation": "A"
         }
+      ]
+    },
+    {
+      "valid": true,
+      "keywordLocation": "/properties",
+      "instanceLocation": "",
+      "annotation": [
+        "a"
       ]
     }
   ]
@@ -4880,6 +4896,11 @@ fn cli_validate_output_verbose_reports_every_subschema() {
           "keywordLocation": "/anyOf/1/title",
           "instanceLocation": "",
           "annotation": "N"
+        },
+        {
+          "valid": true,
+          "keywordLocation": "/anyOf/1/type",
+          "instanceLocation": ""
         }
       ]
     }
