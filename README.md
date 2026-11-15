@@ -579,6 +579,28 @@ let result = compiled.validate(&instance);
 let valid: bool = compiled.is_valid(&instance);
 ```
 
+With the `async` feature, `RegistryBuilder::async_retriever` takes an `AsyncRetrieve`
+implementation and `build_async` fetches the documents each round of discovery finds
+concurrently (the counterpart of jsonschema's `async_options().with_retriever(..)` and
+ajv's `loadSchema`):
+
+```rust
+use json_schema_rs::{AsyncRetrieve, Registry, RetrieveError, RetrieveFuture};
+
+struct MyAsync;
+
+impl AsyncRetrieve for MyAsync {
+    fn retrieve<'a>(&'a self, uri: &'a str) -> RetrieveFuture<'a> {
+        Box::pin(async move { fetch_json(uri).await.map_err(|e| RetrieveError { reason: e.to_string() }) })
+    }
+}
+
+let registry: Registry<'_> = Registry::builder()
+    .async_retriever(MyAsync)
+    .build_async(&schema)
+    .await?;
+```
+
 Each `ValidationError` carries the instance location, the failing keyword's location
 through the schema as evaluated (`keyword_location`, e.g. `/properties/width/$ref/minimum`),
 its absolute URI after the last `$ref` crossed (`absolute_keyword_location`, when the

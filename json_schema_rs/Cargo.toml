@@ -28,6 +28,9 @@ chrono = ["dep:chrono"]
 # Retrieve `http:` / `https:` documents a `$ref` names (`HttpRetriever`, the CLI's
 # `--cgs-allow-remote-refs`). Off by default: no network access unless asked for.
 http = ["dep:reqwest"]
+# `RegistryBuilder::async_retriever` and `build_async`: referenced documents fetched by an
+# `AsyncRetrieve`r, concurrently. Off by default; it needs no extra crate.
+async = []
 # `RegexEngine::Linear`: patterns matched in linear time, for schemas from untrusted sources
 # (`regex` crate). Off by default: the default engine needs no extra crate.
 linear-regex = ["dep:regex"]
