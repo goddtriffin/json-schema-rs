@@ -13,7 +13,7 @@ use super::GenerateRustOutput;
 use super::doc_text;
 use super::input::{CachingRetriever, CodeGenInput};
 use super::rust_validators::{self, BufferValidators, EmbeddedSet, Entry, UnionEntries};
-use super::settings::{CodeGenSettings, DedupeMode, UniqueItemsType};
+use super::settings::{CodeGenSettings, DedupeMode, TypePatch, UniqueItemsType};
 use super::type_graph::passes;
 use super::type_graph::{
     self, Annotations, EnumNode, Field, IntWidth, NameProposal, NameTier, Newtype,
@@ -23,8 +23,8 @@ use super::type_graph::{
 use crate::json_schema::{IntegerSemantics, JsonSchemaSettings, Registry, Schema};
 use crate::number;
 use crate::sanitizers::{
-    RenameRule, enum_variant_name_from_value, sanitize_field_name, sanitize_struct_name,
-    to_pascal_case,
+    RenameRule, enum_variant_name_from_value, is_rust_keyword, sanitize_field_name,
+    sanitize_struct_name, to_pascal_case,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -58,7 +58,7 @@ impl CodeGenBackend for RustBackend {
             .collect::<CodeGenResult<Vec<Registry<'_>>>>()?;
         let (graph, sets, _): (TypeGraph, Option<Vec<EmbeddedSet>>, Vec<TypeId>) =
             prepare_graph(&schemas, &registries, input.retrieval_settings(), settings)?;
-        let plan: Plan = Plan::new(&graph, settings);
+        let plan: Plan = Plan::new(&graph, settings)?;
         let shared: Option<Vec<u8>> = if plan.has_shared() {
             Some(render_buffer(&graph, &plan, Home::Shared, sets.as_deref())?)
         } else {
@@ -163,6 +163,47 @@ const RESERVED_NAMES: [&str; 16] = [
     "Vec",
 ];
 
+/// Each named item's home and name, and each patch, keyed the way [`Plan`] keeps them.
+struct Placement {
+    items: HashMap<TypeId, (Home, String)>,
+    root_aliases: Vec<Option<String>>,
+    node_patches: HashMap<TypeId, TypePatch>,
+    alias_patches: Vec<Option<TypePatch>>,
+}
+
+impl Placement {
+    /// Places each candidate under its allocated name, with its patch (`names` and `patched`
+    /// are in `candidates`' order).
+    fn new(
+        schemas: usize,
+        candidates: Vec<(NameProposal, ItemKey, Home)>,
+        names: Vec<String>,
+        patched: &[Option<&TypePatch>],
+    ) -> Placement {
+        let mut placed: Placement = Placement {
+            items: HashMap::new(),
+            root_aliases: vec![None; schemas],
+            node_patches: HashMap::new(),
+            alias_patches: vec![None; schemas],
+        };
+        for (((_, key, home), name), patch) in candidates.into_iter().zip(names).zip(patched) {
+            match key {
+                ItemKey::Node(id) => {
+                    placed.items.insert(id, (home, name));
+                    if let Some(patch) = patch {
+                        placed.node_patches.insert(id, (*patch).clone());
+                    }
+                }
+                ItemKey::RootAlias(schema) => {
+                    placed.root_aliases[schema] = Some(name);
+                    placed.alias_patches[schema] = patch.cloned();
+                }
+            }
+        }
+        placed
+    }
+}
+
 /// An item that needs a name: a named node, or the type alias for a schema's root.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum ItemKey {
@@ -187,6 +228,12 @@ struct Plan {
     eq_nodes: Vec<bool>,
     /// Whether structs, enums and unions validate themselves (`self_validating`).
     self_validating: bool,
+    /// The settings' derives and attributes for every item (`extra_derives`, `extra_attrs`).
+    extra_derives: Vec<String>,
+    extra_attrs: Vec<String>,
+    /// The patch of each patched named node, and of each schema's patched root alias.
+    node_patches: HashMap<TypeId, TypePatch>,
+    alias_patches: Vec<Option<TypePatch>>,
 }
 
 impl Plan {
@@ -202,7 +249,7 @@ impl Plan {
         })
     }
 
-    fn new(graph: &TypeGraph, settings: &CodeGenSettings) -> Plan {
+    fn new(graph: &TypeGraph, settings: &CodeGenSettings) -> CodeGenResult<Plan> {
         let reach: Vec<BTreeSet<TypeId>> = passes::reachable(graph);
         // Which schemas use each named node.
         let mut users: BTreeMap<TypeId, BTreeSet<usize>> = BTreeMap::new();
@@ -278,17 +325,10 @@ impl Plan {
             }
         };
         let wanted: Vec<(String, Home)> = qualify_collisions(&wanted, &candidates, &clash);
-        let names: Vec<String> = allocate_names(&wanted, clash);
-        let mut items: HashMap<TypeId, (Home, String)> = HashMap::new();
-        let mut root_aliases: Vec<Option<String>> = vec![None; graph.schemas.len()];
-        for ((_, key, home), name) in candidates.into_iter().zip(names) {
-            match key {
-                ItemKey::Node(id) => {
-                    items.insert(id, (home, name));
-                }
-                ItemKey::RootAlias(schema) => root_aliases[schema] = Some(name),
-            }
-        }
+        let mut names: Vec<String> = allocate_names(&wanted, clash);
+        let homes: Vec<Home> = candidates.iter().map(|(_, _, home)| *home).collect();
+        let patched: Vec<Option<&TypePatch>> = apply_patches(settings, &homes, &mut names, clash)?;
+        let placed: Placement = Placement::new(graph.schemas.len(), candidates, names, &patched);
         let set_kind: Option<SetKind> = SetKind::from_setting(settings.unique_items);
         let set_item: Vec<bool> = if set_kind.is_some() {
             set_item_nodes(graph)
@@ -297,15 +337,19 @@ impl Plan {
         };
         let ord_items: BTreeSet<TypeId> = ord_items(graph, &set_item);
         let eq_nodes: Vec<bool> = eq_nodes(graph);
-        Plan {
-            items,
-            root_aliases,
+        Ok(Plan {
+            items: placed.items,
+            root_aliases: placed.root_aliases,
             set_kind,
             set_item,
             ord_items,
             eq_nodes,
             self_validating: settings.self_validating,
-        }
+            extra_derives: settings.extra_derives.clone(),
+            extra_attrs: settings.extra_attrs.clone(),
+            node_patches: placed.node_patches,
+            alias_patches: placed.alias_patches,
+        })
     }
 
     fn has_shared(&self) -> bool {
@@ -319,6 +363,108 @@ impl Plan {
     fn home(&self, id: TypeId) -> Home {
         self.items[&id].0
     }
+}
+
+/// Applies `settings.patches` to the allocated `names` (one per item, in `homes`): renames each
+/// patched item and returns each item's patch. Every problem is collected: a patch whose key
+/// names no item, a new name that is not a Rust identifier or that another item it `clash`es
+/// with has, and an extra derive or attribute (of the settings or a patch) that is malformed.
+fn apply_patches<'s>(
+    settings: &'s CodeGenSettings,
+    homes: &[Home],
+    names: &mut [String],
+    clash: impl Fn(Home, Home) -> bool,
+) -> CodeGenResult<Vec<Option<&'s TypePatch>>> {
+    let mut problems: Vec<String> = Vec::new();
+    let check_derives = |derives: &[String], problems: &mut Vec<String>| {
+        for derive in derives {
+            if !is_rust_path(derive) {
+                problems.push(format!("derive `{derive}` is not a Rust path"));
+            }
+        }
+    };
+    let check_attrs = |attrs: &[String], problems: &mut Vec<String>| {
+        for attr in attrs {
+            let attr: &str = attr.trim();
+            if attr.is_empty() || attr.starts_with('#') {
+                problems.push(format!(
+                    "attribute `{attr}` is not the text inside `#[...]`"
+                ));
+            }
+        }
+    };
+    check_derives(&settings.extra_derives, &mut problems);
+    check_attrs(&settings.extra_attrs, &mut problems);
+    let patched: Vec<Option<&TypePatch>> = names
+        .iter()
+        .map(|name: &String| settings.patches.get(name))
+        .collect();
+    let mut renamed: Vec<usize> = Vec::new();
+    for (key, patch) in &settings.patches {
+        if !names.iter().any(|name: &String| name == key) {
+            problems.push(format!(
+                "patch for `{key}`: no generated type has that name"
+            ));
+        }
+        check_derives(&patch.derives, &mut problems);
+        check_attrs(&patch.attrs, &mut problems);
+        if let Some(ref rename) = patch.rename
+            && !is_rust_identifier(rename)
+        {
+            problems.push(format!(
+                "patch for `{key}`: `{rename}` is not a Rust identifier"
+            ));
+        }
+    }
+    for (index, patch) in patched.iter().enumerate() {
+        if let Some(rename) = patch.and_then(|p: &TypePatch| p.rename.as_ref()) {
+            names[index].clone_from(rename);
+            renamed.push(index);
+        }
+    }
+    for &index in &renamed {
+        let clashes: bool = names
+            .iter()
+            .enumerate()
+            .any(|(other, name): (usize, &String)| {
+                other != index && *name == names[index] && clash(homes[index], homes[other])
+            });
+        if clashes {
+            problems.push(format!(
+                "a patch renames a type to `{}`, which another generated type in its module has",
+                names[index]
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(patched)
+    } else {
+        problems.dedup();
+        Err(CodeGenError::Customization(problems))
+    }
+}
+
+/// Whether `text` is a Rust identifier (not a keyword) that a type can be named.
+fn is_rust_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|c: char| c.is_alphabetic() || c == '_')
+        && chars.all(|c: char| c.is_alphanumeric() || c == '_')
+        && text != "_"
+        && !is_rust_keyword(text)
+}
+
+/// Whether `text` is a Rust path (`Hash`, `serde::Serialize`, `::schemars::JsonSchema`).
+fn is_rust_path(text: &str) -> bool {
+    let path: &str = text.strip_prefix("::").unwrap_or(text);
+    path.split("::").all(|segment: &str| {
+        let mut chars = segment.chars();
+        chars
+            .next()
+            .is_some_and(|c: char| c.is_alphabetic() || c == '_')
+            && chars.all(|c: char| c.is_alphanumeric() || c == '_')
+    })
 }
 
 /// The best name proposal for `id`: lowest tier, then lowest origin. A node without proposals
@@ -1530,12 +1676,59 @@ fn item_derive(plan: &Plan, id: TypeId, default: bool, deserialize: bool) -> Str
         traits.push("json_schema_rs_macro::Deserialize");
     }
     traits.push("json_schema_rs_macro::ToJsonSchema");
-    format!("#[derive({})]", traits.join(", "))
+    derive_block(plan, plan.node_patches.get(&id), &traits)
+}
+
+/// The derive line of an item deriving `base`, then its attribute lines: the settings' extra
+/// derives and those of the item's `patch` that `base` lacks (compared by last path segment, so
+/// `serde::Deserialize` matches a generated `Deserialize`; every item implements `Serialize` and
+/// `Deserialize`, derived or written by hand, so those two are never added), then the settings'
+/// extra attributes and the patch's. Ends with a newline.
+fn derive_block(plan: &Plan, patch: Option<&TypePatch>, base: &[&str]) -> String {
+    let last =
+        |path: &str| -> String { path.rsplit("::").next().unwrap_or(path).trim().to_string() };
+    let mut traits: Vec<&str> = base.to_vec();
+    let patch_derives: &[String] = patch.map_or(&[], |p: &TypePatch| &p.derives);
+    for extra in plan.extra_derives.iter().chain(patch_derives) {
+        let name: String = last(extra);
+        if name != "Serialize"
+            && name != "Deserialize"
+            && !traits.iter().any(|t: &&str| last(t) == name)
+        {
+            traits.push(extra);
+        }
+    }
+    let mut out: String = format!("#[derive({})]\n", traits.join(", "));
+    let patch_attrs: &[String] = patch.map_or(&[], |p: &TypePatch| &p.attrs);
+    for attr in plan.extra_attrs.iter().chain(patch_attrs) {
+        let _ = writeln!(out, "#[{}]", attr.trim());
+    }
+    out
 }
 
 /// Unit variants, one per distinct JSON value: equality, hashing and order are exact and cheap.
-const STRING_ENUM_DERIVE: &str = "#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]";
-const VALUE_ENUM_DERIVE: &str = "#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, json_schema_rs_macro::ToJsonSchema)]";
+const STRING_ENUM_DERIVE: &[&str] = &[
+    "Debug",
+    "Clone",
+    "PartialEq",
+    "Eq",
+    "Hash",
+    "PartialOrd",
+    "Ord",
+    "Serialize",
+    "Deserialize",
+    "json_schema_rs_macro::ToJsonSchema",
+];
+const VALUE_ENUM_DERIVE: &[&str] = &[
+    "Debug",
+    "Clone",
+    "PartialEq",
+    "Eq",
+    "Hash",
+    "PartialOrd",
+    "Ord",
+    "json_schema_rs_macro::ToJsonSchema",
+];
 
 fn render_struct(
     graph: &TypeGraph,
@@ -1559,7 +1752,6 @@ fn render_struct(
     out.push_str(&deprecated_attr(a.deprecated, a.description.as_deref(), ""));
     let default: bool = object.fields.iter().all(|field: &Field| !field.required);
     out.push_str(&item_derive(plan, id, default, true));
-    out.push('\n');
     out.push_str(&description_attr(stated.as_ref()));
     if let Some(ref title) = a.title {
         let _ = writeln!(out, "#[json_schema(title = \"{}\")]", escape(title));
@@ -1596,6 +1788,8 @@ fn render_struct(
 /// Reading goes through `Deref`, `AsRef`, `into_inner` and `From<Name>` for the scalar;
 /// `Serialize` is the scalar's own.
 fn render_newtype(
+    plan: &Plan,
+    patch: Option<&TypePatch>,
     node: &TypeNode,
     name: &str,
     newtype: &Newtype,
@@ -1607,18 +1801,42 @@ fn render_newtype(
     let a: &Annotations = &newtype.annotations;
     let (mut out, stated): (String, Option<String>) = item_docs(a);
     out.push_str(&deprecated_attr(a.deprecated, a.description.as_deref(), ""));
-    out.push_str(match node {
-        TypeNode::String { .. } if string => {
-            "#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]"
-        }
-        TypeNode::Number => {
-            "#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, json_schema_rs_macro::ToJsonSchema)]"
-        }
-        _ => {
-            "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]"
-        }
-    });
-    out.push_str("\n#[serde(transparent)]\n");
+    let base: &[&str] = match node {
+        TypeNode::String { .. } if string => &[
+            "Debug",
+            "Clone",
+            "PartialEq",
+            "Eq",
+            "Hash",
+            "PartialOrd",
+            "Ord",
+            "Serialize",
+            "json_schema_rs_macro::ToJsonSchema",
+        ],
+        TypeNode::Number => &[
+            "Debug",
+            "Clone",
+            "Copy",
+            "PartialEq",
+            "PartialOrd",
+            "Serialize",
+            "json_schema_rs_macro::ToJsonSchema",
+        ],
+        _ => &[
+            "Debug",
+            "Clone",
+            "Copy",
+            "PartialEq",
+            "Eq",
+            "Hash",
+            "PartialOrd",
+            "Ord",
+            "Serialize",
+            "json_schema_rs_macro::ToJsonSchema",
+        ],
+    };
+    out.push_str(&derive_block(plan, patch, base));
+    out.push_str("#[serde(transparent)]\n");
     let mut schema_args: Vec<String> = Vec::new();
     if let Some(ref title) = a.title {
         schema_args.push(format!("title = \"{}\"", escape(title)));
@@ -1727,12 +1945,14 @@ fn buffer_validators(
 fn render_root_alias(
     graph: &TypeGraph,
     plan: &Plan,
-    home: Home,
-    root: TypeId,
+    schema: usize,
     name: &str,
     entry: Option<&Entry>,
     imports: &mut Imports,
 ) -> String {
+    let home: Home = Home::Schema(schema);
+    let root: TypeId = graph.schemas[schema].root;
+    let patch: Option<&TypePatch> = plan.alias_patches[schema].as_ref();
     let ty: String = rust_type(graph, plan, home, root, imports);
     let Some(entry) = entry else {
         return format!("pub type {name} = {ty};\n\n");
@@ -1747,7 +1967,8 @@ fn render_root_alias(
         "Deserialize",
         "json_schema_rs_macro::ToJsonSchema",
     ]);
-    let mut out: String = format!("#[derive({})]\n#[serde(transparent)]\n", traits.join(", "));
+    let mut out: String = derive_block(plan, patch, &traits);
+    out.push_str("#[serde(transparent)]\n");
     let field_attrs: String = if reads_integers(graph, plan, root) {
         format!("#[serde(deserialize_with = \"{INTEGER_READ}\")] ")
     } else {
@@ -1778,14 +1999,19 @@ fn value_variant_base(value: &Value) -> String {
     }
 }
 
-fn render_enum(name: &str, e: &EnumNode, imports: &mut Imports) -> String {
+fn render_enum(
+    plan: &Plan,
+    patch: Option<&TypePatch>,
+    name: &str,
+    e: &EnumNode,
+    imports: &mut Imports,
+) -> String {
     let bases: Vec<String> = e.values.iter().map(value_variant_base).collect();
     let variants: Vec<String> = unique_idents(&bases, "");
     let (mut out, stated): (String, Option<String>) = item_docs(&e.annotations);
     imports.deserialize = true;
     if e.is_string_enum() {
-        out.push_str(STRING_ENUM_DERIVE);
-        out.push('\n');
+        out.push_str(&derive_block(plan, patch, STRING_ENUM_DERIVE));
         out.push_str(&description_attr(stated.as_ref()));
         let members: Vec<(&str, &str)> = e
             .values
@@ -1810,8 +2036,7 @@ fn render_enum(name: &str, e: &EnumNode, imports: &mut Imports) -> String {
     }
     // Values of other JSON types: serde goes through `serde_json::Value` and compares by JSON
     // Schema equality (`1` equals `1.0`).
-    out.push_str(VALUE_ENUM_DERIVE);
-    out.push('\n');
+    out.push_str(&derive_block(plan, patch, VALUE_ENUM_DERIVE));
     out.push_str(&description_attr(stated.as_ref()));
     let _ = writeln!(out, "pub enum {name} {{");
     for (value, variant) in e.values.iter().zip(&variants) {
@@ -1908,7 +2133,6 @@ fn render_union(
     let names: Vec<String> = unique_idents(&bases, "");
     let (mut out, stated): (String, Option<String>) = item_docs(&union.annotations);
     out.push_str(&item_derive(plan, id, false, false));
-    out.push('\n');
     out.push_str(&description_attr(stated.as_ref()));
     out.push_str("#[serde(untagged)]\n");
     if union.kind == UnionKind::OneOf {
@@ -2011,7 +2235,6 @@ fn ordered_items(graph: &TypeGraph, plan: &Plan, home: Home) -> Vec<TypeId> {
     out
 }
 
-/// Renders one output buffer.
 /// Renders one output buffer. `sets` (with self-validating types) holds each input's embedded
 /// documents.
 fn render_buffer(
@@ -2033,6 +2256,8 @@ fn render_buffer(
         if let Some(newtype) = &graph.newtypes[id.index()] {
             let entry: &Entry = entry.as_ref().expect("a newtype has a validation target");
             body.push_str(&render_newtype(
+                plan,
+                plan.node_patches.get(&id),
                 graph.node(id),
                 name,
                 newtype,
@@ -2043,7 +2268,9 @@ fn render_buffer(
         }
         let item: String = match graph.node(id) {
             TypeNode::Object(o) => render_struct(graph, plan, home, id, name, o, &mut imports),
-            TypeNode::Enum(e) => render_enum(name, e, &mut imports),
+            TypeNode::Enum(e) => {
+                render_enum(plan, plan.node_patches.get(&id), name, e, &mut imports)
+            }
             TypeNode::Union(u) => render_union(
                 graph,
                 plan,
@@ -2069,15 +2296,8 @@ fn render_buffer(
         if let Some(ref alias) = plan.root_aliases[s] {
             let entry: Option<Entry> =
                 root_newtype.and_then(|id| validators.as_ref().and_then(|v| v.item(id)));
-            let root: String = render_root_alias(
-                graph,
-                plan,
-                home,
-                roots.root,
-                alias,
-                entry.as_ref(),
-                &mut imports,
-            );
+            let root: String =
+                render_root_alias(graph, plan, s, alias, entry.as_ref(), &mut imports);
             body.push_str(&root);
         }
         // A schema's own root and definitions are reachable from its module even when shared.
@@ -2415,7 +2635,7 @@ mod tests {
     use super::CodeGenError;
     use super::{CodeGenBackend, CodeGenInput, RustBackend, generate_rust};
     use crate::code_gen::settings::{
-        CodeGenSettings, DedupeMode, FormatTypes, ModelNameSource, UniqueItemsType,
+        CodeGenSettings, DedupeMode, FormatTypes, ModelNameSource, TypePatch, UniqueItemsType,
         UnknownProperties,
     };
     use crate::json_schema::{
@@ -14144,6 +14364,409 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         });
         let expected: Vec<String> = vec!["Same".to_string(), "Same".to_string()];
         let actual: Vec<String> = root_types_of(&[shared_root.clone(), shared_root]);
+        assert_eq!(expected, actual);
+    }
+
+    // --- extra derives, extra attributes and type patches ---
+
+    /// A root struct with a `$defs` struct and a string enum, generated with `settings`.
+    fn customized(settings: &CodeGenSettings) -> Result<String, CodeGenError> {
+        let json = r##"{"type":"object","properties":{"veg":{"$ref":"#/$defs/Veg"},"kind":{"enum":["a","b"]}},"required":["veg"],"$defs":{"Veg":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}}"##;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], settings)?;
+        Ok(String::from_utf8(output.per_schema[0].clone()).unwrap())
+    }
+
+    /// The default settings (self-validation off) changed by `customize`.
+    fn customized_settings(
+        customize: impl FnOnce(
+            crate::code_gen::settings::CodeGenSettingsBuilder,
+        ) -> crate::code_gen::settings::CodeGenSettingsBuilder,
+    ) -> CodeGenSettings {
+        customize(
+            CodeGenSettings::builder()
+                .self_validating(false)
+                .constrained_newtypes(false),
+        )
+        .build()
+    }
+
+    #[test]
+    fn extra_derives_follow_each_items_own_derives() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.extra_derives(["schemars::JsonSchema"]));
+        let actual: String = customized(&settings).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
+pub struct Veg {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    pub veg: Veg,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn extra_derives_an_item_already_implements_are_not_repeated() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.extra_derives([
+                "std::fmt::Debug",
+                "Clone",
+                "serde::Serialize",
+                "serde::Deserialize",
+            ])
+        });
+        let expected: String = customized(&default_settings()).unwrap();
+        let actual: String = customized(&settings).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn extra_attrs_follow_each_items_derive_line() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.extra_attrs(["non_exhaustive", "doc(alias = \"x\")"]));
+        let actual: String = customized(&settings).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[non_exhaustive]
+#[doc(alias = "x")]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[non_exhaustive]
+#[doc(alias = "x")]
+pub struct Veg {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[non_exhaustive]
+#[doc(alias = "x")]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    pub veg: Veg,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patch_renames_a_type_and_every_use_of_it() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.patch(
+                "Veg",
+                TypePatch {
+                    rename: Some("Vegetable".to_string()),
+                    ..TypePatch::default()
+                },
+            )
+        });
+        let actual: String = customized(&settings).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Vegetable {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    pub veg: Vegetable,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patch_derives_and_attrs_apply_to_its_type_only() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.extra_derives(["schemars::JsonSchema"]).patch(
+                "Kind",
+                TypePatch {
+                    rename: None,
+                    derives: vec!["Default".to_string(), "schemars::JsonSchema".to_string()],
+                    attrs: vec!["non_exhaustive".to_string()],
+                },
+            )
+        });
+        let actual: String = customized(&settings).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema, Default)]
+#[non_exhaustive]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
+pub struct Veg {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    pub veg: Veg,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn extra_derives_skip_a_plain_type_alias() {
+        let schema: Schema = serde_json::from_str(r#"{"type":"string"}"#).unwrap();
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.extra_derives(["Hash"]).extra_attrs(["non_exhaustive"]));
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = String;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn extra_derives_on_a_constrained_newtype_keep_its_own_deserialize() {
+        let schema: Schema = serde_json::from_str(
+            r#"{"type":"object","properties":{"code":{"type":"string","minLength":2}}}"#,
+        )
+        .unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .self_validating(false)
+            .extra_derives(["serde::Deserialize", "schemars::JsonSchema"])
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
+#[serde(transparent)]
+#[json_schema(min_length = 2)]
+pub struct Code(String);
+
+json_schema_rs::constrained_newtype!(string, Code, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<Code>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"code":{"minLength":2,"type":"string"}}}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/properties/code"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patch_for_a_type_that_is_not_generated_is_an_error() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.patch("Fruit", TypePatch::default()));
+        let expected: &str =
+            r"the settings cannot be applied: patch for `Fruit`: no generated type has that name";
+        let actual: String = customized(&settings).unwrap_err().to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patch_rename_to_a_keyword_is_an_error() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.patch(
+                "Veg",
+                TypePatch {
+                    rename: Some("Self".to_string()),
+                    ..TypePatch::default()
+                },
+            )
+        });
+        let expected: &str =
+            r"the settings cannot be applied: patch for `Veg`: `Self` is not a Rust identifier";
+        let actual: String = customized(&settings).unwrap_err().to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patch_rename_to_a_non_identifier_is_an_error() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.patch(
+                "Veg",
+                TypePatch {
+                    rename: Some("Green Veg".to_string()),
+                    ..TypePatch::default()
+                },
+            )
+        });
+        let expected: &str = r"the settings cannot be applied: patch for `Veg`: `Green Veg` is not a Rust identifier";
+        let actual: String = customized(&settings).unwrap_err().to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patch_rename_to_another_types_name_is_an_error() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.patch(
+                "Veg",
+                TypePatch {
+                    rename: Some("Kind".to_string()),
+                    ..TypePatch::default()
+                },
+            )
+        });
+        let expected: &str = r"the settings cannot be applied: a patch renames a type to `Kind`, which another generated type in its module has";
+        let actual: String = customized(&settings).unwrap_err().to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patches_may_swap_two_types_names() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.patch(
+                "Veg",
+                TypePatch {
+                    rename: Some("Kind".to_string()),
+                    ..TypePatch::default()
+                },
+            )
+            .patch(
+                "Kind",
+                TypePatch {
+                    rename: Some("Veg".to_string()),
+                    ..TypePatch::default()
+                },
+            )
+        });
+        let actual: String = customized(&settings).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Veg {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Kind {
+    pub name: String,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Veg>,
+    pub veg: Kind,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn malformed_extra_derives_and_attrs_are_errors() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.extra_derives(["schemars::", "Json Schema"])
+                .extra_attrs(["", "#[non_exhaustive]"])
+                .patch(
+                    "Veg",
+                    TypePatch {
+                        rename: None,
+                        derives: vec!["Hash<T>".to_string()],
+                        attrs: vec!["  ".to_string()],
+                    },
+                )
+        });
+        let expected: &str = r"the settings cannot be applied: derive `schemars::` is not a Rust path; derive `Json Schema` is not a Rust path; attribute `` is not the text inside `#[...]`; attribute `#[non_exhaustive]` is not the text inside `#[...]`; derive `Hash<T>` is not a Rust path; attribute `` is not the text inside `#[...]`";
+        let actual: String = customized(&settings).unwrap_err().to_string();
         assert_eq!(expected, actual);
     }
 }

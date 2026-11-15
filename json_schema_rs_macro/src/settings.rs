@@ -1,18 +1,22 @@
 //! Settings arguments of `json_schema_to_rust!`: `name = value` after the schema literals, one
 //! per [`CodeGenSettings`] field and [`JsonSchemaSettings`] field, named like the builder
 //! methods. A value is `true` / `false` for a flag and the variant name for an enum
-//! (`dedupe_mode = Disabled`, `forced_spec_version = Draft07`). A setting left out keeps its
-//! builder default.
+//! (`dedupe_mode = Disabled`, `forced_spec_version = Draft07`), a bracketed list for
+//! `extra_derives` (paths) and `extra_attrs` (the text inside `#[...]`), and a braced map of type
+//! names to `{ rename = "Name", derives = [..], attrs = [..] }` for `patch`. A setting left out
+//! keeps its builder default.
 
 use json_schema_rs::{
     CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
     IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-    SpecVersion, UniqueItemsType, UnknownFormats, UnknownProperties, UnknownSchemaUri,
+    SpecVersion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties, UnknownSchemaUri,
 };
 use proc_macro2::Span;
-use std::collections::BTreeSet;
+use quote::ToTokens;
+use std::collections::{BTreeMap, BTreeSet};
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, LitBool, Result as SynResult, Token};
+use syn::punctuated::Punctuated;
+use syn::{Ident, LitBool, LitStr, Meta, Result as SynResult, Token};
 
 /// One `name = value` argument, as written.
 pub(crate) struct SettingArg {
@@ -20,10 +24,14 @@ pub(crate) struct SettingArg {
     pub(crate) value: SettingValue,
 }
 
-/// The value of a [`SettingArg`]: a boolean literal or an identifier (an enum variant name).
+/// The value of a [`SettingArg`]: a boolean literal, an identifier (an enum variant name), a
+/// string literal, a bracketed list of paths or attributes, or a braced list of arguments.
 pub(crate) enum SettingValue {
     Bool(LitBool),
     Ident(Ident),
+    Str(LitStr),
+    List(Span, Vec<Meta>),
+    Group(Span, Vec<SettingArg>),
 }
 
 impl SettingValue {
@@ -31,6 +39,19 @@ impl SettingValue {
         match self {
             SettingValue::Bool(lit) => lit.span(),
             SettingValue::Ident(ident) => ident.span(),
+            SettingValue::Str(lit) => lit.span(),
+            SettingValue::List(span, _) | SettingValue::Group(span, _) => *span,
+        }
+    }
+
+    /// The value as written, for an error message.
+    fn written(&self) -> String {
+        match self {
+            SettingValue::Bool(lit) => lit.value.to_string(),
+            SettingValue::Ident(ident) => ident.to_string(),
+            SettingValue::Str(lit) => format!("{:?}", lit.value()),
+            SettingValue::List(..) => "[..]".to_string(),
+            SettingValue::Group(..) => "{..}".to_string(),
         }
     }
 }
@@ -43,15 +64,30 @@ impl Parse for SettingArg {
             SettingValue::Bool(input.parse()?)
         } else if input.peek(Ident) {
             SettingValue::Ident(input.parse()?)
+        } else if input.peek(LitStr) {
+            SettingValue::Str(input.parse()?)
+        } else if input.peek(syn::token::Bracket) {
+            let content;
+            let bracket = syn::bracketed!(content in input);
+            let items: Punctuated<Meta, Token![,]> = Punctuated::parse_terminated(&content)?;
+            SettingValue::List(bracket.span.join(), items.into_iter().collect())
+        } else if input.peek(syn::token::Brace) {
+            let content;
+            let brace = syn::braced!(content in input);
+            let args: Punctuated<SettingArg, Token![,]> = Punctuated::parse_terminated(&content)?;
+            SettingValue::Group(brace.span.join(), args.into_iter().collect())
         } else {
-            return Err(input.error("expected a setting value: `true`, `false` or a variant name"));
+            return Err(input.error(
+                "expected a setting value: `true`, `false`, a variant name, a string, `[..]` or \
+                 `{..}`",
+            ));
         };
         Ok(SettingArg { name, value })
     }
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 19] = [
+const SETTING_NAMES: [&str; 22] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -60,6 +96,9 @@ const SETTING_NAMES: [&str; 19] = [
     "self_validating",
     "constrained_newtypes",
     "format_types",
+    "extra_derives",
+    "extra_attrs",
+    "patch",
     "disallow_unknown_fields",
     "forced_spec_version",
     "default_spec_version",
@@ -161,6 +200,9 @@ struct Overrides {
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
     format_types: Option<FormatTypes>,
+    extra_derives: Option<Vec<String>>,
+    extra_attrs: Option<Vec<String>>,
+    patches: Option<BTreeMap<String, TypePatch>>,
     disallow_unknown_fields: Option<bool>,
     forced_spec_version: Option<SpecVersion>,
     default_spec_version: Option<SpecVersion>,
@@ -207,6 +249,9 @@ impl Overrides {
                     .constrained_newtypes
                     .unwrap_or(code_gen_default.constrained_newtypes),
                 format_types: self.format_types.unwrap_or(code_gen_default.format_types),
+                extra_derives: self.extra_derives.unwrap_or(code_gen_default.extra_derives),
+                extra_attrs: self.extra_attrs.unwrap_or(code_gen_default.extra_attrs),
+                patches: self.patches.unwrap_or(code_gen_default.patches),
             },
             json_schema: JsonSchemaSettings {
                 disallow_unknown_fields: self
@@ -253,9 +298,12 @@ fn one_of(names: &[&str]) -> String {
 fn boolean(setting: &str, value: &SettingValue) -> SynResult<bool> {
     match value {
         SettingValue::Bool(lit) => Ok(lit.value),
-        SettingValue::Ident(ident) => Err(syn::Error::new(
-            ident.span(),
-            format!("`{setting}` takes `true` or `false`, not `{ident}`"),
+        _ => Err(syn::Error::new(
+            value.span(),
+            format!(
+                "`{setting}` takes `true` or `false`, not `{}`",
+                value.written()
+            ),
         )),
     }
 }
@@ -268,16 +316,13 @@ fn variant<T: Copy>(setting: &str, value: &SettingValue, variants: &[(&str, T)])
             .iter()
             .find(|(name, _)| ident == name)
             .map(|(_, variant)| *variant),
-        SettingValue::Bool(_) => None,
+        _ => None,
     };
     found.ok_or_else(|| unknown_value(setting, value, &names))
 }
 
 fn unknown_value(setting: &str, value: &SettingValue, names: &[&str]) -> syn::Error {
-    let written: String = match value {
-        SettingValue::Bool(lit) => lit.value.to_string(),
-        SettingValue::Ident(ident) => ident.to_string(),
-    };
+    let written: String = value.written();
     syn::Error::new(
         value.span(),
         format!(
@@ -322,6 +367,124 @@ fn unique_items(value: &SettingValue) -> SynResult<UniqueItemsType> {
     }
 }
 
+/// The items of the list `value` of setting `setting`.
+fn list<'v>(setting: &str, value: &'v SettingValue) -> SynResult<&'v [Meta]> {
+    match value {
+        SettingValue::List(_, items) => Ok(items),
+        _ => Err(syn::Error::new(
+            value.span(),
+            format!("`{setting}` takes a list `[..]`, not `{}`", value.written()),
+        )),
+    }
+}
+
+/// The derive paths of the list `value` (`[Hash, schemars::JsonSchema]`).
+fn derives(setting: &str, value: &SettingValue) -> SynResult<Vec<String>> {
+    list(setting, value)?
+        .iter()
+        .map(|item: &Meta| match item {
+            Meta::Path(path) if path.segments.iter().all(|s| s.arguments.is_none()) => {
+                let segments: Vec<String> =
+                    path.segments.iter().map(|s| s.ident.to_string()).collect();
+                let leading: &str = if path.leading_colon.is_some() {
+                    "::"
+                } else {
+                    ""
+                };
+                Ok(format!("{leading}{}", segments.join("::")))
+            }
+            _ => Err(syn::Error::new_spanned(
+                item,
+                format!("`{setting}` takes derive macro paths"),
+            )),
+        })
+        .collect()
+}
+
+/// The attributes of the list `value` (`[non_exhaustive, serde(deny_unknown_fields)]`), each
+/// the text inside `#[...]`.
+fn attrs(setting: &str, value: &SettingValue) -> SynResult<Vec<String>> {
+    Ok(list(setting, value)?
+        .iter()
+        .map(|item: &Meta| item.to_token_stream().to_string())
+        .collect())
+}
+
+/// The arguments of the braced `value`, which `what` takes.
+fn group<'v>(value: &'v SettingValue, what: &str) -> SynResult<&'v [SettingArg]> {
+    match value {
+        SettingValue::Group(_, args) => Ok(args),
+        _ => Err(syn::Error::new(
+            value.span(),
+            format!("{what} takes `{{..}}`, not `{}`", value.written()),
+        )),
+    }
+}
+
+/// The patches of the map `value`: `{ Name = { rename = "New", derives = [..], attrs = [..] } }`.
+fn patches(value: &SettingValue) -> SynResult<BTreeMap<String, TypePatch>> {
+    let mut out: BTreeMap<String, TypePatch> = BTreeMap::new();
+    let mut errors: Option<syn::Error> = None;
+    for entry in group(value, "`patch`")? {
+        let name: String = entry.name.to_string();
+        let mut patch: TypePatch = TypePatch::default();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let fields: &[SettingArg] = match group(&entry.value, &format!("the patch for `{name}`")) {
+            Ok(fields) => fields,
+            Err(error) => {
+                crate::push_error(&mut errors, error);
+                continue;
+            }
+        };
+        for field in fields {
+            let key: String = field.name.to_string();
+            let result: SynResult<()> = if seen.insert(key.clone()) {
+                match key.as_str() {
+                    "rename" => match &field.value {
+                        SettingValue::Str(lit) => {
+                            patch.rename = Some(lit.value());
+                            Ok(())
+                        }
+                        other => Err(syn::Error::new(
+                            other.span(),
+                            format!("`rename` takes a string, not `{}`", other.written()),
+                        )),
+                    },
+                    "derives" => derives("derives", &field.value).map(|d| patch.derives = d),
+                    "attrs" => attrs("attrs", &field.value).map(|a| patch.attrs = a),
+                    _ => Err(syn::Error::new(
+                        field.name.span(),
+                        format!(
+                            "unknown patch field `{key}`; expected `rename`, `derives` or `attrs`"
+                        ),
+                    )),
+                }
+            } else {
+                Err(syn::Error::new(
+                    field.name.span(),
+                    format!("`{key}` is given more than once"),
+                ))
+            };
+            if let Err(error) = result {
+                crate::push_error(&mut errors, error);
+            }
+        }
+        if out.insert(name.clone(), patch).is_some() {
+            crate::push_error(
+                &mut errors,
+                syn::Error::new(
+                    entry.name.span(),
+                    format!("type `{name}` is patched more than once"),
+                ),
+            );
+        }
+    }
+    match errors {
+        Some(errors) => Err(errors),
+        None => Ok(out),
+    }
+}
+
 /// Store `value` in `slot`.
 fn set<T>(slot: &mut Option<T>, value: SynResult<T>) -> SynResult<()> {
     *slot = Some(value?);
@@ -355,6 +518,9 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
             &mut overrides.format_types,
             variant(setting, value, FORMAT_TYPES),
         ),
+        "extra_derives" => set(&mut overrides.extra_derives, derives(setting, value)),
+        "extra_attrs" => set(&mut overrides.extra_attrs, attrs(setting, value)),
+        "patch" => set(&mut overrides.patches, patches(value)),
         "disallow_unknown_fields" => set(
             &mut overrides.disallow_unknown_fields,
             boolean(setting, value),
@@ -449,7 +615,8 @@ mod tests {
     use json_schema_rs::{
         CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
         IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-        SpecVersion, UniqueItemsType, UnknownFormats, UnknownProperties, UnknownSchemaUri,
+        SpecVersion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties,
+        UnknownSchemaUri,
     };
     use proc_macro2::TokenStream;
     use std::str::FromStr;
@@ -503,6 +670,17 @@ mod tests {
                 .self_validating(false)
                 .constrained_newtypes(false)
                 .format_types(FormatTypes::FollowDialect)
+                .extra_derives(["schemars::JsonSchema", "::core::hash::Hash"])
+                .extra_attrs(["non_exhaustive", "serde (rename_all = \"camelCase\")"])
+                .patch(
+                    "Veg",
+                    TypePatch {
+                        rename: Some("Vegetable".to_string()),
+                        derives: vec!["Hash".to_string()],
+                        attrs: vec!["must_use".to_string()],
+                    },
+                )
+                .patch("Fruit", TypePatch::default())
                 .build(),
             json_schema: JsonSchemaSettings::builder()
                 .disallow_unknown_fields(true)
@@ -522,7 +700,11 @@ mod tests {
             "model_name_source = PropertyKeyFirst, dedupe_mode = Disabled, \
              unknown_properties = Drop, unique_items = BTreeSet, \
              flatten_single_entry_combinators = true, self_validating = false, \
-             constrained_newtypes = false, format_types = FollowDialect, disallow_unknown_fields = true, \
+             constrained_newtypes = false, format_types = FollowDialect, \
+             extra_derives = [schemars::JsonSchema, ::core::hash::Hash], \
+             extra_attrs = [non_exhaustive, serde(rename_all = \"camelCase\")], \
+             patch = { Veg = { rename = \"Vegetable\", derives = [Hash], attrs = [must_use] }, Fruit = {} }, \
+             disallow_unknown_fields = true, \
              forced_spec_version = Draft07, default_spec_version = Draft04, \
              format_mode = Assertion, content_mode = Annotation, unknown_formats = Reject, integer_semantics = Lexical, \
              exclusive_bounds = BooleanModifier, ref_siblings = Evaluated, \
@@ -617,8 +799,8 @@ mod tests {
         let expected: Vec<Located> = vec![(
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
-             `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
-             `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+             `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
+             `extra_attrs`, `patch`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
             1,
@@ -701,8 +883,8 @@ mod tests {
             (
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
-                 `self_validating`, `constrained_newtypes`, `format_types`, `disallow_unknown_fields`, \
-                 `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+                 `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
+                 `extra_attrs`, `patch`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,
@@ -748,6 +930,67 @@ mod tests {
             15,
         )];
         let actual: Vec<Located> = errors("unique_items = IndexSet");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_list_for_extra_derives_is_an_error_at_the_value() {
+        let expected: Vec<Located> = vec![(
+            "`extra_derives` takes a list `[..]`, not `Hash`".to_string(),
+            1,
+            16,
+        )];
+        let actual: Vec<Located> = errors("extra_derives = Hash");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn derive_that_is_not_a_path_is_an_error_at_it() {
+        let expected: Vec<Located> = vec![(
+            "`extra_derives` takes derive macro paths".to_string(),
+            1,
+            23,
+        )];
+        let actual: Vec<Located> = errors("extra_derives = [Hash, serde(x)]");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_group_for_patch_is_an_error_at_the_value() {
+        let expected: Vec<Located> = vec![("`patch` takes `{..}`, not `[..]`".to_string(), 1, 8)];
+        let actual: Vec<Located> = errors("patch = []");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn patch_field_errors_are_collected_at_each_field() {
+        let expected: Vec<Located> = vec![
+            (
+                "`rename` takes a string, not `Vegetable`".to_string(),
+                1,
+                27,
+            ),
+            (
+                "unknown patch field `derive`; expected `rename`, `derives` or `attrs`".to_string(),
+                1,
+                38,
+            ),
+            (
+                "the patch for `Fruit` takes `{..}`, not `true`".to_string(),
+                1,
+                65,
+            ),
+        ];
+        let actual: Vec<Located> =
+            errors("patch = { Veg = { rename = Vegetable, derive = [Hash] }, Fruit = true }");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_patched_twice_is_an_error_at_its_second_name() {
+        let expected: Vec<Located> =
+            vec![("type `Veg` is patched more than once".to_string(), 1, 20)];
+        let actual: Vec<Located> = errors("patch = { Veg = {}, Veg = {} }");
         assert_eq!(expected, actual);
     }
 }

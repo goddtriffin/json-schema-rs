@@ -33,6 +33,10 @@ pub enum CodeGenError {
     /// With self-validating types, the schema the generated code embeds cannot be compiled by
     /// the validator (an invalid `pattern`, a raw keyword with a value of the wrong shape, ...).
     SelfValidation(Arc<EmbeddedSchemaError>),
+    /// The settings' extra derives, extra attributes or type patches cannot be applied (a derive
+    /// that is not a Rust path, a patch for a type that is not generated, a new name that is not
+    /// a Rust identifier or clashes), one problem per entry.
+    Customization(Vec<String>),
 }
 
 impl fmt::Display for CodeGenError {
@@ -49,6 +53,9 @@ impl fmt::Display for CodeGenError {
                 write!(f, "invalid then / else subschema: {reason}")
             }
             CodeGenError::Registry(e) => write!(f, "{e}"),
+            CodeGenError::Customization(problems) => {
+                write!(f, "the settings cannot be applied: {}", problems.join("; "))
+            }
             CodeGenError::SelfValidation(e) => {
                 write!(
                     f,
@@ -63,7 +70,9 @@ impl std::error::Error for CodeGenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CodeGenError::Io(e) => Some(e),
-            CodeGenError::RefResolution { .. } | CodeGenError::InvalidSubschema { .. } => None,
+            CodeGenError::RefResolution { .. }
+            | CodeGenError::InvalidSubschema { .. }
+            | CodeGenError::Customization(_) => None,
             CodeGenError::Batch { source, .. } => Some(source.as_ref()),
             CodeGenError::Registry(e) => Some(e),
             CodeGenError::SelfValidation(e) => Some(e.as_ref()),

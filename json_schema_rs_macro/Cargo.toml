@@ -41,6 +41,8 @@ chrono.workspace = true
 indexmap = { workspace = true, features = ["serde"] }
 # Line and column of spans outside a compiler run, so unit tests can check where an error points.
 proc-macro2 = { workspace = true, features = ["span-locations"] }
+# The `extra_derives` test derives `schemars::JsonSchema` on generated types.
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

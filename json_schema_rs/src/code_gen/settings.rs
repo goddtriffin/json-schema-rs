@@ -1,5 +1,7 @@
 //! Code generation settings (model naming, dedupe mode, etc.).
 
+use std::collections::BTreeMap;
+
 /// How to choose the generated struct/type name when both `title` and property key are available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ModelNameSource {
@@ -87,6 +89,21 @@ pub enum FormatTypes {
     FollowDialect,
 }
 
+/// Changes to one generated type, keyed by its generated name in
+/// [`CodeGenSettings::patches`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TypePatch {
+    /// The name the type gets instead of its generated one: a Rust identifier no other type in
+    /// its module has.
+    pub rename: Option<String>,
+    /// Derive macros the type gets on top of its own and
+    /// [`CodeGenSettings::extra_derives`], as paths (`Hash`, `schemars::JsonSchema`).
+    pub derives: Vec<String>,
+    /// Attributes the type gets on top of [`CodeGenSettings::extra_attrs`], each the text
+    /// inside `#[...]` (`serde(deny_unknown_fields)`).
+    pub attrs: Vec<String>,
+}
+
 /// Language-agnostic code generation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeGenSettings {
@@ -131,6 +148,18 @@ pub struct CodeGenSettings {
     /// formats (default [`FormatTypes::Typed`], a deliberate divergence from 2019-09 and
     /// 2020-12; see [`FormatTypes`]).
     pub format_types: FormatTypes,
+    /// Derive macros every generated struct, enum and union gets on top of its own, as paths
+    /// (`schemars::JsonSchema`); default none. A derive the type already has (matched by its
+    /// last path segment, so `serde::Deserialize` matches the generated `Deserialize`) is not
+    /// repeated. A plain type alias (`pub type`) takes none.
+    pub extra_derives: Vec<String>,
+    /// Attributes every generated struct, enum and union gets, each the text inside `#[...]`
+    /// (`non_exhaustive`); default none. A plain type alias takes none.
+    pub extra_attrs: Vec<String>,
+    /// Changes to single generated types, keyed by the name the type would otherwise get: a new
+    /// name, and derives and attributes for that type only (see [`TypePatch`]). Generating fails
+    /// when a key names no generated type, or a new name is not a Rust identifier or clashes.
+    pub patches: BTreeMap<String, TypePatch>,
 }
 
 impl CodeGenSettings {
@@ -152,6 +181,9 @@ impl Default for CodeGenSettings {
             self_validating: true,
             constrained_newtypes: true,
             format_types: FormatTypes::Typed,
+            extra_derives: Vec::new(),
+            extra_attrs: Vec::new(),
+            patches: BTreeMap::new(),
         }
     }
 }
@@ -167,6 +199,9 @@ pub struct CodeGenSettingsBuilder {
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
     format_types: Option<FormatTypes>,
+    extra_derives: Vec<String>,
+    extra_attrs: Vec<String>,
+    patches: BTreeMap<String, TypePatch>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -229,6 +264,37 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Add derive macros to every generated type (see [`CodeGenSettings::extra_derives`]).
+    #[must_use]
+    pub fn extra_derives<I, S>(mut self, derives: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.extra_derives
+            .extend(derives.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add attributes to every generated type (see [`CodeGenSettings::extra_attrs`]).
+    #[must_use]
+    pub fn extra_attrs<I, S>(mut self, attrs: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.extra_attrs.extend(attrs.into_iter().map(Into::into));
+        self
+    }
+
+    /// Patch the generated type named `type_name` (see [`CodeGenSettings::patches`]); a second
+    /// patch for the same name replaces the first.
+    #[must_use]
+    pub fn patch(mut self, type_name: impl Into<String>, patch: TypePatch) -> Self {
+        self.patches.insert(type_name.into(), patch);
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -243,6 +309,9 @@ impl CodeGenSettingsBuilder {
             self_validating: self.self_validating.unwrap_or(true),
             constrained_newtypes: self.constrained_newtypes.unwrap_or(true),
             format_types: self.format_types.unwrap_or_default(),
+            extra_derives: self.extra_derives,
+            extra_attrs: self.extra_attrs,
+            patches: self.patches,
         }
     }
 }

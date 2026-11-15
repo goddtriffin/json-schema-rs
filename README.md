@@ -373,6 +373,18 @@ let name: Name = "Ada".parse()?; // Err for "" (minLength 1)
 let person: Person = serde_json::from_str(r#"{"name": ""}"#)?; // Err at the field
 ```
 
+**Extra derives, attributes and patches.** `.extra_derives(["schemars::JsonSchema"])`
+(`--cgs-derive`) and `.extra_attrs(["non_exhaustive"])` (`--cgs-attr`, the text inside
+`#[...]`) add to every generated struct, enum and union; a derive the type already has
+(compared by its last path segment, `Serialize` and `Deserialize` included) is not
+repeated, and a plain `pub type` alias takes none. `.patch("Veg", TypePatch { rename:
+Some("Vegetable".into()), derives: vec!["Hash".into()], attrs: vec![] })` (`--cgs-patch
+FILE`, a JSON object `{"Veg": {"rename": "Vegetable", "derives": ["Hash"]}}`) renames one
+generated type everywhere it is used and adds derives and attributes to it alone; patches
+are keyed by the generated name. A patch for a name nothing has, a new name that is not a
+Rust identifier or that another type in its module has, and a malformed derive or
+attribute are errors, all reported at once.
+
 **Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
 `CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a
 document shares with another input go in the shared buffer:
@@ -477,7 +489,9 @@ json_schema_to_rust!(
   `dedupe_mode = Disabled|Functional|Full`, `unknown_properties = Capture|Drop`,
   `unique_items = Vec|HashSet|BTreeSet|IndexSet` (`IndexSet` needs the macro's
   `indexmap` feature), `flatten_single_entry_combinators`, `self_validating`,
-  `constrained_newtypes`, `format_types = Typed|FollowDialect`.
+  `constrained_newtypes`, `format_types = Typed|FollowDialect`,
+  `extra_derives = [schemars::JsonSchema]`, `extra_attrs = [non_exhaustive]`,
+  `patch = { Veg = { rename = "Vegetable", derives = [Hash], attrs = [..] } }`.
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,

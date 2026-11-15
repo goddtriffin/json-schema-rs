@@ -19,7 +19,7 @@ pub use error::{CodeGenError, CodeGenResult};
 pub use input::CodeGenInput;
 pub use rust_backend::{RustBackend, generate_rust};
 pub use settings::{
-    CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, FormatTypes, ModelNameSource,
+    CodeGenSettings, CodeGenSettingsBuilder, DedupeMode, FormatTypes, ModelNameSource, TypePatch,
     UniqueItemsType, UnknownProperties,
 };
 

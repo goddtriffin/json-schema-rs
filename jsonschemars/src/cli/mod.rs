@@ -304,6 +304,26 @@ pub fn run() {
                         .value_parser(["typed", "follow-dialect"])
                         .help("Codegen Settings: when a format with a Rust type gets it (uuid: uuid::Uuid with the `uuid` feature; date-time / date: chrono types with the `chrono` feature; ipv4 / ipv6: std::net): typed = always, even where 2019-09 / 2020-12 only annotate formats (a deliberate divergence); follow-dialect = only where the dialect asserts the format, else String (default: typed)"),
                 )
+                .arg(
+                    Arg::new("cgs-derive")
+                        .long("cgs-derive")
+                        .value_name("PATH")
+                        .action(clap::ArgAction::Append)
+                        .help("Codegen Settings: a derive macro every generated struct, enum and union gets on top of its own (e.g. schemars::JsonSchema); repeatable"),
+                )
+                .arg(
+                    Arg::new("cgs-attr")
+                        .long("cgs-attr")
+                        .value_name("ATTR")
+                        .action(clap::ArgAction::Append)
+                        .help("Codegen Settings: an attribute every generated struct, enum and union gets, written as the text inside #[...] (e.g. non_exhaustive); repeatable"),
+                )
+                .arg(
+                    Arg::new("cgs-patch")
+                        .long("cgs-patch")
+                        .value_name("FILE")
+                        .help("Codegen Settings: a JSON file of changes to single generated types, keyed by generated name: {\"Veg\": {\"rename\": \"Vegetable\", \"derives\": [\"Hash\"], \"attrs\": [\"non_exhaustive\"]}}"),
+                )
                 .args(retrieval::retrieval_args()),
         )
         .subcommand(
