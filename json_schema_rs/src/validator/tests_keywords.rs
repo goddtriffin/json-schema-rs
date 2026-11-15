@@ -5144,7 +5144,7 @@ fn custom_content_codecs_compare_by_registration() {
 #[cfg(feature = "linear-regex")]
 fn compiled_schema_builder_debug_lists_content_codecs() {
     let builder: CompiledSchemaBuilder = with_hex().without_content_media_type("Application/JSON");
-    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, regex_engine: Ecma, regex_size_limit: None, max_depth: None, annotations: false }"#;
+    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, regex_engine: Ecma, regex_size_limit: None, max_depth: None, max_errors: None, annotations: false }"#;
     let actual: String = format!("{builder:?}");
     assert_eq!(expected, actual);
 }
@@ -5153,7 +5153,7 @@ fn compiled_schema_builder_debug_lists_content_codecs() {
 #[cfg(not(feature = "linear-regex"))]
 fn compiled_schema_builder_debug_lists_content_codecs_without_linear_regex() {
     let builder: CompiledSchemaBuilder = with_hex().without_content_media_type("Application/JSON");
-    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, max_depth: None, annotations: false }"#;
+    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, max_depth: None, max_errors: None, annotations: false }"#;
     let actual: String = format!("{builder:?}");
     assert_eq!(expected, actual);
 }
@@ -5400,5 +5400,304 @@ fn max_depth_rejects_in_is_valid() {
     .expect("compile");
     let expected: bool = false;
     let actual: bool = compiled.is_valid(&nested_arrays(3));
+    assert_eq!(expected, actual);
+}
+
+// --- Error limits and the lazy error iterator ---
+
+/// `schema` compiled with `max_errors(Some(limit))`.
+fn compile_limited(json: &str, limit: usize) -> CompiledSchema {
+    compile_with(
+        json,
+        &CompiledSchema::builder().max_errors(std::num::NonZeroUsize::new(limit)),
+    )
+    .expect("compile")
+}
+
+/// `n` errors of `{"items":{"type":"string"}}` on `[1, 2, ...]`.
+fn string_item_errors(n: usize) -> Vec<ValidationError> {
+    (0..n)
+        .map(|index| {
+            ValidationError::new(
+                ValidationErrorKind::ExpectedString {
+                    got: "number".to_string(),
+                },
+                JsonPointer::from(vec![index.to_string()]),
+                kl("/items/type"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn max_errors_reports_first_errors() {
+    let compiled: CompiledSchema = compile_limited(r#"{"items":{"type":"string"}}"#, 2);
+    let expected: ValidationResult = Err(string_item_errors(2));
+    let actual: ValidationResult = compiled.validate(&json!([1, 2, 3, 4]));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn max_errors_above_error_count_reports_every_error() {
+    let compiled: CompiledSchema = compile_limited(r#"{"items":{"type":"string"}}"#, 10);
+    let expected: ValidationResult = Err(string_item_errors(4));
+    let actual: ValidationResult = compiled.validate(&json!([1, 2, 3, 4]));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn max_errors_accepts_valid_instance() {
+    let compiled: CompiledSchema = compile_limited(r#"{"items":{"type":"string"}}"#, 1);
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(["a", "b"]));
+    assert_eq!(expected, actual);
+}
+
+/// The limit takes the first errors of the full result, whose `additionalProperties` errors
+/// come ahead of the `properties` ones.
+#[test]
+fn max_errors_keeps_full_result_order_for_closed_properties() {
+    let json: &str = r#"{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"additionalProperties":false}"#;
+    let instance: Value = json!({"a": 1, "b": 2, "c": 3});
+    let mut full: Vec<ValidationError> = compile(&schema(json))
+        .validate(&instance)
+        .expect_err("invalid");
+    full.truncate(2);
+    let expected: ValidationResult = Err(full);
+    let actual: ValidationResult = compile_limited(json, 2).validate(&instance);
+    assert_eq!(expected, actual);
+}
+
+/// With the depth limit 4, the first item fails `type` before the second nests past the limit.
+const TYPE_THEN_DEPTH: &str = r##"{"prefixItems":[{"type":"string"}],"items":{"$ref":"#/$defs/deep"},"$defs":{"deep":{"items":{"$ref":"#/$defs/deep"}}}}"##;
+
+/// `[1, [[[[]]]]]`: its first item fails `type`, its second nests past the depth limit 4.
+fn type_then_depth_instance() -> Value {
+    json!([1, nested_arrays(4)])
+}
+
+fn type_then_depth_errors() -> Vec<ValidationError> {
+    vec![
+        ValidationError::new(
+            ValidationErrorKind::ExpectedString {
+                got: "number".to_string(),
+            },
+            ptr("/0"),
+            kl("/prefixItems/0/type"),
+        ),
+        ValidationError::new(
+            ValidationErrorKind::DepthLimitExceeded { limit: 4 },
+            ptr("/1/0"),
+            kl("/items/$ref/items/$ref"),
+        ),
+    ]
+}
+
+/// Under a limit, the depth guard's error follows the errors found before it fired.
+#[test]
+fn max_errors_keeps_errors_found_before_depth_guard() {
+    let compiled: CompiledSchema = compile_with(
+        TYPE_THEN_DEPTH,
+        &CompiledSchema::builder()
+            .max_depth(Some(4))
+            .max_errors(std::num::NonZeroUsize::new(5)),
+    )
+    .expect("compile");
+    let expected: ValidationResult = Err(type_then_depth_errors());
+    let actual: ValidationResult = compiled.validate(&type_then_depth_instance());
+    assert_eq!(expected, actual);
+}
+
+/// Without a limit, the depth guard's error is the whole result.
+#[test]
+fn depth_guard_error_is_whole_result_without_limit() {
+    let compiled: CompiledSchema = compile_with(
+        TYPE_THEN_DEPTH,
+        &CompiledSchema::builder().max_depth(Some(4)),
+    )
+    .expect("compile");
+    let expected: ValidationResult = Err(type_then_depth_errors().split_off(1));
+    let actual: ValidationResult = compiled.validate(&type_then_depth_instance());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn iter_errors_collects_validate_errors() {
+    let compiled: CompiledSchema = compile(&schema(r#"{"items":{"type":"string"}}"#));
+    let expected: Vec<ValidationError> = string_item_errors(4);
+    let actual: Vec<ValidationError> = compiled.iter_errors(&json!([1, 2, 3, 4])).collect();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn iter_errors_take_one_gives_first_error() {
+    let compiled: CompiledSchema = compile(&schema(r#"{"items":{"type":"string"}}"#));
+    let expected: Vec<ValidationError> = string_item_errors(1);
+    let actual: Vec<ValidationError> = compiled.iter_errors(&json!([1, 2, 3, 4])).take(1).collect();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn iter_errors_take_two_gives_first_errors() {
+    let compiled: CompiledSchema = compile(&schema(r#"{"items":{"type":"string"}}"#));
+    let expected: Vec<ValidationError> = string_item_errors(2);
+    let actual: Vec<ValidationError> = compiled.iter_errors(&json!([1, 2, 3, 4])).take(2).collect();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn iter_errors_gives_nothing_for_valid_instance() {
+    let compiled: CompiledSchema = compile(&schema(r#"{"items":{"type":"string"}}"#));
+    let expected: Vec<ValidationError> = Vec::new();
+    let actual: Vec<ValidationError> = compiled.iter_errors(&json!(["a"])).collect();
+    assert_eq!(expected, actual);
+}
+
+/// The iterator honours `max_errors` past its first error.
+#[test]
+fn iter_errors_honours_max_errors() {
+    let compiled: CompiledSchema = compile_limited(r#"{"items":{"type":"string"}}"#, 3);
+    let expected: Vec<ValidationError> = string_item_errors(3);
+    let actual: Vec<ValidationError> = compiled.iter_errors(&json!([1, 2, 3, 4])).collect();
+    assert_eq!(expected, actual);
+}
+
+/// An error found before the depth guard fired comes ahead of the guard's.
+#[test]
+fn iter_errors_keeps_error_found_before_depth_guard() {
+    let compiled: CompiledSchema = compile_with(
+        TYPE_THEN_DEPTH,
+        &CompiledSchema::builder().max_depth(Some(4)),
+    )
+    .expect("compile");
+    let expected: Vec<ValidationError> = type_then_depth_errors();
+    let actual: Vec<ValidationError> = compiled.iter_errors(&type_then_depth_instance()).collect();
+    assert_eq!(expected, actual);
+}
+
+/// When the depth guard's error comes first, it is the only error.
+#[test]
+fn iter_errors_gives_depth_guard_error_once() {
+    let compiled: CompiledSchema = compile_with(
+        r##"{"items":{"$ref":"#"}}"##,
+        &CompiledSchema::builder().max_depth(Some(4)),
+    )
+    .expect("compile");
+    let expected: Vec<ValidationError> = vec![ValidationError::new(
+        ValidationErrorKind::DepthLimitExceeded { limit: 4 },
+        zeros(2),
+        kl(&"/items/$ref".repeat(2)),
+    )];
+    let actual: Vec<ValidationError> = compiled.iter_errors(&nested_arrays(3)).collect();
+    assert_eq!(expected, actual);
+}
+
+// --- Masked errors ---
+
+fn number(n: i64) -> Number {
+    Number::from(n)
+}
+
+/// Each kind whose message quotes the instance's value, masked.
+#[test]
+fn masked_kinds_leave_out_instance_values() {
+    let kinds: Vec<ValidationErrorKind> = vec![
+        ValidationErrorKind::DuplicateArrayItems {
+            duplicate_value: "\"secret\"".to_string(),
+        },
+        ValidationErrorKind::NotInEnum {
+            invalid_value: "\"secret\"".to_string(),
+            allowed: vec!["\"a\"".to_string(), "\"b\"".to_string()],
+        },
+        ValidationErrorKind::NotConst {
+            expected: "\"a\"".to_string(),
+            actual: "\"secret\"".to_string(),
+        },
+        ValidationErrorKind::BelowMinimum {
+            minimum: number(10),
+            actual: number(7),
+        },
+        ValidationErrorKind::AboveMaximum {
+            maximum: number(10),
+            actual: number(17),
+        },
+        ValidationErrorKind::NotAboveExclusiveMinimum {
+            exclusive_minimum: number(10),
+            actual: number(7),
+        },
+        ValidationErrorKind::NotBelowExclusiveMaximum {
+            exclusive_maximum: number(10),
+            actual: number(17),
+        },
+        ValidationErrorKind::NotMultipleOf {
+            multiple_of: number(3),
+            actual: number(7),
+        },
+        ValidationErrorKind::PatternMismatch {
+            pattern: "^a".to_string(),
+            value: "secret".to_string(),
+        },
+        ValidationErrorKind::InvalidFormat {
+            format: "email".to_string(),
+            value: json!("secret"),
+        },
+        ValidationErrorKind::InvalidFormat {
+            format: "int32".to_string(),
+            value: json!(7_000_000_000_i64),
+        },
+        ValidationErrorKind::Custom {
+            keyword: "maxDecimals".to_string(),
+            message: "7.123 has too many decimals".to_string(),
+        },
+        ValidationErrorKind::InvalidContentEncoding {
+            encoding: "base64".to_string(),
+            value: "secret".to_string(),
+        },
+        ValidationErrorKind::InvalidContentMediaType {
+            media_type: "application/json".to_string(),
+            value: "secret".to_string(),
+        },
+    ];
+    let expected: Vec<String> = [
+        "array has duplicate items",
+        "value not in enum (allowed: \"a\", \"b\")",
+        "value does not match const (expected: \"a\")",
+        "value is below minimum 10",
+        "value is above maximum 10",
+        "value is not above exclusiveMinimum 10",
+        "value is not below exclusiveMaximum 10",
+        "value is not a multiple of 3",
+        "string does not match pattern \"^a\"",
+        "string is not a valid email",
+        "value is not a valid int32",
+        "value fails keyword \"maxDecimals\"",
+        "string is not valid base64",
+        "content of string is not a valid application/json document",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    let actual: Vec<String> = kinds.iter().map(|kind| kind.masked().to_string()).collect();
+    assert_eq!(expected, actual);
+}
+
+/// A kind whose message holds none of the instance's values is displayed as usual.
+#[test]
+fn masked_kind_without_instance_value_is_unchanged() {
+    let kind: ValidationErrorKind = ValidationErrorKind::MissingRequired {
+        property: "name".to_string(),
+    };
+    let expected: String = kind.to_string();
+    let actual: String = kind.masked().to_string();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn masked_error_keeps_instance_location() {
+    let compiled: CompiledSchema = compile(&schema(r#"{"properties":{"age":{"maximum":10}}}"#));
+    let expected: Vec<String> = vec!["/age: value is above maximum 10".to_string()];
+    let actual: Vec<String> = compiled
+        .iter_errors(&json!({"age": 15}))
+        .map(|error: ValidationError| error.masked().to_string())
+        .collect();
     assert_eq!(expected, actual);
 }

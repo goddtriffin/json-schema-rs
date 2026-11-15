@@ -29,6 +29,7 @@ use json_schema_rs::{
 };
 use std::fmt;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 /// Exit code when the payload does not conform to the schema.
@@ -120,7 +121,8 @@ fn read_documents(
     }
 }
 
-/// The compile options from `--regex-engine`, `--regex-size-limit` and `--max-depth`. The
+/// The compile options from `--regex-engine`, `--regex-size-limit`, `--max-depth` and
+/// `--max-errors`. The
 /// first two need the `linear-regex` feature; without it, using them is a no-verdict failure.
 #[cfg_attr(
     feature = "linear-regex",
@@ -134,6 +136,7 @@ pub(crate) fn compile_options(matches: &ArgMatches) -> Result<CompiledSchemaBuil
     let annotations: bool = output_format(matches).is_some_and(|f| f != OutputFormat::Flag);
     let builder: CompiledSchemaBuilder = CompiledSchema::builder()
         .max_depth(matches.get_one::<usize>("max-depth").copied())
+        .max_errors(matches.get_one::<NonZeroUsize>("max-errors").copied())
         .annotations(annotations);
     let engine: Option<&str> = matches
         .get_one::<String>("regex-engine")
@@ -159,8 +162,27 @@ pub(crate) fn compile_options(matches: &ArgMatches) -> Result<CompiledSchemaBuil
     }
 }
 
+/// How `validate` reports its verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Report {
+    /// One line per error on stderr, without the payload's values when `masked` (`--masked`).
+    Lines { masked: bool },
+    /// The output format `--output` names, on stdout.
+    Output(OutputFormat),
+}
+
+/// How `--output` and `--masked` ask the verdict to be reported.
+pub(crate) fn report(matches: &ArgMatches) -> Report {
+    match output_format(matches) {
+        Some(format) => Report::Output(format),
+        None => Report::Lines {
+            masked: matches.get_flag("masked"),
+        },
+    }
+}
+
 /// The format `--output` names, if any.
-pub(crate) fn output_format(matches: &ArgMatches) -> Option<OutputFormat> {
+fn output_format(matches: &ArgMatches) -> Option<OutputFormat> {
     matches
         .get_one::<String>("output")
         .map(|format| match format.as_str() {
@@ -178,7 +200,7 @@ pub(crate) fn run_validate(
     schema_settings: &JsonSchemaSettings,
     retrieval: &RefRetrieval,
     compile: &CompiledSchemaBuilder,
-    output: Option<OutputFormat>,
+    report: Report,
 ) -> Result<(), CliFailure> {
     let (schema, resources): (Document, Vec<Document>) =
         read_documents(schema_path, resource_paths, schema_settings)?;
@@ -207,31 +229,47 @@ pub(crate) fn run_validate(
     let compiled: CompiledSchema = compile
         .build(&registry)
         .map_err(|errors| schema_problems(errors.iter()))?;
-    if let Some(format) = output {
-        let output: Output = compiled.evaluate(&instance, format);
-        let json: String = serde_json::to_string_pretty(&output)
-            .map_err(|e| no_verdict(format!("failed to serialize the output: {e}")))?;
-        println!("{json}");
-        return if output.is_valid() {
-            Ok(())
-        } else {
-            Err(CliFailure {
-                message: "validation failed".to_string(),
-                exit_code: EXIT_INVALID,
-            })
-        };
-    }
+    let masked: bool = match report {
+        Report::Lines { masked } => masked,
+        Report::Output(format) => {
+            return report_output(&compiled, &instance, format);
+        }
+    };
     match compiled.validate(&instance) {
         Ok(()) => Ok(()),
         Err(errors) => {
             for e in &errors {
-                eprintln!("{e}");
+                if masked {
+                    eprintln!("{}", e.masked());
+                } else {
+                    eprintln!("{e}");
+                }
             }
             Err(CliFailure {
                 message: format!("validation failed with {} error(s)", errors.len()),
                 exit_code: EXIT_INVALID,
             })
         }
+    }
+}
+
+/// Prints `format`'s output of `instance` as JSON on stdout.
+fn report_output(
+    compiled: &CompiledSchema,
+    instance: &serde_json::Value,
+    format: OutputFormat,
+) -> Result<(), CliFailure> {
+    let output: Output = compiled.evaluate(instance, format);
+    let json: String = serde_json::to_string_pretty(&output)
+        .map_err(|e| no_verdict(format!("failed to serialize the output: {e}")))?;
+    println!("{json}");
+    if output.is_valid() {
+        Ok(())
+    } else {
+        Err(CliFailure {
+            message: "validation failed".to_string(),
+            exit_code: EXIT_INVALID,
+        })
     }
 }
 

@@ -29,6 +29,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 
 /// A problem that keeps a schema from compiling, with its location.
@@ -770,6 +771,8 @@ pub struct CompiledSchema {
     pub(crate) has_unions: bool,
     /// How deep evaluation may nest (see [`CompiledSchemaBuilder::max_depth`]).
     pub(crate) max_depth: usize,
+    /// The most errors `validate` collects (see [`CompiledSchemaBuilder::max_errors`]).
+    pub(crate) max_errors: Option<NonZeroUsize>,
     /// The annotations each node produces when it passes (see
     /// [`CompiledSchemaBuilder::annotations`]); empty unless they were asked for. Cold: read
     /// only by the trace.
@@ -838,6 +841,7 @@ pub struct CompiledSchemaBuilder {
     #[cfg(feature = "linear-regex")]
     regex_size_limit: Option<usize>,
     max_depth: Option<usize>,
+    max_errors: Option<NonZeroUsize>,
     annotations: bool,
 }
 
@@ -1108,6 +1112,19 @@ impl CompiledSchemaBuilder {
         self
     }
 
+    /// The most errors [`CompiledSchema::validate`] reports (`None`, the default: every error).
+    /// Evaluation ends at the limit's error, so a large invalid instance costs about as much as
+    /// finding that many errors, and the result is the first errors in `validate`'s order. For
+    /// logs of untrusted input, where one error per payload is enough. [`CompiledSchema::is_valid`]
+    /// and the output formats of [`CompiledSchema::evaluate`] are unaffected.
+    ///
+    /// [`CompiledSchema::evaluate`]: crate::CompiledSchema::evaluate
+    #[must_use]
+    pub fn max_errors(mut self, limit: Option<NonZeroUsize>) -> Self {
+        self.max_errors = limit;
+        self
+    }
+
     /// Whether the compiled schema keeps the annotation keywords' values, for
     /// [`CompiledSchema::annotations`] and the annotations of [`CompiledSchema::evaluate`]'s
     /// output (off by default). The annotation keywords are the meta-data ones (`title`,
@@ -1150,6 +1167,7 @@ impl CompiledSchemaBuilder {
             .max_depth
             .map_or(DEPTH_LIMIT, |limit| limit.min(DEPTH_LIMIT));
         compiler.collect_annotations = self.annotations;
+        compiler.max_errors = self.max_errors;
         let standard: Vec<CompileError> = self
             .keywords
             .iter()
@@ -1708,6 +1726,8 @@ struct Compiler<'r, 'a> {
     regex_size_limit: Option<usize>,
     /// See [`CompiledSchemaBuilder::max_depth`].
     max_depth: usize,
+    /// See [`CompiledSchemaBuilder::max_errors`].
+    max_errors: Option<NonZeroUsize>,
     /// The custom keywords (see [`CompiledSchemaBuilder::keyword`]).
     custom_definitions: Vec<CustomKeywordDefinition>,
     /// Whether to keep each node's annotations (see [`CompiledSchemaBuilder::annotations`]).
@@ -1834,6 +1854,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             #[cfg(feature = "linear-regex")]
             regex_size_limit: None,
             max_depth: DEPTH_LIMIT,
+            max_errors: None,
             custom_definitions: Vec::new(),
             custom_keywords: Vec::new(),
             errors: Vec::new(),
@@ -1969,6 +1990,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             custom_keywords: self.custom_keywords.into_boxed_slice(),
             has_unions: !unions.is_empty(),
             max_depth: self.max_depth,
+            max_errors: self.max_errors,
             annotations: self.annotations,
         };
         compiled.add_discriminators(&unions);

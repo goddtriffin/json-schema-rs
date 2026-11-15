@@ -29,8 +29,10 @@ pub use compiled::{
 pub(crate) use compiled::{CompiledEntries, NodeId};
 pub(crate) use equivalence::validation_classes;
 pub use error::{
-    SchemaError, ValidateError, ValidationError, ValidationErrorKind, ValidationResult,
+    MaskedValidationError, MaskedValidationErrorKind, SchemaError, ValidateError, ValidationError,
+    ValidationErrorKind, ValidationResult,
 };
+pub use eval::ErrorIter;
 pub use generated::{
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError,
     NewtypeValue, TypeValidationError, TypeValidators, UnionMatch, UnionVariants,
