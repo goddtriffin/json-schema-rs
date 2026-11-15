@@ -310,6 +310,21 @@ pub fn run() {
                         .help("How deeply evaluation may nest subschemas before the instance fails; at most the built-in stack guard (default: the guard, 2048 levels in a release build)"),
                 )
                 .arg(
+                    Arg::new("max-errors")
+                        .long("max-errors")
+                        .value_name("COUNT")
+                        .value_parser(clap::value_parser!(std::num::NonZeroUsize))
+                        .conflicts_with("output")
+                        .help("Report at most this many errors, ending evaluation at the last one (default: every error)"),
+                )
+                .arg(
+                    Arg::new("masked")
+                        .long("masked")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("output")
+                        .help("Print the errors without the payload's values (`/age: value is above maximum 10`), for logs of sensitive data"),
+                )
+                .arg(
                     Arg::new("output")
                         .long("output")
                         .value_name("FORMAT")
@@ -370,7 +385,7 @@ pub fn run() {
                     &schema_settings,
                     &retrieval,
                     &compile,
-                    validate::output_format(val_m),
+                    validate::report(val_m),
                 )
             })
         }

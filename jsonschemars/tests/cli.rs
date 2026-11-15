@@ -3503,6 +3503,72 @@ fn cli_validate_max_depth_accepts_shallow_instance() {
 }
 
 #[test]
+fn cli_validate_max_errors_reports_first_errors() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"items":{"type":"string"}}"#,
+        "[1, 2, 3]",
+        &["--max-errors", "2"],
+    );
+    let expected: (i32, String) = (
+        1,
+        "/0: expected string, got number\n/1: expected string, got number\nerror: validation failed with 2 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_max_errors_rejects_zero() {
+    let (_path, (code, _stderr)): (String, (i32, String)) = run_cli_validate(
+        r#"{"items":{"type":"string"}}"#,
+        "[1]",
+        &["--max-errors", "0"],
+    );
+    let expected: i32 = 2;
+    let actual: i32 = code;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_masked_leaves_out_payload_values() {
+    let (_path, actual): (String, (i32, String)) = run_cli_validate(
+        r#"{"properties":{"age":{"maximum":10},"name":{"pattern":"^a"}}}"#,
+        r#"{"age": 15, "name": "secret"}"#,
+        &["--masked"],
+    );
+    let expected: (i32, String) = (
+        1,
+        "/age: value is above maximum 10\n/name: string does not match pattern \"^a\"\nerror: validation failed with 2 error(s)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_masked_conflicts_with_output() {
+    let (_path, (code, _stderr)): (String, (i32, String)) = run_cli_validate(
+        r#"{"maximum":10}"#,
+        "15",
+        &["--masked", "--output", "basic"],
+    );
+    let expected: i32 = 2;
+    let actual: i32 = code;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_max_errors_conflicts_with_output() {
+    let (_path, (code, _stderr)): (String, (i32, String)) = run_cli_validate(
+        r#"{"maximum":10}"#,
+        "15",
+        &["--max-errors", "1", "--output", "basic"],
+    );
+    let expected: i32 = 2;
+    let actual: i32 = code;
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_generate_metaschema_check_rejects_a_nonconforming_schema() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let schema_path = temp_dir.path().join("schema.json");

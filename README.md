@@ -175,7 +175,10 @@ untrusted sources, `.regex_engine(RegexEngine::Linear)` (CLI `--regex-engine lin
 `linear-regex` feature, off by default) matches `pattern` and `patternProperties` in linear
 time, refusing backreferences and lookaround, `.regex_size_limit(Some(bytes))` caps each
 pattern's memory (same feature), and `.max_depth(Some(n))` caps
-evaluation depth (CLI `--regex-size-limit`, `--max-depth`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+evaluation depth (CLI `--regex-size-limit`, `--max-depth`). `.max_errors(Some(n))` ends
+`validate` at its `n`-th error (CLI `--max-errors`), `compiled.iter_errors(&instance)` finds
+errors as they are taken (`.next()` costs about one error), and `error.masked()` displays an
+error without the instance's values, for logs of sensitive data (CLI `--masked`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
 bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),
@@ -662,6 +665,14 @@ with the `linear-regex` feature (`cargo install jsonschemars --features linear-r
 
 ```bash
 jsonschemars validate -s untrusted.json --regex-engine linear --regex-size-limit 10000000 --max-depth 64 -p payload.json
+```
+
+`--max-errors COUNT` reports at most that many errors and ends evaluation at the last
+one, and `--masked` prints each error without the payload's values
+(`/age: value is above maximum 10`), for logs of sensitive data:
+
+```bash
+jsonschemars validate -s schema.json --max-errors 1 --masked -p payload.json
 ```
 
 `--output FORMAT` prints the result to stdout as JSON in a standard output format:

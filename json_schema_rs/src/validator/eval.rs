@@ -247,6 +247,11 @@ struct Context {
     /// The trace mode's record, made on its first unit (`None` in the other modes, so their
     /// contexts stay a pointer larger than without the trace).
     trace: Option<Box<TraceRecord>>,
+    /// The most errors the limited mode collects.
+    limit: usize,
+    /// Whether the limited mode holds its limit: every evaluation then fails at once and no
+    /// further error is built.
+    stopped: bool,
 }
 
 impl Context {
@@ -267,6 +272,9 @@ impl Context {
             });
         } else {
             self.errors.push(error);
+            if M::LIMITED && self.errors.len() >= self.limit {
+                self.stopped = true;
+            }
         }
     }
 }
@@ -281,6 +289,12 @@ pub(crate) trait Mode {
     const TRACE: bool;
     /// Whether every keyword is evaluated (no stop at the first failure).
     const ALL: bool = Self::COLLECT || Self::TRACE;
+    /// Whether evaluation ends once the error list holds [`Context::limit`] errors (the
+    /// collect mode under [`CompiledSchemaBuilder::max_errors`] and the first error of
+    /// [`CompiledSchema::iter_errors`]).
+    ///
+    /// [`CompiledSchemaBuilder::max_errors`]: super::CompiledSchemaBuilder::max_errors
+    const LIMITED: bool = false;
     /// The mode a combinator's branches run in, where only their outcome counts: the verdict
     /// mode, except in the trace, which records the branches too.
     type Branch: Mode;
@@ -295,6 +309,10 @@ pub(crate) struct Collect;
 /// The trace: evaluates everything and records every subschema, error and annotation.
 pub(crate) struct Trace;
 
+/// [`CompiledSchema::validate`] with an error limit: collects errors until it holds the limit,
+/// then ends the evaluation.
+pub(crate) struct Limited;
+
 impl Mode for Verdict {
     const COLLECT: bool = false;
     const TRACE: bool = false;
@@ -304,6 +322,13 @@ impl Mode for Verdict {
 impl Mode for Collect {
     const COLLECT: bool = true;
     const TRACE: bool = false;
+    type Branch = Verdict;
+}
+
+impl Mode for Limited {
+    const COLLECT: bool = true;
+    const TRACE: bool = false;
+    const LIMITED: bool = true;
     type Branch = Verdict;
 }
 
@@ -324,6 +349,71 @@ pub(crate) struct TraceRecord {
     /// [`NodeAnnotations::applicators`]): set by [`CompiledSchema::eval_traced`] and read
     /// once, before any nested evaluation, by [`CompiledSchema::keywords_traced`].
     applicators: bool,
+}
+
+/// The errors of an instance, found as they are taken (see [`CompiledSchema::iter_errors`]).
+#[derive(Debug)]
+pub struct ErrorIter<'a> {
+    schema: &'a CompiledSchema,
+    instance: &'a Value,
+    state: ErrorIterState,
+}
+
+/// How far an [`ErrorIter`] has gone.
+#[derive(Debug)]
+enum ErrorIterState {
+    /// Nothing evaluated yet.
+    Start,
+    /// The first error was given; `depth` is whether it was the depth guard's.
+    First { depth: bool },
+    /// The rest of the errors.
+    Rest(std::vec::IntoIter<ValidationError>),
+}
+
+impl Iterator for ErrorIter<'_> {
+    type Item = ValidationError;
+
+    fn next(&mut self) -> Option<ValidationError> {
+        match &mut self.state {
+            ErrorIterState::Start => {
+                let first: Option<ValidationError> = self
+                    .schema
+                    .validate_limited(self.instance, 1)
+                    .err()
+                    .and_then(|errors| errors.into_iter().next());
+                self.state = match &first {
+                    Some(error) => ErrorIterState::First {
+                        depth: matches!(error.kind, ValidationErrorKind::DepthLimitExceeded { .. }),
+                    },
+                    None => ErrorIterState::Rest(Vec::new().into_iter()),
+                };
+                first
+            }
+            ErrorIterState::First { depth } => {
+                let depth: bool = *depth;
+                let errors: Vec<ValidationError> = self
+                    .schema
+                    .validate(self.instance)
+                    .err()
+                    .unwrap_or_default();
+                let mut rest: std::vec::IntoIter<ValidationError> = errors.into_iter();
+                // The full evaluation gives the first error again, unless the depth guard fired
+                // after it: its result is then the guard's error alone, which follows it.
+                let guard_alone: bool = !depth
+                    && rest.len() == 1
+                    && rest.as_slice().first().is_some_and(|error| {
+                        matches!(error.kind, ValidationErrorKind::DepthLimitExceeded { .. })
+                    });
+                if !guard_alone {
+                    rest.next();
+                }
+                let next: Option<ValidationError> = rest.next();
+                self.state = ErrorIterState::Rest(rest);
+                next
+            }
+            ErrorIterState::Rest(rest) => rest.next(),
+        }
+    }
 }
 
 /// One unit of the trace, under the subschema unit `parent` (`None` for the root).
@@ -535,10 +625,20 @@ impl CompiledSchema {
     /// When the instance nests deeper than the depth guard allows, the result is that one
     /// [`ValidationErrorKind::DepthLimitExceeded`].
     ///
+    /// Under [`CompiledSchemaBuilder::max_errors`], evaluation ends at the limit's error and the
+    /// result is the first errors in this order, as many as the limit. The depth guard then
+    /// fires only when evaluation nests too deeply before the limit is reached, and its error
+    /// follows the errors found before it.
+    ///
+    /// [`CompiledSchemaBuilder::max_errors`]: super::CompiledSchemaBuilder::max_errors
+    ///
     /// # Errors
     ///
     /// Returns `Err(errors)` when the instance does not conform to the schema.
     pub fn validate(&self, instance: &Value) -> ValidationResult {
+        if let Some(limit) = self.max_errors {
+            return self.validate_limited(instance, limit.get());
+        }
         let mut cx: Context = self.context();
         let valid: bool = self.eval::<Collect>(self.root, instance, &Location::ROOT, &mut cx, None);
         if let Some(error) = cx.depth_exceeded {
@@ -548,6 +648,57 @@ impl CompiledSchema {
             Ok(())
         } else {
             Err(cx.errors)
+        }
+    }
+
+    /// [`CompiledSchema::validate`] ending at the `limit`-th error.
+    fn validate_limited(&self, instance: &Value, limit: usize) -> ValidationResult {
+        let mut cx: Context = Context {
+            limit,
+            ..self.context()
+        };
+        let valid: bool = self.eval::<Limited>(self.root, instance, &Location::ROOT, &mut cx, None);
+        if let Some(error) = cx.depth_exceeded {
+            cx.errors.push(error);
+        }
+        if valid && cx.errors.is_empty() {
+            return Ok(());
+        }
+        // `additionalProperties` errors are put ahead of the `properties` ones after the walk
+        // (see `closed_properties_failed`), so the list can run past the limit.
+        cx.errors.truncate(limit);
+        Err(cx.errors)
+    }
+
+    /// The errors of `instance`, found as they are taken: the first by an evaluation that ends
+    /// at it, so `next()` on an invalid instance costs about as much as finding one error; the
+    /// rest, on the next call, by [`CompiledSchema::validate`]. Taking every error so costs at
+    /// most an evaluation more than `validate`, and gives `validate`'s errors in its order, with
+    /// one exception: when the depth guard fires only after the first error, that error comes
+    /// ahead of the guard's.
+    ///
+    /// ```
+    /// use json_schema_rs::{CompiledSchema, JsonSchemaSettings, Registry, Schema, ValidationError};
+    /// use serde_json::json;
+    ///
+    /// let settings: JsonSchemaSettings = JsonSchemaSettings::default();
+    /// let schema: Schema =
+    ///     Schema::new_from_serde_value(&json!({"items": {"type": "string"}}), &settings).unwrap();
+    /// let registry: Registry = Registry::new(&schema).unwrap();
+    /// let compiled: CompiledSchema = CompiledSchema::new(&registry).unwrap();
+    /// let first: Vec<String> = compiled
+    ///     .iter_errors(&json!([1, 2, 3]))
+    ///     .take(2)
+    ///     .map(|error: ValidationError| error.to_string())
+    ///     .collect();
+    /// assert_eq!(vec!["/0: expected string, got number", "/1: expected string, got number"], first);
+    /// ```
+    #[must_use]
+    pub fn iter_errors<'a>(&'a self, instance: &'a Value) -> ErrorIter<'a> {
+        ErrorIter {
+            schema: self,
+            instance,
+            state: ErrorIterState::Start,
         }
     }
 
@@ -606,6 +757,9 @@ impl CompiledSchema {
         keyword: Option<Kw>,
         make: impl FnOnce() -> ValidationErrorKind,
     ) {
+        if M::LIMITED && cx.stopped {
+            return;
+        }
         let error: ValidationError = self.error_at(location, keyword, make());
         cx.record::<M>(error);
     }
@@ -736,6 +890,9 @@ impl CompiledSchema {
     ) -> bool {
         if M::TRACE {
             return self.eval_traced(id, instance, location, cx, evaluated);
+        }
+        if M::LIMITED && cx.stopped {
+            return false;
         }
         self.eval_node::<M>(id, instance, location, cx, evaluated)
     }
@@ -1496,6 +1653,9 @@ impl CompiledSchema {
         custom: &CompiledCustomKeyword,
         message: String,
     ) {
+        if M::LIMITED && cx.stopped {
+            return;
+        }
         let kind: ValidationErrorKind = ValidationErrorKind::Custom {
             keyword: custom.name.to_string(),
             message,
@@ -2184,6 +2344,9 @@ impl CompiledSchema {
                 // The trace keeps every unit where it was made; the error list puts the unknown
                 // members first, as `additionalProperties` evaluated before `properties`.
                 let properties: Vec<ValidationError> = cx.errors.split_off(errors);
+                // They precede the `properties` errors, so the limited mode builds them even
+                // when those reached its limit.
+                cx.stopped = M::LIMITED && cx.errors.len() >= cx.limit;
                 for key in object.keys().filter(|key| !table.contains(key)) {
                     self.report::<M>(
                         cx,
@@ -2195,6 +2358,7 @@ impl CompiledSchema {
                     );
                 }
                 cx.errors.extend(properties);
+                cx.stopped = M::LIMITED && cx.errors.len() >= cx.limit;
             }
             return;
         }
@@ -2661,6 +2825,9 @@ impl CompiledSchema {
     #[cold]
     #[inline(never)]
     fn no_match<M: Mode>(&self, keyword: Kw, nodes: &[NodeId], at: At<'_, '_>, cx: &mut Context) {
+        if M::LIMITED && cx.stopped {
+            return;
+        }
         if M::TRACE {
             self.report::<M>(cx, at.location, Some(keyword), || {
                 ValidationErrorKind::NoSubschemaMatched {

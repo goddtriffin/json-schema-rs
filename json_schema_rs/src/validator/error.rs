@@ -157,6 +157,97 @@ impl fmt::Display for ValidationError {
     }
 }
 
+impl ValidationError {
+    /// The error displayed without the instance's values, for logs of sensitive data:
+    /// `/age: value is above maximum 10` for `/age: value 15 is above maximum 10`. The instance
+    /// location and the property names it reports stay (they are the instance's shape, as the
+    /// keyword's constraint is the schema's); see [`ValidationErrorKind::masked`].
+    #[must_use]
+    pub fn masked(&self) -> MaskedValidationError<'_> {
+        MaskedValidationError(self)
+    }
+}
+
+/// A [`ValidationError`] displayed without the instance's values (see
+/// [`ValidationError::masked`]).
+#[derive(Debug, Clone, Copy)]
+pub struct MaskedValidationError<'a>(&'a ValidationError);
+
+impl fmt::Display for MaskedValidationError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: {}",
+            self.0.instance_location.display_root_or_path(),
+            self.0.kind.masked()
+        )
+    }
+}
+
+impl ValidationErrorKind {
+    /// The message displayed without the instance's values: the value that failed `minimum`,
+    /// `enum`, `const`, `multipleOf`, `pattern`, `format`, `uniqueItems` or a content keyword
+    /// is left out, and a custom keyword's message (which may quote it) is replaced by the
+    /// keyword's name. Every other message is the same as [`Display`](fmt::Display)'s.
+    #[must_use]
+    pub fn masked(&self) -> MaskedValidationErrorKind<'_> {
+        MaskedValidationErrorKind(self)
+    }
+}
+
+/// A [`ValidationErrorKind`] displayed without the instance's values (see
+/// [`ValidationErrorKind::masked`]).
+#[derive(Debug, Clone, Copy)]
+pub struct MaskedValidationErrorKind<'a>(&'a ValidationErrorKind);
+
+impl fmt::Display for MaskedValidationErrorKind<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ValidationErrorKind::DuplicateArrayItems { .. } => {
+                f.write_str("array has duplicate items")
+            }
+            ValidationErrorKind::NotInEnum { allowed, .. } => {
+                write!(f, "value not in enum (allowed: {})", allowed.join(", "))
+            }
+            ValidationErrorKind::NotConst { expected, .. } => {
+                write!(f, "value does not match const (expected: {expected})")
+            }
+            ValidationErrorKind::BelowMinimum { minimum, .. } => {
+                write!(f, "value is below minimum {minimum}")
+            }
+            ValidationErrorKind::AboveMaximum { maximum, .. } => {
+                write!(f, "value is above maximum {maximum}")
+            }
+            ValidationErrorKind::NotAboveExclusiveMinimum {
+                exclusive_minimum, ..
+            } => write!(f, "value is not above exclusiveMinimum {exclusive_minimum}"),
+            ValidationErrorKind::NotBelowExclusiveMaximum {
+                exclusive_maximum, ..
+            } => write!(f, "value is not below exclusiveMaximum {exclusive_maximum}"),
+            ValidationErrorKind::NotMultipleOf { multiple_of, .. } => {
+                write!(f, "value is not a multiple of {multiple_of}")
+            }
+            ValidationErrorKind::PatternMismatch { pattern, .. } => {
+                write!(f, "string does not match pattern \"{pattern}\"")
+            }
+            ValidationErrorKind::InvalidFormat { format, value, .. } => match value {
+                Value::String(_) => write!(f, "string is not a valid {format}"),
+                _ => write!(f, "value is not a valid {format}"),
+            },
+            ValidationErrorKind::Custom { keyword, .. } => {
+                write!(f, "value fails keyword \"{keyword}\"")
+            }
+            ValidationErrorKind::InvalidContentEncoding { encoding, .. } => {
+                write!(f, "string is not valid {encoding}")
+            }
+            ValidationErrorKind::InvalidContentMediaType { media_type, .. } => {
+                write!(f, "content of string is not a valid {media_type} document")
+            }
+            kind => fmt::Display::fmt(kind, f),
+        }
+    }
+}
+
 /// What a [`ValidationError`] found: one variant per kind of problem, with the instance
 /// context (actual value, count, length, or "got" type) and the schema constraint.
 #[derive(Debug, Clone, PartialEq, Eq)]
