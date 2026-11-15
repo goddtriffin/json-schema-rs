@@ -1,64 +1,206 @@
 //! The content keywords' checks: `contentEncoding` and `contentMediaType` where the dialect
 //! asserts them ([`ContentMode::Assertion`](crate::ContentMode::Assertion)).
 //!
-//! Only what can be decided without a codec registry is checked: `base64` (RFC 4648, section 4)
-//! and JSON media types (`application/json` and any `+json` type, RFC 6839). Any other encoding
-//! or media type stays an annotation, and so does a media type under an encoding this library
-//! cannot decode.
+//! Built in: `base64` (RFC 4648, section 4) and JSON media types (`application/json` and any
+//! `+json` type, RFC 6839). Users add encodings and media types, or remove built-in ones, on
+//! [`CompiledSchemaBuilder`](crate::CompiledSchemaBuilder) ([`ContentCodecs`]). Any other
+//! encoding or media type stays an annotation, and so does a media type under an encoding that
+//! cannot be decoded.
 
 use std::borrow::Cow;
+use std::fmt;
+use std::sync::Arc;
 
-/// An encoding `contentEncoding` names that this library decodes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A user's decoder for a `contentEncoding`: the bytes a string encodes, or `None` when the
+/// string is not in the encoding.
+pub(crate) type Decoder = Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+
+/// A user's check for a `contentMediaType`: whether the (decoded) content is a document of the
+/// media type.
+pub(crate) type MediaTypeCheck = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+/// An encoding `contentEncoding` names that is decoded.
+#[derive(Clone)]
 pub(crate) enum ContentEncoding {
     /// RFC 4648, section 4: the standard alphabet, padded to a multiple of four characters.
     Base64,
+    /// An encoding the user registered.
+    User(Decoder),
+}
+
+impl PartialEq for ContentEncoding {
+    /// A user encoding equals only itself: the same registration (one builder's compilations
+    /// share it).
+    fn eq(&self, other: &ContentEncoding) -> bool {
+        match (self, other) {
+            (ContentEncoding::Base64, ContentEncoding::Base64) => true,
+            (ContentEncoding::User(a), ContentEncoding::User(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ContentEncoding {}
+
+impl fmt::Debug for ContentEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ContentEncoding::Base64 => f.write_str("Base64"),
+            ContentEncoding::User(_) => f.write_str("User"),
+        }
+    }
 }
 
 impl ContentEncoding {
-    /// The encoding `name` names, or `None` for one this library does not decode. Names are
-    /// case-insensitive, as MIME's Content-Transfer-Encoding values are (RFC 2045, section 6.1).
+    /// The built-in encoding `name` names, or `None` for one this library does not decode.
+    /// Names are case-insensitive, as MIME's Content-Transfer-Encoding values are (RFC 2045,
+    /// section 6.1).
     pub(crate) fn from_name(name: &str) -> Option<ContentEncoding> {
         name.eq_ignore_ascii_case("base64")
             .then_some(ContentEncoding::Base64)
     }
 
     /// The bytes `s` encodes, or `None` when `s` is not in this encoding.
-    pub(crate) fn decode(self, s: &str) -> Option<Vec<u8>> {
+    pub(crate) fn decode(&self, s: &str) -> Option<Vec<u8>> {
         match self {
             ContentEncoding::Base64 => decode_base64(s),
+            ContentEncoding::User(decode) => decode(s),
         }
     }
 }
 
-/// A media type `contentMediaType` names that this library checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A media type `contentMediaType` names that is checked.
+#[derive(Clone)]
 pub(crate) enum ContentMediaType {
     /// `application/json`, or a type with the `+json` structured syntax suffix (RFC 6839,
     /// section 3.1): the content must be a JSON text.
     Json,
+    /// A media type the user registered.
+    User(MediaTypeCheck),
+}
+
+impl PartialEq for ContentMediaType {
+    /// A user media type equals only itself (see [`ContentEncoding`]'s `eq`).
+    fn eq(&self, other: &ContentMediaType) -> bool {
+        match (self, other) {
+            (ContentMediaType::Json, ContentMediaType::Json) => true,
+            (ContentMediaType::User(a), ContentMediaType::User(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ContentMediaType {}
+
+impl fmt::Debug for ContentMediaType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ContentMediaType::Json => f.write_str("Json"),
+            ContentMediaType::User(_) => f.write_str("User"),
+        }
+    }
+}
+
+/// A media type's essence (RFC 2045, section 5.1): `type/subtype` in lowercase, without
+/// parameters (`; charset=utf-8`) or the whitespace around them.
+fn essence(name: &str) -> String {
+    let essence: &str = name.split(';').next().unwrap_or_default().trim();
+    match essence.split_once('/') {
+        Some((kind, subtype)) => format!(
+            "{}/{}",
+            kind.trim().to_ascii_lowercase(),
+            subtype.trim().to_ascii_lowercase()
+        ),
+        None => essence.to_ascii_lowercase(),
+    }
 }
 
 impl ContentMediaType {
-    /// The media type `name` names, or `None` for one this library does not check. Parameters
-    /// (`; charset=utf-8`) are ignored, and type and subtype are case-insensitive (RFC 2045,
-    /// section 5.1).
+    /// The built-in media type `name` names, or `None` for one this library does not check.
+    /// Parameters are ignored and type and subtype are case-insensitive (see [`essence`]).
     pub(crate) fn from_name(name: &str) -> Option<ContentMediaType> {
-        let essence: &str = name.split(';').next().unwrap_or_default().trim();
+        let essence: String = essence(name);
         let (kind, subtype) = essence.split_once('/')?;
-        let kind: String = kind.trim().to_ascii_lowercase();
-        let subtype: String = subtype.trim().to_ascii_lowercase();
         let json: bool = (kind == "application" && subtype == "json")
             || (!kind.is_empty() && subtype.len() > "+json".len() && subtype.ends_with("+json"));
         json.then_some(ContentMediaType::Json)
     }
 
     /// Whether `content` is a document of this media type.
-    pub(crate) fn accepts(self, content: &[u8]) -> bool {
+    pub(crate) fn accepts(&self, content: &[u8]) -> bool {
         match self {
             ContentMediaType::Json => {
                 serde_json::from_slice::<serde::de::IgnoredAny>(content).is_ok()
             }
+            ContentMediaType::User(check) => check(content),
+        }
+    }
+}
+
+/// The encodings and media types the user registered or removed, on top of the built-in ones:
+/// each by its normalized name (an encoding in lowercase, a media type by its [`essence`]),
+/// with its check, or `None` for a removed name, which stays an annotation.
+#[derive(Clone, Default)]
+pub(crate) struct ContentCodecs {
+    encodings: Vec<(Box<str>, Option<Decoder>)>,
+    media_types: Vec<(Box<str>, Option<MediaTypeCheck>)>,
+}
+
+impl fmt::Debug for ContentCodecs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContentCodecs")
+            .field("encodings", &registered(&self.encodings))
+            .field("media_types", &registered(&self.media_types))
+            .finish()
+    }
+}
+
+/// Each entry's name and whether it is registered (`true`) or removed (`false`).
+fn registered<C>(entries: &[(Box<str>, Option<C>)]) -> Vec<(&str, bool)> {
+    entries
+        .iter()
+        .map(|(name, check)| (&**name, check.is_some()))
+        .collect()
+}
+
+impl ContentCodecs {
+    /// Registers (`Some`) or removes (`None`) the encoding `name`, replacing an earlier entry
+    /// for the same name.
+    pub(crate) fn set_encoding(&mut self, name: &str, decode: Option<Decoder>) {
+        let key: Box<str> = name.to_ascii_lowercase().into_boxed_str();
+        self.encodings.retain(|(name, _)| *name != key);
+        self.encodings.push((key, decode));
+    }
+
+    /// Registers (`Some`) or removes (`None`) the media type `name`, replacing an earlier entry
+    /// for the same essence.
+    pub(crate) fn set_media_type(&mut self, name: &str, check: Option<MediaTypeCheck>) {
+        let key: Box<str> = essence(name).into_boxed_str();
+        self.media_types.retain(|(name, _)| *name != key);
+        self.media_types.push((key, check));
+    }
+
+    /// The encoding `name` names: the user's entry for it, else the built-in one.
+    fn encoding(&self, name: &str) -> Option<ContentEncoding> {
+        match self
+            .encodings
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        {
+            Some((_, decode)) => decode.clone().map(ContentEncoding::User),
+            None => ContentEncoding::from_name(name),
+        }
+    }
+
+    /// The media type `name` names: the user's entry for its essence, else the built-in one.
+    fn media_type(&self, name: &str) -> Option<ContentMediaType> {
+        if self.media_types.is_empty() {
+            return ContentMediaType::from_name(name);
+        }
+        let key: String = essence(name);
+        match self.media_types.iter().find(|(entry, _)| **entry == *key) {
+            Some((_, check)) => check.clone().map(ContentMediaType::User),
+            None => ContentMediaType::from_name(name),
         }
     }
 }
@@ -84,17 +226,21 @@ pub(crate) enum ContentFailure<'c> {
 }
 
 impl Content {
-    /// Lower a schema object's `contentEncoding` and `contentMediaType` to a check, or `None`
-    /// when they decide nothing: neither is one this library checks, or the media type sits
-    /// under an encoding it cannot decode (the content cannot be read, so it stays an
-    /// annotation).
-    pub(crate) fn lower(encoding: Option<&str>, media_type: Option<&str>) -> Option<Content> {
+    /// Lower a schema object's `contentEncoding` and `contentMediaType` to a check, with the
+    /// encodings and media types `codecs` registers or removes, or `None` when they decide
+    /// nothing: neither is one that is checked, or the media type sits under an encoding that
+    /// cannot be decoded (the content cannot be read, so it stays an annotation).
+    pub(crate) fn lower(
+        encoding: Option<&str>,
+        media_type: Option<&str>,
+        codecs: &ContentCodecs,
+    ) -> Option<Content> {
         let decoded: Option<(ContentEncoding, Box<str>)> =
-            encoding.and_then(|name| ContentEncoding::from_name(name).map(|e| (e, name.into())));
+            encoding.and_then(|name| codecs.encoding(name).map(|e| (e, name.into())));
         let readable: bool = encoding.is_none() || decoded.is_some();
         let media: Option<(ContentMediaType, Box<str>)> = media_type
             .filter(|_| readable)
-            .and_then(|name| ContentMediaType::from_name(name).map(|m| (m, name.into())));
+            .and_then(|name| codecs.media_type(name).map(|m| (m, name.into())));
         (decoded.is_some() || media.is_some()).then_some(Content {
             encoding: decoded,
             media_type: media,
@@ -166,7 +312,9 @@ fn decode_base64(s: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Content, ContentEncoding, ContentFailure, ContentMediaType, decode_base64};
+    use super::{
+        Content, ContentCodecs, ContentEncoding, ContentFailure, ContentMediaType, decode_base64,
+    };
 
     #[test]
     fn base64_decodes_unpadded_full_groups() {
@@ -298,14 +446,19 @@ mod tests {
     #[test]
     fn lower_is_none_without_a_checked_keyword() {
         let expected: Option<Content> = None;
-        let actual: Option<Content> = Content::lower(Some("7bit"), Some("text/html"));
+        let actual: Option<Content> =
+            Content::lower(Some("7bit"), Some("text/html"), &ContentCodecs::default());
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn lower_drops_a_media_type_under_an_unknown_encoding() {
         let expected: Option<Content> = None;
-        let actual: Option<Content> = Content::lower(Some("base32"), Some("application/json"));
+        let actual: Option<Content> = Content::lower(
+            Some("base32"),
+            Some("application/json"),
+            &ContentCodecs::default(),
+        );
         assert_eq!(expected, actual);
     }
 
@@ -315,13 +468,19 @@ mod tests {
             encoding: Some((ContentEncoding::Base64, "base64".into())),
             media_type: Some((ContentMediaType::Json, "application/json".into())),
         });
-        let actual: Option<Content> = Content::lower(Some("base64"), Some("application/json"));
+        let actual: Option<Content> = Content::lower(
+            Some("base64"),
+            Some("application/json"),
+            &ContentCodecs::default(),
+        );
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn check_passes_a_json_string() {
-        let content: Content = Content::lower(None, Some("application/json")).expect("checked");
+        let content: Content =
+            Content::lower(None, Some("application/json"), &ContentCodecs::default())
+                .expect("checked");
         let expected: Option<ContentFailure<'_>> = None;
         let actual: Option<ContentFailure<'_>> = content.check("{\"foo\": \"bar\"}");
         assert_eq!(expected, actual);
@@ -329,7 +488,9 @@ mod tests {
 
     #[test]
     fn check_fails_a_string_that_is_not_json() {
-        let content: Content = Content::lower(None, Some("application/json")).expect("checked");
+        let content: Content =
+            Content::lower(None, Some("application/json"), &ContentCodecs::default())
+                .expect("checked");
         let expected: Option<ContentFailure<'_>> =
             Some(ContentFailure::MediaType("application/json"));
         let actual: Option<ContentFailure<'_>> = content.check("{:}");
@@ -338,8 +499,12 @@ mod tests {
 
     #[test]
     fn check_fails_a_string_that_does_not_decode() {
-        let content: Content =
-            Content::lower(Some("base64"), Some("application/json")).expect("checked");
+        let content: Content = Content::lower(
+            Some("base64"),
+            Some("application/json"),
+            &ContentCodecs::default(),
+        )
+        .expect("checked");
         let expected: Option<ContentFailure<'_>> = Some(ContentFailure::Encoding("base64"));
         let actual: Option<ContentFailure<'_>> = content.check("eyJmb28iOi%iYmFyIn0K");
         assert_eq!(expected, actual);
@@ -347,8 +512,12 @@ mod tests {
 
     #[test]
     fn check_fails_decoded_content_that_is_not_json() {
-        let content: Content =
-            Content::lower(Some("base64"), Some("application/json")).expect("checked");
+        let content: Content = Content::lower(
+            Some("base64"),
+            Some("application/json"),
+            &ContentCodecs::default(),
+        )
+        .expect("checked");
         let expected: Option<ContentFailure<'_>> =
             Some(ContentFailure::MediaType("application/json"));
         let actual: Option<ContentFailure<'_>> = content.check("ezp9Cg==");
@@ -357,8 +526,12 @@ mod tests {
 
     #[test]
     fn check_passes_decoded_json() {
-        let content: Content =
-            Content::lower(Some("base64"), Some("application/json")).expect("checked");
+        let content: Content = Content::lower(
+            Some("base64"),
+            Some("application/json"),
+            &ContentCodecs::default(),
+        )
+        .expect("checked");
         let expected: Option<ContentFailure<'_>> = None;
         let actual: Option<ContentFailure<'_>> = content.check("eyJmb28iOiAiYmFyIn0K");
         assert_eq!(expected, actual);
