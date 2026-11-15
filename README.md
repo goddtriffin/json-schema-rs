@@ -170,7 +170,12 @@ content by default (override with `--jss-content-mode`); other encodings and med
 and `contentSchema`, are annotations. Encodings and media types are added with
 `CompiledSchema::builder().content_encoding(name, |s: &str| ...)` (the decoded bytes, or
 `None`) and `.content_media_type(name, |content: &[u8]| ...)`, and built-in ones removed
-with `.without_content_encoding(name)` / `.without_content_media_type(name)`. Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+with `.without_content_encoding(name)` / `.without_content_media_type(name)`. For schemas from
+untrusted sources, `.regex_engine(RegexEngine::Linear)` (CLI `--regex-engine linear`; the
+`linear-regex` feature, off by default) matches `pattern` and `patternProperties` in linear
+time, refusing backreferences and lookaround, `.regex_size_limit(Some(bytes))` caps each
+pattern's memory (same feature), and `.max_depth(Some(n))` caps
+evaluation depth (CLI `--regex-size-limit`, `--max-depth`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
 bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),
@@ -630,6 +635,16 @@ vendored:
 
 ```bash
 jsonschemars validate -s package.json -r ava.json -r eslintrc.json -p my-package.json
+```
+
+For a schema from an untrusted source, `--regex-engine linear` matches patterns in
+linear time (a pattern with a backreference or lookaround is then a schema error),
+`--regex-size-limit BYTES` caps the memory each pattern compiles to, and
+`--max-depth LEVELS` caps how deeply evaluation nests. The first two need the binary built
+with the `linear-regex` feature (`cargo install jsonschemars --features linear-regex`):
+
+```bash
+jsonschemars validate -s untrusted.json --regex-engine linear --regex-size-limit 10000000 --max-depth 64 -p payload.json
 ```
 
 Exit

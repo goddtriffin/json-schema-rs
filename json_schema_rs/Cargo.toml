@@ -28,6 +28,9 @@ chrono = ["dep:chrono"]
 # Retrieve `http:` / `https:` documents a `$ref` names (`HttpRetriever`, the CLI's
 # `--cgs-allow-remote-refs`). Off by default: no network access unless asked for.
 http = ["dep:reqwest"]
+# `RegexEngine::Linear`: patterns matched in linear time, for schemas from untrusted sources
+# (`regex` crate). Off by default: the default engine needs no extra crate.
+linear-regex = ["dep:regex"]
 # `UniqueItemsType::IndexSet` (codegen emits `indexmap::IndexSet` for `uniqueItems` arrays) and
 # `ToJsonSchema for IndexSet`. Off by default: generated code then needs no extra crate.
 indexmap = ["dep:indexmap"]
@@ -48,6 +51,9 @@ log.workspace = true
 memchr.workspace = true
 # Big-integer mantissas for exact decimal arithmetic under `arbitrary-precision`.
 num-bigint = { workspace = true, optional = true }
+# The tables `\p{…}` needs (`\d`, `\w`, `\s` are written out, and no case folding is used)
+# and the lazy DFA; the rest of `regex`'s defaults would double its size in the binary.
+regex = { workspace = true, optional = true, features = ["std", "unicode-bool", "unicode-gencat", "unicode-script", "perf-dfa"] }
 regress.workspace = true
 reqwest = { workspace = true, optional = true, features = ["blocking"] }
 serde.workspace = true

@@ -17,6 +17,8 @@
 //! unbalanced groups) and the other Annex B extensions (quantified lookaheads, ranges with a class
 //! escape, legacy octal escapes) remain errors, reported for the pattern as written.
 
+#[cfg(feature = "linear-regex")]
+use std::borrow::Cow;
 use std::fmt::Write;
 use std::sync::LazyLock;
 
@@ -124,6 +126,16 @@ fn rewrite(pattern: &str) -> Option<String> {
         }
     }
     changed.then_some(out)
+}
+
+/// `pattern` as the `u` grammar accepts it: as written, or rewritten (see the module docs) when
+/// only the rewritten form is accepted.
+#[cfg(feature = "linear-regex")]
+pub(crate) fn u_form(pattern: &str) -> Cow<'_, str> {
+    if regress::Regex::with_flags(pattern, "u").is_ok() {
+        return Cow::Borrowed(pattern);
+    }
+    rewrite(pattern).map_or(Cow::Borrowed(pattern), Cow::Owned)
 }
 
 /// `pattern` compiled with Unicode semantics. A pattern the `u` grammar refuses is rewritten

@@ -5141,9 +5141,264 @@ fn custom_content_codecs_compare_by_registration() {
 }
 
 #[test]
+#[cfg(feature = "linear-regex")]
 fn compiled_schema_builder_debug_lists_content_codecs() {
     let builder: CompiledSchemaBuilder = with_hex().without_content_media_type("Application/JSON");
-    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] } }"#;
+    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, regex_engine: Ecma, regex_size_limit: None, max_depth: None }"#;
     let actual: String = format!("{builder:?}");
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(not(feature = "linear-regex"))]
+fn compiled_schema_builder_debug_lists_content_codecs_without_linear_regex() {
+    let builder: CompiledSchemaBuilder = with_hex().without_content_media_type("Application/JSON");
+    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, max_depth: None }"#;
+    let actual: String = format!("{builder:?}");
+    assert_eq!(expected, actual);
+}
+
+// --- Untrusted-schema limits ---
+
+#[cfg(feature = "linear-regex")]
+use super::RegexEngine;
+
+/// `schema` (draft 2020-12) compiled with `builder`, or its compile errors.
+fn compile_with(
+    json: &str,
+    builder: &CompiledSchemaBuilder,
+) -> Result<CompiledSchema, CompileErrors> {
+    let schema: JsonSchema = schema(json);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    builder.build(&registry)
+}
+
+#[cfg(feature = "linear-regex")]
+fn linear() -> CompiledSchemaBuilder {
+    CompiledSchema::builder().regex_engine(RegexEngine::Linear)
+}
+
+#[test]
+#[cfg(feature = "linear-regex")]
+fn regex_engine_defaults_to_ecma() {
+    let expected: RegexEngine = RegexEngine::Ecma;
+    let actual: RegexEngine = RegexEngine::default();
+    assert_eq!(expected, actual);
+}
+
+/// The default engine runs backreferences, as ECMA-262 requires.
+#[test]
+fn ecma_engine_matches_backreference() {
+    let compiled: CompiledSchema =
+        compile_with(r#"{"pattern":"^(a)\\1$"}"#, &CompiledSchema::builder()).expect("compile");
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        compiled.is_valid(&json!("aa")),
+        compiled.is_valid(&json!("ab")),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(feature = "linear-regex")]
+fn linear_engine_matches_pattern() {
+    let compiled: CompiledSchema =
+        compile_with(r#"{"pattern":"^\\d{3}-[a-z]+$"}"#, &linear()).expect("compile");
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        compiled.is_valid(&json!("123-abc")),
+        compiled.is_valid(&json!("12-abc")),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(feature = "linear-regex")]
+fn linear_engine_matches_pattern_properties() {
+    let compiled: CompiledSchema = compile_with(
+        r#"{"patternProperties":{"^x-":{"type":"string"}},"additionalProperties":false}"#,
+        &linear(),
+    )
+    .expect("compile");
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        compiled.is_valid(&json!({"x-a": "s"})),
+        compiled.is_valid(&json!({"y": "s"})),
+    );
+    assert_eq!(expected, actual);
+}
+
+/// A pattern that backtracks exponentially under ECMA-262 decides at once under the linear
+/// engine.
+#[test]
+#[cfg(feature = "linear-regex")]
+fn linear_engine_decides_catastrophic_pattern() {
+    let compiled: CompiledSchema =
+        compile_with(r#"{"pattern":"^(a+)+$"}"#, &linear()).expect("compile");
+    let text: String = format!("{}b", "a".repeat(64));
+    let expected: bool = false;
+    let actual: bool = compiled.is_valid(&Value::String(text));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(feature = "linear-regex")]
+fn linear_engine_refuses_backreference_with_location() {
+    let actual: Result<(), CompileErrors> =
+        compile_with(r#"{"properties":{"a":{"pattern":"(a)\\1"}}}"#, &linear()).map(|_| ());
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidPattern {
+            location: "/properties/a/pattern".to_string(),
+            pattern: r"(a)\1".to_string(),
+            reason: "backreferences are not supported by the linear engine".to_string(),
+        }));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(feature = "linear-regex")]
+fn linear_engine_refuses_lookaround_in_pattern_properties_key() {
+    let actual: Result<(), CompileErrors> =
+        compile_with(r#"{"patternProperties":{"a(?=b)":{}}}"#, &linear()).map(|_| ());
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidPattern {
+            location: "/patternProperties/a(?=b)".to_string(),
+            pattern: "a(?=b)".to_string(),
+            reason: "lookaround is not supported by the linear engine".to_string(),
+        }));
+    assert_eq!(expected, actual);
+}
+
+/// A pattern ECMA-262 rejects is rejected with the ECMA-262 reason under either engine.
+#[test]
+#[cfg(feature = "linear-regex")]
+fn linear_engine_reports_invalid_pattern_as_ecma() {
+    let actual: Result<(), CompileErrors> =
+        compile_with(r#"{"pattern":"("}"#, &linear()).map(|_| ());
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidPattern {
+            location: "/pattern".to_string(),
+            pattern: "(".to_string(),
+            reason: regex_reason("("),
+        }));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(feature = "linear-regex")]
+fn regex_size_limit_refuses_pattern_over_limit() {
+    let actual: Result<(), CompileErrors> = compile_with(
+        r#"{"pattern":"a{1000}"}"#,
+        &linear().regex_size_limit(Some(100)),
+    )
+    .map(|_| ());
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidPattern {
+            location: "/pattern".to_string(),
+            pattern: "a{1000}".to_string(),
+            reason: "the compiled pattern exceeds the size limit of 100 bytes".to_string(),
+        }));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+#[cfg(feature = "linear-regex")]
+fn regex_size_limit_accepts_pattern_within_limit() {
+    let actual: Result<(), CompileErrors> = compile_with(
+        r#"{"pattern":"a{1000}"}"#,
+        &linear().regex_size_limit(Some(10_000_000)),
+    )
+    .map(|_| ());
+    let expected: Result<(), CompileErrors> = Ok(());
+    assert_eq!(expected, actual);
+}
+
+/// The size limit is the linear engine's: the ECMA-262 engine compiles the same pattern.
+#[test]
+#[cfg(feature = "linear-regex")]
+fn regex_size_limit_does_not_apply_to_ecma_engine() {
+    let actual: Result<(), CompileErrors> = compile_with(
+        r#"{"pattern":"a{1000}"}"#,
+        &CompiledSchema::builder().regex_size_limit(Some(100)),
+    )
+    .map(|_| ());
+    let expected: Result<(), CompileErrors> = Ok(());
+    assert_eq!(expected, actual);
+}
+
+/// The `regex` format checks its strings as ECMA-262 whatever the engine: a backreference is a
+/// valid regular expression.
+#[test]
+#[cfg(feature = "linear-regex")]
+fn regex_format_is_ecma_under_linear_engine() {
+    let compiled: CompiledSchema = compile_with(
+        r#"{"$schema":"http://json-schema.org/draft-07/schema#","format":"regex"}"#,
+        &linear(),
+    )
+    .expect("compile");
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        compiled.is_valid(&json!(r"(a)\1")),
+        compiled.is_valid(&json!("(")),
+    );
+    assert_eq!(expected, actual);
+}
+
+/// With `max_depth(Some(4))`, two nested arrays (four levels) fit.
+#[test]
+fn max_depth_accepts_nesting_within_limit() {
+    let compiled: CompiledSchema = compile_with(
+        r##"{"items":{"$ref":"#"}}"##,
+        &CompiledSchema::builder().max_depth(Some(4)),
+    )
+    .expect("compile");
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&nested_arrays(2));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn max_depth_rejects_nesting_past_limit() {
+    let compiled: CompiledSchema = compile_with(
+        r##"{"items":{"$ref":"#"}}"##,
+        &CompiledSchema::builder().max_depth(Some(4)),
+    )
+    .expect("compile");
+    let expected: ValidationResult = Err(vec![ValidationError::new(
+        ValidationErrorKind::DepthLimitExceeded { limit: 4 },
+        zeros(2),
+        kl(&"/items/$ref".repeat(2)),
+    )]);
+    let actual: ValidationResult = compiled.validate(&nested_arrays(3));
+    assert_eq!(expected, actual);
+}
+
+/// A limit above the built-in guard is lowered to it.
+#[test]
+fn max_depth_above_guard_is_lowered_to_guard() {
+    let compiled: CompiledSchema = compile_with(
+        r##"{"items":{"$ref":"#"}}"##,
+        &CompiledSchema::builder().max_depth(Some(usize::MAX)),
+    )
+    .expect("compile");
+    let expected: ValidationResult = Err(vec![ValidationError::new(
+        ValidationErrorKind::DepthLimitExceeded { limit: DEPTH_LIMIT },
+        zeros(DEPTH_LIMIT / 2),
+        kl(&"/items/$ref".repeat(DEPTH_LIMIT / 2)),
+    )]);
+    let actual: ValidationResult = compiled.validate(&nested_arrays(DEPTH_LIMIT / 2 + 1));
+    assert_eq!(expected, actual);
+}
+
+/// `is_valid` stops at the limit too.
+#[test]
+fn max_depth_rejects_in_is_valid() {
+    let compiled: CompiledSchema = compile_with(
+        r##"{"items":{"$ref":"#"}}"##,
+        &CompiledSchema::builder().max_depth(Some(4)),
+    )
+    .expect("compile");
+    let expected: bool = false;
+    let actual: bool = compiled.is_valid(&nested_arrays(3));
     assert_eq!(expected, actual);
 }
