@@ -2,10 +2,10 @@
 
 use super::dialect::IntegerSemantics;
 use crate::number;
+use crate::validator::{Instance, InstanceRef};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
 use std::fmt;
 use std::str::FromStr;
 
@@ -169,20 +169,21 @@ impl TypeSet {
     /// Whether `instance` matches the set: its JSON type is in the set, or it is a number that
     /// is an integer under `integer_semantics` and the set holds [`JsonType::Integer`].
     #[must_use]
-    pub fn matches(self, instance: &Value, integer_semantics: IntegerSemantics) -> bool {
+    pub fn matches<I: Instance>(self, instance: &I, integer_semantics: IntegerSemantics) -> bool {
         // One bit test decides every instance but a number the set accepts only as an integer.
-        let ty: JsonType = match instance {
-            Value::Null => JsonType::Null,
-            Value::Bool(_) => JsonType::Boolean,
-            Value::Number(_) => JsonType::Number,
-            Value::String(_) => JsonType::String,
-            Value::Array(_) => JsonType::Array,
-            Value::Object(_) => JsonType::Object,
+        let view: InstanceRef<'_, I> = instance.view();
+        let ty: JsonType = match &view {
+            InstanceRef::Null => JsonType::Null,
+            InstanceRef::Bool(_) => JsonType::Boolean,
+            InstanceRef::Number(_) => JsonType::Number,
+            InstanceRef::String(_) => JsonType::String,
+            InstanceRef::Array(_) => JsonType::Array,
+            InstanceRef::Object(_) => JsonType::Object,
         };
         self.contains(ty)
-            || match instance {
-                Value::Number(n) => {
-                    self.contains(JsonType::Integer) && number::is_integer(n, integer_semantics)
+            || match view {
+                InstanceRef::Number(n) => {
+                    self.contains(JsonType::Integer) && number::is_integer(&n, integer_semantics)
                 }
                 _ => false,
             }
@@ -461,7 +462,7 @@ mod tests {
         instances
             .iter()
             .enumerate()
-            .filter(|(_, v)| types.matches(v, semantics))
+            .filter(|(_, v)| types.matches(*v, semantics))
             .map(|(i, _)| i)
             .collect()
     }

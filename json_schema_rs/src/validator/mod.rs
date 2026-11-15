@@ -13,11 +13,14 @@ mod error;
 mod eval;
 mod format;
 mod generated;
+mod instance;
 #[cfg(feature = "linear-regex")]
 mod linear_regex;
 mod name_index;
 mod output;
 mod simple_pattern;
+#[cfg(test)]
+mod tests_instance;
 #[cfg(test)]
 mod tests_keywords;
 mod value_ref;
@@ -38,6 +41,7 @@ pub use generated::{
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError,
     NewtypeValue, TypeValidationError, TypeValidators, UnionMatch, UnionVariants,
 };
+pub use instance::{Instance, InstanceObject, InstanceRef};
 pub use output::{Annotation, BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
 
 use crate::json_schema::{Registry, SchemaRef};
