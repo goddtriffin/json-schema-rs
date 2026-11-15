@@ -698,11 +698,44 @@ annotations of a valid payload):
 jsonschemars validate -s schema.json -p payload.json --output basic
 ```
 
-Exit
-codes: `0` the payload conforms; `1` it does not (one line per error on stderr,
-or the `--output` JSON on stdout);
-`2` no verdict, because a schema document or the payload could not be read or
-parsed, or the schema cannot be used (one `schema error:` line per problem).
+`-p` is repeatable: the schema compiles once and validates every payload. Each error line
+then starts with the payload's path, and `--output` prints a JSON array of
+`{"instance": PATH, "output": ...}` records in the order given; `--errors-only` leaves the
+conforming payloads out of it:
+
+```bash
+jsonschemars validate -s schema.json -p a.json -p b.json --output basic --errors-only
+```
+
+Without `-s`, each payload's `$schema` names its schema, resolved against the payload's
+path (a `$ref` like any other; the standard metaschemas are built in, so a schema file
+validates against its own `$schema` offline):
+
+```bash
+jsonschemars validate -p config.json -p my-schema.json
+```
+
+Files ending in `.yaml` or `.yml` (schema, resources and payloads) are read as YAML.
+
+For `--allow-remote-refs`, `--connect-timeout SECONDS` and `--timeout SECONDS` (default 30)
+bound each request, `--cacert FILE` adds the PEM certificates in FILE to the trusted roots,
+and `-k/--insecure` accepts any certificate:
+
+```bash
+jsonschemars validate -s https-refs.json --allow-remote-refs --timeout 5 --cacert ca.pem -p payload.json
+```
+
+Exit codes: `0` every payload conforms; `1` a payload does not (one line per error on
+stderr, or the `--output` JSON on stdout); `2` no verdict for a payload, because a schema
+document or the payload could not be read or parsed, or the schema cannot be used (one
+`schema error:` line per problem).
+
+Coming from another validator's CLI: `jsonschema-cli validate schema.json -i a.json -i b.json`
+and `boon schema.json a.json b.json` become `jsonschemars validate -s schema.json -p a.json
+-p b.json`; jsonschema-cli's `--output list` and boon's `--output basic` are
+`--output basic`, and `--output hierarchical` / boon's `--output detailed` are
+`--output detailed`; `--errors-only`, `--connect-timeout`, `--timeout`, `-k/--insecure`
+and `--cacert` keep their names.
 
 `jsonschemars bundle SCHEMA` (or `-s SCHEMA`) writes one schema document holding every
 document the schema references, so it needs no other files (`--resource`, `--file-root` and
