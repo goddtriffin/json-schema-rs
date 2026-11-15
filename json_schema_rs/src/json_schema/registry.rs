@@ -51,8 +51,12 @@ use std::sync::Arc;
 mod bundle;
 mod canonicalize;
 mod dereference;
+#[cfg(feature = "async")]
+mod retrieve_async;
 
 pub use dereference::DereferenceError;
+#[cfg(feature = "async")]
+pub use retrieve_async::{AsyncRetrieve, RetrieveFuture};
 
 /// The base URI of a root document that has no retrieval URI and no absolute `$id`.
 pub const DEFAULT_BASE_URI: &str = "json-schema:///";
@@ -634,6 +638,9 @@ pub struct RegistryBuilder<'b> {
     documents: HashMap<String, Value>,
     parsed_documents: Vec<(String, SchemaRef<'b>)>,
     retriever: Box<dyn Retrieve + 'b>,
+    /// See [`RegistryBuilder::async_retriever`].
+    #[cfg(feature = "async")]
+    async_retriever: Option<Box<dyn AsyncRetrieve + 'b>>,
     settings: JsonSchemaSettings,
     /// Absolute URIs resolved as if written as `$ref` in the root resource.
     entries: Vec<String>,
@@ -668,6 +675,8 @@ impl Default for RegistryBuilder<'_> {
             documents: HashMap::new(),
             parsed_documents: Vec::new(),
             retriever: Box::new(OfflineRetriever),
+            #[cfg(feature = "async")]
+            async_retriever: None,
             settings: JsonSchemaSettings::default(),
             entries: Vec::new(),
             vocabularies: Vec::new(),

@@ -18,6 +18,8 @@ pub use dialect::{
 pub use error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
 pub use json_schema::{JsonSchema, Schema, SchemaRef};
 pub(crate) use registry::RegistryDocumentKind;
+#[cfg(feature = "async")]
+pub use registry::{AsyncRetrieve, RetrieveFuture};
 pub use registry::{
     DEFAULT_BASE_URI, DereferenceError, OfflineRetriever, Registry, RegistryBuilder, RegistryError,
     RegistryErrors, Resolved, Retrieve, RetrieveError, Scope, UnknownRef,

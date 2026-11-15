@@ -27,6 +27,8 @@ pub use error_list::ErrorList;
 pub use json_pointer::{JsonPointer, JsonPointerError};
 #[cfg(feature = "http")]
 pub use json_schema::HttpRetriever;
+#[cfg(feature = "async")]
+pub use json_schema::{AsyncRetrieve, RetrieveFuture};
 pub use json_schema::{
     ContentMode, DereferenceError, Dialect, DialectSettings, DialectWarning, ExclusiveBounds,
     FileRetriever, FormatMode, IntegerSemantics, JsonSchema, JsonSchemaParseError,
