@@ -184,7 +184,9 @@ property, then validates (CLI `--apply-defaults`); `validate` never changes the 
 references reach as one document, each embedded as a schema resource (2020-12 core §9.3;
 CLI `jsonschemars bundle`); `registry.dereference()` replaces every reference by its target,
 for tools that do not resolve references (a recursive reference becomes a JSON Pointer to
-its ancestor; CLI `jsonschemars dereference`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+its ancestor; CLI `jsonschemars dereference`); `registry.canonicalize()` rewrites the schema
+into one normal form that keeps its verdicts, annotations and references, so equivalent
+schemas compare equal more often (CLI `jsonschemars canonicalize`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
 bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),
@@ -717,6 +719,15 @@ another draft, which cannot be inlined):
 
 ```bash
 jsonschemars dereference order.json -o order.dereferenced.json
+```
+
+`jsonschemars canonicalize SCHEMA` takes the same arguments and writes the schema in one
+normal form: keywords sorted; `type`, `enum` and `required` deduplicated and sorted; a
+one-value `enum` as `const`; assertions that accept everything and bounds another bound
+implies removed; `{}` as `true`. References and every subschema's position are kept:
+
+```bash
+jsonschemars canonicalize order.json -o order.canonical.json
 ```
 
 To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of

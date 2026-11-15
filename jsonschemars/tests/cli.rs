@@ -5353,3 +5353,92 @@ fn cli_dereference_reports_a_reference_into_another_dialect_with_no_output() {
     );
     assert_eq!(expected, actual);
 }
+
+// --- canonicalize ---
+
+/// Runs `jsonschemars canonicalize <args>` from `cwd`; returns its exit code, stdout and stderr.
+fn cli_canonicalize_from(cwd: &Path, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(jsonschemars_bin())
+        .current_dir(cwd)
+        .arg("canonicalize")
+        .args(args)
+        .output()
+        .expect("run jsonschemars");
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A schema written loosely, with a reference to a sibling file.
+const LOOSE_ORDER: &str = r#"{
+  "type": ["object"],
+  "required": ["id", "customer", "id"],
+  "minProperties": 0,
+  "properties": {
+    "id": {"type": ["integer", "number"], "minimum": 1, "exclusiveMinimum": 0},
+    "status": {"enum": ["open"]},
+    "note": {"minLength": 0},
+    "customer": {"$ref": "customer.json"}
+  }
+}"#;
+
+/// [`LOOSE_ORDER`] canonicalized: its reference kept as written.
+const LOOSE_ORDER_CANONICAL: &str = r#"{
+  "properties": {
+    "customer": {
+      "$ref": "customer.json"
+    },
+    "id": {
+      "minimum": 1,
+      "type": "number"
+    },
+    "note": true,
+    "status": {
+      "const": "open"
+    }
+  },
+  "required": [
+    "customer",
+    "id"
+  ],
+  "type": "object"
+}
+"#;
+
+#[test]
+fn cli_canonicalize_prints_the_canonical_schema_to_stdout() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("order.json", LOOSE_ORDER), ("customer.json", CUSTOMER)]);
+    let actual: (i32, String, String) = cli_canonicalize_from(&path, &["-s", "order.json"]);
+    let expected: (i32, String, String) = (0, LOOSE_ORDER_CANONICAL.to_string(), String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_canonicalize_writes_the_output_file() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        cross_file_dir(&[("order.json", LOOSE_ORDER), ("customer.json", CUSTOMER)]);
+    let (code, stdout, stderr): (i32, String, String) =
+        cli_canonicalize_from(&path, &["order.json", "-o", "out.json"]);
+    let written: String = fs::read_to_string(path.join("out.json")).expect("read output");
+    let actual: (i32, String, String, String) = (code, stdout, stderr, written);
+    let expected: (i32, String, String, String) = (
+        0,
+        String::new(),
+        String::new(),
+        LOOSE_ORDER_CANONICAL.to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_canonicalize_of_a_missing_reference_target_reports_it_with_no_output() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[("order.json", LOOSE_ORDER)]);
+    let (code, stdout, _stderr): (i32, String, String) =
+        cli_canonicalize_from(&path, &["order.json"]);
+    let actual: (i32, String) = (code, stdout);
+    let expected: (i32, String) = (2, String::new());
+    assert_eq!(expected, actual);
+}

@@ -49,6 +49,7 @@ use std::hash::BuildHasher;
 use std::sync::Arc;
 
 mod bundle;
+mod canonicalize;
 mod dereference;
 
 pub use dereference::DereferenceError;

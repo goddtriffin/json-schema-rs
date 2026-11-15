@@ -19,7 +19,9 @@
 //! case whose two verdicts differ fails, whatever the manifest says. The group's schema is also
 //! dereferenced ([`Registry::dereference`]) and the result compiled: a case whose verdict on the
 //! dereferenced schema differs fails too, whatever the manifest says. A schema that cannot be
-//! dereferenced (one reaching another dialect) skips that check.
+//! dereferenced (one reaching another dialect) skips that check. Each schema is also
+//! canonicalized ([`Registry::canonicalize`]): the canonical form must canonicalize to itself
+//! and give every case the same verdict.
 //!
 //! The suite must be cloned at `research/json-schema-test-suite/` (`make vendor_test_suite`);
 //! the run hard-fails when it is missing. `make update_suite_xfail` rewrites both manifests from
@@ -250,6 +252,58 @@ fn dereference(
     }
 }
 
+/// Canonicalizes the schema of `registry` ([`Registry::canonicalize`]), checks that the
+/// canonical form canonicalizes to itself, and compiles it with the same remotes and settings.
+fn canonicalize(
+    registry: &Registry<'_>,
+    remotes: &HashMap<String, serde_json::Value>,
+    settings: &JsonSchemaSettings,
+) -> Result<CompiledSchema, String> {
+    let value: serde_json::Value = registry
+        .canonicalize()
+        .map_err(|e| format!("canonicalize failed: {e}"))?;
+    let schema: Schema = Schema::new_from_serde_value(&value, settings)
+        .map_err(|e| format!("the canonical schema is unusable: {e}"))?;
+    let canonical: Registry<'_> = Registry::builder()
+        .retriever(remotes)
+        .settings(settings.clone())
+        .build(&schema)
+        .map_err(|e| format!("the canonical schema is unusable: {e}"))?;
+    let again: serde_json::Value = canonical
+        .canonicalize()
+        .map_err(|e| format!("canonicalize failed: {e}"))?;
+    if again != value {
+        return Err(format!(
+            "canonicalizing the canonical schema changed it: {value} became {again}"
+        ));
+    }
+    CompiledSchema::new(&canonical).map_err(|e| format!("the canonical schema is unusable: {e}"))
+}
+
+/// Why the dereferenced or canonical schema disagrees with `compiled` on `data`, if it does.
+fn transformed_verdicts(
+    compiled: &CompiledSchema,
+    dereferenced: &Dereferenced,
+    canonical: &Result<CompiledSchema, String>,
+    data: &serde_json::Value,
+) -> Option<String> {
+    let verdict: bool = compiled.is_valid(data);
+    match dereferenced {
+        Dereferenced::Compiled(dereferenced) if dereferenced.is_valid(data) != verdict => {
+            return Some("the dereferenced schema gives another verdict".to_string());
+        }
+        Dereferenced::Unusable(reason) => return Some(reason.clone()),
+        Dereferenced::Compiled(_) | Dereferenced::Skipped => {}
+    }
+    match canonical {
+        Ok(canonical) if canonical.is_valid(data) != verdict => {
+            Some("the canonical schema gives another verdict".to_string())
+        }
+        Ok(_) => None,
+        Err(reason) => Some(reason.clone()),
+    }
+}
+
 /// Evaluates every test in every draft. Errors are reasons the suite itself is unusable.
 fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
     let tests_dir: PathBuf = root.join("tests");
@@ -299,41 +353,40 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
                     Ok(Err(e)) => Err(format!("schema not supported: {e}")),
                     Err(_) => Err("schema parser panicked".to_string()),
                 };
-                let compiled: Option<(CompiledSchema, Dereferenced)> =
-                    schema.as_ref().ok().and_then(|schema| {
-                        catch_unwind(AssertUnwindSafe(|| {
-                            let registry: Registry<'_> = Registry::builder()
-                                .retriever(&remotes)
-                                .settings(settings.clone())
-                                .build(schema)
-                                .ok()?;
-                            let compiled: CompiledSchema = CompiledSchema::new(&registry).ok()?;
-                            Some((compiled, dereference(&registry, &remotes, settings)))
-                        }))
-                        .ok()
-                        .flatten()
-                    });
+                let compiled: Option<(
+                    CompiledSchema,
+                    Dereferenced,
+                    Result<CompiledSchema, String>,
+                )> = schema.as_ref().ok().and_then(|schema| {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        let registry: Registry<'_> = Registry::builder()
+                            .retriever(&remotes)
+                            .settings(settings.clone())
+                            .build(schema)
+                            .ok()?;
+                        let compiled: CompiledSchema = CompiledSchema::new(&registry).ok()?;
+                        Some((
+                            compiled,
+                            dereference(&registry, &remotes, settings),
+                            canonicalize(&registry, &remotes, settings),
+                        ))
+                    }))
+                    .ok()
+                    .flatten()
+                });
                 for test in group.tests {
                     let outcome: Outcome = match (&schema, &compiled) {
                         (Ok(schema), None) => run_test(schema, None, &test),
-                        (Ok(schema), Some((compiled, dereferenced))) => {
+                        (Ok(schema), Some((compiled, dereferenced, canonical))) => {
                             match run_test(schema, Some(compiled), &test) {
                                 Outcome::Mismatch(reason) => Outcome::Mismatch(reason),
-                                outcome => match dereferenced {
-                                    Dereferenced::Compiled(dereferenced)
-                                        if dereferenced.is_valid(&test.data)
-                                            != compiled.is_valid(&test.data) =>
-                                    {
-                                        Outcome::Mismatch(
-                                            "the dereferenced schema gives another verdict"
-                                                .to_string(),
-                                        )
-                                    }
-                                    Dereferenced::Unusable(reason) => {
-                                        Outcome::Mismatch(reason.clone())
-                                    }
-                                    _ => outcome,
-                                },
+                                outcome => transformed_verdicts(
+                                    compiled,
+                                    dereferenced,
+                                    canonical,
+                                    &test.data,
+                                )
+                                .map_or(outcome, Outcome::Mismatch),
                             }
                         }
                         (Err(reason), _) => Outcome::Failed(reason.clone()),

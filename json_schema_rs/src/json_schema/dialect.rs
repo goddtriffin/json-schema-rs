@@ -500,6 +500,12 @@ impl Dialect {
         self.active_vocabularies.contains(kind)
     }
 
+    /// Whether `true` and `false` are schemas: from draft 6.
+    #[must_use]
+    pub fn boolean_schemas(&self) -> bool {
+        Draft::of(self.spec_version) >= Draft::Draft6
+    }
+
     /// The keyword that sets a schema resource's URI: `"id"` in draft 4, `"$id"` from draft 6.
     #[must_use]
     pub fn id_keyword(&self) -> &'static str {
