@@ -1,7 +1,8 @@
 //! In-memory representation of JSON Schema for codegen.
 
 use super::dialect::{
-    Dialect, DialectWarning, ExclusiveBounds, IntegerSemantics, ResolvedDialect, SubschemaPosition,
+    Dialect, DialectWarning, ExclusiveBounds, IntegerSemantics, RefSiblings, ResolvedDialect,
+    SubschemaPosition,
 };
 use super::error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResult};
 use super::settings::{
@@ -812,7 +813,7 @@ fn parse_raw(raw: RawSchema<'_>, settings: &JsonSchemaSettings) -> JsonSchemaPar
             Ok(schema) => {
                 let schema_uri: Option<&str> = schema.as_object().and_then(|s| s.schema.as_deref());
                 let resolved: ResolvedDialect = resolve_dialect_for_uri(schema_uri, settings)?;
-                if !needs_value_pass(raw, resolved.dialect) {
+                if !needs_value_pass(raw, resolved.dialect, settings) {
                     return Ok(finish_parse(schema, &resolved, settings));
                 }
             }
@@ -825,7 +826,9 @@ fn parse_raw(raw: RawSchema<'_>, settings: &JsonSchemaSettings) -> JsonSchemaPar
                 }
                 let value: Value = raw.parse()?;
                 let resolved: ResolvedDialect = resolve_dialect_for_value(&value, settings)?;
-                if resolved.dialect.exclusive_bounds != ExclusiveBounds::BooleanModifier {
+                if resolved.dialect.exclusive_bounds != ExclusiveBounds::BooleanModifier
+                    && !embeds_draft4_resource(&value, resolved.dialect, settings)
+                {
                     return Err(error.into());
                 }
                 return parse_value_in_dialect(Cow::Owned(value), &resolved, settings);
@@ -864,12 +867,15 @@ fn parse_value_in_dialect(
     resolved: &ResolvedDialect,
     settings: &JsonSchemaSettings,
 ) -> JsonSchemaParseResult<Schema> {
+    // An embedded resource of draft 4 has draft-4 shapes and counts of its own.
+    let embeds_draft4: bool = embeds_draft4_resource(&value, resolved.dialect, settings);
     let checks: KeywordChecks = KeywordChecks {
         reject_unknown: settings.disallow_unknown_fields,
-        lexical_counts: resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
+        lexical_counts: embeds_draft4
+            || resolved.dialect.integer_semantics == IntegerSemantics::Lexical,
     };
     let mut errors: Vec<JsonSchemaParseError> = if checks.reject_unknown || checks.lexical_counts {
-        check_keywords(&value, resolved.dialect, checks)
+        check_keywords(&value, resolved.dialect, checks, settings)
     } else {
         Vec::new()
     };
@@ -889,8 +895,8 @@ fn parse_value_in_dialect(
             return Err(found);
         }
     }
-    if needs_draft4_normalization(resolved.dialect) {
-        normalize_draft4_shapes(value.to_mut(), resolved.dialect);
+    if embeds_draft4 || needs_draft4_normalization(resolved.dialect) {
+        normalize_draft4_shapes(value.to_mut(), resolved.dialect, settings);
     }
     // Built even when the walk found problems: a model error (a keyword's value of the wrong
     // type) is one more independent problem to report alongside them.
@@ -943,7 +949,8 @@ struct KeywordChecks {
     /// Reject keys that are not keywords of the dialect (strict parsing).
     reject_unknown: bool,
     /// Reject count keywords written with a fraction or exponent (`2.0`, `2e0`), which are not
-    /// integers under [`IntegerSemantics::Lexical`] (draft 4).
+    /// integers under [`IntegerSemantics::Lexical`] (draft 4), in the schema objects whose
+    /// dialect has it.
     lexical_counts: bool,
 }
 
@@ -951,35 +958,47 @@ struct KeywordChecks {
 /// walk order: depth-first, each object's keys in map order, an object's own keys before its
 /// subschemas' keys. The same document always lists the same errors in the same order.
 ///
-/// - with `reject_unknown`, each key that is not a keyword of `dialect` (its keyword table,
-///   see [`Dialect::keywords`]) is a [`JsonSchemaParseError::UnknownField`];
+/// - with `reject_unknown`, each key that is not a keyword of the object's dialect (its keyword
+///   table, see [`Dialect::keywords`]) is a [`JsonSchemaParseError::UnknownField`];
 /// - with `lexical_counts`, each count keyword whose number was written with a fraction or
-///   exponent is a [`JsonSchemaParseError::InvalidKeywordValue`]. `serde_json` reads such a
+///   exponent, in an object whose dialect has [`IntegerSemantics::Lexical`], is a
+///   [`JsonSchemaParseError::InvalidKeywordValue`]. `serde_json` reads such a
 ///   number as a float and an integer literal as an integer, so the float form is the written
 ///   form.
 ///
 /// Every schema object is checked: the root and each subschema the table's
 /// [`SubschemaPosition`]s reach, including those under keywords the model does not hold (`not`,
 /// `if`, ...). Keys in non-schema positions (property names, `enum` values, `default`) are data,
-/// not keywords, and are not checked. Iterative.
+/// not keywords, and are not checked. An object's dialect is `dialect`, or an embedded
+/// resource's own (see [`embedded_dialect`]), whose root may also hold the key that named it in
+/// the enclosing draft. Iterative.
 fn check_keywords(
     root: &Value,
     dialect: Dialect,
     checks: KeywordChecks,
+    settings: &JsonSchemaSettings,
 ) -> Vec<JsonSchemaParseError> {
     let mut errors: Vec<JsonSchemaParseError> = Vec::new();
     // Each visited subschema records how it was reached (`steps`) instead of carrying its own
     // pointer, so the walk allocates no strings; the pointer is built only for an error.
     let mut steps: Vec<PathStep<'_>> = Vec::new();
-    let mut stack: Vec<(&Value, Option<usize>)> = vec![(root, None)];
+    let mut stack: Vec<(&Value, Option<usize>, Dialect)> = vec![(root, None, dialect)];
     let mut children: Vec<(&Value, Option<usize>)> = Vec::new();
-    while let Some((node, at)) = stack.pop() {
+    while let Some((node, at, parent)) = stack.pop() {
         let Value::Object(map) = node else {
             continue;
         };
+        let dialect: Dialect = match at {
+            None => parent,
+            Some(_) => embedded_dialect(map, parent, settings).unwrap_or(parent),
+        };
+        let lexical_counts: bool =
+            checks.lexical_counts && dialect.integer_semantics == IntegerSemantics::Lexical;
         for (key, child) in map {
             let Some(keyword) = dialect.keyword(key) else {
-                if checks.reject_unknown {
+                // The enclosing draft's id keyword, which named this resource.
+                let names_resource: bool = key == parent.id_keyword();
+                if checks.reject_unknown && !names_resource {
                     errors.push(JsonSchemaParseError::UnknownField {
                         key: key.clone(),
                         path: path_to(&steps, at),
@@ -987,7 +1006,7 @@ fn check_keywords(
                 }
                 continue;
             };
-            if checks.lexical_counts
+            if lexical_counts
                 && COUNT_KEYWORDS.contains(&key.as_str())
                 && let Value::Number(n) = child
                 && !number::is_integer(n, IntegerSemantics::Lexical)
@@ -1037,7 +1056,12 @@ fn check_keywords(
             }
         }
         // Reversed so the stack visits subschemas in map order.
-        stack.extend(children.drain(..).rev());
+        stack.extend(
+            children
+                .drain(..)
+                .rev()
+                .map(|(child, at)| (child, at, dialect)),
+        );
     }
     errors
 }
@@ -1116,12 +1140,16 @@ fn may_contain_key(raw: RawSchema<'_>, needle: &str) -> bool {
 /// [`IntegerSemantics::Lexical`] and the text can contain a count keyword (the model stores
 /// `2.0` as `2`, so only the `Value` still has the written form). A `\u` escape could spell
 /// either key, so it always answers `true`; text that is not UTF-8 also answers `true` and is
-/// left to the parser. Drafts 6 and later scan nothing; draft 4 scans the text at most three
-/// times.
-fn needs_value_pass(raw: RawSchema<'_>, dialect: Dialect) -> bool {
+/// left to the parser. Unless a draft is forced, a document of a later draft is also redone
+/// when its text can name a draft-4 metaschema (an embedded resource of draft 4 has draft-4
+/// shapes to normalise): a `\u` escape could spell one, so it answers `true` too. The text is
+/// scanned at most four times.
+fn needs_value_pass(raw: RawSchema<'_>, dialect: Dialect, settings: &JsonSchemaSettings) -> bool {
     let legacy_id: bool = uses_legacy_id(dialect);
     let lexical_counts: bool = dialect.integer_semantics == IntegerSemantics::Lexical;
-    if !legacy_id && !lexical_counts {
+    let embedded: bool =
+        settings.forced_spec_version.is_none() && !needs_draft4_normalization(dialect);
+    if !legacy_id && !lexical_counts && !embedded {
         return false;
     }
     let text: &str = match raw {
@@ -1135,6 +1163,123 @@ fn needs_value_pass(raw: RawSchema<'_>, dialect: Dialect) -> bool {
     memmem::find(bytes, b"\\u").is_some()
         || (legacy_id && memmem::find(bytes, b"\"id\"").is_some())
         || (lexical_counts && contains_count_key(text))
+        || (embedded && may_name_draft4_metaschema(bytes))
+}
+
+/// Whether raw JSON text can hold the URI of a metaschema that follows draft 4's rules
+/// (drafts 0 to 5, and the legacy `http://json-schema.org/schema#`), written literally or
+/// with escaped slashes. A string that is not a `$schema` value also matches; the walk on the
+/// `Value` sorts that out.
+fn may_name_draft4_metaschema(bytes: &[u8]) -> bool {
+    memmem::find_iter(bytes, b"draft-0").any(|at| matches!(bytes.get(at + 7), Some(b'0'..=b'5')))
+        || memmem::find(bytes, b"json-schema.org/schema#").is_some()
+        || memmem::find(bytes, b"json-schema.org\\/schema#").is_some()
+}
+
+/// The dialect of a schema object of `parent` that is an embedded schema resource with a
+/// `$schema` naming a standard metaschema (2020-12 core §8.1.1: a resource may name its own
+/// dialect), with `settings`' overrides applied; `None` for any other object, and always
+/// `None` when `settings` forces a draft. Mirrors the registry: the resource is the one its
+/// `$id` (or draft 4's `id`) opens, unless a draft-4–7 `$ref` beside it makes the id ignored.
+fn embedded_dialect(
+    map: &serde_json::Map<String, Value>,
+    parent: Dialect,
+    settings: &JsonSchemaSettings,
+) -> Option<Dialect> {
+    if settings.forced_spec_version.is_some() {
+        return None;
+    }
+    let version: SpecVersion =
+        SpecVersion::from_schema_uri(map.get("$schema").and_then(Value::as_str)?)?;
+    if parent.ref_siblings == RefSiblings::Ignored && map.contains_key("$ref") {
+        return None;
+    }
+    map.get("$id")
+        .or_else(|| map.get(parent.id_keyword()))
+        .filter(|id| id.is_string())?;
+    Some(
+        settings
+            .dialect_settings()
+            .apply_overrides(Dialect::for_spec_version(version)),
+    )
+}
+
+/// Whether `root`, a document of `dialect` whose root needs no draft-4 normalisation, embeds
+/// a schema resource that does (see [`embedded_dialect`]). Iterative; reads only.
+fn embeds_draft4_resource(root: &Value, dialect: Dialect, settings: &JsonSchemaSettings) -> bool {
+    if settings.forced_spec_version.is_some()
+        || needs_draft4_normalization(dialect)
+        || !has_draft4_schema_key(root)
+    {
+        return false;
+    }
+    let mut stack: Vec<(&Value, Dialect)> = vec![(root, dialect)];
+    let mut is_root: bool = true;
+    while let Some((node, parent)) = stack.pop() {
+        let Value::Object(map) = node else {
+            continue;
+        };
+        let dialect: Dialect = if std::mem::take(&mut is_root) {
+            parent
+        } else {
+            embedded_dialect(map, parent, settings).unwrap_or(parent)
+        };
+        if needs_draft4_normalization(dialect) {
+            return true;
+        }
+        for_each_subschema(map, dialect, |child| stack.push((child, dialect)));
+    }
+    false
+}
+
+/// Whether any object under `root`, at any position, has a `$schema` naming a metaschema that
+/// follows draft 4's rules (see [`may_name_draft4_metaschema`]). The cheap screen before
+/// [`embeds_draft4_resource`]'s keyword-guided walk: one `$schema` lookup per object and no
+/// keyword-table lookups, so a document of one draft pays little. Iterative.
+fn has_draft4_schema_key(root: &Value) -> bool {
+    let mut stack: Vec<&Value> = vec![root];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::Object(map) => {
+                if map
+                    .get("$schema")
+                    .and_then(Value::as_str)
+                    .is_some_and(|uri| may_name_draft4_metaschema(uri.as_bytes()))
+                {
+                    return true;
+                }
+                stack.extend(map.values().filter(|v| v.is_object() || v.is_array()));
+            }
+            Value::Array(items) => {
+                stack.extend(items.iter().filter(|v| v.is_object() || v.is_array()));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Calls `visit` with every subschema directly under `map`, by `dialect`'s keyword table.
+fn for_each_subschema<'v>(
+    map: &'v serde_json::Map<String, Value>,
+    dialect: Dialect,
+    mut visit: impl FnMut(&'v Value),
+) {
+    for (key, child) in map {
+        let Some(position) = dialect.keyword(key).and_then(|k| k.subschemas) else {
+            continue;
+        };
+        match (position, child) {
+            (SubschemaPosition::Array | SubschemaPosition::SingleOrArray, Value::Array(items)) => {
+                items.iter().for_each(&mut visit);
+            }
+            (SubschemaPosition::Map, Value::Object(entries)) => {
+                entries.values().for_each(&mut visit);
+            }
+            (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, child) => visit(child),
+            (SubschemaPosition::Array | SubschemaPosition::Map, _) => {}
+        }
+    }
 }
 
 /// Whether `text` has a quoted name from [`COUNT_KEYWORDS`] written literally. One SIMD pass over
@@ -1162,15 +1307,24 @@ fn contains_count_key(text: &str) -> bool {
 ///   `exclusiveMaximum` / `maximum`. A numeric `exclusiveMinimum` is kept as the bound it states.
 ///
 /// Only schema positions are visited (from the dialect's keyword table), so a property named
-/// `id` is left alone. Iterative.
-fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect) {
-    let legacy_id: bool = uses_legacy_id(dialect);
-    let boolean_bounds: bool = dialect.exclusive_bounds == ExclusiveBounds::BooleanModifier;
-    let mut stack: Vec<&mut Value> = vec![root];
-    while let Some(node) = stack.pop() {
+/// `id` is left alone. An embedded schema resource with its own `$schema` is normalised by its
+/// own draft's rules (see [`embedded_dialect`]). Iterative.
+fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect, settings: &JsonSchemaSettings) {
+    let mut stack: Vec<(&mut Value, Dialect)> = vec![(root, dialect)];
+    let mut is_root: bool = true;
+    while let Some((node, parent)) = stack.pop() {
         let Value::Object(map) = node else {
             continue;
         };
+        let dialect: Dialect = if std::mem::take(&mut is_root) {
+            parent
+        } else {
+            embedded_dialect(map, parent, settings).unwrap_or(parent)
+        };
+        // The id that opens a resource is read by the enclosing draft; everything else by the
+        // node's own.
+        let legacy_id: bool = uses_legacy_id(parent);
+        let boolean_bounds: bool = dialect.exclusive_bounds == ExclusiveBounds::BooleanModifier;
         if legacy_id
             && !map.contains_key("$id")
             && map.get("id").is_some_and(Value::is_string)
@@ -1201,13 +1355,13 @@ fn normalize_draft4_shapes(root: &mut Value, dialect: Dialect) {
                     SubschemaPosition::Array | SubschemaPosition::SingleOrArray,
                     Value::Array(items),
                 ) => {
-                    stack.extend(items.iter_mut());
+                    stack.extend(items.iter_mut().map(|item| (item, dialect)));
                 }
                 (SubschemaPosition::Map, Value::Object(entries)) => {
-                    stack.extend(entries.values_mut());
+                    stack.extend(entries.values_mut().map(|entry| (entry, dialect)));
                 }
                 (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, child) => {
-                    stack.push(child);
+                    stack.push((child, dialect));
                 }
                 (SubschemaPosition::Array | SubschemaPosition::Map, _) => {}
             }
@@ -3465,6 +3619,7 @@ mod tests {
         let actual: bool = super::needs_value_pass(
             super::RawSchema::Str(r#"{"\u006dinLength":2}"#),
             Dialect::for_spec_version(SpecVersion::Draft04),
+            &JsonSchemaSettings::default(),
         );
         assert_eq!(expected, actual);
     }
@@ -3473,8 +3628,9 @@ mod tests {
     fn value_pass_not_needed_in_2020_12() {
         let expected: bool = false;
         let actual: bool = super::needs_value_pass(
-            super::RawSchema::Str(r#"{"\u0069d":"x","minLength":2.0}"#),
+            super::RawSchema::Str(r#"{"id":"x","minLength":2.0,"exclusiveMinimum":true}"#),
             Dialect::default(),
+            &JsonSchemaSettings::default(),
         );
         assert_eq!(expected, actual);
     }
@@ -3485,6 +3641,7 @@ mod tests {
         let actual: bool = super::needs_value_pass(
             super::RawSchema::Str(r#"{"type":"string","minimum":1}"#),
             Dialect::for_spec_version(SpecVersion::Draft04),
+            &JsonSchemaSettings::default(),
         );
         assert_eq!(expected, actual);
     }
@@ -3858,7 +4015,11 @@ mod tests {
     #[test]
     fn draft4_id_normalized_inside_items_array() {
         let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
-        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(
+            &mut raw,
+            Dialect::for_spec_version(SpecVersion::Draft04),
+            &JsonSchemaSettings::default(),
+        );
         let expected: serde_json::Value = serde_json::json!([{"$id": "#first"}]);
         let actual: serde_json::Value = raw["items"].clone();
         assert_eq!(expected, actual);
@@ -3867,7 +4028,11 @@ mod tests {
     #[test]
     fn draft4_id_normalization_leaves_property_named_id() {
         let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
-        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(
+            &mut raw,
+            Dialect::for_spec_version(SpecVersion::Draft04),
+            &JsonSchemaSettings::default(),
+        );
         let expected: serde_json::Value =
             serde_json::json!({"id": {"type": "string", "$id": "#name"}});
         let actual: serde_json::Value = raw["properties"].clone();
@@ -3877,7 +4042,11 @@ mod tests {
     #[test]
     fn draft4_id_normalized_in_dependencies_leaving_string_arrays() {
         let mut raw: serde_json::Value = serde_json::from_str(DRAFT4_RAW).expect("json");
-        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(
+            &mut raw,
+            Dialect::for_spec_version(SpecVersion::Draft04),
+            &JsonSchemaSettings::default(),
+        );
         let expected: serde_json::Value = serde_json::json!({"b": ["c"], "d": {"$id": "#d"}});
         let actual: serde_json::Value = raw["dependencies"].clone();
         assert_eq!(expected, actual);
@@ -3886,7 +4055,11 @@ mod tests {
     #[test]
     fn draft4_id_normalization_keeps_existing_dollar_id() {
         let mut raw: serde_json::Value = serde_json::json!({"$id": "http://example.com/dollar", "id": "http://example.com/plain"});
-        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(
+            &mut raw,
+            Dialect::for_spec_version(SpecVersion::Draft04),
+            &JsonSchemaSettings::default(),
+        );
         let expected: serde_json::Value = serde_json::json!({"$id": "http://example.com/dollar", "id": "http://example.com/plain"});
         let actual: serde_json::Value = raw;
         assert_eq!(expected, actual);
@@ -3895,9 +4068,181 @@ mod tests {
     #[test]
     fn draft4_id_normalization_leaves_non_string_id() {
         let mut raw: serde_json::Value = serde_json::json!({"id": 5});
-        super::normalize_draft4_shapes(&mut raw, Dialect::for_spec_version(SpecVersion::Draft04));
+        super::normalize_draft4_shapes(
+            &mut raw,
+            Dialect::for_spec_version(SpecVersion::Draft04),
+            &JsonSchemaSettings::default(),
+        );
         let expected: serde_json::Value = serde_json::json!({"id": 5});
         let actual: serde_json::Value = raw;
+        assert_eq!(expected, actual);
+    }
+
+    // --- Embedded resources of another draft ---
+
+    const DRAFT4: &str = "http://json-schema.org/draft-04/schema#";
+
+    /// `value` parsed from its text with `settings`, written back as JSON.
+    fn reparsed(value: &serde_json::Value, settings: &JsonSchemaSettings) -> serde_json::Value {
+        let schema: Schema =
+            Schema::new_from_str(&value.to_string(), settings).expect("parse schema");
+        serde_json::to_value(&schema).expect("serialize schema")
+    }
+
+    #[test]
+    fn embedded_draft4_resource_text_is_normalised_by_draft4_rules() {
+        let raw: serde_json::Value = serde_json::json!({"$defs": {"old": {
+            "$schema": DRAFT4,
+            "$id": "old.json",
+            "properties": {"n": {"id": "#n", "minimum": 0, "exclusiveMinimum": true}}
+        }}});
+        let expected: serde_json::Value = serde_json::json!({"$defs": {"old": {
+            "$schema": DRAFT4,
+            "$id": "old.json",
+            "properties": {"n": {"$id": "#n", "exclusiveMinimum": 0}}
+        }}});
+        let actual: serde_json::Value = reparsed(&raw, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn embedded_draft4_resource_value_is_normalised_by_draft4_rules() {
+        let raw: serde_json::Value = serde_json::json!({"items": {
+            "$schema": DRAFT4,
+            "$id": "old.json",
+            "maximum": 9,
+            "exclusiveMaximum": true
+        }});
+        let expected: serde_json::Value = serde_json::json!({"items": {
+            "$schema": DRAFT4,
+            "$id": "old.json",
+            "exclusiveMaximum": 9
+        }});
+        let schema: Schema = Schema::try_from(&raw).expect("parse schema");
+        let actual: serde_json::Value = serde_json::to_value(&schema).expect("serialize");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_schema_without_an_id_is_not_a_resource_of_its_own() {
+        let raw: serde_json::Value = serde_json::json!({"items": {
+            "$schema": DRAFT4,
+            "minimum": 0,
+            "exclusiveMinimum": true
+        }});
+        let actual: bool = Schema::try_from(&raw).is_err();
+        // The subschema stays 2020-12, where a boolean `exclusiveMinimum` is invalid.
+        let expected: bool = true;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft7_ref_sibling_ignores_an_embedded_draft4_id() {
+        let raw: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {"old": {
+                "$schema": DRAFT4,
+                "$id": "old.json",
+                "$ref": "#/definitions/x",
+                "properties": {"a": {"id": "#a"}}
+            }}
+        });
+        let expected: serde_json::Value = raw.clone();
+        let actual: serde_json::Value = reparsed(&raw, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn forced_draft_ignores_an_embedded_draft4_schema() {
+        let raw: serde_json::Value = serde_json::json!({"$defs": {"old": {
+            "$schema": DRAFT4,
+            "$id": "old.json",
+            "properties": {"a": {"id": "#a"}}
+        }}});
+        let expected: serde_json::Value = raw.clone();
+        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+            .forced_spec_version(SpecVersion::Draft202012)
+            .build();
+        let actual: serde_json::Value = reparsed(&raw, &settings);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn embedded_2020_12_resource_in_draft4_reads_only_its_own_id_by_draft4() {
+        let raw: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT4,
+            "id": "http://example.com/root.json",
+            "definitions": {"new": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "id": "new.json",
+                "properties": {"a": {"id": "#a"}}
+            }}
+        });
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT4,
+            "$id": "http://example.com/root.json",
+            "definitions": {"new": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "new.json",
+                "properties": {"a": {"id": "#a"}}
+            }}
+        });
+        let actual: serde_json::Value = reparsed(&raw, &JsonSchemaSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_checks_embedded_draft4_resource_by_draft4_keywords() {
+        let expected: StrictOutcome = unknown("$anchor", "/$defs/old/properties/a");
+        let actual: StrictOutcome = strict_parse(&format!(
+            r##"{{"$defs":{{"old":{{"$schema":"{DRAFT4}","$id":"old.json","properties":{{"a":{{"id":"#a","$anchor":"x"}}}}}}}}}}"##
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_accepts_the_enclosing_id_keyword_at_an_embedded_resource_root() {
+        let expected: StrictOutcome = Ok(());
+        let actual: StrictOutcome = strict_parse(&format!(
+            r#"{{"$schema":"{DRAFT4}","id":"http://example.com/r","definitions":{{"new":{{"$schema":"https://json-schema.org/draft/2020-12/schema","id":"new.json","$anchor":"a"}}}}}}"#
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn embedded_draft4_resource_rejects_a_decimal_count() {
+        let expected: KeywordValueOutcome = invalid_value("minLength", "/$defs/old", "2.0");
+        let json: String = format!(
+            r#"{{"$defs":{{"old":{{"$schema":"{DRAFT4}","$id":"old.json","minLength":2.0}}}}}}"#
+        );
+        let actual: KeywordValueOutcome =
+            keyword_value_outcome(Schema::new_from_str(&json, &JsonSchemaSettings::default()));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_metaschema_uri_with_escaped_slashes_is_detected() {
+        let expected: bool = true;
+        let actual: bool = super::may_name_draft4_metaschema(
+            br#"{"$schema":"http:\/\/json-schema.org\/draft-04\/schema#"}"#,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn legacy_draft4_metaschema_uri_is_detected() {
+        let expected: bool = true;
+        let actual: bool =
+            super::may_name_draft4_metaschema(br#"{"$schema":"http://json-schema.org/schema#"}"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft6_metaschema_uri_is_not_draft4() {
+        let expected: bool = false;
+        let actual: bool = super::may_name_draft4_metaschema(
+            br#"{"$schema":"http://json-schema.org/draft-06/schema#"}"#,
+        );
         assert_eq!(expected, actual);
     }
 
