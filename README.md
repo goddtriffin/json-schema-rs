@@ -574,13 +574,30 @@ its absolute URI after the last `$ref` crossed (`absolute_keyword_location`, whe
 schema has one), and the `kind` of problem. A failing `anyOf` / `oneOf` lists every
 branch's errors as its `causes`. The standard output formats of JSON Schema 2020-12
 (§12) are rendered with `compiled.evaluate(&instance, OutputFormat::Basic)` (`Flag`,
-`Basic` or `Detailed`), which serializes to the specification's JSON:
+`Basic`, `Detailed` or `Verbose`, which reports every subschema evaluated), which
+serializes to the specification's JSON:
 
 ```rust
 use json_schema_rs::{Output, OutputFormat};
 
 let output: Output = compiled.evaluate(&instance, OutputFormat::Detailed);
 println!("{}", serde_json::to_string_pretty(&output)?);
+```
+
+**Annotations** (`title`, `description`, `default`, `examples`, `readOnly`,
+`writeOnly`, `deprecated`, `format`, the content keywords and unknown keywords such
+as `x-widget`) are collected when the schema is compiled with `annotations(true)`.
+`compiled.annotations(&instance)` lists the ones a valid instance collects, each with
+its keyword, value, instance location and schema locations (those of failing
+subschemas are dropped, as the specification requires), and `evaluate` includes them
+in `Basic`, `Detailed` and `Verbose` output. The setting is off by default and costs
+`validate` and `is_valid` nothing.
+
+```rust
+use json_schema_rs::{Annotation, CompiledSchema};
+
+let compiled: CompiledSchema = CompiledSchema::builder().annotations(true).build(&registry)?;
+let annotations: Vec<Annotation> = compiled.annotations(&instance).expect("valid instance");
 ```
 
 ## Running the binary
@@ -647,8 +664,17 @@ with the `linear-regex` feature (`cargo install jsonschemars --features linear-r
 jsonschemars validate -s untrusted.json --regex-engine linear --regex-size-limit 10000000 --max-depth 64 -p payload.json
 ```
 
+`--output FORMAT` prints the result to stdout as JSON in a standard output format:
+`flag`, `basic`, `detailed` or `verbose` (every format but `flag` includes the
+annotations of a valid payload):
+
+```bash
+jsonschemars validate -s schema.json -p payload.json --output basic
+```
+
 Exit
-codes: `0` the payload conforms; `1` it does not (one line per error on stderr);
+codes: `0` the payload conforms; `1` it does not (one line per error on stderr,
+or the `--output` JSON on stdout);
 `2` no verdict, because a schema document or the payload could not be read or
 parsed, or the schema cannot be used (one `schema error:` line per problem).
 

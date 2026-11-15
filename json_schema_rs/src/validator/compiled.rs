@@ -19,8 +19,8 @@ use crate::error_list::ErrorList;
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
     ContentMode, Dialect, FormatMode, IntegerSemantics, JsonSchema, JsonType,
-    Keyword as DialectKeyword, RefSiblings, Registry, Schema, SchemaRef, Scope, TypeSet,
-    UnknownFormats, VocabularyKind,
+    Keyword as DialectKeyword, RefSiblings, Registry, Schema, SchemaRef, Scope, SpecVersion,
+    TypeSet, UnknownFormats, VocabularyKind,
 };
 use crate::number;
 use serde::Deserialize;
@@ -770,6 +770,19 @@ pub struct CompiledSchema {
     pub(crate) has_unions: bool,
     /// How deep evaluation may nest (see [`CompiledSchemaBuilder::max_depth`]).
     pub(crate) max_depth: usize,
+    /// The annotations each node produces when it passes (see
+    /// [`CompiledSchemaBuilder::annotations`]); empty unless they were asked for. Cold: read
+    /// only by the trace.
+    pub(crate) annotations: IntMap<NodeId, Box<[NodeAnnotation]>>,
+}
+
+/// An annotation a schema object produces when it passes: its keyword and value.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NodeAnnotation {
+    pub(crate) keyword: Box<str>,
+    pub(crate) value: Value,
+    /// Whether it applies to string instances only (the `content*` keywords).
+    pub(crate) strings_only: bool,
 }
 
 /// Whether [`serde_json::Map`] iterates its keys in sorted (byte) order: it does unless some
@@ -815,6 +828,7 @@ pub struct CompiledSchemaBuilder {
     #[cfg(feature = "linear-regex")]
     regex_size_limit: Option<usize>,
     max_depth: Option<usize>,
+    annotations: bool,
 }
 
 impl CompiledSchemaBuilder {
@@ -1084,6 +1098,22 @@ impl CompiledSchemaBuilder {
         self
     }
 
+    /// Whether the compiled schema keeps the annotation keywords' values, for
+    /// [`CompiledSchema::annotations`] and the annotations of [`CompiledSchema::evaluate`]'s
+    /// output (off by default). The annotation keywords are the meta-data ones (`title`,
+    /// `description`, `default`, `examples`, `deprecated`, `readOnly`, `writeOnly`), `format`,
+    /// the content ones (`contentEncoding`, `contentMediaType`, `contentSchema`, from the drafts
+    /// that define them, on strings only) and every keyword the dialect does not know.
+    /// `is_valid` and `validate` cost the same either way.
+    ///
+    /// [`CompiledSchema::annotations`]: crate::CompiledSchema::annotations
+    /// [`CompiledSchema::evaluate`]: crate::CompiledSchema::evaluate
+    #[must_use]
+    pub fn annotations(mut self, enabled: bool) -> Self {
+        self.annotations = enabled;
+        self
+    }
+
     fn register(mut self, name: String, check: FormatCheck) -> Self {
         let name: Box<str> = name.into_boxed_str();
         self.formats.retain(|format| format.name != name);
@@ -1109,6 +1139,7 @@ impl CompiledSchemaBuilder {
         compiler.max_depth = self
             .max_depth
             .map_or(DEPTH_LIMIT, |limit| limit.min(DEPTH_LIMIT));
+        compiler.collect_annotations = self.annotations;
         let standard: Vec<CompileError> = self
             .keywords
             .iter()
@@ -1620,6 +1651,10 @@ impl DialectFacts {
 }
 
 /// Build-time state.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the schema and compile settings, not a state machine"
+)]
 struct Compiler<'r, 'a> {
     registry: &'r Registry<'a>,
     nodes: Vec<Option<Node>>,
@@ -1665,6 +1700,9 @@ struct Compiler<'r, 'a> {
     max_depth: usize,
     /// The custom keywords (see [`CompiledSchemaBuilder::keyword`]).
     custom_definitions: Vec<CustomKeywordDefinition>,
+    /// Whether to keep each node's annotations (see [`CompiledSchemaBuilder::annotations`]).
+    collect_annotations: bool,
+    annotations: IntMap<NodeId, Box<[NodeAnnotation]>>,
     /// The custom keywords compiled so far, by [`CustomKeywordId`].
     custom_keywords: Vec<CompiledCustomKeyword>,
     errors: Vec<CompileError>,
@@ -1790,6 +1828,8 @@ impl<'r, 'a> Compiler<'r, 'a> {
             custom_keywords: Vec::new(),
             errors: Vec::new(),
             located: None,
+            collect_annotations: false,
+            annotations: IntMap::default(),
         }
     }
 
@@ -1919,6 +1959,7 @@ impl<'r, 'a> Compiler<'r, 'a> {
             custom_keywords: self.custom_keywords.into_boxed_slice(),
             has_unions: !unions.is_empty(),
             max_depth: self.max_depth,
+            annotations: self.annotations,
         };
         compiled.add_discriminators(&unions);
         Ok(compiled)
@@ -2080,6 +2121,13 @@ impl<'r, 'a> Compiler<'r, 'a> {
         if !self.custom_definitions.is_empty() && !siblings_ignored {
             self.lower_custom(pending.source, pending.location, &mut keywords);
         }
+        if self.collect_annotations && !siblings_ignored {
+            let annotations: Vec<NodeAnnotation> = self.node_annotations(pending.source, dialect);
+            if !annotations.is_empty() {
+                self.annotations
+                    .insert(pending.id, annotations.into_boxed_slice());
+            }
+        }
         let has_unevaluated: bool = keywords.iter().any(|k| {
             matches!(
                 k,
@@ -2093,6 +2141,64 @@ impl<'r, 'a> Compiler<'r, 'a> {
             has_unevaluated,
             leaf,
         }
+    }
+
+    /// The annotations of the schema object `source` in `dialect`, in key order: the annotation
+    /// keywords the draft defines (see [`CompiledSchemaBuilder::annotations`]) and, from 2019-09,
+    /// the keywords it does not know (other than custom keywords, which assert).
+    fn node_annotations(&self, source: Source<'r>, dialect: Dialect) -> Vec<NodeAnnotation> {
+        let typed: Value;
+        let object: &Map<String, Value> = match source {
+            Source::Bool(_) => return Vec::new(),
+            Source::Raw(object) => object,
+            Source::Typed(schema) => {
+                typed = serde_json::to_value(schema).unwrap_or(Value::Null);
+                match &typed {
+                    Value::Object(object) => object,
+                    _ => return Vec::new(),
+                }
+            }
+        };
+        // Every keyword the dialect does not define is an annotation (2019-09 core §6.5; the
+        // annotation suite applies the rule to every draft). Of the ones it defines, the
+        // meta-data and content keywords annotate; the content keywords only strings, and
+        // `contentSchema` only beside `contentMediaType` (2020-12 validation §8.5).
+        let version: SpecVersion = dialect.spec_version;
+        let content: bool = !matches!(
+            version,
+            SpecVersion::Draft00
+                | SpecVersion::Draft01
+                | SpecVersion::Draft02
+                | SpecVersion::Draft03
+                | SpecVersion::Draft04
+                | SpecVersion::Draft05
+                | SpecVersion::Draft06
+        );
+        let content_schema: bool = content && version != SpecVersion::Draft07;
+        let mut annotations: Vec<NodeAnnotation> = Vec::new();
+        for (key, value) in object {
+            let (annotates, strings_only): (bool, bool) = match key.as_str() {
+                "title" | "description" | "default" | "format" | "examples" | "readOnly"
+                | "writeOnly" | "deprecated" => (true, false),
+                "contentEncoding" | "contentMediaType" if content => (true, true),
+                "contentSchema" if content_schema => {
+                    (object.contains_key("contentMediaType"), true)
+                }
+                name => (
+                    dialect.keyword(name).is_none()
+                        && !self.custom_definitions.iter().any(|c| &*c.name == name),
+                    false,
+                ),
+            };
+            if annotates {
+                annotations.push(NodeAnnotation {
+                    keyword: key.as_str().into(),
+                    value: value.clone(),
+                    strings_only,
+                });
+            }
+        }
+        annotations
     }
 
     fn facts(&mut self, dialect: Dialect) -> DialectFacts {

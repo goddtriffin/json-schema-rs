@@ -1,31 +1,40 @@
-//! The standard output formats of JSON Schema 2020-12 (core §12): `flag`, `basic` and
-//! `detailed`, rendered from a [`ValidationResult`].
+//! The standard output formats of JSON Schema 2020-12 (core §12): `flag`, `basic`, `detailed`
+//! and `verbose`, and the annotations of a valid instance.
 //!
-//! Every error already carries what an output unit needs (its keyword locations and instance
-//! location), so rendering needs neither the schema nor the instance. `basic` lists every error
+//! The errors of `basic` and `detailed` are rendered from the error list: every error already
+//! carries what an output unit needs (its keyword locations and instance location). `basic` lists every error
 //! and, after each `anyOf` / `oneOf` failure, its causes. `detailed` nests the errors by where
 //! the schema applied a subschema: each applicator a path goes through (`properties/<name>`,
 //! `items`, `allOf/<i>`, `$ref`, ...) is a node at its keyword location and the instance location
 //! it applied to, a node with a single child is replaced by that child (§12.4.3), and the causes
 //! of an `anyOf` / `oneOf` failure nest under its own unit. Rendering is iterative, so no depth of
 //! errors or causes can overflow the stack.
+//!
+//! Annotations and `verbose` come from the evaluator's trace (see [`CompiledSchema::trace`]),
+//! which records every subschema evaluated, with its errors and annotations, as a tree in
+//! evaluation order. An annotation is kept when its subschema and every subschema above it
+//! passed (2020-12 core §7.7.1.2); `verbose` renders the whole tree.
 
 use super::compiled::CompiledSchema;
-use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
-use crate::json_pointer;
+use super::error::{ValidationError, ValidationErrorKind};
+use super::eval::{TraceKind, TraceRecord, TraceUnit, UnitLocations};
+use crate::json_pointer::{self, JsonPointer};
 use serde::Serialize;
 use serde_json::Value;
 
-/// Which output format to render (2020-12 core §12.2). `verbose`, which also reports passing
-/// subschemas, is not provided.
+/// Which output format to render (2020-12 core §12.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutputFormat {
     /// The verdict alone: `{"valid": false}`.
     Flag,
-    /// A flat list of output units, one per error (§12.4.2).
+    /// A flat list of output units, one per error, or one per annotation of a valid instance
+    /// (§12.4.2).
     Basic,
     /// Output units nested by the schema's structure, condensed (§12.4.3).
     Detailed,
+    /// Every subschema evaluated, passing or failing, with its errors and annotations: the
+    /// uncondensed hierarchy (§12.4.4).
+    Verbose,
 }
 
 /// A validation result in one of the standard output formats. Serializes to the JSON the
@@ -60,6 +69,8 @@ pub enum Output {
     Basic(BasicOutput),
     /// `detailed` (§12.4.3): the root output unit.
     Detailed(OutputUnit),
+    /// `verbose` (§12.4.4): the root output unit.
+    Verbose(OutputUnit),
 }
 
 /// The `flag` output: the verdict alone.
@@ -78,13 +89,19 @@ pub struct BasicOutput {
     /// failure follow its own unit. Empty (and not serialized) when the instance is valid.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<OutputUnit>,
+    /// One unit per annotation of a valid instance, in evaluation order. Empty (and not
+    /// serialized) when the instance is invalid or the schema was compiled without annotations
+    /// (see [`CompiledSchemaBuilder::annotations`](crate::CompiledSchemaBuilder::annotations)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<OutputUnit>,
 }
 
 /// One output unit (2020-12 core §12.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputUnit {
-    /// Whether this part of the evaluation passed (`false` for every error and branch unit).
+    /// Whether this part of the evaluation passed (`false` for every error, `true` for every
+    /// annotation).
     pub valid: bool,
     /// The keyword's location through the schema as evaluated, a JSON Pointer (§12.3.1).
     pub keyword_location: String,
@@ -96,41 +113,41 @@ pub struct OutputUnit {
     /// The error message, for a unit that is an error (a branch unit has none).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Nested units (`detailed` only).
+    /// The annotation's value, for a unit that is an annotation (§12.3.4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<Value>,
+    /// Nested units of a failing unit (`detailed` and `verbose`; §12.3.5).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<OutputUnit>,
+    /// Nested units of a passing unit (`detailed` and `verbose`; §12.3.5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<OutputUnit>,
+}
+
+/// An annotation a valid instance collected: the value of an annotation keyword (`title`,
+/// `default`, `readOnly`, an unknown keyword, ...) of a subschema that passed at
+/// `instance_location`, from [`CompiledSchema::annotations`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotation {
+    /// The keyword.
+    pub keyword: String,
+    /// The keyword's location through the schema as evaluated.
+    pub keyword_location: JsonPointer,
+    /// The keyword's absolute location, when a reference was followed to reach it.
+    pub absolute_keyword_location: Option<String>,
+    /// The instance location the annotation applies to.
+    pub instance_location: JsonPointer,
+    /// The annotation's value: the keyword's value.
+    pub value: Value,
 }
 
 impl Output {
-    /// Renders `result` in `format`.
-    #[must_use]
-    pub fn new(result: &ValidationResult, format: OutputFormat) -> Output {
-        match (format, result) {
-            (OutputFormat::Flag, _) => Output::Flag(FlagOutput {
-                valid: result.is_ok(),
-            }),
-            (OutputFormat::Basic, Ok(())) => Output::Basic(BasicOutput {
-                valid: true,
-                errors: Vec::new(),
-            }),
-            (OutputFormat::Basic, Err(errors)) => Output::Basic(BasicOutput {
-                valid: false,
-                errors: basic(errors),
-            }),
-            (OutputFormat::Detailed, Ok(())) => Output::Detailed(OutputUnit {
-                valid: true,
-                ..branch_unit()
-            }),
-            (OutputFormat::Detailed, Err(errors)) => Output::Detailed(detailed(errors)),
-        }
-    }
-
     /// Whether the instance is valid.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         match self {
             Output::Flag(FlagOutput { valid }) | Output::Basic(BasicOutput { valid, .. }) => *valid,
-            Output::Detailed(unit) => unit.valid,
+            Output::Detailed(unit) | Output::Verbose(unit) => unit.valid,
         }
     }
 }
@@ -138,18 +155,239 @@ impl Output {
 impl CompiledSchema {
     /// Validates `instance` and renders the result in `format` (2020-12 core §12). `flag`
     /// stops at the first failure, like [`CompiledSchema::is_valid`]; `basic` and `detailed`
-    /// collect every error, like [`CompiledSchema::validate`].
+    /// collect every error, like [`CompiledSchema::validate`], and for a valid instance list its
+    /// annotations when the schema keeps them (see
+    /// [`CompiledSchemaBuilder::annotations`](crate::CompiledSchemaBuilder::annotations));
+    /// `verbose` evaluates every subschema and reports each one.
     #[must_use]
     pub fn evaluate(&self, instance: &Value, format: OutputFormat) -> Output {
         match format {
             OutputFormat::Flag => Output::Flag(FlagOutput {
                 valid: self.is_valid(instance),
             }),
-            OutputFormat::Basic | OutputFormat::Detailed => {
-                Output::new(&self.validate(instance), format)
+            OutputFormat::Basic => match self.validate(instance) {
+                Err(errors) => Output::Basic(BasicOutput {
+                    valid: false,
+                    errors: basic(&errors),
+                    annotations: Vec::new(),
+                }),
+                Ok(()) => Output::Basic(BasicOutput {
+                    valid: true,
+                    errors: Vec::new(),
+                    annotations: self.kept_trace(instance).map_or_else(Vec::new, |trace| {
+                        kept_annotations(&trace)
+                            .into_iter()
+                            .map(|(_, unit)| annotation_unit(unit))
+                            .collect()
+                    }),
+                }),
+            },
+            OutputFormat::Detailed => match self.validate(instance) {
+                Err(errors) => Output::Detailed(detailed(&errors)),
+                Ok(()) => Output::Detailed(self.kept_trace(instance).map_or_else(
+                    || OutputUnit {
+                        valid: true,
+                        ..branch_unit()
+                    },
+                    |trace| detailed_annotations(&trace),
+                )),
+            },
+            OutputFormat::Verbose => {
+                let (_, trace, depth_exceeded): (bool, TraceRecord, Option<ValidationError>) =
+                    self.trace(instance);
+                // Cut short, the trace says nothing reliable: the guard's error alone.
+                if let Some(error) = depth_exceeded {
+                    return Output::Verbose(detailed(&[error]));
+                }
+                // A failing subschema's annotations are dropped (§7.7.1.2): every subschema
+                // and error is reported, annotations only where they are kept.
+                let kept: Vec<bool> = kept(&trace);
+                Output::Verbose(tree(
+                    &trace,
+                    |i| kept[i] || !matches!(trace.units[i].kind, TraceKind::Annotation { .. }),
+                    false,
+                ))
             }
         }
     }
+
+    /// The annotations `instance` collects (2020-12 core §7.7), in evaluation order: the
+    /// annotation keywords of every subschema that passed and that only passing subschemas led
+    /// to. Empty unless the schema was compiled with
+    /// [`CompiledSchemaBuilder::annotations`](crate::CompiledSchemaBuilder::annotations).
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`CompiledSchema::validate`] when the instance is invalid: an
+    /// invalid instance has no annotations.
+    pub fn annotations(&self, instance: &Value) -> Result<Vec<Annotation>, Vec<ValidationError>> {
+        if self.annotations.is_empty() {
+            return self.validate(instance).map(|()| Vec::new());
+        }
+        let (valid, trace, depth_exceeded): (bool, TraceRecord, Option<ValidationError>) =
+            self.trace(instance);
+        if let Some(error) = depth_exceeded {
+            return Err(vec![error]);
+        }
+        if !valid {
+            return self.validate(instance).map(|()| Vec::new());
+        }
+        Ok(kept_annotations(&trace)
+            .into_iter()
+            .filter_map(|(_, unit)| match &unit.kind {
+                TraceKind::Annotation {
+                    keyword,
+                    value,
+                    locations,
+                } => Some(Annotation {
+                    keyword: keyword.to_string(),
+                    keyword_location: locations.keyword_location.clone(),
+                    absolute_keyword_location: locations.absolute_keyword_location.clone(),
+                    instance_location: locations.instance_location.clone(),
+                    value: value.clone(),
+                }),
+                TraceKind::Subschema { .. } | TraceKind::Error(_) => None,
+            })
+            .collect())
+    }
+
+    /// The trace of a valid `instance`, when the schema keeps annotations (without them the
+    /// trace of a valid instance holds nothing to report).
+    fn kept_trace(&self, instance: &Value) -> Option<TraceRecord> {
+        if self.annotations.is_empty() {
+            return None;
+        }
+        let (valid, trace, depth_exceeded): (bool, TraceRecord, Option<ValidationError>) =
+            self.trace(instance);
+        (valid && depth_exceeded.is_none()).then_some(trace)
+    }
+}
+
+/// Which units of `trace` are kept: a subschema that passed, annotates, and sits under kept
+/// subschemas only; an annotation under a kept subschema. Parents come before their children,
+/// so one pass in order decides every unit.
+fn kept(trace: &TraceRecord) -> Vec<bool> {
+    let mut kept: Vec<bool> = Vec::with_capacity(trace.units.len());
+    for unit in &trace.units {
+        let parent: bool = unit.parent.is_none_or(|parent| kept[parent]);
+        let keep: bool = parent
+            && match &unit.kind {
+                TraceKind::Subschema {
+                    valid, annotates, ..
+                } => *valid && *annotates,
+                TraceKind::Annotation { .. } => true,
+                TraceKind::Error(_) => false,
+            };
+        kept.push(keep);
+    }
+    kept
+}
+
+/// The kept annotation units of `trace`, with their indexes, in evaluation order.
+fn kept_annotations(trace: &TraceRecord) -> Vec<(usize, &TraceUnit)> {
+    let kept: Vec<bool> = kept(trace);
+    trace
+        .units
+        .iter()
+        .enumerate()
+        .filter(|(i, unit)| kept[*i] && matches!(unit.kind, TraceKind::Annotation { .. }))
+        .collect()
+}
+
+/// A unit at `locations`.
+fn located(valid: bool, locations: &UnitLocations) -> OutputUnit {
+    OutputUnit {
+        valid,
+        keyword_location: locations.keyword_location.to_string(),
+        absolute_keyword_location: locations.absolute_keyword_location.clone(),
+        instance_location: locations.instance_location.to_string(),
+        error: None,
+        annotation: None,
+        errors: Vec::new(),
+        annotations: Vec::new(),
+    }
+}
+
+/// The output unit of one trace unit, without its children.
+fn annotation_unit(unit: &TraceUnit) -> OutputUnit {
+    match &unit.kind {
+        TraceKind::Subschema {
+            valid, locations, ..
+        } => located(*valid, locations),
+        TraceKind::Error(error) => error_unit(error),
+        TraceKind::Annotation {
+            value, locations, ..
+        } => OutputUnit {
+            annotation: Some(value.clone()),
+            ..located(true, locations)
+        },
+    }
+}
+
+/// The `detailed` output of a valid instance: the kept annotations, nested under the
+/// subschemas that led to them, each subschema with a single child replaced by it.
+fn detailed_annotations(trace: &TraceRecord) -> OutputUnit {
+    let mut needed: Vec<bool> = vec![false; trace.units.len()];
+    for (index, _) in kept_annotations(trace) {
+        let mut cursor: Option<usize> = Some(index);
+        while let Some(i) = cursor {
+            if needed[i] {
+                break;
+            }
+            needed[i] = true;
+            cursor = trace.units[i].parent;
+        }
+    }
+    if let Some(root) = needed.first_mut() {
+        *root = true;
+    }
+    tree(trace, |i| needed[i], true)
+}
+
+/// The units of `trace` that `include` accepts, nested as evaluated; with `condense`, every
+/// subschema but the root that has a single child is replaced by it. Built from the last unit
+/// to the first (children always follow their parent), without recursion.
+fn tree(trace: &TraceRecord, include: impl Fn(usize) -> bool, condense: bool) -> OutputUnit {
+    let units: &[TraceUnit] = &trace.units;
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
+    for (index, unit) in units.iter().enumerate() {
+        if let Some(parent) = unit.parent
+            && include(index)
+        {
+            children[parent].push(index);
+        }
+    }
+    let mut built: Vec<Option<OutputUnit>> = Vec::with_capacity(units.len());
+    built.resize_with(units.len(), || None);
+    for index in (0..units.len()).rev() {
+        if !include(index) {
+            continue;
+        }
+        let mut unit: OutputUnit = annotation_unit(&units[index]);
+        let nested: Vec<OutputUnit> = std::mem::take(&mut children[index])
+            .into_iter()
+            .filter_map(|child| built[child].take())
+            .collect();
+        let subschema: bool = matches!(units[index].kind, TraceKind::Subschema { .. });
+        if condense && index != 0 && subschema && nested.len() == 1 {
+            built[index] = nested.into_iter().next();
+            continue;
+        }
+        if unit.valid {
+            unit.annotations = nested;
+        } else {
+            unit.errors = nested;
+        }
+        built[index] = Some(unit);
+    }
+    built
+        .into_iter()
+        .next()
+        .flatten()
+        .unwrap_or_else(|| OutputUnit {
+            valid: true,
+            ..branch_unit()
+        })
 }
 
 /// The unit of one error, without its causes.
@@ -160,7 +398,9 @@ fn error_unit(error: &ValidationError) -> OutputUnit {
         absolute_keyword_location: error.absolute_keyword_location.clone(),
         instance_location: error.instance_location.to_string(),
         error: Some(error.kind.to_string()),
+        annotation: None,
         errors: Vec::new(),
+        annotations: Vec::new(),
     }
 }
 
@@ -311,7 +551,9 @@ fn detailed(errors: &[ValidationError]) -> OutputUnit {
                         absolute_keyword_location: branch_absolute(error, keyword_len),
                         instance_location: key.1.clone(),
                         error: None,
+                        annotation: None,
                         errors: Vec::new(),
+                        annotations: Vec::new(),
                     },
                     key: Some(key),
                     children: Vec::new(),
@@ -373,18 +615,19 @@ fn branch_unit() -> OutputUnit {
         absolute_keyword_location: None,
         instance_location: String::new(),
         error: None,
+        annotation: None,
         errors: Vec::new(),
+        annotations: Vec::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::Annotation;
     use super::{Output, OutputFormat};
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::{Registry, Schema};
-    use crate::validator::{
-        CompiledSchema, ValidationError, ValidationErrorKind, ValidationResult,
-    };
+    use crate::validator::{CompiledSchema, ValidationError, ValidationErrorKind};
     use serde_json::{Value, json};
 
     fn compile(schema: &Value) -> CompiledSchema {
@@ -393,6 +636,22 @@ mod tests {
             .build_owned(schema)
             .expect("test registry builds");
         CompiledSchema::new(&registry).expect("test schema compiles")
+    }
+
+    fn compile_annotating(schema: &Value) -> CompiledSchema {
+        let schema: Schema = serde_json::from_value(schema.clone()).expect("test schema parses");
+        let registry: Registry<'static> = Registry::builder()
+            .build_owned(schema)
+            .expect("test registry builds");
+        CompiledSchema::builder()
+            .annotations(true)
+            .build(&registry)
+            .expect("test schema compiles")
+    }
+
+    fn render_annotating(schema: &Value, instance: &Value, format: OutputFormat) -> Value {
+        let output: Output = compile_annotating(schema).evaluate(instance, format);
+        serde_json::to_value(&output).expect("output serializes")
     }
 
     fn render(schema: &Value, instance: &Value, format: OutputFormat) -> Value {
@@ -742,24 +1001,393 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    /// A schema with annotations in a property, behind a reference, in a passing and a
+    /// failing `anyOf` branch, and under `not`.
+    fn annotated() -> Value {
+        json!({
+            "$id": "https://example.com/annotated",
+            "title": "Root",
+            "properties": {
+                "a": {"title": "A", "x-widget": "slider", "minimum": 0},
+                "b": {"$ref": "#/$defs/b"}
+            },
+            "$defs": {"b": {"description": "B"}},
+            "anyOf": [{"title": "Yes"}, {"title": "No", "type": "string"}],
+            "not": {"title": "Hidden", "type": "string"}
+        })
+    }
+
     #[test]
-    fn output_new_renders_an_error_list() {
-        let result: ValidationResult = Err(vec![ValidationError::new(
-            ValidationErrorKind::FalseSchema,
-            ptr("/a"),
-            ptr("/properties/a"),
-        )]);
+    fn basic_lists_the_annotations_of_a_valid_instance() {
+        let expected: Value = json!({
+            "valid": true,
+            "annotations": [
+                {
+                    "valid": true,
+                    "keywordLocation": "/title",
+                    "instanceLocation": "",
+                    "annotation": "Root"
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/a/title",
+                    "instanceLocation": "/a",
+                    "annotation": "A"
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/a/x-widget",
+                    "instanceLocation": "/a",
+                    "annotation": "slider"
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/b/$ref/description",
+                    "absoluteKeywordLocation": "https://example.com/annotated#/$defs/b/description",
+                    "instanceLocation": "/b",
+                    "annotation": "B"
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/anyOf/0/title",
+                    "instanceLocation": "",
+                    "annotation": "Yes"
+                }
+            ]
+        });
+        let actual: Value = render_annotating(
+            &annotated(),
+            &json!({"a": 2, "b": true}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn basic_lists_no_annotations_without_the_setting() {
+        let expected: Value = json!({"valid": true});
+        let actual: Value = render(
+            &annotated(),
+            &json!({"a": 2, "b": true}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn basic_lists_only_errors_of_an_invalid_instance() {
         let expected: Value = json!({
             "valid": false,
             "errors": [{
                 "valid": false,
-                "keywordLocation": "/properties/a",
+                "keywordLocation": "/properties/a/minimum",
                 "instanceLocation": "/a",
-                "error": "no value is allowed here (schema is false)"
+                "error": "value -1 is below minimum 0"
             }]
         });
-        let actual: Value = serde_json::to_value(Output::new(&result, OutputFormat::Basic))
-            .expect("output serializes");
+        let actual: Value = render_annotating(&annotated(), &json!({"a": -1}), OutputFormat::Basic);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn detailed_nests_the_annotations_of_a_valid_instance() {
+        let expected: Value = json!({
+            "valid": true,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "annotations": [
+                {
+                    "valid": true,
+                    "keywordLocation": "/title",
+                    "instanceLocation": "",
+                    "annotation": "Root"
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/a",
+                    "instanceLocation": "/a",
+                    "annotations": [
+                        {
+                            "valid": true,
+                            "keywordLocation": "/properties/a/title",
+                            "instanceLocation": "/a",
+                            "annotation": "A"
+                        },
+                        {
+                            "valid": true,
+                            "keywordLocation": "/properties/a/x-widget",
+                            "instanceLocation": "/a",
+                            "annotation": "slider"
+                        }
+                    ]
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/b/$ref/description",
+                    "absoluteKeywordLocation": "https://example.com/annotated#/$defs/b/description",
+                    "instanceLocation": "/b",
+                    "annotation": "B"
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/anyOf/0/title",
+                    "instanceLocation": "",
+                    "annotation": "Yes"
+                }
+            ]
+        });
+        let actual: Value = render_annotating(
+            &annotated(),
+            &json!({"a": 2, "b": true}),
+            OutputFormat::Detailed,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn detailed_without_the_setting_reports_the_valid_root_alone() {
+        let expected: Value = json!({"valid": true, "keywordLocation": "", "instanceLocation": ""});
+        let actual: Value = render(
+            &annotated(),
+            &json!({"a": 2, "b": true}),
+            OutputFormat::Detailed,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn verbose_reports_every_subschema_and_drops_failed_annotations() {
+        let expected: Value = json!({
+            "valid": true,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "annotations": [
+                {
+                    "valid": true,
+                    "keywordLocation": "/title",
+                    "instanceLocation": "",
+                    "annotation": "Root"
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/a",
+                    "instanceLocation": "/a",
+                    "annotations": [
+                        {
+                            "valid": true,
+                            "keywordLocation": "/properties/a/title",
+                            "instanceLocation": "/a",
+                            "annotation": "A"
+                        },
+                        {
+                            "valid": true,
+                            "keywordLocation": "/properties/a/x-widget",
+                            "instanceLocation": "/a",
+                            "annotation": "slider"
+                        }
+                    ]
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/b",
+                    "instanceLocation": "/b",
+                    "annotations": [{
+                        "valid": true,
+                        "keywordLocation": "/properties/b/$ref",
+                        "absoluteKeywordLocation": "https://example.com/annotated#/$defs/b",
+                        "instanceLocation": "/b",
+                        "annotations": [{
+                            "valid": true,
+                            "keywordLocation": "/properties/b/$ref/description",
+                            "absoluteKeywordLocation":
+                                "https://example.com/annotated#/$defs/b/description",
+                            "instanceLocation": "/b",
+                            "annotation": "B"
+                        }]
+                    }]
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/anyOf/0",
+                    "instanceLocation": "",
+                    "annotations": [{
+                        "valid": true,
+                        "keywordLocation": "/anyOf/0/title",
+                        "instanceLocation": "",
+                        "annotation": "Yes"
+                    }]
+                },
+                {
+                    "valid": false,
+                    "keywordLocation": "/anyOf/1",
+                    "instanceLocation": "",
+                    "errors": [{
+                        "valid": false,
+                        "keywordLocation": "/anyOf/1/type",
+                        "instanceLocation": "",
+                        "error": "expected string, got object"
+                    }]
+                },
+                {
+                    "valid": false,
+                    "keywordLocation": "/not",
+                    "instanceLocation": "",
+                    "errors": [{
+                        "valid": false,
+                        "keywordLocation": "/not/type",
+                        "instanceLocation": "",
+                        "error": "expected string, got object"
+                    }]
+                }
+            ]
+        });
+        let actual: Value = render_annotating(
+            &annotated(),
+            &json!({"a": 2, "b": true}),
+            OutputFormat::Verbose,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn verbose_reports_the_failing_path_of_an_invalid_instance() {
+        let expected: Value = json!({
+            "valid": false,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "errors": [
+                {
+                    "valid": false,
+                    "keywordLocation": "/properties/a",
+                    "instanceLocation": "/a",
+                    "errors": [{
+                        "valid": false,
+                        "keywordLocation": "/properties/a/minimum",
+                        "instanceLocation": "/a",
+                        "error": "value 1 is below minimum 3"
+                    }]
+                },
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/b",
+                    "instanceLocation": "/b"
+                }
+            ]
+        });
+        let actual: Value = render(
+            &json!({"title": "T", "properties": {"a": {"minimum": 3}, "b": {}}}),
+            &json!({"a": 1, "b": 2}),
+            OutputFormat::Verbose,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn verbose_past_the_depth_limit_reports_the_guard_error() {
+        let schema: Schema = serde_json::from_value(json!({"items": {"items": {"items": {}}}}))
+            .expect("test schema parses");
+        let registry: Registry<'static> = Registry::builder()
+            .build_owned(schema)
+            .expect("test registry builds");
+        let compiled: CompiledSchema = CompiledSchema::builder()
+            .max_depth(Some(2))
+            .build(&registry)
+            .expect("test schema compiles");
+        let expected: Value = json!({
+            "valid": false,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "errors": [{
+                "valid": false,
+                "keywordLocation": "/items/items",
+                "instanceLocation": "/0/0",
+                "error": "evaluation nested deeper than 2 levels"
+            }]
+        });
+        let actual: Value =
+            serde_json::to_value(compiled.evaluate(&json!([[[1]]]), OutputFormat::Verbose))
+                .expect("output serializes");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn annotations_lists_every_kept_annotation() {
+        let expected: Vec<Annotation> = vec![
+            Annotation {
+                keyword: "title".to_string(),
+                keyword_location: ptr("/title"),
+                absolute_keyword_location: None,
+                instance_location: ptr(""),
+                value: json!("Root"),
+            },
+            Annotation {
+                keyword: "title".to_string(),
+                keyword_location: ptr("/properties/a/title"),
+                absolute_keyword_location: None,
+                instance_location: ptr("/a"),
+                value: json!("A"),
+            },
+            Annotation {
+                keyword: "x-widget".to_string(),
+                keyword_location: ptr("/properties/a/x-widget"),
+                absolute_keyword_location: None,
+                instance_location: ptr("/a"),
+                value: json!("slider"),
+            },
+            Annotation {
+                keyword: "description".to_string(),
+                keyword_location: ptr("/properties/b/$ref/description"),
+                absolute_keyword_location: Some(
+                    "https://example.com/annotated#/$defs/b/description".to_string(),
+                ),
+                instance_location: ptr("/b"),
+                value: json!("B"),
+            },
+            Annotation {
+                keyword: "title".to_string(),
+                keyword_location: ptr("/anyOf/0/title"),
+                absolute_keyword_location: None,
+                instance_location: ptr(""),
+                value: json!("Yes"),
+            },
+        ];
+        let actual: Vec<Annotation> = compile_annotating(&annotated())
+            .annotations(&json!({"a": 2, "b": true}))
+            .expect("instance is valid");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn annotations_of_an_invalid_instance_are_its_errors() {
+        let expected: Result<Vec<Annotation>, Vec<ValidationError>> =
+            Err(vec![ValidationError::new(
+                ValidationErrorKind::BelowMinimum {
+                    minimum: json!(0).as_number().cloned().expect("a number"),
+                    actual: json!(-1).as_number().cloned().expect("a number"),
+                },
+                ptr("/a"),
+                ptr("/properties/a/minimum"),
+            )]);
+        let actual: Result<Vec<Annotation>, Vec<ValidationError>> =
+            compile_annotating(&annotated()).annotations(&json!({"a": -1}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn annotations_without_the_setting_are_empty() {
+        let expected: Result<Vec<Annotation>, Vec<ValidationError>> = Ok(Vec::new());
+        let actual: Result<Vec<Annotation>, Vec<ValidationError>> =
+            compile(&annotated()).annotations(&json!({"a": 2, "b": true}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn annotations_only_annotate_strings_with_content_keywords() {
+        let expected: Vec<Annotation> = Vec::new();
+        let actual: Vec<Annotation> =
+            compile_annotating(&json!({"contentMediaType": "application/json"}))
+                .annotations(&json!(42))
+                .expect("instance is valid");
         assert_eq!(expected, actual);
     }
 

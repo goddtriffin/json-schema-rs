@@ -35,7 +35,7 @@ pub use generated::{
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError,
     NewtypeValue, TypeValidationError, TypeValidators, UnionMatch, UnionVariants,
 };
-pub use output::{BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
+pub use output::{Annotation, BasicOutput, FlagOutput, Output, OutputFormat, OutputUnit};
 
 use crate::json_schema::{Registry, SchemaRef};
 

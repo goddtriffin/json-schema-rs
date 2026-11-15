@@ -4703,3 +4703,191 @@ fn cli_validate_allow_remote_refs_retrieves_http_document() {
     );
     assert_eq!(expected, actual);
 }
+
+// --- CLI: `--output` (standard output formats and annotations) ---
+
+/// Runs `jsonschemars validate` on the payload with `--output <format>`: the exit code, stdout
+/// and stderr.
+fn run_cli_validate_output(
+    schema_json: &str,
+    payload_json: &str,
+    format: &str,
+) -> (i32, String, String) {
+    let mut schema_file = tempfile::NamedTempFile::new().expect("temp schema");
+    std::io::Write::write_all(&mut schema_file, schema_json.as_bytes()).expect("write schema");
+    schema_file.flush().expect("flush schema");
+    let schema_path: String = schema_file.path().to_str().unwrap().to_string();
+    let mut child = Command::new(jsonschemars_bin())
+        .args(["validate", "-s", schema_path.as_str(), "--output", format])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn jsonschemars");
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload_json.as_bytes())
+        .expect("write payload");
+    let output = child.wait_with_output().expect("wait jsonschemars");
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8(output.stdout).expect("utf8 stdout"),
+        String::from_utf8(output.stderr).expect("utf8 stderr"),
+    )
+}
+
+#[test]
+fn cli_validate_output_flag_prints_the_verdict() {
+    let actual: (i32, String, String) = run_cli_validate_output(r#"{"minimum":3}"#, "2", "flag");
+    let expected: (i32, String, String) = (
+        1,
+        "{\n  \"valid\": false\n}\n".to_string(),
+        "error: validation failed\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_output_basic_prints_the_errors() {
+    let actual: (i32, String, String) = run_cli_validate_output(r#"{"minimum":3}"#, "2", "basic");
+    let expected: (i32, String, String) = (
+        1,
+        r#"{
+  "valid": false,
+  "errors": [
+    {
+      "valid": false,
+      "keywordLocation": "/minimum",
+      "instanceLocation": "",
+      "error": "value 2 is below minimum 3"
+    }
+  ]
+}
+"#
+        .to_string(),
+        "error: validation failed\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_output_basic_prints_the_annotations_of_a_valid_payload() {
+    let actual: (i32, String, String) = run_cli_validate_output(
+        r#"{"properties":{"a":{"title":"A","readOnly":true}}}"#,
+        r#"{"a":1}"#,
+        "basic",
+    );
+    let expected: (i32, String, String) = (
+        0,
+        r#"{
+  "valid": true,
+  "annotations": [
+    {
+      "valid": true,
+      "keywordLocation": "/properties/a/readOnly",
+      "instanceLocation": "/a",
+      "annotation": true
+    },
+    {
+      "valid": true,
+      "keywordLocation": "/properties/a/title",
+      "instanceLocation": "/a",
+      "annotation": "A"
+    }
+  ]
+}
+"#
+        .to_string(),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_output_detailed_nests_the_annotations() {
+    let actual: (i32, String, String) = run_cli_validate_output(
+        r#"{"properties":{"a":{"title":"A","readOnly":true}}}"#,
+        r#"{"a":1}"#,
+        "detailed",
+    );
+    let expected: (i32, String, String) = (
+        0,
+        r#"{
+  "valid": true,
+  "keywordLocation": "",
+  "instanceLocation": "",
+  "annotations": [
+    {
+      "valid": true,
+      "keywordLocation": "/properties/a",
+      "instanceLocation": "/a",
+      "annotations": [
+        {
+          "valid": true,
+          "keywordLocation": "/properties/a/readOnly",
+          "instanceLocation": "/a",
+          "annotation": true
+        },
+        {
+          "valid": true,
+          "keywordLocation": "/properties/a/title",
+          "instanceLocation": "/a",
+          "annotation": "A"
+        }
+      ]
+    }
+  ]
+}
+"#
+        .to_string(),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_validate_output_verbose_reports_every_subschema() {
+    let actual: (i32, String, String) = run_cli_validate_output(
+        r#"{"anyOf":[{"type":"string"},{"title":"N","type":"number"}]}"#,
+        "1",
+        "verbose",
+    );
+    let expected: (i32, String, String) = (
+        0,
+        r#"{
+  "valid": true,
+  "keywordLocation": "",
+  "instanceLocation": "",
+  "annotations": [
+    {
+      "valid": false,
+      "keywordLocation": "/anyOf/0",
+      "instanceLocation": "",
+      "errors": [
+        {
+          "valid": false,
+          "keywordLocation": "/anyOf/0/type",
+          "instanceLocation": "",
+          "error": "expected string, got number"
+        }
+      ]
+    },
+    {
+      "valid": true,
+      "keywordLocation": "/anyOf/1",
+      "instanceLocation": "",
+      "annotations": [
+        {
+          "valid": true,
+          "keywordLocation": "/anyOf/1/title",
+          "instanceLocation": "",
+          "annotation": "N"
+        }
+      ]
+    }
+  ]
+}
+"#
+        .to_string(),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
