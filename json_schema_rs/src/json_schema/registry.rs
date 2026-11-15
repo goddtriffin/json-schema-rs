@@ -3117,6 +3117,46 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    /// A 2020-12 root holding a draft-4 resource with a boolean `exclusiveMinimum`.
+    fn embedded_draft4_bound() -> JsonSchema {
+        let value: Value = json!({
+            "properties": {"n": {"$ref": "old.json"}},
+            "$defs": {"old": {
+                "$schema": "http://json-schema.org/draft-04/schema#",
+                "$id": "old.json",
+                "minimum": 0,
+                "exclusiveMinimum": true
+            }}
+        });
+        Schema::new_from_serde_value(&value, &JsonSchemaSettings::default())
+            .expect("parse schema")
+            .into_object()
+            .expect("schema object")
+    }
+
+    #[test]
+    fn embedded_draft4_exclusive_minimum_rejects_the_bound() {
+        let schema: JsonSchema = embedded_draft4_bound();
+        let actual: ValidationResult = validate_default(&schema, &json!({"n": 0}));
+        let expected: ValidationResult = Err(vec![ValidationError::new(
+            ValidationErrorKind::NotAboveExclusiveMinimum {
+                exclusive_minimum: serde_json::Number::from(0),
+                actual: serde_json::Number::from(0),
+            },
+            JsonPointer::root().push("n"),
+            kl("/properties/n/$ref/exclusiveMinimum"),
+        )]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn embedded_draft4_exclusive_minimum_accepts_above_the_bound() {
+        let schema: JsonSchema = embedded_draft4_bound();
+        let actual: ValidationResult = validate_default(&schema, &json!({"n": 1}));
+        let expected: ValidationResult = Ok(());
+        assert_eq!(expected, actual);
+    }
+
     /// [`mixed_dialect_root`]'s schema text parsed with `settings`.
     fn mixed_dialect_root_with(settings: &JsonSchemaSettings) -> JsonSchema {
         let value: Value = serde_json::to_value(mixed_dialect_root()).expect("serialize");
