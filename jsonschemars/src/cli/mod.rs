@@ -324,6 +324,20 @@ pub fn run() {
                         .value_name("FILE")
                         .help("Codegen Settings: a JSON file of changes to single generated types, keyed by generated name: {\"Veg\": {\"rename\": \"Vegetable\", \"derives\": [\"Hash\"], \"attrs\": [\"non_exhaustive\"]}}"),
                 )
+                .arg(
+                    Arg::new("cgs-convert")
+                        .long("cgs-convert")
+                        .value_name("TYPE=SCHEMA")
+                        .action(clap::ArgAction::Append)
+                        .help("Codegen Settings: generate TYPE wherever a subschema equals the JSON SCHEMA, ignoring annotations (e.g. 'rust_decimal::Decimal={\"type\":\"string\",\"format\":\"decimal\"}'); the first match wins; repeatable"),
+                )
+                .arg(
+                    Arg::new("cgs-replace")
+                        .long("cgs-replace")
+                        .value_name("NAME=TYPE")
+                        .action(clap::ArgAction::Append)
+                        .help("Codegen Settings: use TYPE in place of the generated type NAME, which is not generated (e.g. Ipv4=my::Ipv4); repeatable"),
+                )
                 .args(retrieval::retrieval_args()),
         )
         .subcommand(

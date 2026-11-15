@@ -31,6 +31,13 @@ pub enum ReverseCodeGenError {
         /// Why it is not a URI reference.
         reason: String,
     },
+    /// A schema written out as JSON ([`super::schema_from_json`]) is not a JSON Schema object.
+    InvalidSchema {
+        /// The JSON as written.
+        json: String,
+        /// Why it is not a schema object.
+        reason: String,
+    },
 }
 
 impl fmt::Display for ReverseCodeGenError {
@@ -54,6 +61,9 @@ impl fmt::Display for ReverseCodeGenError {
                 f,
                 "`{schema_id}` has $id {id:?}, which is not a URI reference: {reason}"
             ),
+            ReverseCodeGenError::InvalidSchema { json, reason } => {
+                write!(f, "{json} is not a JSON Schema object: {reason}")
+            }
         }
     }
 }
@@ -86,6 +96,17 @@ mod tests {
         let actual: String = ReverseCodeGenError::InvalidResourceId {
             schema_id: "a::Node".to_string(),
             id: "a b".to_string(),
+            reason: "bad".to_string(),
+        }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn invalid_schema_display_names_the_json_and_reason() {
+        let expected: String = "[1] is not a JSON Schema object: bad".to_string();
+        let actual: String = ReverseCodeGenError::InvalidSchema {
+            json: "[1]".to_string(),
             reason: "bad".to_string(),
         }
         .to_string();

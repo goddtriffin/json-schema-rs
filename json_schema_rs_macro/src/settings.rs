@@ -9,9 +9,10 @@
 use json_schema_rs::{
     CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
     IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-    SpecVersion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties, UnknownSchemaUri,
+    SpecVersion, TypeConversion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties,
+    UnknownSchemaUri,
 };
-use proc_macro2::Span;
+use proc_macro2::{Delimiter, Span, TokenTree};
 use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::parse::{Parse, ParseStream};
@@ -32,6 +33,10 @@ pub(crate) enum SettingValue {
     Str(LitStr),
     List(Span, Vec<Meta>),
     Group(Span, Vec<SettingArg>),
+    /// `convert = { schema => path, .. }`.
+    Conversions(Span, Vec<(Span, TypeConversion)>),
+    /// `replace = { Name = path, .. }`.
+    Replacements(Span, Vec<(Ident, String)>),
 }
 
 impl SettingValue {
@@ -40,7 +45,10 @@ impl SettingValue {
             SettingValue::Bool(lit) => lit.span(),
             SettingValue::Ident(ident) => ident.span(),
             SettingValue::Str(lit) => lit.span(),
-            SettingValue::List(span, _) | SettingValue::Group(span, _) => *span,
+            SettingValue::List(span, _)
+            | SettingValue::Group(span, _)
+            | SettingValue::Conversions(span, _)
+            | SettingValue::Replacements(span, _) => *span,
         }
     }
 
@@ -51,7 +59,9 @@ impl SettingValue {
             SettingValue::Ident(ident) => ident.to_string(),
             SettingValue::Str(lit) => format!("{:?}", lit.value()),
             SettingValue::List(..) => "[..]".to_string(),
-            SettingValue::Group(..) => "{..}".to_string(),
+            SettingValue::Group(..)
+            | SettingValue::Conversions(..)
+            | SettingValue::Replacements(..) => "{..}".to_string(),
         }
     }
 }
@@ -60,7 +70,12 @@ impl Parse for SettingArg {
     fn parse(input: ParseStream<'_>) -> SynResult<Self> {
         let name: Ident = input.parse()?;
         input.parse::<Token![=]>()?;
-        let value: SettingValue = if input.peek(LitBool) {
+        let braced: bool = input.peek(syn::token::Brace);
+        let value: SettingValue = if name == "convert" && braced {
+            parse_conversions(input)?
+        } else if name == "replace" && braced {
+            parse_replacements(input)?
+        } else if input.peek(LitBool) {
             SettingValue::Bool(input.parse()?)
         } else if input.peek(Ident) {
             SettingValue::Ident(input.parse()?)
@@ -86,8 +101,104 @@ impl Parse for SettingArg {
     }
 }
 
+/// `{ schema => path, .. }`: each schema JSON tokens or a string literal holding JSON.
+fn parse_conversions(input: ParseStream<'_>) -> SynResult<SettingValue> {
+    let content;
+    let brace = syn::braced!(content in input);
+    let mut out: Vec<(Span, TypeConversion)> = Vec::new();
+    while !content.is_empty() {
+        let schema: TokenTree = content.parse()?;
+        let span: Span = schema.span();
+        let json: String = match syn::parse2::<LitStr>(schema.to_token_stream()) {
+            Ok(lit) => lit.value(),
+            Err(_) => json_text(schema),
+        };
+        let schema: serde_json::Value = serde_json::from_str(&json).map_err(|error| {
+            syn::Error::new(span, format!("conversion schema is not JSON: {error}"))
+        })?;
+        content.parse::<Token![=>]>()?;
+        let ty: syn::Type = content.parse()?;
+        out.push((
+            span,
+            TypeConversion {
+                schema,
+                rust_type: type_text(&ty),
+            },
+        ));
+        if !content.is_empty() {
+            content.parse::<Token![,]>()?;
+        }
+    }
+    Ok(SettingValue::Conversions(brace.span.join(), out))
+}
+
+/// `{ Name = path, .. }`.
+fn parse_replacements(input: ParseStream<'_>) -> SynResult<SettingValue> {
+    let content;
+    let brace = syn::braced!(content in input);
+    let mut out: Vec<(Ident, String)> = Vec::new();
+    while !content.is_empty() {
+        let name: Ident = content.parse()?;
+        content.parse::<Token![=]>()?;
+        let ty: syn::Type = content.parse()?;
+        out.push((name, type_text(&ty)));
+        if !content.is_empty() {
+            content.parse::<Token![,]>()?;
+        }
+    }
+    Ok(SettingValue::Replacements(brace.span.join(), out))
+}
+
+/// A type as the path text codegen takes (`rust_decimal::Decimal`, `Vec<u8>`, `&'a str`): the
+/// tokens with a space kept only between two word characters, where it separates them.
+fn type_text(ty: &syn::Type) -> String {
+    let tokens: String = ty.to_token_stream().to_string();
+    let word = |c: Option<char>| c.is_some_and(|c: char| c.is_alphanumeric() || c == '_');
+    let mut out: String = String::with_capacity(tokens.len());
+    let mut chars = tokens.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != ' ' || (word(out.chars().last()) && word(chars.peek().copied())) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The JSON text of JSON written as Rust tokens: every token as written, with no space between
+/// (a space would split `-1` and is never needed between JSON tokens). Iterative, so deeply
+/// nested input cannot overflow the stack.
+fn json_text(tree: TokenTree) -> String {
+    let mut out: String = String::new();
+    // Each open group's remaining tokens and its closing delimiter.
+    let mut stack: Vec<(std::vec::IntoIter<TokenTree>, &'static str)> =
+        vec![(vec![tree].into_iter(), "")];
+    while let Some((tokens, _)) = stack.last_mut() {
+        let Some(token) = tokens.next() else {
+            if let Some((_, close)) = stack.pop() {
+                out.push_str(close);
+            }
+            continue;
+        };
+        match token {
+            TokenTree::Group(group) => {
+                let (open, close): (&str, &'static str) = match group.delimiter() {
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::None => ("", ""),
+                };
+                out.push_str(open);
+                let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+                stack.push((inner.into_iter(), close));
+            }
+            other => out.push_str(&other.to_string()),
+        }
+    }
+    out
+}
+
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 22] = [
+const SETTING_NAMES: [&str; 24] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -99,6 +210,8 @@ const SETTING_NAMES: [&str; 22] = [
     "extra_derives",
     "extra_attrs",
     "patch",
+    "convert",
+    "replace",
     "disallow_unknown_fields",
     "forced_spec_version",
     "default_spec_version",
@@ -203,6 +316,8 @@ struct Overrides {
     extra_derives: Option<Vec<String>>,
     extra_attrs: Option<Vec<String>>,
     patches: Option<BTreeMap<String, TypePatch>>,
+    conversions: Option<Vec<TypeConversion>>,
+    replacements: Option<BTreeMap<String, String>>,
     disallow_unknown_fields: Option<bool>,
     forced_spec_version: Option<SpecVersion>,
     default_spec_version: Option<SpecVersion>,
@@ -252,6 +367,8 @@ impl Overrides {
                 extra_derives: self.extra_derives.unwrap_or(code_gen_default.extra_derives),
                 extra_attrs: self.extra_attrs.unwrap_or(code_gen_default.extra_attrs),
                 patches: self.patches.unwrap_or(code_gen_default.patches),
+                conversions: self.conversions.unwrap_or(code_gen_default.conversions),
+                replacements: self.replacements.unwrap_or(code_gen_default.replacements),
             },
             json_schema: JsonSchemaSettings {
                 disallow_unknown_fields: self
@@ -485,6 +602,53 @@ fn patches(value: &SettingValue) -> SynResult<BTreeMap<String, TypePatch>> {
     }
 }
 
+/// The conversions of `convert`, in order (the first matching one wins).
+fn conversions(value: &SettingValue) -> SynResult<Vec<TypeConversion>> {
+    match value {
+        SettingValue::Conversions(_, entries) => Ok(entries
+            .iter()
+            .map(|(_, conversion)| conversion.clone())
+            .collect()),
+        other => Err(syn::Error::new(
+            other.span(),
+            format!(
+                "`convert` takes `{{ schema => path, .. }}`, not `{}`",
+                other.written()
+            ),
+        )),
+    }
+}
+
+/// The replacements of `replace`; a type named twice is an error at each repeat.
+fn replacements(value: &SettingValue) -> SynResult<BTreeMap<String, String>> {
+    let SettingValue::Replacements(_, entries) = value else {
+        return Err(syn::Error::new(
+            value.span(),
+            format!(
+                "`replace` takes `{{ Name = path, .. }}`, not `{}`",
+                value.written()
+            ),
+        ));
+    };
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut errors: Option<syn::Error> = None;
+    for (name, rust_type) in entries {
+        if out.insert(name.to_string(), rust_type.clone()).is_some() {
+            crate::push_error(
+                &mut errors,
+                syn::Error::new(
+                    name.span(),
+                    format!("type `{name}` is replaced more than once"),
+                ),
+            );
+        }
+    }
+    match errors {
+        Some(errors) => Err(errors),
+        None => Ok(out),
+    }
+}
+
 /// Store `value` in `slot`.
 fn set<T>(slot: &mut Option<T>, value: SynResult<T>) -> SynResult<()> {
     *slot = Some(value?);
@@ -521,6 +685,8 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
         "extra_derives" => set(&mut overrides.extra_derives, derives(setting, value)),
         "extra_attrs" => set(&mut overrides.extra_attrs, attrs(setting, value)),
         "patch" => set(&mut overrides.patches, patches(value)),
+        "convert" => set(&mut overrides.conversions, conversions(value)),
+        "replace" => set(&mut overrides.replacements, replacements(value)),
         "disallow_unknown_fields" => set(
             &mut overrides.disallow_unknown_fields,
             boolean(setting, value),
@@ -615,10 +781,11 @@ mod tests {
     use json_schema_rs::{
         CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
         IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-        SpecVersion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties,
+        SpecVersion, TypeConversion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties,
         UnknownSchemaUri,
     };
     use proc_macro2::TokenStream;
+    use std::collections::BTreeMap;
     use std::str::FromStr;
     use syn::Token;
     use syn::parse::Parser;
@@ -800,7 +967,7 @@ mod tests {
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
              `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
-             `extra_attrs`, `patch`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+             `extra_attrs`, `patch`, `convert`, `replace`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
             1,
@@ -884,7 +1051,7 @@ mod tests {
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
-                 `extra_attrs`, `patch`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+                 `extra_attrs`, `patch`, `convert`, `replace`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,
@@ -991,6 +1158,82 @@ mod tests {
         let expected: Vec<Located> =
             vec![("type `Veg` is patched more than once".to_string(), 1, 20)];
         let actual: Vec<Located> = errors("patch = { Veg = {}, Veg = {} }");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn convert_and_replace_reach_their_fields() {
+        let expected: (Vec<TypeConversion>, BTreeMap<String, String>) = (
+            vec![
+                TypeConversion {
+                    schema: serde_json::json!({"type": "string", "format": "decimal"}),
+                    rust_type: "rust_decimal::Decimal".to_string(),
+                },
+                TypeConversion {
+                    schema: serde_json::json!({"type": "integer", "minimum": -1}),
+                    rust_type: "&'static my::Small<i8>".to_string(),
+                },
+            ],
+            BTreeMap::from([("Ipv4".to_string(), "my::Ipv4".to_string())]),
+        );
+        let settings: MacroSettings = resolve_source(
+            r#"convert = { {"type":"string","format":"decimal"} => rust_decimal::Decimal, "{\"type\":\"integer\",\"minimum\":-1}" => &'static my::Small<i8> }, replace = { Ipv4 = my::Ipv4 }"#,
+        )
+        .expect("resolve");
+        let actual: (Vec<TypeConversion>, BTreeMap<String, String>) = (
+            settings.code_gen.conversions,
+            settings.code_gen.replacements,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn conversion_schema_that_is_not_json_is_an_error_at_it() {
+        let expected: (String, usize, usize) = (
+            "conversion schema is not JSON: key must be a string at line 1 column 2".to_string(),
+            1,
+            12,
+        );
+        let tokens: TokenStream =
+            TokenStream::from_str("convert = { {type: 1} => my::T }").expect("tokenize");
+        let Err(error) = syn::parse2::<SettingArg>(tokens) else {
+            panic!("a schema that is not JSON parsed");
+        };
+        let actual: (String, usize, usize) = (
+            error.to_string(),
+            error.span().start().line,
+            error.span().start().column,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_group_for_convert_is_an_error_at_the_value() {
+        let expected: Vec<Located> = vec![(
+            "`convert` takes `{ schema => path, .. }`, not `[..]`".to_string(),
+            1,
+            10,
+        )];
+        let actual: Vec<Located> = errors("convert = []");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_group_for_replace_is_an_error_at_the_value() {
+        let expected: Vec<Located> = vec![(
+            "`replace` takes `{ Name = path, .. }`, not `true`".to_string(),
+            1,
+            10,
+        )];
+        let actual: Vec<Located> = errors("replace = true");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn type_replaced_twice_is_an_error_at_its_second_name() {
+        let expected: Vec<Located> =
+            vec![("type `Veg` is replaced more than once".to_string(), 1, 24)];
+        let actual: Vec<Located> = errors("replace = { Veg = a::B, Veg = c::D }");
         assert_eq!(expected, actual);
     }
 }

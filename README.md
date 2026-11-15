@@ -389,6 +389,19 @@ are keyed by the generated name. A patch for a name nothing has, a new name that
 Rust identifier or that another type in its module has, and a malformed derive or
 attribute are errors, all reported at once.
 
+**Your own types.** `.convert(json!({"type": "string", "format": "decimal"}),
+"rust_decimal::Decimal")` (`--cgs-convert 'rust_decimal::Decimal={"type":"string","format":"decimal"}'`)
+uses your type wherever a subschema equals that schema, ignoring annotations (`title`,
+`description`, ...); a nullable copy (`"type": ["string", "null"]`) becomes an `Option`,
+and the first matching conversion wins. `.replace("Ipv4", "my::Ipv4")` (`--cgs-replace
+Ipv4=my::Ipv4`) uses your type in place of the generated type of that name, which is no
+longer generated (nor are the types only it used). A replacement type implements
+`Debug`, `Clone`, `PartialEq`, `Serialize`, `Deserialize` and `ToJsonSchema`; a converted
+type needs no `ToJsonSchema`, since the generated code keeps the subschema for it.
+Self-validating types validate the JSON before converting it (`TryFrom<Value>`,
+`Validated<T>`, and union variants while deserializing); a plain `Deserialize` takes
+what your type takes.
+
 **Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
 `CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a
 document shares with another input go in the shared buffer:
@@ -495,7 +508,9 @@ json_schema_to_rust!(
   `indexmap` feature), `flatten_single_entry_combinators`, `self_validating`,
   `constrained_newtypes`, `format_types = Typed|FollowDialect`,
   `extra_derives = [schemars::JsonSchema]`, `extra_attrs = [non_exhaustive]`,
-  `patch = { Veg = { rename = "Vegetable", derives = [Hash], attrs = [..] } }`.
+  `patch = { Veg = { rename = "Vegetable", derives = [Hash], attrs = [..] } }`,
+  `convert = { {"type":"string","format":"decimal"} => rust_decimal::Decimal }`,
+  `replace = { Ipv4 = my::Ipv4 }`.
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,

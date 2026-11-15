@@ -104,6 +104,19 @@ pub struct TypePatch {
     pub attrs: Vec<String>,
 }
 
+/// One entry of [`CodeGenSettings::conversions`]: a subschema generated as a type of the
+/// user's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeConversion {
+    /// The subschema to match, as JSON. A subschema matches when it equals this one, ignoring
+    /// the annotations of both (`title`, `description`, `$comment`, `default`, `examples`,
+    /// `deprecated`, `readOnly`, `writeOnly`) at their top level; a property that only
+    /// `$ref`s a matching definition matches too.
+    pub schema: serde_json::Value,
+    /// The Rust type generated in its place, as a path (`rust_decimal::Decimal`).
+    pub rust_type: String,
+}
+
 /// Language-agnostic code generation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeGenSettings {
@@ -160,6 +173,20 @@ pub struct CodeGenSettings {
     /// name, and derives and attributes for that type only (see [`TypePatch`]). Generating fails
     /// when a key names no generated type, or a new name is not a Rust identifier or clashes.
     pub patches: BTreeMap<String, TypePatch>,
+    /// Subschemas generated as a type of the user's instead of a generated one, in order (the
+    /// first match wins; see [`TypeConversion`]); default none. The subschema's type, and every
+    /// type only it reaches, is not generated. The user's type must implement what the types
+    /// holding it derive (`Debug`, `Clone`, `PartialEq`, `serde::Serialize`,
+    /// `serde::Deserialize`). Self-validating parents still validate the JSON against the
+    /// subschema before deserializing it into the user's type.
+    pub conversions: Vec<TypeConversion>,
+    /// Generated types replaced by a type of the user's, keyed by the name the type would
+    /// otherwise get, valued by the user's type as a path (`my_crate::Ipv4`); default none.
+    /// Every use of the type names the user's type instead, and the type, with every type only
+    /// it reaches, is not generated. The user's type must implement what
+    /// [`conversions`](CodeGenSettings::conversions) asks. Generating fails when a key names no
+    /// generated type, names a schema's root type, or a value is not a Rust path.
+    pub replacements: BTreeMap<String, String>,
 }
 
 impl CodeGenSettings {
@@ -184,6 +211,8 @@ impl Default for CodeGenSettings {
             extra_derives: Vec::new(),
             extra_attrs: Vec::new(),
             patches: BTreeMap::new(),
+            conversions: Vec::new(),
+            replacements: BTreeMap::new(),
         }
     }
 }
@@ -202,6 +231,8 @@ pub struct CodeGenSettingsBuilder {
     extra_derives: Vec<String>,
     extra_attrs: Vec<String>,
     patches: BTreeMap<String, TypePatch>,
+    conversions: Vec<TypeConversion>,
+    replacements: BTreeMap<String, String>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -295,6 +326,26 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Generate subschemas equal to `schema` as `rust_type` (see
+    /// [`CodeGenSettings::conversions`]); conversions added earlier match first.
+    #[must_use]
+    pub fn convert(mut self, schema: serde_json::Value, rust_type: impl Into<String>) -> Self {
+        self.conversions.push(TypeConversion {
+            schema,
+            rust_type: rust_type.into(),
+        });
+        self
+    }
+
+    /// Replace the generated type named `type_name` with `rust_type` (see
+    /// [`CodeGenSettings::replacements`]); a second replacement for the same name replaces the
+    /// first.
+    #[must_use]
+    pub fn replace(mut self, type_name: impl Into<String>, rust_type: impl Into<String>) -> Self {
+        self.replacements.insert(type_name.into(), rust_type.into());
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -312,6 +363,8 @@ impl CodeGenSettingsBuilder {
             extra_derives: self.extra_derives,
             extra_attrs: self.extra_attrs,
             patches: self.patches,
+            conversions: self.conversions,
+            replacements: self.replacements,
         }
     }
 }

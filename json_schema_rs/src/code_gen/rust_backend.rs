@@ -56,9 +56,9 @@ impl CodeGenBackend for RustBackend {
                     })
             })
             .collect::<CodeGenResult<Vec<Registry<'_>>>>()?;
-        let (graph, sets, _): (TypeGraph, Option<Vec<EmbeddedSet>>, Vec<TypeId>) =
+        let (mut graph, sets, _): (TypeGraph, Option<Vec<EmbeddedSet>>, Vec<TypeId>) =
             prepare_graph(&schemas, &registries, input.retrieval_settings(), settings)?;
-        let plan: Plan = Plan::new(&graph, settings)?;
+        let plan: Plan = Plan::new(&mut graph, settings)?;
         let shared: Option<Vec<u8>> = if plan.has_shared() {
             Some(render_buffer(&graph, &plan, Home::Shared, sets.as_deref())?)
         } else {
@@ -234,6 +234,9 @@ struct Plan {
     /// The patch of each patched named node, and of each schema's patched root alias.
     node_patches: HashMap<TypeId, TypePatch>,
     alias_patches: Vec<Option<TypePatch>>,
+    /// Per conversion in the settings, the name of its schema marker in `converted_schemas` and
+    /// the schema it stands for, as compact JSON (see [`render_converted_schemas`]).
+    converted: Vec<(String, String)>,
 }
 
 impl Plan {
@@ -249,7 +252,7 @@ impl Plan {
         })
     }
 
-    fn new(graph: &TypeGraph, settings: &CodeGenSettings) -> CodeGenResult<Plan> {
+    fn new(graph: &mut TypeGraph, settings: &CodeGenSettings) -> CodeGenResult<Plan> {
         let reach: Vec<BTreeSet<TypeId>> = passes::reachable(graph);
         // Which schemas use each named node.
         let mut users: BTreeMap<TypeId, BTreeSet<usize>> = BTreeMap::new();
@@ -260,25 +263,11 @@ impl Plan {
                 }
             }
         }
-        // Shared: used by two or more schemas, and everything such an item reaches.
-        let mut shared: BTreeSet<TypeId> = BTreeSet::new();
-        if settings.dedupe_mode != DedupeMode::Disabled {
-            let mut stack: Vec<TypeId> = users
-                .iter()
-                .filter(|(_, s)| s.len() > 1)
-                .map(|(id, _)| *id)
-                .collect();
-            let mut seen: BTreeSet<TypeId> = BTreeSet::new();
-            while let Some(id) = stack.pop() {
-                if !seen.insert(id) {
-                    continue;
-                }
-                if graph.is_named(id) {
-                    shared.insert(id);
-                }
-                stack.extend(graph.node(id).children());
-            }
-        }
+        let shared: BTreeSet<TypeId> = if settings.dedupe_mode == DedupeMode::Disabled {
+            BTreeSet::new()
+        } else {
+            shared_items(graph, &users)
+        };
         let uses_shared: Vec<bool> = reach
             .iter()
             .map(|ids| ids.iter().any(|id| shared.contains(id)))
@@ -291,7 +280,7 @@ impl Plan {
             }
         };
         // Every item that wants a name: (best proposal, key, home).
-        let mut candidates: Vec<(NameProposal, ItemKey, Home)> = Vec::new();
+        let mut candidates: Vec<Candidate> = Vec::new();
         for &id in users.keys() {
             candidates.push((best_proposal(graph, id), ItemKey::Node(id), home_of(id)));
         }
@@ -325,7 +314,14 @@ impl Plan {
             }
         };
         let wanted: Vec<(String, Home)> = qualify_collisions(&wanted, &candidates, &clash);
-        let mut names: Vec<String> = allocate_names(&wanted, clash);
+        let names: Vec<String> = allocate_names(&wanted, clash);
+        let (candidates, mut names): (Vec<Candidate>, Vec<String>) =
+            if settings.replacements.is_empty() {
+                (candidates, names)
+            } else {
+                apply_replacements(graph, settings, candidates, names)?
+            };
+        let graph: &TypeGraph = graph;
         let homes: Vec<Home> = candidates.iter().map(|(_, _, home)| *home).collect();
         let patched: Vec<Option<&TypePatch>> = apply_patches(settings, &homes, &mut names, clash)?;
         let placed: Placement = Placement::new(graph.schemas.len(), candidates, names, &patched);
@@ -349,6 +345,7 @@ impl Plan {
             extra_attrs: settings.extra_attrs.clone(),
             node_patches: placed.node_patches,
             alias_patches: placed.alias_patches,
+            converted: converted_markers(settings),
         })
     }
 
@@ -363,6 +360,93 @@ impl Plan {
     fn home(&self, id: TypeId) -> Home {
         self.items[&id].0
     }
+}
+
+/// The named items in the shared module: those two or more schemas use (`users`), and every
+/// named item such an item reaches.
+fn shared_items(graph: &TypeGraph, users: &BTreeMap<TypeId, BTreeSet<usize>>) -> BTreeSet<TypeId> {
+    let mut shared: BTreeSet<TypeId> = BTreeSet::new();
+    let mut stack: Vec<TypeId> = users
+        .iter()
+        .filter(|(_, s)| s.len() > 1)
+        .map(|(id, _)| *id)
+        .collect();
+    let mut seen: BTreeSet<TypeId> = BTreeSet::new();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if graph.is_named(id) {
+            shared.insert(id);
+        }
+        stack.extend(graph.node(id).children());
+    }
+    shared
+}
+
+/// An item that wants a name: its best proposal, its key and its module.
+type Candidate = (NameProposal, ItemKey, Home);
+
+/// Applies `settings.replacements` to the allocated `names` of `candidates`: each replaced
+/// node becomes the user's type, and the items only it reached are dropped, while every other
+/// item keeps its name. Every problem is collected: a key that names no item or a schema's root
+/// type, and a replacement that is not a Rust type.
+fn apply_replacements(
+    graph: &mut TypeGraph,
+    settings: &CodeGenSettings,
+    candidates: Vec<Candidate>,
+    names: Vec<String>,
+) -> CodeGenResult<(Vec<Candidate>, Vec<String>)> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut replaced: Vec<(TypeId, &str)> = Vec::new();
+    for (key, rust_type) in &settings.replacements {
+        if !is_rust_type(rust_type) {
+            problems.push(format!(
+                "replacement for `{key}`: `{rust_type}` is not a Rust type"
+            ));
+        }
+        let Some(index) = names.iter().position(|name: &String| name == key) else {
+            problems.push(format!(
+                "replacement for `{key}`: no generated type has that name"
+            ));
+            continue;
+        };
+        match candidates[index].1 {
+            ItemKey::Node(id)
+                if !graph
+                    .schemas
+                    .iter()
+                    .any(|roots| graph.peel(roots.root) == id) =>
+            {
+                replaced.push((id, rust_type));
+            }
+            _ => problems.push(format!(
+                "replacement for `{key}`: a schema's root type cannot be replaced"
+            )),
+        }
+    }
+    if !problems.is_empty() {
+        return Err(CodeGenError::Customization(problems));
+    }
+    for (id, rust_type) in replaced {
+        graph.nodes[id.index()] = TypeNode::External {
+            path: rust_type.to_string(),
+            conversion: None,
+        };
+        graph.newtypes[id.index()] = None;
+    }
+    let reach: Vec<BTreeSet<TypeId>> = passes::reachable(graph);
+    let kept = |key: &ItemKey| -> bool {
+        match key {
+            ItemKey::Node(id) => graph.is_named(*id) && reach.iter().any(|ids| ids.contains(id)),
+            ItemKey::RootAlias(_) => true,
+        }
+    };
+    Ok(candidates
+        .into_iter()
+        .zip(names)
+        .filter(|((_, key, _), _)| kept(key))
+        .unzip())
 }
 
 /// Applies `settings.patches` to the allocated `names` (one per item, in `homes`): renames each
@@ -465,6 +549,47 @@ fn is_rust_path(text: &str) -> bool {
             .is_some_and(|c: char| c.is_alphabetic() || c == '_')
             && chars.all(|c: char| c.is_alphanumeric() || c == '_')
     })
+}
+
+/// Whether `text` is a Rust type that is a path, each segment optionally with generic arguments
+/// that are such types themselves or lifetimes (`rust_decimal::Decimal`,
+/// `my::Wrapper<String, u8>`, `Cow<'static, str>`).
+pub(crate) fn is_rust_type(text: &str) -> bool {
+    // Split at the delimiters: every piece before a `<`, `,` or the end of a list is a path,
+    // and only whitespace may follow a `>`.
+    let mut depth: usize = 0;
+    let mut piece: String = String::new();
+    let mut closed: bool = false;
+    for c in text.chars() {
+        match c {
+            '<' | ',' | '>' => {
+                let path_ok: bool = if closed {
+                    piece.trim().is_empty() && c != '<'
+                } else if let Some(lifetime) = piece.trim().strip_prefix('\'') {
+                    depth > 0 && c != '<' && is_rust_path(lifetime) && !lifetime.contains("::")
+                } else {
+                    is_rust_path(piece.trim())
+                };
+                if !path_ok || (c != '<' && depth == 0) {
+                    return false;
+                }
+                piece.clear();
+                match c {
+                    '<' => depth += 1,
+                    '>' => depth -= 1,
+                    _ => {}
+                }
+                closed = c == '>';
+            }
+            _ => piece.push(c),
+        }
+    }
+    depth == 0
+        && if closed {
+            piece.trim().is_empty()
+        } else {
+            is_rust_path(piece.trim())
+        }
 }
 
 /// The best name proposal for `id`: lowest tier, then lowest origin. A node without proposals
@@ -692,6 +817,8 @@ struct Imports {
     unique_shapes: BTreeSet<FieldShape>,
     /// The `unique_items` deserialize functions for integer items fields use.
     unique_integer_shapes: BTreeSet<FieldShape>,
+    /// The conversions whose schema markers the buffer names (indices into the settings).
+    converted: BTreeSet<usize>,
 }
 
 /// A set type a `uniqueItems` field can be.
@@ -736,14 +863,58 @@ impl SetKind {
     }
 }
 
-/// Renders the Rust type of `id` as seen from `home`, recording imports. Iterative: a type is
-/// rendered as a token stream of open / close parts so deep nesting cannot overflow.
+/// Renders the Rust type of `id` as seen from `home`, recording imports.
 fn rust_type(
     graph: &TypeGraph,
     plan: &Plan,
     home: Home,
     id: TypeId,
     imports: &mut Imports,
+) -> String {
+    render_type(graph, plan, home, id, imports, false)
+}
+
+/// The type whose `ToJsonSchema` gives `id`'s schema, when it is not `id`'s own Rust type: `id`
+/// reaches a converted type (outside named items), whose schema comes from its marker in
+/// `converted_schemas`, as no impl of the crate's trait exists for the user's type. `None`
+/// otherwise.
+fn schema_type(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    id: TypeId,
+    imports: &mut Imports,
+) -> Option<String> {
+    let mut stack: Vec<TypeId> = vec![id];
+    let mut converted: bool = false;
+    while let Some(id) = stack.pop() {
+        if plan.items.contains_key(&id) {
+            continue;
+        }
+        let node: &TypeNode = graph.node(id);
+        if let TypeNode::External {
+            conversion: Some(_),
+            ..
+        } = node
+        {
+            converted = true;
+            break;
+        }
+        stack.extend(node.children());
+    }
+    converted.then(|| render_type(graph, plan, home, id, imports, true))
+}
+
+/// Renders the Rust type of `id` as seen from `home`, recording imports; with `markers`, a
+/// converted type as its schema marker (see [`schema_type`]). Iterative: a type is rendered as
+/// a token stream of open / close parts so deep nesting cannot overflow.
+fn render_type(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    id: TypeId,
+    imports: &mut Imports,
+    markers: bool,
 ) -> String {
     enum Part {
         Node(TypeId),
@@ -794,6 +965,16 @@ fn rust_type(
                 stack.push(Part::Text(">"));
                 stack.push(Part::Node(*inner));
             }
+            TypeNode::External {
+                conversion: Some(index),
+                ..
+            } if markers => {
+                let name: &str = &plan.converted[*index].0;
+                out.push_str("converted_schemas::");
+                out.push_str(name);
+                imports.converted.insert(*index);
+            }
+            TypeNode::External { path, .. } => out.push_str(path),
             TypeNode::Object(_) | TypeNode::Enum(_) | TypeNode::Union(_) => {
                 unreachable!("every reachable named node has a planned name")
             }
@@ -887,7 +1068,8 @@ fn reaching(
 /// arrays `uniqueItems` rejects. The greatest such set: a node is out when it is blocked itself
 /// or reaches a blocked node, so recursive types stay in.
 ///
-/// Blocked: any value (`serde_json::Value`, no `Hash`), floats (no `Eq`), a typed format
+/// Blocked: any value (`serde_json::Value`, no `Hash`), floats (no `Eq`), a user's type (its
+/// traits and equality are unknown), a typed format
 /// (parsing folds case and accepts several spellings, and `chrono` compares instants, so
 /// different strings are equal values), a struct that
 /// drops unknown keys (two objects differing only there would be equal) or keeps them as
@@ -911,7 +1093,9 @@ fn set_item_nodes(graph: &TypeGraph) -> Vec<bool> {
     );
     let blocked = |node: &TypeNode| -> bool {
         match node {
-            TypeNode::Pending | TypeNode::Any | TypeNode::Number => true,
+            TypeNode::Pending | TypeNode::Any | TypeNode::Number | TypeNode::External { .. } => {
+                true
+            }
             TypeNode::String { format, .. } => *format != StringFormat::Plain,
             TypeNode::Object(o) => {
                 (!o.deny_unknown && o.additional.is_none())
@@ -963,7 +1147,8 @@ fn ord_items(graph: &TypeGraph, set_item: &[bool]) -> BTreeSet<TypeId> {
 }
 
 /// Per node, whether its Rust type implements `Eq`: every type a generated item can hold does
-/// (`serde_json::Value` included) except floats, so a node is out when it reaches a number.
+/// (`serde_json::Value` included) except floats and a user's type (which may not), so a node is
+/// out when it reaches either.
 fn eq_nodes(graph: &TypeGraph) -> Vec<bool> {
     let mut parents: Vec<Vec<TypeId>> = vec![Vec::new(); graph.nodes.len()];
     for (i, node) in graph.nodes.iter().enumerate() {
@@ -973,7 +1158,10 @@ fn eq_nodes(graph: &TypeGraph) -> Vec<bool> {
         }
     }
     reaching(graph, &parents, |node: &TypeNode| {
-        matches!(node, TypeNode::Pending | TypeNode::Number)
+        matches!(
+            node,
+            TypeNode::Pending | TypeNode::Number | TypeNode::External { .. }
+        )
     })
     .into_iter()
     .map(|reaches_float: bool| !reaches_float)
@@ -1375,6 +1563,12 @@ fn render_fields(
         } else {
             "    #[serde(flatten)]\n".to_string()
         };
+        let attrs: String = match schema_type(graph, plan, home, additional, imports) {
+            Some(schema) => {
+                format!("{attrs}    #[json_schema(with = \"BTreeMap<String, {schema}>\")]\n")
+            }
+            None => attrs,
+        };
         out.push(RenderedField {
             name: names.last().expect("additional field name").clone(),
             ty: format!("BTreeMap<String, {value}>"),
@@ -1532,6 +1726,42 @@ fn integer_serde_args(
     }
 }
 
+/// The `#[json_schema(..)]` arguments that carry the constraints of a field's value node
+/// `value_id` into its reverse schema; a newtype carries its own.
+fn constraint_schema_args(graph: &TypeGraph, value_id: TypeId, schema_args: &mut Vec<String>) {
+    match graph.node(value_id) {
+        // A newtype carries its own constraints.
+        _ if graph.newtypes[value_id.index()].is_some() => {}
+        TypeNode::String { constraints, .. } => {
+            if let Some(n) = constraints.min_length {
+                schema_args.push(format!("min_length = {n}"));
+            }
+            if let Some(n) = constraints.max_length {
+                schema_args.push(format!("max_length = {n}"));
+            }
+            if let Some(ref p) = constraints.pattern {
+                schema_args.push(format!("pattern = \"{}\"", escape(p)));
+            }
+        }
+        TypeNode::Array {
+            constraints,
+            unique,
+            ..
+        } => {
+            if let Some(n) = constraints.min_items {
+                schema_args.push(format!("min_items = {n}"));
+            }
+            if let Some(n) = constraints.max_items {
+                schema_args.push(format!("max_items = {n}"));
+            }
+            if *unique {
+                schema_args.push("unique_items".to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Renders one field named `name`, with its own `rename` when `rename` (see [`needs_rename`]).
 fn render_field(
     graph: &TypeGraph,
@@ -1606,37 +1836,15 @@ fn render_field(
     if shape == FieldShape::RequiredNullable {
         schema_args.push("required".to_string());
     }
-    match graph.node(value_id) {
-        // A newtype carries its own constraints.
-        _ if graph.newtypes[value_id.index()].is_some() => {}
-        TypeNode::String { constraints, .. } => {
-            if let Some(n) = constraints.min_length {
-                schema_args.push(format!("min_length = {n}"));
-            }
-            if let Some(n) = constraints.max_length {
-                schema_args.push(format!("max_length = {n}"));
-            }
-            if let Some(ref p) = constraints.pattern {
-                schema_args.push(format!("pattern = \"{}\"", escape(p)));
-            }
-        }
-        TypeNode::Array {
-            constraints,
-            unique,
-            ..
-        } => {
-            if let Some(n) = constraints.min_items {
-                schema_args.push(format!("min_items = {n}"));
-            }
-            if let Some(n) = constraints.max_items {
-                schema_args.push(format!("max_items = {n}"));
-            }
-            if *unique {
-                schema_args.push("unique_items".to_string());
-            }
-        }
-        _ => {}
+    if let Some(schema) = schema_type(graph, plan, home, value_id, imports) {
+        let with: String = match shape {
+            FieldShape::Plain | FieldShape::Optional | FieldShape::OptionalHoldingNull => schema,
+            FieldShape::RequiredNullable => format!("Option<{schema}>"),
+            FieldShape::OptionalNullable => format!("json_schema_rs::Nullable<{schema}>"),
+        };
+        schema_args.push(format!("with = \"{with}\""));
     }
+    constraint_schema_args(graph, value_id, &mut schema_args);
     if let Some(arg) = field.default.as_ref().and_then(default_annotation) {
         schema_args.push(arg);
     }
@@ -2086,7 +2294,13 @@ fn render_enum(
 }
 
 /// The variant name for a union branch: its title, the named type a `$ref` points to, the
-/// kind of a scalar, else `Variant{i}`.
+/// last segment of a user's type, the kind of a scalar, else `Variant{i}`.
+/// The name a user's type suggests: its path's last segment, without generic arguments.
+fn external_base(path: &str) -> String {
+    let bare: &str = path.split('<').next().unwrap_or(path);
+    sanitize_struct_name(bare.rsplit("::").next().unwrap_or(bare))
+}
+
 fn variant_base(graph: &TypeGraph, plan: &Plan, union: &UnionNode, index: usize) -> String {
     let variant = &union.variants[index];
     if let Some(ref title) = variant.title {
@@ -2097,6 +2311,9 @@ fn variant_base(graph: &TypeGraph, plan: &Plan, union: &UnionNode, index: usize)
         && (variant.is_ref || union.kind == UnionKind::TypeArray)
     {
         return name.clone();
+    }
+    if let TypeNode::External { path, .. } = graph.node(target) {
+        return external_base(path);
     }
     let kind: Option<&str> = match graph.node(target) {
         TypeNode::Null => Some("Null"),
@@ -2142,7 +2359,17 @@ fn render_union(
     let mut variants: Vec<rust_validators::UnionVariant> = Vec::with_capacity(union.variants.len());
     for (variant, variant_name) in union.variants.iter().zip(&names) {
         let ty: String = rust_type(graph, plan, home, variant.ty, imports);
-        let _ = writeln!(out, "    {variant_name}({ty}),");
+        match schema_type(graph, plan, home, variant.ty, imports) {
+            Some(schema) => {
+                let _ = writeln!(
+                    out,
+                    "    {variant_name}(#[json_schema(with = \"{schema}\")] {ty}),"
+                );
+            }
+            None => {
+                let _ = writeln!(out, "    {variant_name}({ty}),");
+            }
+        }
         variants.push(rust_validators::UnionVariant {
             name: variant_name.clone(),
             ty,
@@ -2341,8 +2568,43 @@ fn render_buffer(
     if !imports.unique_shapes.is_empty() || !imports.unique_integer_shapes.is_empty() {
         out.write_all(unique_items_module(&imports).as_bytes())?;
     }
+    if !imports.converted.is_empty() {
+        out.write_all(render_converted_schemas(plan, &imports).as_bytes())?;
+    }
     out.write_all(body.as_bytes())?;
     Ok(out)
+}
+
+/// The schema markers of the conversions a buffer names: a private module of
+/// [`json_schema_rs::schema_marker!`](crate::schema_marker) types, one per conversion, each
+/// giving the conversion's schema to the `ToJsonSchema` derive (see [`schema_type`]).
+fn render_converted_schemas(plan: &Plan, imports: &Imports) -> String {
+    let mut out: String = "mod converted_schemas {\n".to_string();
+    for &index in &imports.converted {
+        let (name, json) = &plan.converted[index];
+        let _ = writeln!(
+            out,
+            "    json_schema_rs::schema_marker!({name}, {});",
+            rust_validators::raw_string(json)
+        );
+    }
+    out.push_str("}\n\n");
+    out
+}
+
+/// Per conversion in `settings`, its schema marker's name (the type's last path segment,
+/// colliding names suffixed) and its schema as compact JSON.
+fn converted_markers(settings: &CodeGenSettings) -> Vec<(String, String)> {
+    let bases: Vec<String> = settings
+        .conversions
+        .iter()
+        .map(|c| external_base(&c.rust_type))
+        .collect();
+    unique_idents(&bases, "")
+        .into_iter()
+        .zip(&settings.conversions)
+        .map(|(name, c)| (name, c.schema.to_string()))
+        .collect()
 }
 
 /// Helper for optional nullable fields: a present value (including `null`) is `Some(..)`, so
@@ -14767,6 +15029,422 @@ pub struct Root {
         });
         let expected: &str = r"the settings cannot be applied: derive `schemars::` is not a Rust path; derive `Json Schema` is not a Rust path; attribute `` is not the text inside `#[...]`; attribute `#[non_exhaustive]` is not the text inside `#[...]`; derive `Hash<T>` is not a Rust path; attribute `` is not the text inside `#[...]`";
         let actual: String = customized(&settings).unwrap_err().to_string();
+        assert_eq!(expected, actual);
+    }
+
+    // --- conversions and replacements ---
+
+    /// `json` generated with `settings`, or the error's message.
+    fn converted(json: &str, settings: &CodeGenSettings) -> Result<String, String> {
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        generate_rust(&[schema], settings)
+            .map(|output: super::GenerateRustOutput| {
+                String::from_utf8(output.per_schema[0].clone()).unwrap()
+            })
+            .map_err(|error: CodeGenError| error.to_string())
+    }
+
+    fn decimal_schema() -> serde_json::Value {
+        serde_json::json!({"type": "string", "format": "decimal"})
+    }
+
+    #[test]
+    /// A property, a `$ref`'d definition, array items, a nullable copy and additional properties that match a conversion (ignoring annotations) become the user's type, each with its schema marker.
+    fn conversions_replace_matching_properties_items_and_additional_properties() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.convert(decimal_schema(), "rust_decimal::Decimal"));
+        let actual: Result<String, String> = converted(
+            r##"{"type":"object","properties":{"price":{"type":"string","format":"decimal","description":"Cost."},"maybe":{"type":["string","null"],"format":"decimal"},"opt":{"$ref":"#/$defs/Dec"},"list":{"type":"array","items":{"$ref":"#/$defs/Dec"}},"other":{"type":"string"}},"required":["price","maybe"],"additionalProperties":{"type":"string","format":"decimal"},"$defs":{"Dec":{"type":"string","format":"decimal","title":"Dec"}}}"##,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+mod converted_schemas {
+    json_schema_rs::schema_marker!(Decimal, r#"{"format":"decimal","type":"string"}"#);
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(with = "Vec<converted_schemas::Decimal>")]
+    pub list: Option<Vec<rust_decimal::Decimal>>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[json_schema(required, with = "Option<converted_schemas::Decimal>")]
+    pub maybe: Option<rust_decimal::Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(with = "converted_schemas::Decimal")]
+    pub opt: Option<rust_decimal::Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
+    /// Cost.
+    #[json_schema(with = "converted_schemas::Decimal")]
+    pub price: rust_decimal::Decimal,
+    #[serde(flatten)]
+    #[json_schema(with = "BTreeMap<String, converted_schemas::Decimal>")]
+    pub additional: BTreeMap<String, rust_decimal::Decimal>,
+}
+
+"##.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn conversion_matches_a_union_branch() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.convert(decimal_schema(), "rust_decimal::Decimal"));
+        let actual: Result<String, String> = converted(
+            r#"{"anyOf":[{"type":"string","format":"decimal"},{"type":"integer"}]}"#,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+
+mod converted_schemas {
+    json_schema_rs::schema_marker!(Decimal, r#"{"format":"decimal","type":"string"}"#);
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum RootAnyOf {
+    Decimal(#[json_schema(with = "converted_schemas::Decimal")] rust_decimal::Decimal),
+    Integer(i64),
+}
+
+json_schema_rs::deserialize_untagged!(RootAnyOf { Decimal(rust_decimal::Decimal), Integer(i64 = with(json_schema_rs::integer::deserialize)) });
+
+"##.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_union_deserializes_a_converted_branch_after_validating() {
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .convert(decimal_schema(), "rust_decimal::Decimal")
+            .build();
+        let actual: Result<String, String> = converted(
+            r#"{"anyOf":[{"type":"string","format":"decimal"},{"type":"integer"}]}"#,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+mod converted_schemas {
+    json_schema_rs::schema_marker!(Decimal, r#"{"format":"decimal","type":"string"}"#);
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum RootAnyOf {
+    Decimal(#[json_schema(with = "converted_schemas::Decimal")] rust_decimal::Decimal),
+    Integer(i64),
+}
+
+json_schema_rs::deserialize_union!(RootAnyOf, TYPE_VALIDATORS, AnyOf, Some(0), [1, 2], |value| {
+    0 => <rust_decimal::Decimal as Deserialize>::deserialize(value).map(Self::Decimal),
+    _ => json_schema_rs::integer::deserialize::<_, i64>(value).map(Self::Integer),
+});
+
+json_schema_rs::self_validating!(RootAnyOf, TYPE_VALIDATORS, 0);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"anyOf":[{"format":"decimal","type":"string"},{"type":"integer"}]}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+        &["#/anyOf/0"],
+        &["#/anyOf/1"],
+    ],
+);
+
+"##.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn self_validating_struct_embeds_the_converted_subschema() {
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .convert(decimal_schema(), "rust_decimal::Decimal")
+            .build();
+        let actual: Result<String, String> = converted(
+            r#"{"type":"object","properties":{"price":{"type":"string","format":"decimal"}}}"#,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+mod converted_schemas {
+    json_schema_rs::schema_marker!(Decimal, r#"{"format":"decimal","type":"string"}"#);
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(with = "converted_schemas::Decimal")]
+    pub price: Option<rust_decimal::Decimal>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 0);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"price":{"format":"decimal","type":"string"}},"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+    ],
+);
+
+"##.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn converted_root_is_an_alias_to_the_users_type() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.convert(decimal_schema(), "rust_decimal::Decimal"));
+        let actual: Result<String, String> =
+            converted(r#"{"type":"string","format":"decimal"}"#, &settings);
+        let expected: Result<String, String> =
+            Ok(r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = rust_decimal::Decimal;
+
+"
+            .to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn first_matching_conversion_wins() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.convert(decimal_schema(), "a::Decimal")
+                .convert(decimal_schema(), "b::Decimal")
+        });
+        let actual: Result<String, String> = converted(
+            r#"{"type":"object","properties":{"price":{"type":"string","format":"decimal"}}}"#,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+mod converted_schemas {
+    json_schema_rs::schema_marker!(Decimal0, r#"{"format":"decimal","type":"string"}"#);
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(with = "converted_schemas::Decimal0")]
+    pub price: Option<a::Decimal>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"##.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn conversion_markers_with_the_same_name_get_suffixes() {
+        let settings: CodeGenSettings = customized_settings(|b| {
+            b.convert(decimal_schema(), "a::Decimal").convert(
+                serde_json::json!({"type":"number","format":"decimal"}),
+                "b::Decimal<'static>",
+            )
+        });
+        let actual: Result<String, String> = converted(
+            r#"{"type":"object","properties":{"price":{"type":"string","format":"decimal"},"cost":{"type":"number","format":"decimal"}}}"#,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+mod converted_schemas {
+    json_schema_rs::schema_marker!(Decimal0, r#"{"format":"decimal","type":"string"}"#);
+    json_schema_rs::schema_marker!(Decimal1, r#"{"format":"decimal","type":"number"}"#);
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(with = "converted_schemas::Decimal1")]
+    pub cost: Option<b::Decimal<'static>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(with = "converted_schemas::Decimal0")]
+    pub price: Option<a::Decimal>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"##.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn conversion_does_not_match_a_subschema_with_another_keyword() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.convert(decimal_schema(), "rust_decimal::Decimal"));
+        let actual: Result<String, String> = converted(
+            r#"{"type":"object","properties":{"price":{"type":"string","format":"decimal","maxLength":3}}}"#,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(max_length = 3)]
+    pub price: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn conversion_to_a_non_type_is_an_error() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.convert(decimal_schema(), "not a type"));
+        let actual: Result<String, String> = converted(r#"{"type":"string"}"#, &settings);
+        let expected: Result<String, String> = Err(
+            r"the settings cannot be applied: conversion type `not a type` is not a Rust type"
+                .to_string(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn conversion_of_a_boolean_schema_is_an_error() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.convert(serde_json::json!(true), "X"));
+        let actual: Result<String, String> = converted(r#"{"type":"string"}"#, &settings);
+        let expected: Result<String, String> = Err(r"the settings cannot be applied: conversion schema true is a boolean schema, not an object".to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn conversion_of_an_invalid_schema_is_an_error() {
+        let settings: CodeGenSettings =
+            customized_settings(|b| b.convert(serde_json::json!({"type":5}), "X"));
+        let actual: Result<String, String> = converted(r#"{"type":"string"}"#, &settings);
+        let expected: Result<String, String> = Err(r#"the settings cannot be applied: conversion schema {"type":5} does not parse: invalid JSON Schema: invalid type: integer `5`, expected a type name or an array of type names"#.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replacement_drops_the_types_only_it_reached() {
+        let settings: CodeGenSettings = customized_settings(|b| b.replace("Veg", "my::Veg"));
+        let actual: Result<String, String> = converted(
+            r##"{"type":"object","properties":{"veg":{"$ref":"#/$defs/Veg"},"inner":{"$ref":"#/$defs/Inner"}},"$defs":{"Veg":{"type":"object","properties":{"inner":{"$ref":"#/$defs/Inner"},"leaf":{"$ref":"#/$defs/Leaf"}}},"Inner":{"type":"object","properties":{"n":{"type":"integer"}}},"Leaf":{"type":"object","properties":{"n":{"type":"integer"}}}}}"##,
+            &settings,
+        );
+        let expected: Result<String, String> = Ok(r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Inner {
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub n: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inner: Option<Inner>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub veg: Option<my::Veg>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replacing_a_root_type_is_an_error() {
+        let settings: CodeGenSettings = customized_settings(|b| b.replace("Root", "my::Root"));
+        let actual: Result<String, String> = converted(r#"{"type":"object"}"#, &settings);
+        let expected: Result<String, String> = Err(r"the settings cannot be applied: replacement for `Root`: a schema's root type cannot be replaced".to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replacing_an_unknown_type_is_an_error() {
+        let settings: CodeGenSettings = customized_settings(|b| b.replace("Nope", "my::Root"));
+        let actual: Result<String, String> = converted(r#"{"type":"object"}"#, &settings);
+        let expected: Result<String, String> = Err(r"the settings cannot be applied: replacement for `Nope`: no generated type has that name".to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replacement_by_a_non_type_is_an_error() {
+        let settings: CodeGenSettings = customized_settings(|b| b.replace("Veg", "1x"));
+        let actual: Result<String, String> = converted(
+            r##"{"type":"object","properties":{"veg":{"$ref":"#/$defs/Veg"}},"$defs":{"Veg":{"type":"object","properties":{"n":{"type":"integer"}}}}}"##,
+            &settings,
+        );
+        let expected: Result<String, String> = Err(
+            r"the settings cannot be applied: replacement for `Veg`: `1x` is not a Rust type"
+                .to_string(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rust_type_shapes() {
+        let texts: [&str; 10] = [
+            "rust_decimal::Decimal",
+            "::my::Ipv4",
+            "my::Wrapper<String, u8>",
+            "Cow<'static, str>",
+            "Vec<Vec<u8>>",
+            "not a type",
+            "Vec<>",
+            "'a",
+            "Vec<u8>>",
+            "Vec<u8",
+        ];
+        let expected: Vec<bool> = vec![
+            true, true, true, true, true, false, false, false, false, false,
+        ];
+        let actual: Vec<bool> = texts
+            .iter()
+            .map(|text: &&str| super::is_rust_type(text))
+            .collect();
         assert_eq!(expected, actual);
     }
 }

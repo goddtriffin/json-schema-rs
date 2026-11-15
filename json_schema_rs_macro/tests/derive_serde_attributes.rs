@@ -1112,3 +1112,54 @@ fn value_enum_alias_is_another_value() {
     let actual: ReverseCodeGenResult = Level::json_schema();
     assert_eq!(expected, actual);
 }
+
+#[derive(Deserialize, ToJsonSchema)]
+#[serde(untagged)]
+#[expect(dead_code)]
+enum WithVariant {
+    Text(#[json_schema(with = "String")] u8),
+    Pair(#[json_schema(with = "bool")] u8, u8),
+}
+
+#[test]
+fn variant_field_with_replaces_its_schema() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+            { "type": "string" },
+            {
+                "type": "array",
+                "prefixItems": [
+                    { "type": "boolean" },
+                    { "type": "integer", "minimum": 0, "maximum": 255 }
+                ],
+                "minItems": 2,
+                "maxItems": 2
+            }
+        ]
+    })));
+    let actual: ReverseCodeGenResult = WithVariant::json_schema();
+    assert_eq!(expected, actual);
+}
+
+#[derive(Deserialize, ToJsonSchema)]
+#[expect(dead_code)]
+struct WithFlatten {
+    name: String,
+    #[serde(flatten)]
+    #[json_schema(with = "BTreeMap<String, String>")]
+    rest: BTreeMap<String, u8>,
+}
+
+#[test]
+fn flatten_field_with_replaces_the_additional_properties_schema() {
+    let expected: ReverseCodeGenResult = Ok(schema_from_json(serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "name": { "type": "string" } },
+        "additionalProperties": { "type": "string" },
+        "required": ["name"]
+    })));
+    let actual: ReverseCodeGenResult = WithFlatten::json_schema();
+    assert_eq!(expected, actual);
+}

@@ -457,6 +457,7 @@ We test each **codegen scenario** (a named situation: e.g. single required strin
 | `type`-array union through `deserialize_untagged!` (number branch), in both number builds | Y | — | N | — | Y |
 | Missing referenced document → error naming the URI | Y | — | Y | — | — |
 | Remote `$ref`: off by default (error), `--allow-remote-refs` without the `http` feature (error), with it (loopback server) | — | — | Y | — | — |
+| Conversions and replacements (properties, items, additional properties, union branch, nullable, root alias; errors) | Y | — | Y | Y | Y |
 
 ### Rust codegen: name sanitization
 
@@ -497,6 +498,14 @@ All functions that produce valid Rust identifiers (struct names, field names, mo
 - **Every problem is an error, collected into one `CodeGenError::Customization`:** a patch key that names no generated type (a silently ignored patch is a typo that hides), a rename that is not a Rust identifier (a keyword included) or that another item in a clashing module has, a derive that is not a path, an attribute that is empty or written with its `#[`. Typify ignores an unknown patch key; we reject it.
 - The macro takes paths and attribute token lists (`extra_derives = [schemars::JsonSchema]`, `patch = { Veg = { rename = "Vegetable", derives = [Hash] } }`); the CLI takes repeatable `--cgs-derive` / `--cgs-attr` and a JSON `--cgs-patch FILE` with unknown keys rejected.
 - With nothing set the output is byte-identical: the settings are empty by default.
+
+**Conversions and replacements (#215).** `CodeGenSettings::conversions` (a `TypeConversion` per schema: `schema`, `rust_type`) and `replacements` (generated name → Rust type) put the user's types in the output. Parity with typify's `with_conversion` / `with_replacement` and its macro's `convert` / `replace`, and jsonschema2pojo's `formatTypeMapping` / `useBigDecimals`. Decisions:
+- **A conversion matches a subschema equal to its schema with annotations ignored** (`title`, `description`, `$comment`, `examples`, `default`, `deprecated`, `readOnly`, `writeOnly`; typify compares whole schemas, so a described property never matches there). Keyword order and the schema's own JSON form do not matter; every other keyword must match, so `{"type":"string","format":"decimal","maxLength":10}` does not match a conversion without `maxLength` (the user's type might not hold the constraint). A subschema whose `type` array is the schema's type plus `"null"` matches too and becomes `Option<T>`: nullable copies are common and typify misses them. The first matching conversion wins, in the order given.
+- **Conversions match during the type-graph build, before dedupe and naming**, as an `External` node; a converted root is a plain `pub type Root = T;`.
+- **A converted field keeps its subschema for reverse codegen:** the target type need not implement `ToJsonSchema` (`rust_decimal::Decimal` does not), so each conversion with a use gets a unit marker in `mod converted_schemas` (`json_schema_rs::schema_marker!`) and the field `#[json_schema(with = "...")]` (`Option<..>`, the flatten map's `BTreeMap<String, ..>`, a union variant's field alike). Markers are named after the type's last segment, with the numeric suffix on collision as for other names. The derive honours `with` on variant fields and flatten fields for this.
+- **Self-validating output validates the JSON before conversion**: the embedded schema keeps the converted subschema, so `TryFrom<Value>` / `Validated<T>` check it, and a union picks a converted branch only after validating. A plain `Deserialize` checks only the Rust shape: the converted field has no constrained newtype, and wrapping the user's type to validate it would change the field's type. Typify does not validate at all.
+- **Replacements apply after name allocation and are keyed by the allocated name**, like patches. The type is not emitted, nor anything only it reached; a replaced root is an error (the root is the output's entry point), and so is a name nothing has (a silently ignored replacement hides a typo) and a target that is not a Rust type. A replacement type must implement everything the generated types derive (`Debug`, `Clone`, `PartialEq`, `Serialize`, `Deserialize`, `ToJsonSchema`): unlike a conversion it replaces a whole named type, whose reverse schema the user's type describes.
+- The macro takes `convert = { schema => Type, .. }` (the schema as JSON tokens or a string literal of JSON) and `replace = { Name = Type, .. }`; the CLI takes repeatable `--cgs-convert TYPE=SCHEMA` and `--cgs-replace NAME=TYPE`.
 
 ---
 

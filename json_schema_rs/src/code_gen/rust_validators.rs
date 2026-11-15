@@ -648,7 +648,7 @@ fn string_literal(s: &str) -> String {
 }
 
 /// A raw string literal for `s`, with as many `#` as it needs.
-fn raw_string(s: &str) -> String {
+pub(crate) fn raw_string(s: &str) -> String {
     let mut hashes: usize = 0;
     loop {
         let closing: String = format!("\"{}", "#".repeat(hashes));
