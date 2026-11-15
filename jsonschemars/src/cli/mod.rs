@@ -1,9 +1,9 @@
 //! CLI entry and subcommand dispatch for jsonschemars.
 
-mod bundle;
 mod documents;
 mod generate;
 mod retrieval;
+mod transform;
 mod utils;
 mod validate;
 
@@ -15,6 +15,7 @@ use json_schema_rs::{
 };
 use retrieval::RefRetrieval;
 use std::path::PathBuf;
+use transform::Transform;
 
 /// Why a subcommand failed: the message for the final `error:` line and the process exit code.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,10 +179,51 @@ fn jss_settings(matches: &ArgMatches) -> JsonSchemaSettings {
     builder.build()
 }
 
+/// The `bundle` / `dereference` subcommand: a schema and its resources in, one document out.
+fn transform_command(
+    name: &'static str,
+    about: &'static str,
+    output_help: &'static str,
+) -> Command {
+    Command::new(name)
+        .about(about)
+        .arg(
+            Arg::new("schema")
+                .short('s')
+                .long("schema")
+                .value_name("FILE")
+                .required_unless_present("schema_file")
+                .conflicts_with("schema_file")
+                .help("Path to the JSON Schema file. Use \"-\" for stdin."),
+        )
+        .arg(
+            Arg::new("schema_file")
+                .value_name("SCHEMA")
+                .help("Path to the JSON Schema file, as an alternative to --schema"),
+        )
+        .arg(
+            Arg::new("resource")
+                .short('r')
+                .long("resource")
+                .value_name("FILE")
+                .action(clap::ArgAction::Append)
+                .help("A JSON Schema document the schema may reference, reached by its file: URI or its root $id. Repeatable."),
+        )
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .value_name("FILE")
+                .help(output_help),
+        )
+        .args(jss_args())
+        .args(retrieval::retrieval_args())
+}
+
 #[expect(clippy::too_many_lines)]
 pub fn run() {
     let cmd = Command::new("jsonschemars")
-        .about("JSON Schema tooling: generate Rust types, validate JSON, bundle schemas")
+        .about("JSON Schema tooling: generate Rust types, validate JSON, bundle and dereference schemas")
         .subcommand(
             Command::new("generate")
                 .about("Generate Rust from one or more JSON Schema files or directories")
@@ -343,41 +385,16 @@ pub fn run() {
                 .args(jss_args())
                 .args(retrieval::retrieval_args()),
         )
-        .subcommand(
-            Command::new("bundle")
-                .about("Write one JSON Schema document that holds every document the schema references (2020-12 core §9.3)")
-                .arg(
-                    Arg::new("schema")
-                        .short('s')
-                        .long("schema")
-                        .value_name("FILE")
-                        .required_unless_present("schema_file")
-                        .conflicts_with("schema_file")
-                        .help("Path to the JSON Schema file. Use \"-\" for stdin."),
-                )
-                .arg(
-                    Arg::new("schema_file")
-                        .value_name("SCHEMA")
-                        .help("Path to the JSON Schema file, as an alternative to --schema"),
-                )
-                .arg(
-                    Arg::new("resource")
-                        .short('r')
-                        .long("resource")
-                        .value_name("FILE")
-                        .action(clap::ArgAction::Append)
-                        .help("A JSON Schema document the schema may reference, reached by its file: URI or its root $id. Repeatable."),
-                )
-                .arg(
-                    Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .value_name("FILE")
-                        .help("Write the bundle to this file (default: stdout)"),
-                )
-                .args(jss_args())
-                .args(retrieval::retrieval_args()),
-        );
+        .subcommand(transform_command(
+            "bundle",
+            "Write one JSON Schema document that holds every document the schema references (2020-12 core §9.3)",
+            "Write the bundle to this file (default: stdout)",
+        ))
+        .subcommand(transform_command(
+            "dereference",
+            "Write the schema with every reference replaced by its target, for tools that do not resolve references (a recursive reference becomes a JSON Pointer to its ancestor)",
+            "Write the dereferenced schema to this file (default: stdout)",
+        ));
     let matches = cmd.get_matches();
 
     let result: Result<(), CliFailure> = match matches.subcommand() {
@@ -433,28 +450,34 @@ pub fn run() {
                 )
             })
         }
-        Some(("bundle", bundle_m)) => {
-            let schema: PathBuf = bundle_m
+        Some((name @ ("bundle" | "dereference"), transform_m)) => {
+            let transform: Transform = if name == "bundle" {
+                Transform::Bundle
+            } else {
+                Transform::Dereference
+            };
+            let schema: PathBuf = transform_m
                 .get_one::<String>("schema")
-                .or_else(|| bundle_m.get_one::<String>("schema_file"))
+                .or_else(|| transform_m.get_one::<String>("schema_file"))
                 .map(|s| PathBuf::from(s.as_str()))
                 .expect("--schema or SCHEMA is required");
-            let resources: Vec<PathBuf> = bundle_m
+            let resources: Vec<PathBuf> = transform_m
                 .get_many::<String>("resource")
                 .map_or_default(|it| it.map(PathBuf::from).collect());
-            let output: Option<PathBuf> = bundle_m
+            let output: Option<PathBuf> = transform_m
                 .get_one::<String>("output")
                 .map(|s| PathBuf::from(s.as_str()));
-            bundle::run_bundle(
+            transform::run_transform(
+                transform,
                 &schema,
                 &resources,
                 output.as_deref(),
-                &jss_settings(bundle_m),
-                &RefRetrieval::from_matches(bundle_m),
+                &jss_settings(transform_m),
+                &RefRetrieval::from_matches(transform_m),
             )
         }
         _ => {
-            eprintln!("expected subcommand: generate, validate or bundle");
+            eprintln!("expected subcommand: generate, validate, bundle or dereference");
             std::process::exit(1);
         }
     };

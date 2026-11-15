@@ -182,7 +182,9 @@ error without the instance's values, for logs of sensitive data (CLI `--masked`)
 `compiled.validate_with_defaults(&mut instance)` inserts the `default` of every missing
 property, then validates (CLI `--apply-defaults`); `validate` never changes the instance. `registry.bundle()` writes the schema and every document its
 references reach as one document, each embedded as a schema resource (2020-12 core §9.3;
-CLI `jsonschemars bundle`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
+CLI `jsonschemars bundle`); `registry.dereference()` replaces every reference by its target,
+for tools that do not resolve references (a recursive reference becomes a JSON Pointer to
+its ancestor; CLI `jsonschemars dereference`). Keywords next to `$ref` are evaluated in 2019-09/2020-12 and
 ignored in earlier drafts (override with `--jss-ref-siblings`). The official JSON
 Schema Test Suite runs as a gate with the default settings. It passes every test except draft 4's
 bignum integers in the default build (numbers beyond 64 bits, listed in `json_schema_rs/tests/suite_xfail.json`),
@@ -707,6 +709,14 @@ written, `2` a document could not be read or the schema cannot be used):
 
 ```bash
 jsonschemars bundle order.json -r vendored-customer.json -o order.bundle.json
+```
+
+`jsonschemars dereference SCHEMA` takes the same arguments and writes the schema with every
+reference replaced by its target (exit `2` also when the schema reaches a document of
+another draft, which cannot be inlined):
+
+```bash
+jsonschemars dereference order.json -o order.dereferenced.json
 ```
 
 To generate into a **file at build time** (e.g. under `OUT_DIR`) instead of

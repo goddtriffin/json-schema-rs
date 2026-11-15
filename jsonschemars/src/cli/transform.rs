@@ -1,14 +1,16 @@
-//! `jsonschemars bundle` subcommand: one schema document holding every document the schema
-//! references (2020-12 core §9.3, see `Registry::bundle`).
+//! `jsonschemars bundle` and `jsonschemars dereference`: one schema document made from the
+//! schema and every document it references. `bundle` embeds them (2020-12 core §9.3, see
+//! `Registry::bundle`); `dereference` replaces every reference by its target (see
+//! `Registry::dereference`).
 //!
 //! The schema and its `--resource`s are read as `validate` reads them; any other document a
 //! `$ref` names is retrieved from inside `--file-root` (or over HTTP with
-//! `--allow-remote-refs`). The bundle is written as pretty-printed JSON to `--output`, or to
+//! `--allow-remote-refs`). The result is written as pretty-printed JSON to `--output`, or to
 //! stdout.
 //!
-//! Exit codes: `0` the bundle was written; `1` it could not be written; `2` there is no
-//! bundle: a document could not be read or parsed (one `error:` line per problem), or the
-//! schema cannot be used (one `schema error:` line per problem).
+//! Exit codes: `0` the result was written; `1` it could not be written; `2` there is no
+//! result: a document could not be read or parsed (one `error:` line per problem), the schema
+//! cannot be used (one `schema error:` line per problem), or it cannot be transformed.
 
 use super::CliFailure;
 use super::documents::{Document, no_verdict, read_documents, schema_problems};
@@ -16,7 +18,26 @@ use super::retrieval::{CliRetriever, RefRetrieval};
 use json_schema_rs::{JsonSchemaSettings, Registry, RegistryBuilder};
 use std::path::{Path, PathBuf};
 
-pub(crate) fn run_bundle(
+/// What to make of the schema.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Transform {
+    /// [`Registry::bundle`].
+    Bundle,
+    /// [`Registry::dereference`].
+    Dereference,
+}
+
+impl Transform {
+    fn noun(self) -> &'static str {
+        match self {
+            Transform::Bundle => "bundle",
+            Transform::Dereference => "dereferenced schema",
+        }
+    }
+}
+
+pub(crate) fn run_transform(
+    transform: Transform,
     schema_path: &PathBuf,
     resource_paths: &[PathBuf],
     output: Option<&Path>,
@@ -40,11 +61,14 @@ pub(crate) fn run_bundle(
     let registry: Registry<'_> = builder
         .build(&schema.schema)
         .map_err(|errors| schema_problems(errors.iter()))?;
-    let bundle: serde_json::Value = registry
-        .bundle()
-        .map_err(|e| no_verdict(format!("failed to build the bundle: {e}")))?;
-    let mut json: String = serde_json::to_string_pretty(&bundle)
-        .map_err(|e| no_verdict(format!("failed to serialize the bundle: {e}")))?;
+    let noun: &str = transform.noun();
+    let result: serde_json::Value = match transform {
+        Transform::Bundle => registry.bundle().map_err(|e| e.to_string()),
+        Transform::Dereference => registry.dereference().map_err(|e| e.to_string()),
+    }
+    .map_err(|e| no_verdict(format!("failed to build the {noun}: {e}")))?;
+    let mut json: String = serde_json::to_string_pretty(&result)
+        .map_err(|e| no_verdict(format!("failed to serialize the {noun}: {e}")))?;
     json.push('\n');
     if let Some(path) = output {
         std::fs::write(path, json)
