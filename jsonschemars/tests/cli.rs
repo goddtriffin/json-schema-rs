@@ -5222,3 +5222,134 @@ fn cli_bundle_rejects_both_schema_forms() {
     let expected: (i32, String) = (2, String::new());
     assert_eq!(expected, actual);
 }
+
+// --- dereference ---
+
+/// Runs `jsonschemars dereference <args>` from `cwd`; returns its exit code, stdout and stderr.
+fn cli_dereference_from(cwd: &Path, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(jsonschemars_bin())
+        .current_dir(cwd)
+        .arg("dereference")
+        .args(args)
+        .output()
+        .expect("run jsonschemars");
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// [`ORDER_REFS_CUSTOMER`] with `customer.json` in place of its reference.
+const ORDER_DEREFERENCED: &str = r#"{
+  "properties": {
+    "customer": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Customer",
+      "type": "object"
+    }
+  },
+  "required": [
+    "customer"
+  ],
+  "title": "Order",
+  "type": "object"
+}
+"#;
+
+#[test]
+fn cli_dereference_inlines_a_sibling_file_and_prints_to_stdout() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let actual: (i32, String, String) = cli_dereference_from(&path, &["-s", "order.json"]);
+    let expected: (i32, String, String) = (0, ORDER_DEREFERENCED.to_string(), String::new());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_dereference_writes_the_output_file() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_REFS_CUSTOMER),
+        ("customer.json", CUSTOMER),
+    ]);
+    let (code, stdout, stderr): (i32, String, String) =
+        cli_dereference_from(&path, &["order.json", "-o", "out.json"]);
+    let written: String = fs::read_to_string(path.join("out.json")).expect("read output");
+    let actual: (i32, String, String, String) = (code, stdout, stderr, written);
+    let expected: (i32, String, String, String) = (
+        0,
+        String::new(),
+        String::new(),
+        ORDER_DEREFERENCED.to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_dereference_inlines_a_resource_reached_by_its_root_id() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        ("order.json", ORDER_WITH_ID),
+        ("vendored-customer.json", CUSTOMER_WITH_ID),
+    ]);
+    let actual: (i32, String, String) =
+        cli_dereference_from(&path, &["-s", "order.json", "-r", "vendored-customer.json"]);
+    let expected: (i32, String, String) = (
+        0,
+        r#"{
+  "$id": "https://example.com/schemas/order.json",
+  "properties": {
+    "customer": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "customer"
+  ],
+  "type": "object"
+}
+"#
+        .to_string(),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn cli_dereference_reports_a_reference_into_another_dialect_with_no_output() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        (
+            "order.json",
+            r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://example.com/schemas/order.json","properties":{"customer":{"$ref":"customer.json"}}}"#,
+        ),
+        (
+            "vendored-customer.json",
+            r#"{"$schema":"http://json-schema.org/draft-07/schema#","$id":"https://example.com/schemas/customer.json","type":"object"}"#,
+        ),
+    ]);
+    let actual: (i32, String, String) =
+        cli_dereference_from(&path, &["-s", "order.json", "-r", "vendored-customer.json"]);
+    let expected: (i32, String, String) = (
+        2,
+        String::new(),
+        "error: failed to build the dereferenced schema: https://example.com/schemas/customer.json#: this schema's dialect differs from the root's, so it cannot be inlined (bundle the schema instead)\n"
+            .to_string(),
+    );
+    assert_eq!(expected, actual);
+}

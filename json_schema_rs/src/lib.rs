@@ -28,13 +28,13 @@ pub use json_pointer::{JsonPointer, JsonPointerError};
 #[cfg(feature = "http")]
 pub use json_schema::HttpRetriever;
 pub use json_schema::{
-    ContentMode, Dialect, DialectSettings, DialectWarning, ExclusiveBounds, FileRetriever,
-    FormatMode, IntegerSemantics, JsonSchema, JsonSchemaParseError, JsonSchemaParseErrors,
-    JsonSchemaParseResult, JsonSchemaSettings, JsonSchemaSettingsBuilder, JsonType, Keyword,
-    MetaschemaCheck, OfflineRetriever, RefSiblings, Registry, RegistryBuilder, RegistryError,
-    RegistryErrors, Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema, SchemaRef, Scope,
-    SpecVersion, SubschemaPosition, TypeSet, UnknownFormats, UnknownJsonType, UnknownRef,
-    UnknownSchemaUri, Vocabulary, VocabularyKind, VocabularySet, file_path, file_uri,
+    ContentMode, DereferenceError, Dialect, DialectSettings, DialectWarning, ExclusiveBounds,
+    FileRetriever, FormatMode, IntegerSemantics, JsonSchema, JsonSchemaParseError,
+    JsonSchemaParseErrors, JsonSchemaParseResult, JsonSchemaSettings, JsonSchemaSettingsBuilder,
+    JsonType, Keyword, MetaschemaCheck, OfflineRetriever, RefSiblings, Registry, RegistryBuilder,
+    RegistryError, RegistryErrors, Resolved, ResolvedDialect, Retrieve, RetrieveError, Schema,
+    SchemaRef, Scope, SpecVersion, SubschemaPosition, TypeSet, UnknownFormats, UnknownJsonType,
+    UnknownRef, UnknownSchemaUri, Vocabulary, VocabularyKind, VocabularySet, file_path, file_uri,
     resolve_dialect,
 };
 pub use nullable::Nullable;

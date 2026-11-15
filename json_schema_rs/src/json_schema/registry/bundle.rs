@@ -395,7 +395,7 @@ fn push_subschemas<'v>(
 /// keeps both), and under [`ExclusiveBounds::BooleanModifier`] a numeric `exclusiveMinimum`
 /// without `minimum` becomes `minimum` with `exclusiveMinimum: true` (likewise for
 /// `exclusiveMaximum`). Iterative.
-fn restore_draft4_shapes(value: &mut Value, dialect: Dialect) {
+pub(super) fn restore_draft4_shapes(value: &mut Value, dialect: Dialect) {
     let legacy_id: bool = dialect.id_keyword() == "id";
     let boolean_bounds: bool = dialect.exclusive_bounds == ExclusiveBounds::BooleanModifier;
     if !legacy_id && !boolean_bounds {

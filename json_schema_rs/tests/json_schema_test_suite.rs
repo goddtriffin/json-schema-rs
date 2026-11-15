@@ -16,15 +16,18 @@
 //! draft: a schema without `$schema` uses it, one with `$schema` follows that (so a custom
 //! metaschema is found through the registry). The group's schema is compiled once and every
 //! test runs in both modes, [`CompiledSchema::validate`] and [`CompiledSchema::is_valid`]; a
-//! case whose two verdicts differ fails, whatever the manifest says.
+//! case whose two verdicts differ fails, whatever the manifest says. The group's schema is also
+//! dereferenced ([`Registry::dereference`]) and the result compiled: a case whose verdict on the
+//! dereferenced schema differs fails too, whatever the manifest says. A schema that cannot be
+//! dereferenced (one reaching another dialect) skips that check.
 //!
 //! The suite must be cloned at `research/json-schema-test-suite/` (`make vendor_test_suite`);
 //! the run hard-fails when it is missing. `make update_suite_xfail` rewrites both manifests from
 //! the current results (sets `JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE=1`, once per build).
 
 use json_schema_rs::{
-    CompiledSchema, FormatMode, JsonSchemaSettings, Registry, Schema, SpecVersion, ValidateError,
-    ValidationError, validate,
+    CompiledSchema, DereferenceError, FormatMode, JsonSchemaSettings, Registry, Schema,
+    SpecVersion, ValidateError, ValidationError, validate,
 };
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
@@ -207,6 +210,46 @@ fn run_test(schema: &Schema, compiled: Option<&CompiledSchema>, test: &SuiteTest
     }
 }
 
+/// A group's schema after [`Registry::dereference`].
+enum Dereferenced {
+    /// The dereferenced schema, compiled.
+    Compiled(Box<CompiledSchema>),
+    /// The schema reaches another dialect, which dereferencing reports instead of inlining.
+    Skipped,
+    /// Dereferencing failed otherwise, or its output is not a usable schema.
+    Unusable(String),
+}
+
+/// Dereferences the schema of `registry` and compiles the result with the same remotes and
+/// settings.
+fn dereference(
+    registry: &Registry<'_>,
+    remotes: &HashMap<String, serde_json::Value>,
+    settings: &JsonSchemaSettings,
+) -> Dereferenced {
+    let value: serde_json::Value = match registry.dereference() {
+        Ok(value) => value,
+        Err(DereferenceError::MixedDialects { .. }) => return Dereferenced::Skipped,
+        Err(error) => return Dereferenced::Unusable(format!("dereference failed: {error}")),
+    };
+    let compiled: Result<CompiledSchema, String> = Schema::new_from_serde_value(&value, settings)
+        .map_err(|e| e.to_string())
+        .and_then(|schema: Schema| {
+            let registry: Registry<'_> = Registry::builder()
+                .retriever(remotes)
+                .settings(settings.clone())
+                .build(&schema)
+                .map_err(|e| e.to_string())?;
+            CompiledSchema::new(&registry).map_err(|e| e.to_string())
+        });
+    match compiled {
+        Ok(compiled) => Dereferenced::Compiled(Box::new(compiled)),
+        Err(error) => {
+            Dereferenced::Unusable(format!("the dereferenced schema is unusable: {error}"))
+        }
+    }
+}
+
 /// Evaluates every test in every draft. Errors are reasons the suite itself is unusable.
 fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
     let tests_dir: PathBuf = root.join("tests");
@@ -256,22 +299,44 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
                     Ok(Err(e)) => Err(format!("schema not supported: {e}")),
                     Err(_) => Err("schema parser panicked".to_string()),
                 };
-                let compiled: Option<CompiledSchema> = schema.as_ref().ok().and_then(|schema| {
-                    catch_unwind(AssertUnwindSafe(|| {
-                        let registry: Registry<'_> = Registry::builder()
-                            .retriever(&remotes)
-                            .settings(settings.clone())
-                            .build(schema)
-                            .ok()?;
-                        CompiledSchema::new(&registry).ok()
-                    }))
-                    .ok()
-                    .flatten()
-                });
+                let compiled: Option<(CompiledSchema, Dereferenced)> =
+                    schema.as_ref().ok().and_then(|schema| {
+                        catch_unwind(AssertUnwindSafe(|| {
+                            let registry: Registry<'_> = Registry::builder()
+                                .retriever(&remotes)
+                                .settings(settings.clone())
+                                .build(schema)
+                                .ok()?;
+                            let compiled: CompiledSchema = CompiledSchema::new(&registry).ok()?;
+                            Some((compiled, dereference(&registry, &remotes, settings)))
+                        }))
+                        .ok()
+                        .flatten()
+                    });
                 for test in group.tests {
-                    let outcome: Outcome = match &schema {
-                        Ok(schema) => run_test(schema, compiled.as_ref(), &test),
-                        Err(reason) => Outcome::Failed(reason.clone()),
+                    let outcome: Outcome = match (&schema, &compiled) {
+                        (Ok(schema), None) => run_test(schema, None, &test),
+                        (Ok(schema), Some((compiled, dereferenced))) => {
+                            match run_test(schema, Some(compiled), &test) {
+                                Outcome::Mismatch(reason) => Outcome::Mismatch(reason),
+                                outcome => match dereferenced {
+                                    Dereferenced::Compiled(dereferenced)
+                                        if dereferenced.is_valid(&test.data)
+                                            != compiled.is_valid(&test.data) =>
+                                    {
+                                        Outcome::Mismatch(
+                                            "the dereferenced schema gives another verdict"
+                                                .to_string(),
+                                        )
+                                    }
+                                    Dereferenced::Unusable(reason) => {
+                                        Outcome::Mismatch(reason.clone())
+                                    }
+                                    _ => outcome,
+                                },
+                            }
+                        }
+                        (Err(reason), _) => Outcome::Failed(reason.clone()),
                     };
                     cases.push(Case {
                         key: CaseKey {

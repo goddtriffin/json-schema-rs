@@ -19,8 +19,8 @@ pub use error::{JsonSchemaParseError, JsonSchemaParseErrors, JsonSchemaParseResu
 pub use json_schema::{JsonSchema, Schema, SchemaRef};
 pub(crate) use registry::RegistryDocumentKind;
 pub use registry::{
-    DEFAULT_BASE_URI, OfflineRetriever, Registry, RegistryBuilder, RegistryError, RegistryErrors,
-    Resolved, Retrieve, RetrieveError, Scope, UnknownRef,
+    DEFAULT_BASE_URI, DereferenceError, OfflineRetriever, Registry, RegistryBuilder, RegistryError,
+    RegistryErrors, Resolved, Retrieve, RetrieveError, Scope, UnknownRef,
 };
 #[cfg(feature = "http")]
 pub use retrievers::HttpRetriever;
