@@ -44,7 +44,7 @@ pub use reverse_code_gen::{
 };
 pub use validated::Validated;
 pub use validator::{
-    BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder,
+    BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, CustomKeyword,
     EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError, FlagOutput,
     NewtypeValue, Output, OutputFormat, OutputUnit, SchemaError, TypeValidationError,
     TypeValidators, UnionMatch, UnionVariants, ValidateError, ValidationError, ValidationErrorKind,

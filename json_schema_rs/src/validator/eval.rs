@@ -18,8 +18,9 @@
 //! evaluated again in the collect mode, only to attach their errors as the failure's causes.
 
 use super::compiled::{
-    CompiledSchema, Contains, DynamicRef, EnumId, EnumList, Keyword, KnownProperties, Kw, Node,
-    NodeId, Pattern, Pick, PrefixItems, RegexId, Required, Union, UserFormat, UserFormatId,
+    CompiledCustomKeyword, CompiledSchema, Contains, CustomKeywordId, DynamicRef, EnumId, EnumList,
+    Keyword, KnownProperties, Kw, Node, NodeId, Pattern, Pick, PrefixItems, RegexId, Required,
+    Union, UserFormat, UserFormatId,
 };
 use super::content::{Content, ContentFailure};
 use super::error::{ValidationError, ValidationErrorKind, ValidationResult};
@@ -462,12 +463,22 @@ impl CompiledSchema {
         keyword: Option<Kw>,
         kind: ValidationErrorKind,
     ) -> ValidationError {
+        self.error_at_keyword(location, keyword.map(Kw::as_str), kind)
+    }
+
+    /// [`error_at`](Self::error_at) for a keyword named by its string (a custom keyword).
+    fn error_at_keyword(
+        &self,
+        location: &Location<'_>,
+        keyword: Option<&str>,
+        kind: ValidationErrorKind,
+    ) -> ValidationError {
         // Segments leaf first; `after_ref` is how many were collected when the nearest
         // reference was reached, and its target.
         let mut segments: Vec<Cow<'_, str>> = Vec::with_capacity(16);
         let mut after_ref: Option<(usize, NodeId)> = None;
         if let Some(keyword) = keyword {
-            segments.push(Cow::Borrowed(keyword.as_str()));
+            segments.push(Cow::Borrowed(keyword));
         }
         let mut cursor: Option<&Location<'_>> = Some(location);
         while let Some(frame) = cursor {
@@ -698,6 +709,7 @@ impl CompiledSchema {
                 let format: &UserFormat = self.user_format(*id);
                 instances.all(|instance| format.check(instance))
             }
+            Keyword::Custom(id) => self.custom_leaf(*id, instances),
             _ => true,
         }
     }
@@ -787,6 +799,7 @@ impl CompiledSchema {
             (Keyword::UserFormat(id), instance) => {
                 self.user_format_check::<COLLECT>(*id, instance, at, cx)
             }
+            (Keyword::Custom(id), instance) => self.custom_check::<COLLECT>(*id, instance, at, cx),
             (
                 Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems,
                 Value::Array(items),
@@ -953,6 +966,60 @@ impl CompiledSchema {
                     value: instance.clone(),
                 }
             )
+    }
+
+    /// Whether each of `instances` passes custom keyword `id` (see
+    /// [`leaf_keyword`](Self::leaf_keyword)). Out of line, so the hot leaf check that every
+    /// leaf node runs keeps its size when no custom keyword is defined.
+    #[inline(never)]
+    fn custom_leaf<'v>(
+        &self,
+        id: CustomKeywordId,
+        mut instances: impl Iterator<Item = &'v Value>,
+    ) -> bool {
+        let custom: &CompiledCustomKeyword = self.custom_keyword(id);
+        instances.all(|instance| custom.keyword.is_valid(instance))
+    }
+
+    /// Checks a custom keyword: [`CustomKeyword::is_valid`](super::CustomKeyword::is_valid) in
+    /// the verdict mode, [`CustomKeyword::validate`](super::CustomKeyword::validate) in the
+    /// collect mode. Kept out of line like [`user_format_check`](Self::user_format_check).
+    #[inline(never)]
+    fn custom_check<const COLLECT: bool>(
+        &self,
+        id: CustomKeywordId,
+        instance: &Value,
+        at: At<'_, '_>,
+        cx: &mut Context,
+    ) -> bool {
+        let custom: &CompiledCustomKeyword = self.custom_keyword(id);
+        if !COLLECT {
+            return custom.keyword.is_valid(instance);
+        }
+        match custom.keyword.validate(instance) {
+            Ok(()) => true,
+            Err(message) => {
+                self.report_custom(&mut cx.errors, at.location, custom, message);
+                false
+            }
+        }
+    }
+
+    /// Records the error of a failing custom keyword (see [`report`](Self::report)).
+    #[cold]
+    #[inline(never)]
+    fn report_custom(
+        &self,
+        errors: &mut Vec<ValidationError>,
+        location: &Location<'_>,
+        custom: &CompiledCustomKeyword,
+        message: String,
+    ) {
+        let kind: ValidationErrorKind = ValidationErrorKind::Custom {
+            keyword: custom.name.to_string(),
+            message,
+        };
+        errors.push(self.error_at_keyword(location, Some(&custom.name), kind));
     }
 
     /// Evaluates a subschema at the same instance, entered through `location`; its

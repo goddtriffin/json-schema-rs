@@ -631,6 +631,8 @@ pub struct RegistryBuilder<'b> {
     settings: JsonSchemaSettings,
     /// Absolute URIs resolved as if written as `$ref` in the root resource.
     entries: Vec<String>,
+    /// See [`RegistryBuilder::vocabulary`].
+    vocabularies: Vec<String>,
 }
 
 impl fmt::Debug for RegistryBuilder<'_> {
@@ -648,6 +650,7 @@ impl fmt::Debug for RegistryBuilder<'_> {
             )
             .field("settings", &self.settings)
             .field("entries", &self.entries)
+            .field("vocabularies", &self.vocabularies)
             .finish_non_exhaustive()
     }
 }
@@ -661,6 +664,7 @@ impl Default for RegistryBuilder<'_> {
             retriever: Box::new(OfflineRetriever),
             settings: JsonSchemaSettings::default(),
             entries: Vec::new(),
+            vocabularies: Vec::new(),
         }
     }
 }
@@ -714,6 +718,17 @@ impl<'b> RegistryBuilder<'b> {
     #[must_use]
     pub fn settings(mut self, settings: JsonSchemaSettings) -> Self {
         self.settings = settings;
+        self
+    }
+
+    /// Declares the vocabulary `uri` known, so a custom metaschema whose `$vocabulary` requires
+    /// it is accepted rather than a [`RegistryError::UnsupportedVocabulary`]. Its keywords are
+    /// whatever custom keywords the validator is given
+    /// ([`CompiledSchemaBuilder::keyword`](crate::CompiledSchemaBuilder::keyword)). The URI is
+    /// compared exactly as written.
+    #[must_use]
+    pub fn vocabulary(mut self, uri: impl Into<String>) -> Self {
+        self.vocabularies.push(uri.into());
         self
     }
 
@@ -823,6 +838,8 @@ struct Builder<'a, 'b> {
     walks: Vec<Walk>,
     /// See [`RegistryBuilder::entry`].
     entries: Vec<String>,
+    /// See [`RegistryBuilder::vocabulary`].
+    vocabularies: Vec<String>,
 }
 
 impl<'a, 'b: 'a> Builder<'a, 'b> {
@@ -902,6 +919,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
             errors: Vec::new(),
             walks: Vec::new(),
             entries: options.entries,
+            vocabularies: options.vocabularies,
         })
     }
 
@@ -994,8 +1012,9 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
     }
 
     /// The dialect `$schema: uri` selects; `fallback` when absent or when a custom metaschema
-    /// cannot be loaded. A required vocabulary this library does not know is
-    /// [`RegistryError::UnsupportedVocabulary`]; the dialect is then built without it.
+    /// cannot be loaded. A required vocabulary neither this library nor
+    /// [`RegistryBuilder::vocabulary`] knows is [`RegistryError::UnsupportedVocabulary`]; the
+    /// dialect is then built without it.
     fn dialect_for_schema_uri(&mut self, uri: Option<&str>, fallback: Dialect) -> Dialect {
         let Some(uri) = uri else {
             return fallback;
@@ -1048,7 +1067,9 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
             for (vocabulary, required) in vocabularies {
                 match VocabularyKind::from_uri(vocabulary) {
                     Some(kind) => active.insert(kind),
-                    None if required.as_bool() == Some(true) => {
+                    None if required.as_bool() == Some(true)
+                        && !self.vocabularies.iter().any(|known| known == vocabulary) =>
+                    {
                         self.errors.push(RegistryError::UnsupportedVocabulary {
                             metaschema: meta_uri.to_string(),
                             vocabulary: vocabulary.clone(),

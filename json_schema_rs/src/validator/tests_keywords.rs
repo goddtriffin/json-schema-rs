@@ -5,13 +5,13 @@
 use super::ValidationErrorKind;
 use super::eval::DEPTH_LIMIT;
 use super::{
-    CompileError, CompileErrors, CompiledSchema, SchemaError, ValidateError, ValidationError,
-    ValidationResult, validate, validate_usable,
+    CompileError, CompileErrors, CompiledSchema, CustomKeyword, SchemaError, ValidateError,
+    ValidationError, ValidationResult, validate, validate_usable,
 };
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
-    ContentMode, FormatMode, JsonSchema, JsonSchemaSettings, RefSiblings, Registry, Schema,
-    SpecVersion, UnknownFormats,
+    ContentMode, FormatMode, JsonSchema, JsonSchemaSettings, RefSiblings, Registry, RegistryError,
+    RegistryErrors, Schema, SpecVersion, UnknownFormats,
 };
 use serde_json::{Number, Value, json};
 
@@ -4503,5 +4503,373 @@ fn discriminated_any_of_through_refs_accepts_the_picked_branch() {
     );
     let expected: ValidationResult = Ok(());
     let actual: ValidationResult = validate_usable(&schema, &json!({"kind": "a2", "n": 1}));
+    assert_eq!(expected, actual);
+}
+
+// --- Custom keywords ---
+
+/// `"maxDecimals": n`: a number has at most `n` digits after the decimal point.
+struct MaxDecimals(usize);
+
+impl CustomKeyword for MaxDecimals {
+    fn validate(&self, instance: &Value) -> Result<(), String> {
+        let Value::Number(n) = instance else {
+            return Ok(());
+        };
+        let text: String = n.to_string();
+        let decimals: usize = text.split_once('.').map_or(0, |(_, d)| d.len());
+        if decimals <= self.0 {
+            Ok(())
+        } else {
+            Err(format!("{n} has more than {} decimals", self.0))
+        }
+    }
+}
+
+/// Builds [`MaxDecimals`] from a non-negative integer.
+fn max_decimals(value: &Value) -> Result<Box<dyn CustomKeyword>, String> {
+    let n: u64 = value
+        .as_u64()
+        .ok_or_else(|| "expected a non-negative integer".to_string())?;
+    let n: usize = usize::try_from(n).map_err(|e| e.to_string())?;
+    Ok(Box::new(MaxDecimals(n)))
+}
+
+/// The result of compiling `schema` with the custom keyword `maxDecimals`.
+fn compile_with_max_decimals_result(schema: &JsonSchema) -> Result<CompiledSchema, CompileErrors> {
+    let registry: Registry<'_> = Registry::new(schema).expect("build registry");
+    CompiledSchema::builder()
+        .keyword("maxDecimals", max_decimals)
+        .build(&registry)
+}
+
+/// Compiles `schema` with the custom keyword `maxDecimals`.
+fn compile_with_max_decimals(schema: &JsonSchema) -> CompiledSchema {
+    compile_with_max_decimals_result(schema).expect("compile")
+}
+
+/// The custom keyword's error for `value` failing `"maxDecimals": max`.
+fn max_decimals_error(
+    value: &str,
+    max: usize,
+    instance: JsonPointer,
+    keyword: JsonPointer,
+) -> ValidationError {
+    ValidationError::new(
+        ValidationErrorKind::Custom {
+            keyword: "maxDecimals".to_string(),
+            message: format!("{value} has more than {max} decimals"),
+        },
+        instance,
+        keyword,
+    )
+}
+
+#[test]
+fn custom_keyword_accepts_satisfying_instance() {
+    let compiled: CompiledSchema = compile_with_max_decimals(&schema(r#"{"maxDecimals":2}"#));
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(1.25));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_rejects_instance_with_its_message_and_location() {
+    let compiled: CompiledSchema =
+        compile_with_max_decimals(&schema(r#"{"properties":{"a":{"maxDecimals":2}}}"#));
+    let expected: ValidationResult = Err(vec![max_decimals_error(
+        "1.125",
+        2,
+        ptr("/a"),
+        kl("/properties/a/maxDecimals"),
+    )]);
+    let actual: ValidationResult = compiled.validate(&json!({"a": 1.125}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_reports_every_failing_instance() {
+    let compiled: CompiledSchema =
+        compile_with_max_decimals(&schema(r#"{"items":{"maxDecimals":0}}"#));
+    let expected: ValidationResult = Err(vec![
+        max_decimals_error("1.5", 0, ptr("/0"), kl("/items/maxDecimals")),
+        max_decimals_error("2.5", 0, ptr("/2"), kl("/items/maxDecimals")),
+    ]);
+    let actual: ValidationResult = compiled.validate(&json!([1.5, 2, 2.5]));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_is_valid_matches_validate() {
+    let compiled: CompiledSchema =
+        compile_with_max_decimals(&schema(r#"{"items":{"maxDecimals":1}}"#));
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        compiled.is_valid(&json!([1.5, 2, 3.25e1])),
+        compiled.is_valid(&json!([1.5, 2.25])),
+    );
+    assert_eq!(expected, actual);
+}
+
+/// A branch a custom keyword rejects inside a valid instance leaves no error.
+#[test]
+fn custom_keyword_rejected_any_of_branch_leaves_instance_valid() {
+    let compiled: CompiledSchema = compile_with_max_decimals(&schema(
+        r#"{"anyOf":[{"maxDecimals":0},{"type":"number"}]}"#,
+    ));
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_under_not_inverts() {
+    let compiled: CompiledSchema =
+        compile_with_max_decimals(&schema(r#"{"not":{"maxDecimals":0}}"#));
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (compiled.is_valid(&json!(1.5)), compiled.is_valid(&json!(2)));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_runs_with_standard_siblings() {
+    let compiled: CompiledSchema =
+        compile_with_max_decimals(&schema(r#"{"minimum":10,"maxDecimals":0}"#));
+    let expected: ValidationResult = Err(vec![
+        ValidationError::new(
+            ValidationErrorKind::BelowMinimum {
+                minimum: Number::from(10),
+                actual: Number::from_f64(2.5).expect("finite"),
+            },
+            root(),
+            kl("/minimum"),
+        ),
+        max_decimals_error("2.5", 0, root(), kl("/maxDecimals")),
+    ]);
+    let actual: ValidationResult = compiled.validate(&json!(2.5));
+    assert_eq!(expected, actual);
+}
+
+/// Without a custom keyword registered, an unknown keyword is ignored, as the specification
+/// requires.
+#[test]
+fn unknown_keyword_is_ignored_without_custom_keyword() {
+    let compiled: CompiledSchema = compile(&schema(r#"{"maxDecimals":0}"#));
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+/// Drafts 4 to 7 ignore `$ref`'s siblings, custom keywords included.
+#[test]
+fn custom_keyword_beside_ref_is_ignored_in_draft7() {
+    let compiled: CompiledSchema = compile_with_max_decimals(&schema_in(
+        r##"{"definitions":{"n":{"type":"number"}},"$ref":"#/definitions/n","maxDecimals":0}"##,
+        SpecVersion::Draft07,
+    ));
+    let expected: ValidationResult = Ok(());
+    let actual: ValidationResult = compiled.validate(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_beside_ref_runs_in_2020_12() {
+    let compiled: CompiledSchema = compile_with_max_decimals(&schema(
+        r##"{"$defs":{"n":{"type":"number"}},"$ref":"#/$defs/n","maxDecimals":0}"##,
+    ));
+    let expected: ValidationResult = Err(vec![max_decimals_error(
+        "1.5",
+        0,
+        root(),
+        kl("/maxDecimals"),
+    )]);
+    let actual: ValidationResult = compiled.validate(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_runs_in_draft4() {
+    let compiled: CompiledSchema =
+        compile_with_max_decimals(&schema_in(r#"{"maxDecimals":0}"#, SpecVersion::Draft04));
+    let expected: bool = false;
+    let actual: bool = compiled.is_valid(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_invalid_value_is_compile_error() {
+    let actual: Result<(), CompileErrors> =
+        compile_with_max_decimals_result(&schema(r#"{"properties":{"a":{"maxDecimals":"two"}}}"#))
+            .map(|_| ());
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::InvalidCustomKeyword {
+            location: "/properties/a".to_string(),
+            keyword: "maxDecimals".to_string(),
+            reason: "expected a non-negative integer".to_string(),
+        }));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_invalid_value_display() {
+    let error: CompileError = CompileError::InvalidCustomKeyword {
+        location: "/properties/a".to_string(),
+        keyword: "maxDecimals".to_string(),
+        reason: "expected a non-negative integer".to_string(),
+    };
+    let expected: &str = r#"/properties/a: invalid "maxDecimals": expected a non-negative integer"#;
+    let actual: String = error.to_string();
+    assert_eq!(expected, actual);
+}
+
+/// `const` is a keyword of draft 6 onwards, so it cannot be custom even in draft 4.
+#[test]
+fn custom_keyword_with_standard_name_is_compile_error() {
+    let schema: JsonSchema = schema_in(r#"{"const":1}"#, SpecVersion::Draft04);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let actual: Result<(), CompileErrors> = CompiledSchema::builder()
+        .keyword("const", max_decimals)
+        .build(&registry)
+        .map(|_| ());
+    let expected: Result<(), CompileErrors> =
+        Err(CompileErrors::new(CompileError::StandardKeywordName {
+            keyword: "const".to_string(),
+        }));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_with_standard_name_display() {
+    let error: CompileError = CompileError::StandardKeywordName {
+        keyword: "const".to_string(),
+    };
+    let expected: &str = r#"custom keyword "const" is a standard JSON Schema keyword"#;
+    let actual: String = error.to_string();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_defined_twice_keeps_last_factory() {
+    let schema: JsonSchema = schema(r#"{"maxDecimals":0}"#);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let compiled: CompiledSchema = CompiledSchema::builder()
+        .keyword(
+            "maxDecimals",
+            |_: &Value| -> Result<Box<dyn CustomKeyword>, String> {
+                Err("first factory".to_string())
+            },
+        )
+        .keyword("maxDecimals", max_decimals)
+        .build(&registry)
+        .expect("compile");
+    let expected: bool = false;
+    let actual: bool = compiled.is_valid(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+/// A custom keyword that only implements `validate` and one that overrides `is_valid` agree.
+#[test]
+fn custom_keyword_overridden_is_valid_is_used_by_is_valid() {
+    struct Never;
+    impl CustomKeyword for Never {
+        fn validate(&self, _: &Value) -> Result<(), String> {
+            Err("never".to_string())
+        }
+        fn is_valid(&self, _: &Value) -> bool {
+            false
+        }
+    }
+    let schema: JsonSchema = schema(r#"{"never":true}"#);
+    let registry: Registry<'_> = Registry::new(&schema).expect("build registry");
+    let compiled: CompiledSchema = CompiledSchema::builder()
+        .keyword(
+            "never",
+            |_: &Value| -> Result<Box<dyn CustomKeyword>, String> { Ok(Box::new(Never)) },
+        )
+        .build(&registry)
+        .expect("compile");
+    let expected: (bool, ValidationResult) = (
+        false,
+        Err(vec![ValidationError::new(
+            ValidationErrorKind::Custom {
+                keyword: "never".to_string(),
+                message: "never".to_string(),
+            },
+            root(),
+            kl("/never"),
+        )]),
+    );
+    let actual: (bool, ValidationResult) =
+        (compiled.is_valid(&json!(1)), compiled.validate(&json!(1)));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_keyword_error_display_is_its_message() {
+    let kind: ValidationErrorKind = ValidationErrorKind::Custom {
+        keyword: "maxDecimals".to_string(),
+        message: "1.125 has more than 2 decimals".to_string(),
+    };
+    let expected: &str = "1.125 has more than 2 decimals";
+    let actual: String = kind.to_string();
+    assert_eq!(expected, actual);
+}
+
+/// The metaschema of a custom vocabulary, requiring `vocabulary`.
+fn custom_vocabulary_metaschema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://ex.com/meta",
+        "$vocabulary": {
+            "https://json-schema.org/draft/2020-12/vocab/core": true,
+            "https://json-schema.org/draft/2020-12/vocab/validation": true,
+            "https://ex.com/vocab/decimals": true
+        }
+    })
+}
+
+#[test]
+fn custom_vocabulary_declared_runs_its_keyword() {
+    let schema: JsonSchema = schema(r#"{"$schema":"https://ex.com/meta","maxDecimals":0}"#);
+    let registry: Registry<'_> = Registry::builder()
+        .document("https://ex.com/meta", custom_vocabulary_metaschema())
+        .vocabulary("https://ex.com/vocab/decimals")
+        .build(&schema)
+        .expect("build registry");
+    let compiled: CompiledSchema = CompiledSchema::builder()
+        .keyword("maxDecimals", max_decimals)
+        .build(&registry)
+        .expect("compile");
+    let expected: bool = false;
+    let actual: bool = compiled.is_valid(&json!(1.5));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn custom_vocabulary_undeclared_is_unsupported() {
+    let schema: JsonSchema = schema(r#"{"$schema":"https://ex.com/meta","maxDecimals":0}"#);
+    let actual: Result<(), RegistryErrors> = Registry::builder()
+        .document("https://ex.com/meta", custom_vocabulary_metaschema())
+        .build(&schema)
+        .map(|_| ());
+    let expected: Result<(), RegistryErrors> =
+        Err(RegistryErrors::new(RegistryError::UnsupportedVocabulary {
+            metaschema: "https://ex.com/meta".to_string(),
+            vocabulary: "https://ex.com/vocab/decimals".to_string(),
+        }));
+    assert_eq!(expected, actual);
+}
+
+/// Two schema objects with the same custom keyword and value compile to equal validation.
+#[test]
+fn custom_keyword_same_value_is_same_validation() {
+    let a: CompiledSchema = compile_with_max_decimals(&schema(r#"{"maxDecimals":1}"#));
+    let b: CompiledSchema = compile_with_max_decimals(&schema(r#"{"maxDecimals":1}"#));
+    let c: CompiledSchema = compile_with_max_decimals(&schema(r#"{"maxDecimals":2}"#));
+    let expected: (bool, bool) = (true, false);
+    let actual: (bool, bool) = (
+        a.same_validation(&b, str::to_string),
+        a.same_validation(&c, str::to_string),
+    );
     assert_eq!(expected, actual);
 }
