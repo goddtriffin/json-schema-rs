@@ -309,6 +309,13 @@ pub fn run() {
                         .value_parser(clap::value_parser!(usize))
                         .help("How deeply evaluation may nest subschemas before the instance fails; at most the built-in stack guard (default: the guard, 2048 levels in a release build)"),
                 )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .value_name("FORMAT")
+                        .value_parser(["flag", "basic", "detailed", "verbose"])
+                        .help("Print the result to stdout as JSON in a standard output format (2020-12 core §12): flag = the verdict; basic = a flat list of errors, or of the annotations of a valid payload; detailed = the same nested by schema structure; verbose = every subschema evaluated (default: one line per error on stderr)"),
+                )
                 .args(jss_args())
                 .args(retrieval::retrieval_args()),
         );
@@ -363,6 +370,7 @@ pub fn run() {
                     &schema_settings,
                     &retrieval,
                     &compile,
+                    validate::output_format(val_m),
                 )
             })
         }

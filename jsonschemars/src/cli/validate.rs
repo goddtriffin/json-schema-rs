@@ -5,7 +5,11 @@
 //! any other document a `$ref` names is retrieved from inside `--file-root` (or over HTTP with
 //! `--allow-remote-refs`).
 //!
-//! Exit codes: `0` the payload conforms; `1` the payload does not conform (one line per error);
+//! With `--output FORMAT`, the result is printed to stdout as JSON in that standard output
+//! format (2020-12 core §12), annotations included for `basic`, `detailed` and `verbose`;
+//! otherwise each error is one line on stderr.
+//!
+//! Exit codes: `0` the payload conforms; `1` the payload does not conform;
 //! `2` no verdict could be reached: a schema document or the payload could not be read or
 //! parsed (one `error:` line per problem), or the schema cannot be used (one `schema error:`
 //! line per problem).
@@ -20,8 +24,8 @@ use clap::ArgMatches;
 #[cfg(feature = "linear-regex")]
 use json_schema_rs::RegexEngine;
 use json_schema_rs::{
-    CompiledSchema, CompiledSchemaBuilder, JsonSchemaSettings, Registry, RegistryBuilder, Schema,
-    file_uri,
+    CompiledSchema, CompiledSchemaBuilder, JsonSchemaSettings, Output, OutputFormat, Registry,
+    RegistryBuilder, Schema, file_uri,
 };
 use std::fmt;
 use std::io;
@@ -126,8 +130,11 @@ fn read_documents(
     )
 )]
 pub(crate) fn compile_options(matches: &ArgMatches) -> Result<CompiledSchemaBuilder, CliFailure> {
-    let builder: CompiledSchemaBuilder =
-        CompiledSchema::builder().max_depth(matches.get_one::<usize>("max-depth").copied());
+    // Every format but `flag` reports the annotations of a valid payload.
+    let annotations: bool = output_format(matches).is_some_and(|f| f != OutputFormat::Flag);
+    let builder: CompiledSchemaBuilder = CompiledSchema::builder()
+        .max_depth(matches.get_one::<usize>("max-depth").copied())
+        .annotations(annotations);
     let engine: Option<&str> = matches
         .get_one::<String>("regex-engine")
         .map(String::as_str);
@@ -152,6 +159,18 @@ pub(crate) fn compile_options(matches: &ArgMatches) -> Result<CompiledSchemaBuil
     }
 }
 
+/// The format `--output` names, if any.
+pub(crate) fn output_format(matches: &ArgMatches) -> Option<OutputFormat> {
+    matches
+        .get_one::<String>("output")
+        .map(|format| match format.as_str() {
+            "flag" => OutputFormat::Flag,
+            "basic" => OutputFormat::Basic,
+            "detailed" => OutputFormat::Detailed,
+            _ => OutputFormat::Verbose,
+        })
+}
+
 pub(crate) fn run_validate(
     schema_path: &PathBuf,
     payload_path: Option<PathBuf>,
@@ -159,6 +178,7 @@ pub(crate) fn run_validate(
     schema_settings: &JsonSchemaSettings,
     retrieval: &RefRetrieval,
     compile: &CompiledSchemaBuilder,
+    output: Option<OutputFormat>,
 ) -> Result<(), CliFailure> {
     let (schema, resources): (Document, Vec<Document>) =
         read_documents(schema_path, resource_paths, schema_settings)?;
@@ -187,6 +207,20 @@ pub(crate) fn run_validate(
     let compiled: CompiledSchema = compile
         .build(&registry)
         .map_err(|errors| schema_problems(errors.iter()))?;
+    if let Some(format) = output {
+        let output: Output = compiled.evaluate(&instance, format);
+        let json: String = serde_json::to_string_pretty(&output)
+            .map_err(|e| no_verdict(format!("failed to serialize the output: {e}")))?;
+        println!("{json}");
+        return if output.is_valid() {
+            Ok(())
+        } else {
+            Err(CliFailure {
+                message: "validation failed".to_string(),
+                exit_code: EXIT_INVALID,
+            })
+        };
+    }
     match compiled.validate(&instance) {
         Ok(()) => Ok(()),
         Err(errors) => {

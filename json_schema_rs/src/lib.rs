@@ -46,9 +46,9 @@ pub use validated::Validated;
 #[cfg(feature = "linear-regex")]
 pub use validator::RegexEngine;
 pub use validator::{
-    BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder, CustomKeyword,
-    EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind, EmbeddedSchemaError, FlagOutput,
-    NewtypeValue, Output, OutputFormat, OutputUnit, SchemaError, TypeValidationError,
-    TypeValidators, UnionMatch, UnionVariants, ValidateError, ValidationError, ValidationErrorKind,
-    ValidationResult, validate,
+    Annotation, BasicOutput, CompileError, CompileErrors, CompiledSchema, CompiledSchemaBuilder,
+    CustomKeyword, EmbeddedDocument, EmbeddedDocumentError, EmbeddedDocumentKind,
+    EmbeddedSchemaError, FlagOutput, NewtypeValue, Output, OutputFormat, OutputUnit, SchemaError,
+    TypeValidationError, TypeValidators, UnionMatch, UnionVariants, ValidateError, ValidationError,
+    ValidationErrorKind, ValidationResult, validate,
 };

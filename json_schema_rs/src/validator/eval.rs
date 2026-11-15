@@ -1,10 +1,12 @@
 //! Evaluates a [`CompiledSchema`] against an instance.
 //!
-//! One evaluator serves two modes, chosen by the `COLLECT` const parameter: the verdict mode
+//! One evaluator serves three modes, chosen by its [`Mode`] type parameter: the verdict mode
 //! (`is_valid`) stops at the first failing keyword and allocates nothing for errors; the collect
-//! mode (`validate`) evaluates every keyword and records one [`ValidationError`] per problem.
-//! Combinator branches (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) always run in
-//! the verdict mode, since only their outcome matters.
+//! mode (`validate`) evaluates every keyword and records one [`ValidationError`] per problem;
+//! the trace mode (annotations and the `verbose` output) evaluates everything and records every
+//! subschema, error and annotation in a tree. Combinator branches (`anyOf`, `oneOf`, `not`,
+//! `if`, `contains`, `propertyNames`) run in the verdict mode, since only their outcome matters,
+//! except in the trace, which records them too.
 //!
 //! The evaluator recurses (one native frame group per nested schema), guarded by a depth limit
 //! that returns [`ValidationErrorKind::DepthLimitExceeded`] before the stack can overflow. An
@@ -242,6 +244,120 @@ struct Context {
     /// and the result is that one error: a branch cut short by the guard must not read as a
     /// branch that failed (which would make `not` pass, or `anyOf` report a mismatch).
     depth_exceeded: Option<ValidationError>,
+    /// The trace mode's record, made on its first unit (`None` in the other modes, so their
+    /// contexts stay a pointer larger than without the trace).
+    trace: Option<Box<TraceRecord>>,
+}
+
+impl Context {
+    /// The trace mode's record.
+    fn trace(&mut self) -> &mut TraceRecord {
+        self.trace.get_or_insert_default()
+    }
+
+    /// Records `error`: in the trace under the subschema being evaluated in the trace mode, in
+    /// the error list otherwise.
+    fn record<M: Mode>(&mut self, error: ValidationError) {
+        if M::TRACE {
+            let trace: &mut TraceRecord = self.trace();
+            let parent: Option<usize> = trace.current;
+            trace.units.push(TraceUnit {
+                parent,
+                kind: TraceKind::Error(error),
+            });
+        } else {
+            self.errors.push(error);
+        }
+    }
+}
+
+/// How an evaluation runs. Each mode is its own monomorphization of the evaluator, so the checks
+/// one mode does cost the others nothing.
+pub(crate) trait Mode {
+    /// Whether errors are collected into the error list ([`CompiledSchema::validate`]).
+    const COLLECT: bool;
+    /// Whether every subschema, error and annotation is recorded in the trace, the source of the
+    /// annotations and of the `verbose` output.
+    const TRACE: bool;
+    /// Whether every keyword is evaluated (no stop at the first failure).
+    const ALL: bool = Self::COLLECT || Self::TRACE;
+    /// The mode a combinator's branches run in, where only their outcome counts: the verdict
+    /// mode, except in the trace, which records the branches too.
+    type Branch: Mode;
+}
+
+/// [`CompiledSchema::is_valid`]: stops at the first failure and records nothing.
+pub(crate) struct Verdict;
+
+/// [`CompiledSchema::validate`]: collects every error.
+pub(crate) struct Collect;
+
+/// The trace: evaluates everything and records every subschema, error and annotation.
+pub(crate) struct Trace;
+
+impl Mode for Verdict {
+    const COLLECT: bool = false;
+    const TRACE: bool = false;
+    type Branch = Verdict;
+}
+
+impl Mode for Collect {
+    const COLLECT: bool = true;
+    const TRACE: bool = false;
+    type Branch = Verdict;
+}
+
+impl Mode for Trace {
+    const COLLECT: bool = false;
+    const TRACE: bool = true;
+    type Branch = Trace;
+}
+
+/// What the trace mode records: every subschema evaluated, each error and each annotation, in
+/// evaluation order, each unit after its parent.
+#[derive(Debug, Default)]
+pub(crate) struct TraceRecord {
+    pub(crate) units: Vec<TraceUnit>,
+    /// The subschema unit being evaluated.
+    current: Option<usize>,
+}
+
+/// One unit of the trace, under the subschema unit `parent` (`None` for the root).
+#[derive(Debug)]
+pub(crate) struct TraceUnit {
+    pub(crate) parent: Option<usize>,
+    pub(crate) kind: TraceKind,
+}
+
+#[derive(Debug)]
+pub(crate) enum TraceKind {
+    /// A subschema evaluated at an instance location, and whether it passed. Annotations under a
+    /// subschema that does not `annotate` (one `propertyNames` applies to a name) are dropped.
+    Subschema {
+        valid: bool,
+        annotates: bool,
+        locations: UnitLocations,
+    },
+    /// An error of a keyword of the parent subschema.
+    Error(ValidationError),
+    /// An annotation of a keyword of the parent subschema.
+    Annotation {
+        keyword: Box<str>,
+        value: Value,
+        locations: UnitLocations,
+    },
+}
+
+/// Where a unit sits: the locations of its keyword (or of its subschema).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the names of the output format's fields and of `ValidationError`'s"
+)]
+pub(crate) struct UnitLocations {
+    pub(crate) instance_location: JsonPointer,
+    pub(crate) keyword_location: JsonPointer,
+    pub(crate) absolute_keyword_location: Option<String>,
 }
 
 /// Returns the JSON type name of the value for use in "got" error messages.
@@ -318,26 +434,26 @@ fn contains_all_names(object: &Map<String, Value>, names: &[Box<str>]) -> bool {
     true
 }
 
-/// Records, in collect mode, the error `$kind` of the keyword `$keyword` evaluated at
-/// `$location`, and evaluates to `false` (the keyword failed).
+/// Records, in the collect and trace modes, the error `$kind` of the keyword `$keyword`
+/// evaluated at `$location`, and evaluates to `false` (the keyword failed).
 macro_rules! fail {
-    ($collect:expr, $this:expr, $cx:expr, $location:expr, $keyword:expr, $kind:expr) => {{
-        if $collect {
-            $this.report(&mut $cx.errors, $location, Some($keyword), || $kind);
+    ($mode:ident, $this:expr, $cx:expr, $location:expr, $keyword:expr, $kind:expr) => {{
+        if $mode::ALL {
+            $this.report::<$mode>($cx, $location, Some($keyword), || $kind);
         }
         false
     }};
 }
 
 /// Runs `$check` for each of a keyword's parts; a failure stops the loop in verdict mode and
-/// is remembered in collect mode. Evaluates to whether every part passed.
+/// is remembered in the collect and trace modes. Evaluates to whether every part passed.
 macro_rules! each {
-    ($collect:expr, $iter:expr, |$item:pat_param| $check:expr) => {{
+    ($mode:ident, $iter:expr, |$item:pat_param| $check:expr) => {{
         let mut valid: bool = true;
         for $item in $iter {
             if !$check {
                 valid = false;
-                if !$collect {
+                if !$mode::ALL {
                     break;
                 }
             }
@@ -360,7 +476,7 @@ impl CompiledSchema {
     #[must_use]
     pub fn is_valid(&self, instance: &Value) -> bool {
         let mut cx: Context = self.context();
-        self.eval::<false>(self.root, instance, &Location::ROOT, &mut cx, None)
+        self.eval::<Verdict>(self.root, instance, &Location::ROOT, &mut cx, None)
             && cx.depth_exceeded.is_none()
     }
 
@@ -370,7 +486,7 @@ impl CompiledSchema {
     pub(crate) fn is_valid_at(&self, nodes: &[NodeId], instance: &Value) -> bool {
         let mut cx: Context = self.context();
         nodes.iter().all(|id| {
-            self.eval::<false>(*id, instance, &Location::ROOT, &mut cx, None)
+            self.eval::<Verdict>(*id, instance, &Location::ROOT, &mut cx, None)
                 && cx.depth_exceeded.is_none()
         })
     }
@@ -388,6 +504,15 @@ impl CompiledSchema {
         }
     }
 
+    /// Evaluates `instance` in the trace mode: its verdict, the trace, and the depth guard's
+    /// error when it fired.
+    pub(crate) fn trace(&self, instance: &Value) -> (bool, TraceRecord, Option<ValidationError>) {
+        let mut cx: Context = self.context();
+        let valid: bool = self.eval::<Trace>(self.root, instance, &Location::ROOT, &mut cx, None);
+        let trace: TraceRecord = cx.trace.map_or_else(TraceRecord::default, |trace| *trace);
+        (valid, trace, cx.depth_exceeded)
+    }
+
     /// Validates `instance`, collecting every error (one per problem, see [`ValidationError`]).
     /// When the instance nests deeper than the depth guard allows, the result is that one
     /// [`ValidationErrorKind::DepthLimitExceeded`].
@@ -397,7 +522,7 @@ impl CompiledSchema {
     /// Returns `Err(errors)` when the instance does not conform to the schema.
     pub fn validate(&self, instance: &Value) -> ValidationResult {
         let mut cx: Context = self.context();
-        let valid: bool = self.eval::<true>(self.root, instance, &Location::ROOT, &mut cx, None);
+        let valid: bool = self.eval::<Collect>(self.root, instance, &Location::ROOT, &mut cx, None);
         if let Some(error) = cx.depth_exceeded {
             return Err(vec![error]);
         }
@@ -426,7 +551,7 @@ impl CompiledSchema {
         };
         let mut valid: bool = true;
         for id in nodes {
-            valid &= self.eval::<true>(*id, instance, &Location::ROOT, &mut cx, None);
+            valid &= self.eval::<Collect>(*id, instance, &Location::ROOT, &mut cx, None);
         }
         let mut choices: UnionChoices = cx.choices.take().unwrap_or_default();
         choices.finish();
@@ -446,7 +571,7 @@ impl CompiledSchema {
         let mut cx: Context = self.context();
         let mut valid: bool = true;
         for id in nodes {
-            valid &= self.eval::<true>(*id, instance, &Location::ROOT, &mut cx, None);
+            valid &= self.eval::<Collect>(*id, instance, &Location::ROOT, &mut cx, None);
         }
         Self::collected(valid, cx)
     }
@@ -456,14 +581,15 @@ impl CompiledSchema {
     /// temporaries) takes no space in the evaluator's recursive frames.
     #[cold]
     #[inline(never)]
-    fn report(
+    fn report<M: Mode>(
         &self,
-        errors: &mut Vec<ValidationError>,
+        cx: &mut Context,
         location: &Location<'_>,
         keyword: Option<Kw>,
         make: impl FnOnce() -> ValidationErrorKind,
     ) {
-        errors.push(self.error_at(location, keyword, make()));
+        let error: ValidationError = self.error_at(location, keyword, make());
+        cx.record::<M>(error);
     }
 
     /// The error `kind` of `keyword` (`None`: of the subschema itself) evaluated at `location`,
@@ -484,6 +610,26 @@ impl CompiledSchema {
         keyword: Option<&str>,
         kind: ValidationErrorKind,
     ) -> ValidationError {
+        let UnitLocations {
+            instance_location,
+            keyword_location,
+            absolute_keyword_location,
+        } = self.locations(location, keyword);
+        ValidationError {
+            instance_location,
+            keyword_location,
+            absolute_keyword_location,
+            kind,
+        }
+    }
+
+    /// The locations of `keyword` (or of the subschema itself, for `None`) evaluated at
+    /// `location`.
+    pub(crate) fn locations(
+        &self,
+        location: &Location<'_>,
+        keyword: Option<&str>,
+    ) -> UnitLocations {
         // Segments leaf first; `after_ref` is how many were collected when the nearest
         // reference was reached, and its target.
         let mut segments: Vec<Cow<'_, str>> = Vec::with_capacity(16);
@@ -518,11 +664,10 @@ impl CompiledSchema {
             json_pointer::push_uri_fragment(segments[..count].iter().rev().map(|s| &**s), &mut uri);
             Some(uri)
         });
-        ValidationError {
+        UnitLocations {
             instance_location: location.pointer(),
             keyword_location: JsonPointer::from_segments(segments.iter().rev().map(|s| &**s)),
             absolute_keyword_location: absolute,
-            kind,
         }
     }
 
@@ -562,7 +707,74 @@ impl CompiledSchema {
 
     /// Evaluates node `id` against `instance` at `location`, adding the members / items it
     /// evaluates to `evaluated` when asked to.
-    fn eval<const COLLECT: bool>(
+    #[inline]
+    fn eval<M: Mode>(
+        &self,
+        id: NodeId,
+        instance: &Value,
+        location: &Location<'_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        if M::TRACE {
+            return self.eval_traced(id, instance, location, cx, evaluated);
+        }
+        self.eval_node::<M>(id, instance, location, cx, evaluated)
+    }
+
+    /// [`CompiledSchema::eval`] in the trace mode: records the subschema's unit and its
+    /// annotations, then evaluates it with every unit it makes under its own.
+    #[inline(never)]
+    fn eval_traced(
+        &self,
+        id: NodeId,
+        instance: &Value,
+        location: &Location<'_>,
+        cx: &mut Context,
+        evaluated: Option<&mut Evaluated>,
+    ) -> bool {
+        let locations: UnitLocations = self.locations(location, None);
+        // `propertyNames` evaluates a name, not a value: it annotates nothing.
+        let annotates: bool =
+            !matches!(location.step, Step::Key(_, Via::Keyword(Kw::PropertyNames)));
+        let trace: &mut TraceRecord = cx.trace();
+        let unit: usize = trace.units.len();
+        trace.units.push(TraceUnit {
+            parent: trace.current,
+            kind: TraceKind::Subschema {
+                valid: false,
+                annotates,
+                locations,
+            },
+        });
+        let outer: Option<usize> = trace.current.replace(unit);
+        if let Some(annotations) = self.annotations.get(&id) {
+            for annotation in annotations
+                .iter()
+                .filter(|a| !a.strings_only || instance.is_string())
+            {
+                let locations: UnitLocations = self.locations(location, Some(&annotation.keyword));
+                cx.trace().units.push(TraceUnit {
+                    parent: Some(unit),
+                    kind: TraceKind::Annotation {
+                        keyword: annotation.keyword.clone(),
+                        value: annotation.value.clone(),
+                        locations,
+                    },
+                });
+            }
+        }
+        let valid: bool = self.eval_node::<Trace>(id, instance, location, cx, evaluated);
+        let trace: &mut TraceRecord = cx.trace();
+        trace.current = outer;
+        if let TraceKind::Subschema { valid: passed, .. } = &mut trace.units[unit].kind {
+            *passed = valid;
+        }
+        valid
+    }
+
+    /// [`CompiledSchema::eval`] outside the trace's bookkeeping.
+    fn eval_node<M: Mode>(
         &self,
         id: NodeId,
         instance: &Value,
@@ -587,7 +799,7 @@ impl CompiledSchema {
             if self.leaf_valid(&node.keywords, instance) {
                 return true;
             }
-            if !COLLECT {
+            if !M::ALL {
                 return false;
             }
         }
@@ -598,9 +810,9 @@ impl CompiledSchema {
         }
         let at: At<'_, '_> = At { instance, location };
         let valid: bool = if node.has_unevaluated {
-            self.keywords_with_unevaluated::<COLLECT>(node, at, cx, evaluated)
+            self.keywords_with_unevaluated::<M>(node, at, cx, evaluated)
         } else {
-            self.keywords::<COLLECT>(node, at, cx, evaluated)
+            self.keywords::<M>(node, at, cx, evaluated)
         };
         if entered {
             cx.dynamic_scope.pop();
@@ -615,7 +827,10 @@ impl CompiledSchema {
     /// building the child's location; they still call `eval` for a node that is not a leaf, and
     /// in collect mode for a leaf that fails, to record its errors.
     #[inline]
-    fn leaf_verdict(&self, id: NodeId, instance: &Value, cx: &Context) -> Option<bool> {
+    fn leaf_verdict<M: Mode>(&self, id: NodeId, instance: &Value, cx: &Context) -> Option<bool> {
+        if M::TRACE {
+            return None;
+        }
         let node: &Node = self.node(id);
         (node.leaf && cx.depth_exceeded.is_none() && cx.depth < DEPTH_LIMIT)
             .then(|| self.leaf_valid(&node.keywords, instance))
@@ -624,7 +839,15 @@ impl CompiledSchema {
     /// [`CompiledSchema::leaf_verdict`] on each of `instances`: whether all of them pass, when
     /// node `id` is a leaf.
     #[inline]
-    fn leaf_verdict_all(&self, id: NodeId, instances: &[Value], cx: &Context) -> Option<bool> {
+    fn leaf_verdict_all<M: Mode>(
+        &self,
+        id: NodeId,
+        instances: &[Value],
+        cx: &Context,
+    ) -> Option<bool> {
+        if M::TRACE {
+            return None;
+        }
         let node: &Node = self.node(id);
         (node.leaf && cx.depth_exceeded.is_none() && cx.depth < DEPTH_LIMIT)
             .then(|| self.leaf_valid_all(&node.keywords, instances))
@@ -740,7 +963,7 @@ impl CompiledSchema {
     /// The keywords of a node with `unevaluated*`, which reads every sibling's annotations, so
     /// they are collected here and passed on only when the node passes.
     #[inline(never)]
-    fn keywords_with_unevaluated<const COLLECT: bool>(
+    fn keywords_with_unevaluated<M: Mode>(
         &self,
         node: &Node,
         at: At<'_, '_>,
@@ -748,22 +971,26 @@ impl CompiledSchema {
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let mut local: Evaluated = Evaluated::default();
-        let valid: bool = self.keywords::<COLLECT>(node, at, cx, Some(&mut local));
+        let valid: bool = self.keywords::<M>(node, at, cx, Some(&mut local));
         if valid && let Some(parent) = evaluated {
             parent.merge(&local);
         }
         valid
     }
 
-    fn keywords<const COLLECT: bool>(
+    fn keywords<M: Mode>(
         &self,
         node: &Node,
         at: At<'_, '_>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        each!(COLLECT, node.keywords.iter(), |keyword| self
-            .keyword::<COLLECT>(keyword, at, cx, evaluated.as_deref_mut()))
+        each!(M, node.keywords.iter(), |keyword| self.keyword::<M>(
+            keyword,
+            at,
+            cx,
+            evaluated.as_deref_mut()
+        ))
     }
 
     /// Dispatches one keyword. Each keyword is its own function, so a recursive evaluation
@@ -772,7 +999,7 @@ impl CompiledSchema {
         clippy::too_many_lines,
         reason = "one arm per keyword; the closed enum is matched exhaustively"
     )]
-    fn keyword<const COLLECT: bool>(
+    fn keyword<M: Mode>(
         &self,
         keyword: &Keyword,
         at: At<'_, '_>,
@@ -780,7 +1007,7 @@ impl CompiledSchema {
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         match (keyword, at.instance) {
-            (Keyword::False, _) => self.false_schema::<COLLECT>(at, cx),
+            (Keyword::False, _) => self.false_schema::<M>(at, cx),
             (
                 Keyword::Type {
                     types,
@@ -788,11 +1015,10 @@ impl CompiledSchema {
                 },
                 instance,
             ) => {
-                types.matches(instance, *integer_semantics)
-                    || self.type_error::<COLLECT>(*types, at, cx)
+                types.matches(instance, *integer_semantics) || self.type_error::<M>(*types, at, cx)
             }
-            (Keyword::Const(expected), _) => self.const_check::<COLLECT>(expected, at, cx),
-            (Keyword::Enum(id), _) => self.enum_check::<COLLECT>(*id, at, cx),
+            (Keyword::Const(expected), _) => self.const_check::<M>(expected, at, cx),
+            (Keyword::Enum(id), _) => self.enum_check::<M>(*id, at, cx),
             (
                 Keyword::Minimum(_)
                 | Keyword::Maximum(_)
@@ -800,7 +1026,7 @@ impl CompiledSchema {
                 | Keyword::ExclusiveMaximum(_)
                 | Keyword::MultipleOf(_),
                 Value::Number(n),
-            ) => self.numeric::<COLLECT>(keyword, n, at, cx),
+            ) => self.numeric::<M>(keyword, n, at, cx),
             (
                 Keyword::MinLength(_)
                 | Keyword::MaxLength(_)
@@ -808,15 +1034,15 @@ impl CompiledSchema {
                 | Keyword::Format(_)
                 | Keyword::Content(_),
                 Value::String(s),
-            ) => self.string::<COLLECT>(keyword, s, at, cx),
+            ) => self.string::<M>(keyword, s, at, cx),
             (Keyword::UserFormat(id), instance) => {
-                self.user_format_check::<COLLECT>(*id, instance, at, cx)
+                self.user_format_check::<M>(*id, instance, at, cx)
             }
-            (Keyword::Custom(id), instance) => self.custom_check::<COLLECT>(*id, instance, at, cx),
+            (Keyword::Custom(id), instance) => self.custom_check::<M>(*id, instance, at, cx),
             (
                 Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems,
                 Value::Array(items),
-            ) => self.array_assertion::<COLLECT>(keyword, items, at, cx),
+            ) => self.array_assertion::<M>(keyword, items, at, cx),
             (
                 Keyword::Required(_)
                 | Keyword::MinProperties(_)
@@ -824,7 +1050,7 @@ impl CompiledSchema {
                 | Keyword::DependentRequired { .. }
                 | Keyword::NoAdditionalProperties(_),
                 Value::Object(object),
-            ) => self.object_assertion::<COLLECT>(keyword, object, at, cx),
+            ) => self.object_assertion::<M>(keyword, object, at, cx),
             (
                 Keyword::Ref {
                     target,
@@ -832,7 +1058,7 @@ impl CompiledSchema {
                     ref_str,
                 },
                 _,
-            ) => self.follow::<COLLECT>(*target, *keyword, ref_str, at, cx, evaluated),
+            ) => self.follow::<M>(*target, *keyword, ref_str, at, cx, evaluated),
             (Keyword::DynamicRef(dynamic), _) => {
                 let DynamicRef {
                     fallback,
@@ -840,7 +1066,7 @@ impl CompiledSchema {
                     ref_str,
                 } = &**dynamic;
                 let target: NodeId = self.dynamic_target(*fallback, anchor, cx);
-                self.follow::<COLLECT>(target, Kw::DynamicRef, ref_str, at, cx, evaluated)
+                self.follow::<M>(target, Kw::DynamicRef, ref_str, at, cx, evaluated)
             }
             (Keyword::RecursiveRef { fallback, ref_str }, _) => {
                 let target: NodeId = cx
@@ -848,21 +1074,22 @@ impl CompiledSchema {
                     .iter()
                     .find_map(|scope| self.recursive_anchors.get(scope).copied())
                     .unwrap_or(*fallback);
-                self.follow::<COLLECT>(target, Kw::RecursiveRef, ref_str, at, cx, evaluated)
+                self.follow::<M>(target, Kw::RecursiveRef, ref_str, at, cx, evaluated)
             }
             (Keyword::Properties(id), Value::Object(object)) => {
-                self.properties::<COLLECT>(self.property_table(*id), object, at, cx, evaluated)
+                self.properties::<M>(self.property_table(*id), object, at, cx, evaluated)
             }
-            (Keyword::ClosedProperties(id), Value::Object(object)) => self
-                .closed_properties::<COLLECT>(self.property_table(*id), object, at, cx, evaluated),
+            (Keyword::ClosedProperties(id), Value::Object(object)) => {
+                self.closed_properties::<M>(self.property_table(*id), object, at, cx, evaluated)
+            }
             (Keyword::PatternProperties(patterns), Value::Object(object)) => {
-                self.pattern_properties::<COLLECT>(patterns, object, at, cx, evaluated)
+                self.pattern_properties::<M>(patterns, object, at, cx, evaluated)
             }
             (Keyword::AdditionalProperties { node, known }, Value::Object(object)) => {
-                self.additional_properties::<COLLECT>(*node, known, object, at, cx, evaluated)
+                self.additional_properties::<M>(*node, known, object, at, cx, evaluated)
             }
             (Keyword::PropertyNames(node), Value::Object(object)) => {
-                self.property_names::<COLLECT>(*node, object, at, cx)
+                self.property_names::<M>(*node, object, at, cx)
             }
             (
                 Keyword::DependentSchemas {
@@ -870,13 +1097,11 @@ impl CompiledSchema {
                     keyword,
                 },
                 Value::Object(object),
-            ) => {
-                self.dependent_schemas::<COLLECT>(dependencies, *keyword, object, at, cx, evaluated)
-            }
+            ) => self.dependent_schemas::<M>(dependencies, *keyword, object, at, cx, evaluated),
             (Keyword::UnevaluatedProperties(node), Value::Object(object)) => {
-                self.unevaluated_properties::<COLLECT>(*node, object, at, cx, evaluated)
+                self.unevaluated_properties::<M>(*node, object, at, cx, evaluated)
             }
-            (Keyword::Items { node, keyword }, Value::Array(items)) => self.items::<COLLECT>(
+            (Keyword::Items { node, keyword }, Value::Array(items)) => self.items::<M>(
                 &[],
                 Some(*node),
                 (*keyword, *keyword),
@@ -892,7 +1117,7 @@ impl CompiledSchema {
                     prefix_keyword,
                     rest_keyword,
                 } = &**tuple;
-                self.items::<COLLECT>(
+                self.items::<M>(
                     prefix,
                     *rest,
                     (*prefix_keyword, *rest_keyword),
@@ -903,15 +1128,15 @@ impl CompiledSchema {
                 )
             }
             (Keyword::Contains(contains), Value::Array(items)) => {
-                self.contains::<COLLECT>(contains, items, at, cx, evaluated)
+                self.contains::<M>(contains, items, at, cx, evaluated)
             }
             (Keyword::UnevaluatedItems(node), Value::Array(items)) => {
-                self.unevaluated_items::<COLLECT>(*node, items, at, cx, evaluated)
+                self.unevaluated_items::<M>(*node, items, at, cx, evaluated)
             }
-            (Keyword::AllOf(nodes), _) => self.all_of::<COLLECT>(nodes, at, cx, evaluated),
-            (Keyword::AnyOf(union), _) => self.any_of::<COLLECT>(union, at, cx, evaluated),
-            (Keyword::OneOf(union), _) => self.one_of::<COLLECT>(union, at, cx, evaluated),
-            (Keyword::Not(node), _) => self.not::<COLLECT>(*node, at, cx),
+            (Keyword::AllOf(nodes), _) => self.all_of::<M>(nodes, at, cx, evaluated),
+            (Keyword::AnyOf(union), _) => self.any_of::<M>(union, at, cx, evaluated),
+            (Keyword::OneOf(union), _) => self.one_of::<M>(union, at, cx, evaluated),
+            (Keyword::Not(node), _) => self.not::<M>(*node, at, cx),
             (
                 Keyword::IfThenElse {
                     condition,
@@ -919,7 +1144,7 @@ impl CompiledSchema {
                     otherwise,
                 },
                 _,
-            ) => self.if_then_else::<COLLECT>(*condition, *then, *otherwise, at, cx, evaluated),
+            ) => self.if_then_else::<M>(*condition, *then, *otherwise, at, cx, evaluated),
             // Type-specific keywords ignore instances of other types.
             (
                 Keyword::Minimum(_)
@@ -959,7 +1184,7 @@ impl CompiledSchema {
     /// Checks a user-defined format against an instance of any type. Kept out of line: the
     /// keyword is rare, and inlining it into the dispatch slows every other keyword.
     #[inline(never)]
-    fn user_format_check<const COLLECT: bool>(
+    fn user_format_check<M: Mode>(
         &self,
         id: UserFormatId,
         instance: &Value,
@@ -969,7 +1194,7 @@ impl CompiledSchema {
         let format: &UserFormat = self.user_format(id);
         format.check(instance)
             || fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -998,7 +1223,7 @@ impl CompiledSchema {
     /// the verdict mode, [`CustomKeyword::validate`](super::CustomKeyword::validate) in the
     /// collect mode. Kept out of line like [`user_format_check`](Self::user_format_check).
     #[inline(never)]
-    fn custom_check<const COLLECT: bool>(
+    fn custom_check<M: Mode>(
         &self,
         id: CustomKeywordId,
         instance: &Value,
@@ -1006,13 +1231,13 @@ impl CompiledSchema {
         cx: &mut Context,
     ) -> bool {
         let custom: &CompiledCustomKeyword = self.custom_keyword(id);
-        if !COLLECT {
+        if !M::ALL {
             return custom.keyword.is_valid(instance);
         }
         match custom.keyword.validate(instance) {
             Ok(()) => true,
             Err(message) => {
-                self.report_custom(&mut cx.errors, at.location, custom, message);
+                self.report_custom::<M>(cx, at.location, custom, message);
                 false
             }
         }
@@ -1021,9 +1246,9 @@ impl CompiledSchema {
     /// Records the error of a failing custom keyword (see [`report`](Self::report)).
     #[cold]
     #[inline(never)]
-    fn report_custom(
+    fn report_custom<M: Mode>(
         &self,
-        errors: &mut Vec<ValidationError>,
+        cx: &mut Context,
         location: &Location<'_>,
         custom: &CompiledCustomKeyword,
         message: String,
@@ -1032,12 +1257,13 @@ impl CompiledSchema {
             keyword: custom.name.to_string(),
             message,
         };
-        errors.push(self.error_at_keyword(location, Some(&custom.name), kind));
+        let error: ValidationError = self.error_at_keyword(location, Some(&custom.name), kind);
+        cx.record::<M>(error);
     }
 
     /// Evaluates a subschema at the same instance, entered through `location`; its
     /// annotations count only when it passes.
-    fn in_place<const COLLECT: bool>(
+    fn in_place<M: Mode>(
         &self,
         id: NodeId,
         instance: &Value,
@@ -1046,13 +1272,13 @@ impl CompiledSchema {
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
         match evaluated {
-            None => self.eval::<COLLECT>(id, instance, location, cx, None),
-            Some(parent) => self.in_place_annotated::<COLLECT>(id, instance, location, cx, parent),
+            None => self.eval::<M>(id, instance, location, cx, None),
+            Some(parent) => self.in_place_annotated::<M>(id, instance, location, cx, parent),
         }
     }
 
     #[inline(never)]
-    fn in_place_annotated<const COLLECT: bool>(
+    fn in_place_annotated<M: Mode>(
         &self,
         id: NodeId,
         instance: &Value,
@@ -1061,7 +1287,7 @@ impl CompiledSchema {
         parent: &mut Evaluated,
     ) -> bool {
         let mut sub: Evaluated = Evaluated::default();
-        let ok: bool = self.eval::<COLLECT>(id, instance, location, cx, Some(&mut sub));
+        let ok: bool = self.eval::<M>(id, instance, location, cx, Some(&mut sub));
         if ok {
             parent.merge(&sub);
         }
@@ -1071,7 +1297,7 @@ impl CompiledSchema {
     /// Follows a reference (`keyword`) to `target` in place, failing with
     /// [`ValidationErrorKind::RefCycle`] when `target` is already being evaluated at this
     /// instance location.
-    fn follow<const COLLECT: bool>(
+    fn follow<M: Mode>(
         &self,
         target: NodeId,
         keyword: Kw,
@@ -1118,7 +1344,7 @@ impl CompiledSchema {
         if looping {
             // The keyword location ends at the reference that closed the loop.
             return fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -1128,7 +1354,7 @@ impl CompiledSchema {
                 }
             );
         }
-        self.in_place::<COLLECT>(target, at.instance, &entered, cx, evaluated)
+        self.in_place::<M>(target, at.instance, &entered, cx, evaluated)
     }
 
     /// How many distinct resources in the dynamic scope declare a dynamic anchor a dynamic
@@ -1164,23 +1390,16 @@ impl CompiledSchema {
             .unwrap_or(fallback)
     }
 
-    fn false_schema<const COLLECT: bool>(&self, at: At<'_, '_>, cx: &mut Context) -> bool {
-        if COLLECT {
-            self.report(&mut cx.errors, at.location, None, || {
-                ValidationErrorKind::FalseSchema
-            });
+    fn false_schema<M: Mode>(&self, at: At<'_, '_>, cx: &mut Context) -> bool {
+        if M::ALL {
+            self.report::<M>(cx, at.location, None, || ValidationErrorKind::FalseSchema);
         }
         false
     }
 
-    fn type_error<const COLLECT: bool>(
-        &self,
-        types: TypeSet,
-        at: At<'_, '_>,
-        cx: &mut Context,
-    ) -> bool {
+    fn type_error<M: Mode>(&self, types: TypeSet, at: At<'_, '_>, cx: &mut Context) -> bool {
         fail!(
-            COLLECT,
+            M,
             self,
             cx,
             at.location,
@@ -1189,15 +1408,10 @@ impl CompiledSchema {
         )
     }
 
-    fn const_check<const COLLECT: bool>(
-        &self,
-        expected: &Value,
-        at: At<'_, '_>,
-        cx: &mut Context,
-    ) -> bool {
+    fn const_check<M: Mode>(&self, expected: &Value, at: At<'_, '_>, cx: &mut Context) -> bool {
         number::json_equal(at.instance, expected)
             || fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -1209,15 +1423,10 @@ impl CompiledSchema {
             )
     }
 
-    fn enum_check<const COLLECT: bool>(
-        &self,
-        id: EnumId,
-        at: At<'_, '_>,
-        cx: &mut Context,
-    ) -> bool {
+    fn enum_check<M: Mode>(&self, id: EnumId, at: At<'_, '_>, cx: &mut Context) -> bool {
         self.enum_list(id).contains(at.instance)
             || fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -1229,7 +1438,7 @@ impl CompiledSchema {
             )
     }
 
-    fn numeric<const COLLECT: bool>(
+    fn numeric<M: Mode>(
         &self,
         keyword: &Keyword,
         n: &Number,
@@ -1240,7 +1449,7 @@ impl CompiledSchema {
             Keyword::Minimum(minimum) => {
                 number::cmp_num(n, minimum) != Ordering::Less
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1254,7 +1463,7 @@ impl CompiledSchema {
             Keyword::Maximum(maximum) => {
                 number::cmp_num(n, maximum) != Ordering::Greater
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1268,7 +1477,7 @@ impl CompiledSchema {
             Keyword::ExclusiveMinimum(exclusive_minimum) => {
                 number::cmp_num(n, exclusive_minimum) == Ordering::Greater
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1282,7 +1491,7 @@ impl CompiledSchema {
             Keyword::ExclusiveMaximum(exclusive_maximum) => {
                 number::cmp_num(n, exclusive_maximum) == Ordering::Less
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1296,7 +1505,7 @@ impl CompiledSchema {
             Keyword::MultipleOf(multiple_of) => {
                 number::is_multiple_of(n, multiple_of)
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1311,7 +1520,7 @@ impl CompiledSchema {
         }
     }
 
-    fn string<const COLLECT: bool>(
+    fn string<M: Mode>(
         &self,
         keyword: &Keyword,
         s: &str,
@@ -1328,7 +1537,7 @@ impl CompiledSchema {
                 let count: u64 = s.chars().count() as u64;
                 count >= *min_length
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1346,7 +1555,7 @@ impl CompiledSchema {
                 let count: u64 = s.chars().count() as u64;
                 count <= *max_length
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1361,7 +1570,7 @@ impl CompiledSchema {
                 let pattern: &Pattern = self.pattern(*id);
                 pattern.is_match(s)
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1375,7 +1584,7 @@ impl CompiledSchema {
             Keyword::Format(format) => {
                 format.is_valid(s)
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1386,14 +1595,14 @@ impl CompiledSchema {
                         }
                     )
             }
-            Keyword::Content(content) => self.content::<COLLECT>(content, s, at, cx),
+            Keyword::Content(content) => self.content::<M>(content, s, at, cx),
             _ => true,
         }
     }
 
     /// `contentEncoding` / `contentMediaType` on string `s`: a string that does not decode fails
     /// its encoding; a decoded one that is not of the media type fails the media type.
-    fn content<const COLLECT: bool>(
+    fn content<M: Mode>(
         &self,
         content: &Content,
         s: &str,
@@ -1403,7 +1612,7 @@ impl CompiledSchema {
         match content.check(s) {
             None => true,
             Some(ContentFailure::Encoding(encoding)) => fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -1414,7 +1623,7 @@ impl CompiledSchema {
                 }
             ),
             Some(ContentFailure::MediaType(media_type)) => fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -1427,7 +1636,7 @@ impl CompiledSchema {
         }
     }
 
-    fn array_assertion<const COLLECT: bool>(
+    fn array_assertion<M: Mode>(
         &self,
         keyword: &Keyword,
         items: &[Value],
@@ -1439,7 +1648,7 @@ impl CompiledSchema {
             Keyword::MinItems(min_items) => {
                 count >= *min_items
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1453,7 +1662,7 @@ impl CompiledSchema {
             Keyword::MaxItems(max_items) => {
                 count <= *max_items
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1467,7 +1676,7 @@ impl CompiledSchema {
             Keyword::UniqueItems => match first_duplicate(items) {
                 None => true,
                 Some(duplicate) => fail!(
-                    COLLECT,
+                    M,
                     self,
                     cx,
                     at.location,
@@ -1492,7 +1701,7 @@ impl CompiledSchema {
                 .any(|id| self.pattern(*id).is_match(name))
     }
 
-    fn object_assertion<const COLLECT: bool>(
+    fn object_assertion<M: Mode>(
         &self,
         keyword: &Keyword,
         object: &Map<String, Value>,
@@ -1501,11 +1710,11 @@ impl CompiledSchema {
     ) -> bool {
         let count: u64 = object.len() as u64;
         match keyword {
-            Keyword::Required(required) => self.required::<COLLECT>(required, object, at, cx),
+            Keyword::Required(required) => self.required::<M>(required, object, at, cx),
             Keyword::MinProperties(min_properties) => {
                 count >= *min_properties
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1519,7 +1728,7 @@ impl CompiledSchema {
             Keyword::MaxProperties(max_properties) => {
                 count <= *max_properties
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1534,14 +1743,14 @@ impl CompiledSchema {
                 dependencies,
                 keyword,
             } => each!(
-                COLLECT,
+                M,
                 dependencies
                     .iter()
                     .filter(|(name, _)| object.contains_key(&**name))
                     .flat_map(|(name, required)| required.iter().map(move |r| (name, r))),
                 |(name, property)| object.contains_key(&**property)
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         at.location,
@@ -1553,9 +1762,9 @@ impl CompiledSchema {
                     )
             ),
             Keyword::NoAdditionalProperties(known) => {
-                each!(COLLECT, object.keys(), |key| self.is_known(known, key)
+                each!(M, object.keys(), |key| self.is_known(known, key)
                     || fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         &at.location.key(key, Via::None),
@@ -1572,7 +1781,7 @@ impl CompiledSchema {
     /// `required`: decided against the object's sorted keys in one pass when the maps are
     /// sorted and the object is not much larger than the list; errors are built in schema order,
     /// by looking each name up.
-    fn required<const COLLECT: bool>(
+    fn required<M: Mode>(
         &self,
         required: &Required,
         object: &Map<String, Value>,
@@ -1591,13 +1800,13 @@ impl CompiledSchema {
             };
             match decided {
                 Some(true) => return true,
-                Some(false) if !COLLECT => return false,
+                Some(false) if !M::ALL => return false,
                 Some(false) | None => {}
             }
         }
-        each!(COLLECT, names.iter(), |name| object.contains_key(&**name)
+        each!(M, names.iter(), |name| object.contains_key(&**name)
             || fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -1608,7 +1817,7 @@ impl CompiledSchema {
             ))
     }
 
-    fn properties<const COLLECT: bool>(
+    fn properties<M: Mode>(
         &self,
         table: &PropertyTable,
         object: &Map<String, Value>,
@@ -1629,19 +1838,19 @@ impl CompiledSchema {
             };
         if by_name {
             return each!(
-                COLLECT,
+                M,
                 table
                     .iter()
                     .filter_map(|(name, node)| object.get_key_value(name).map(|kv| (kv, node))),
-                |((key, value), node)| match self.leaf_verdict(node, value, cx) {
+                |((key, value), node)| match self.leaf_verdict::<M>(node, value, cx) {
                     Some(true) => true,
-                    Some(false) if !COLLECT => false,
-                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                    Some(false) if !M::ALL => false,
+                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
                 }
             );
         }
         each!(
-            COLLECT,
+            M,
             object
                 .iter()
                 .enumerate()
@@ -1650,10 +1859,10 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                match self.leaf_verdict(node, value, cx) {
+                match self.leaf_verdict::<M>(node, value, cx) {
                     Some(true) => true,
-                    Some(false) if !COLLECT => false,
-                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                    Some(false) if !M::ALL => false,
+                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
                 }
             }
         )
@@ -1666,7 +1875,7 @@ impl CompiledSchema {
     /// any member, what evaluating them left behind (the depth guard's error, recorded union
     /// choices) is undone. An unknown member is only noted, not a reason to stop: a branch out of
     /// the per-member loop cost the valid path as much as the second lookup did.
-    fn closed_properties<const COLLECT: bool>(
+    fn closed_properties<M: Mode>(
         &self,
         table: &PropertyTable,
         object: &Map<String, Value>,
@@ -1675,7 +1884,7 @@ impl CompiledSchema {
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         // More members than names: some member is unknown.
-        if !COLLECT && object.len() > table.len() {
+        if !M::ALL && object.len() > table.len() {
             return false;
         }
         let errors: usize = cx.errors.len();
@@ -1684,7 +1893,7 @@ impl CompiledSchema {
         let via: Via<'_> = Via::Member(Kw::Properties);
         let mut unknown: bool = false;
         let valid: bool = each!(
-            COLLECT,
+            M,
             object.iter().enumerate().filter_map(|(i, (key, value))| {
                 let node: Option<NodeId> = table.get(key);
                 unknown |= node.is_none();
@@ -1694,15 +1903,15 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                match self.leaf_verdict(node, value, cx) {
+                match self.leaf_verdict::<M>(node, value, cx) {
                     Some(true) => true,
-                    Some(false) if !COLLECT => false,
-                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                    Some(false) if !M::ALL => false,
+                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
                 }
             }
         ) && !unknown;
         if !valid {
-            self.closed_properties_failed::<COLLECT>(
+            self.closed_properties_failed::<M>(
                 table,
                 object,
                 at,
@@ -1718,7 +1927,7 @@ impl CompiledSchema {
     /// errors and of recorded choices before the walk, and whether the depth guard had fired.
     #[cold]
     #[inline(never)]
-    fn closed_properties_failed<const COLLECT: bool>(
+    fn closed_properties_failed<M: Mode>(
         &self,
         table: &PropertyTable,
         object: &Map<String, Value>,
@@ -1727,12 +1936,14 @@ impl CompiledSchema {
         start: (bool, usize, usize, bool),
     ) {
         let (unknown, errors, choices, depth_exceeded) = start;
-        if COLLECT {
+        if M::ALL {
             if unknown {
+                // The trace keeps every unit where it was made; the error list puts the unknown
+                // members first, as `additionalProperties` evaluated before `properties`.
                 let properties: Vec<ValidationError> = cx.errors.split_off(errors);
                 for key in object.keys().filter(|key| !table.contains(key)) {
-                    self.report(
-                        &mut cx.errors,
+                    self.report::<M>(
+                        cx,
                         &at.location.key(key, Via::None),
                         Some(Kw::AdditionalProperties),
                         || ValidationErrorKind::DisallowedAdditionalProperty {
@@ -1755,7 +1966,7 @@ impl CompiledSchema {
         }
     }
 
-    fn pattern_properties<const COLLECT: bool>(
+    fn pattern_properties<M: Mode>(
         &self,
         patterns: &[(RegexId, NodeId)],
         object: &Map<String, Value>,
@@ -1764,7 +1975,7 @@ impl CompiledSchema {
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         each!(
-            COLLECT,
+            M,
             object.iter().enumerate().flat_map(|(i, kv)| patterns
                 .iter()
                 .filter(|(pattern, _)| self.pattern(*pattern).is_match(kv.0))
@@ -1774,12 +1985,12 @@ impl CompiledSchema {
                     evaluated.mark(i);
                 }
                 let child: Location<'_> = at.location.key(key, Via::Pattern(pattern));
-                self.eval::<COLLECT>(*node, value, &child, cx, None)
+                self.eval::<M>(*node, value, &child, cx, None)
             }
         )
     }
 
-    fn additional_properties<const COLLECT: bool>(
+    fn additional_properties<M: Mode>(
         &self,
         node: NodeId,
         known: &KnownProperties,
@@ -1790,7 +2001,7 @@ impl CompiledSchema {
     ) -> bool {
         let via: Via<'_> = Via::Keyword(Kw::AdditionalProperties);
         each!(
-            COLLECT,
+            M,
             object
                 .iter()
                 .enumerate()
@@ -1799,16 +2010,16 @@ impl CompiledSchema {
                 if let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                match self.leaf_verdict(node, value, cx) {
+                match self.leaf_verdict::<M>(node, value, cx) {
                     Some(true) => true,
-                    Some(false) if !COLLECT => false,
-                    _ => self.eval::<COLLECT>(node, value, &at.location.key(key, via), cx, None),
+                    Some(false) if !M::ALL => false,
+                    _ => self.eval::<M>(node, value, &at.location.key(key, via), cx, None),
                 }
             }
         )
     }
 
-    fn property_names<const COLLECT: bool>(
+    fn property_names<M: Mode>(
         &self,
         node: NodeId,
         object: &Map<String, Value>,
@@ -1817,15 +2028,15 @@ impl CompiledSchema {
     ) -> bool {
         // One buffer holds each name in turn, so names are not allocated one by one.
         let mut name: Value = Value::String(String::new());
-        each!(COLLECT, object.keys(), |key| {
+        each!(M, object.keys(), |key| {
             if let Value::String(buffer) = &mut name {
                 buffer.clear();
                 buffer.push_str(key);
             }
             let child: Location<'_> = at.location.key(key, Via::Keyword(Kw::PropertyNames));
-            self.eval::<false>(node, &name, &child, cx, None)
+            self.eval::<M::Branch>(node, &name, &child, cx, None)
                 || fail!(
-                    COLLECT,
+                    M,
                     self,
                     cx,
                     &at.location.key(key, Via::None),
@@ -1837,7 +2048,7 @@ impl CompiledSchema {
         })
     }
 
-    fn dependent_schemas<const COLLECT: bool>(
+    fn dependent_schemas<M: Mode>(
         &self,
         dependencies: &[(Box<str>, NodeId)],
         keyword: Kw,
@@ -1847,18 +2058,18 @@ impl CompiledSchema {
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         each!(
-            COLLECT,
+            M,
             dependencies
                 .iter()
                 .filter(|(name, _)| object.contains_key(&**name)),
             |(name, node)| {
                 let branch: Location<'_> = at.location.in_place(Via::Name(keyword, name));
-                self.in_place::<COLLECT>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
+                self.in_place::<M>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
             }
         )
     }
 
-    fn unevaluated_properties<const COLLECT: bool>(
+    fn unevaluated_properties<M: Mode>(
         &self,
         node: NodeId,
         object: &Map<String, Value>,
@@ -1869,7 +2080,7 @@ impl CompiledSchema {
         let reject: bool = self.is_false(node);
         let seen: Option<&Evaluated> = evaluated.as_deref();
         let valid: bool = each!(
-            COLLECT,
+            M,
             object
                 .iter()
                 .enumerate()
@@ -1877,7 +2088,7 @@ impl CompiledSchema {
             |(_, (key, value))| {
                 if reject {
                     fail!(
-                        COLLECT,
+                        M,
                         self,
                         cx,
                         &at.location.key(key, Via::None),
@@ -1890,7 +2101,7 @@ impl CompiledSchema {
                     let child: Location<'_> = at
                         .location
                         .key(key, Via::Keyword(Kw::UnevaluatedProperties));
-                    self.eval::<COLLECT>(node, value, &child, cx, None)
+                    self.eval::<M>(node, value, &child, cx, None)
                 }
             }
         );
@@ -1906,7 +2117,7 @@ impl CompiledSchema {
         clippy::too_many_arguments,
         reason = "the tuple, its spellings, and the shared evaluation state"
     )]
-    fn items<const COLLECT: bool>(
+    fn items<M: Mode>(
         &self,
         prefix: &[NodeId],
         rest: Option<NodeId>,
@@ -1921,13 +2132,13 @@ impl CompiledSchema {
         // each taken once; the general path below runs only when they fail in collect mode, to
         // build the errors, and for the prefix.
         let valid: bool = if let ([], Some(rest)) = (prefix, rest)
-            && let Some(valid) = self.leaf_verdict_all(rest, items, cx)
-            && (valid || !COLLECT)
+            && let Some(valid) = self.leaf_verdict_all::<M>(rest, items, cx)
+            && (valid || !M::ALL)
         {
             valid
         } else {
             each!(
-                COLLECT,
+                M,
                 items
                     .iter()
                     .enumerate()
@@ -1935,10 +2146,10 @@ impl CompiledSchema {
                         Some(node) => Some((i, item, *node, Via::Member(prefix_keyword))),
                         None => rest.map(|node| (i, item, node, Via::Keyword(rest_keyword))),
                     }),
-                |(i, item, node, via)| match self.leaf_verdict(node, item, cx) {
+                |(i, item, node, via)| match self.leaf_verdict::<M>(node, item, cx) {
                     Some(true) => true,
-                    Some(false) if !COLLECT => false,
-                    _ => self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None),
+                    Some(false) if !M::ALL => false,
+                    _ => self.eval::<M>(node, item, &at.location.index(i, via), cx, None),
                 }
             )
         };
@@ -1954,7 +2165,7 @@ impl CompiledSchema {
         valid
     }
 
-    fn contains<const COLLECT: bool>(
+    fn contains<M: Mode>(
         &self,
         contains: &Contains,
         items: &[Value],
@@ -1973,19 +2184,19 @@ impl CompiledSchema {
         let mut match_count: u64 = 0;
         for (i, item) in items.iter().enumerate() {
             let child: Location<'_> = at.location.index(i, Via::Keyword(Kw::Contains));
-            if self.eval::<false>(*node, item, &child, cx, None) {
+            if self.eval::<M::Branch>(*node, item, &child, cx, None) {
                 match_count += 1;
                 if annotating && let Some(evaluated) = evaluated.as_deref_mut() {
                     evaluated.mark(i);
                 }
-                if !annotating && max.is_none() && match_count >= *min {
+                if !annotating && !M::TRACE && max.is_none() && match_count >= *min {
                     break;
                 }
             }
         }
         if match_count < *min {
             return fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -1998,7 +2209,7 @@ impl CompiledSchema {
         }
         match max {
             Some(max) if match_count > *max => fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -2012,7 +2223,7 @@ impl CompiledSchema {
         }
     }
 
-    fn unevaluated_items<const COLLECT: bool>(
+    fn unevaluated_items<M: Mode>(
         &self,
         node: NodeId,
         items: &[Value],
@@ -2023,12 +2234,12 @@ impl CompiledSchema {
         let seen: Option<&Evaluated> = evaluated.as_deref();
         let via: Via<'_> = Via::Keyword(Kw::UnevaluatedItems);
         let valid: bool = each!(
-            COLLECT,
+            M,
             items
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| !seen.is_some_and(|e| e.contains(*i))),
-            |(i, item)| self.eval::<COLLECT>(node, item, &at.location.index(i, via), cx, None)
+            |(i, item)| self.eval::<M>(node, item, &at.location.index(i, via), cx, None)
         );
         if let Some(evaluated) = evaluated {
             evaluated.mark_all();
@@ -2036,16 +2247,16 @@ impl CompiledSchema {
         valid
     }
 
-    fn all_of<const COLLECT: bool>(
+    fn all_of<M: Mode>(
         &self,
         nodes: &[NodeId],
         at: At<'_, '_>,
         cx: &mut Context,
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        each!(COLLECT, nodes.iter().enumerate(), |(i, node)| {
+        each!(M, nodes.iter().enumerate(), |(i, node)| {
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AllOf, index_u32(i)));
-            self.in_place::<COLLECT>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
+            self.in_place::<M>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
         })
     }
 
@@ -2072,7 +2283,7 @@ impl CompiledSchema {
         }
     }
 
-    fn any_of<const COLLECT: bool>(
+    fn any_of<M: Mode>(
         &self,
         union: &Union,
         at: At<'_, '_>,
@@ -2081,13 +2292,14 @@ impl CompiledSchema {
     ) -> bool {
         let nodes: &[NodeId] = &union.nodes;
         // Every other branch fails, so the one the discriminator picks decides. A failure is
-        // evaluated again in full below when its errors are collected.
+        // evaluated again in full below when its errors are collected. The trace evaluates
+        // every branch once, below.
         let pick: Pick = Self::pick(union, at.instance);
-        if pick != Pick::Undecided {
+        if pick != Pick::Undecided && !M::TRACE {
             if let Pick::Branch(i) = pick {
                 let branch: Location<'_> =
                     at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
-                if self.in_place::<false>(
+                if self.in_place::<M::Branch>(
                     nodes[i],
                     at.instance,
                     &branch,
@@ -2098,32 +2310,33 @@ impl CompiledSchema {
                     return true;
                 }
             }
-            if !COLLECT {
+            if !M::ALL {
                 return false;
             }
         }
         let mut matched: bool = false;
         for (i, node) in nodes.iter().enumerate() {
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::AnyOf, index_u32(i)));
-            if self.in_place::<false>(*node, at.instance, &branch, cx, evaluated.as_deref_mut()) {
+            if self.in_place::<M::Branch>(*node, at.instance, &branch, cx, evaluated.as_deref_mut())
+            {
                 if !matched {
                     Self::record_choice(union, at.instance, i, cx);
                 }
                 matched = true;
                 // Every passing branch annotates, so keep going only when annotations are
-                // collected.
-                if evaluated.is_none() {
+                // collected (and the trace records every branch).
+                if evaluated.is_none() && !M::TRACE {
                     break;
                 }
             }
         }
-        if !matched && COLLECT {
-            self.no_match(Kw::AnyOf, nodes, at, cx);
+        if !matched && M::ALL {
+            self.no_match::<M>(Kw::AnyOf, nodes, at, cx);
         }
         matched
     }
 
-    fn one_of<const COLLECT: bool>(
+    fn one_of<M: Mode>(
         &self,
         union: &Union,
         at: At<'_, '_>,
@@ -2133,13 +2346,13 @@ impl CompiledSchema {
         let nodes: &[NodeId] = &union.nodes;
         // As in `any_of`: only the discriminated branch can pass, so it is the one match.
         let pick: Pick = Self::pick(union, at.instance);
-        if pick != Pick::Undecided {
+        if pick != Pick::Undecided && !M::TRACE {
             if let Pick::Branch(i) = pick {
                 let mut sub: Evaluated = Evaluated::default();
                 let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
                 let branch: Location<'_> =
                     at.location.in_place(Via::Index(Kw::OneOf, index_u32(i)));
-                if self.eval::<false>(nodes[i], at.instance, &branch, cx, wants) {
+                if self.eval::<M::Branch>(nodes[i], at.instance, &branch, cx, wants) {
                     if let Some(parent) = evaluated.as_deref_mut() {
                         parent.merge(&sub);
                     }
@@ -2147,7 +2360,7 @@ impl CompiledSchema {
                     return true;
                 }
             }
-            if !COLLECT {
+            if !M::ALL {
                 return false;
             }
         }
@@ -2157,13 +2370,13 @@ impl CompiledSchema {
             let mut sub: Evaluated = Evaluated::default();
             let wants: Option<&mut Evaluated> = evaluated.is_some().then_some(&mut sub);
             let branch: Location<'_> = at.location.in_place(Via::Index(Kw::OneOf, index_u32(i)));
-            if self.eval::<false>(*node, at.instance, &branch, cx, wants) {
+            if self.eval::<M::Branch>(*node, at.instance, &branch, cx, wants) {
                 match_count += 1;
                 if first.is_none() {
                     first = Some((i, sub));
                 }
                 // A second match decides the verdict; the error counts every match.
-                if match_count > 1 && !COLLECT {
+                if match_count > 1 && !M::ALL {
                     break;
                 }
             }
@@ -2179,13 +2392,13 @@ impl CompiledSchema {
                 true
             }
             0 => {
-                if COLLECT {
-                    self.no_match(Kw::OneOf, nodes, at, cx);
+                if M::ALL {
+                    self.no_match::<M>(Kw::OneOf, nodes, at, cx);
                 }
                 false
             }
             _ => fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -2200,17 +2413,27 @@ impl CompiledSchema {
 
     /// Records [`ValidationErrorKind::NoSubschemaMatched`] for an `anyOf` / `oneOf` none of
     /// whose branches passed, with its causes: the branches evaluated again in the collect mode,
-    /// only to explain the failure (every error of every branch, in branch order).
+    /// only to explain the failure (every error of every branch, in branch order). The trace
+    /// already holds every branch's errors under the branch, so its error has no causes.
     #[cold]
     #[inline(never)]
-    fn no_match(&self, keyword: Kw, nodes: &[NodeId], at: At<'_, '_>, cx: &mut Context) {
+    fn no_match<M: Mode>(&self, keyword: Kw, nodes: &[NodeId], at: At<'_, '_>, cx: &mut Context) {
+        if M::TRACE {
+            self.report::<M>(cx, at.location, Some(keyword), || {
+                ValidationErrorKind::NoSubschemaMatched {
+                    subschema_count: nodes.len(),
+                    causes: Vec::new(),
+                }
+            });
+            return;
+        }
         let outer: Vec<ValidationError> = std::mem::take(&mut cx.errors);
         for (i, node) in nodes.iter().enumerate() {
             let branch: Location<'_> = at.location.in_place(Via::Index(keyword, index_u32(i)));
-            self.eval::<true>(*node, at.instance, &branch, cx, None);
+            self.eval::<Collect>(*node, at.instance, &branch, cx, None);
         }
         let causes: Vec<ValidationError> = std::mem::replace(&mut cx.errors, outer);
-        self.report(&mut cx.errors, at.location, Some(keyword), || {
+        self.report::<M>(cx, at.location, Some(keyword), || {
             ValidationErrorKind::NoSubschemaMatched {
                 subschema_count: nodes.len(),
                 causes,
@@ -2218,16 +2441,16 @@ impl CompiledSchema {
         });
     }
 
-    fn not<const COLLECT: bool>(&self, node: NodeId, at: At<'_, '_>, cx: &mut Context) -> bool {
+    fn not<M: Mode>(&self, node: NodeId, at: At<'_, '_>, cx: &mut Context) -> bool {
         let branch: Location<'_> = at.location.in_place(Via::Keyword(Kw::Not));
-        let matched: bool = self.eval::<false>(node, at.instance, &branch, cx, None);
+        let matched: bool = self.eval::<M::Branch>(node, at.instance, &branch, cx, None);
         // A branch cut short by the depth guard did not fail: it must not make `not` pass.
         if cx.depth_exceeded.is_some() {
             return false;
         }
         !matched
             || fail!(
-                COLLECT,
+                M,
                 self,
                 cx,
                 at.location,
@@ -2236,7 +2459,7 @@ impl CompiledSchema {
             )
     }
 
-    fn if_then_else<const COLLECT: bool>(
+    fn if_then_else<M: Mode>(
         &self,
         condition: NodeId,
         then: Option<NodeId>,
@@ -2246,7 +2469,7 @@ impl CompiledSchema {
         mut evaluated: Option<&mut Evaluated>,
     ) -> bool {
         let branch: Location<'_> = at.location.in_place(Via::Keyword(Kw::If));
-        let passed: bool = self.in_place::<false>(
+        let passed: bool = self.in_place::<M::Branch>(
             condition,
             at.instance,
             &branch,
@@ -2261,7 +2484,7 @@ impl CompiledSchema {
         match node {
             Some(node) => {
                 let branch: Location<'_> = at.location.in_place(Via::Keyword(keyword));
-                self.in_place::<COLLECT>(node, at.instance, &branch, cx, evaluated)
+                self.in_place::<M>(node, at.instance, &branch, cx, evaluated)
             }
             None => true,
         }

@@ -5144,7 +5144,7 @@ fn custom_content_codecs_compare_by_registration() {
 #[cfg(feature = "linear-regex")]
 fn compiled_schema_builder_debug_lists_content_codecs() {
     let builder: CompiledSchemaBuilder = with_hex().without_content_media_type("Application/JSON");
-    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, regex_engine: Ecma, regex_size_limit: None, max_depth: None }"#;
+    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, regex_engine: Ecma, regex_size_limit: None, max_depth: None, annotations: false }"#;
     let actual: String = format!("{builder:?}");
     assert_eq!(expected, actual);
 }
@@ -5153,7 +5153,7 @@ fn compiled_schema_builder_debug_lists_content_codecs() {
 #[cfg(not(feature = "linear-regex"))]
 fn compiled_schema_builder_debug_lists_content_codecs_without_linear_regex() {
     let builder: CompiledSchemaBuilder = with_hex().without_content_media_type("Application/JSON");
-    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, max_depth: None }"#;
+    let expected: &str = r#"CompiledSchemaBuilder { formats: [], keywords: [], content: ContentCodecs { encodings: [("hex", true)], media_types: [("application/json", false)] }, max_depth: None, annotations: false }"#;
     let actual: String = format!("{builder:?}");
     assert_eq!(expected, actual);
 }

@@ -69,3 +69,7 @@ tempfile.workspace = true
 [[test]]
 name = "json_schema_test_suite"
 harness = false
+
+[[test]]
+name = "annotation_suite"
+harness = false
