@@ -338,6 +338,20 @@ pub fn run() {
                         .action(clap::ArgAction::Append)
                         .help("Codegen Settings: use TYPE in place of the generated type NAME, which is not generated (e.g. Ipv4=my::Ipv4); repeatable"),
                 )
+                .arg(
+                    Arg::new("cgs-crate")
+                        .long("cgs-crate")
+                        .value_name("[RENAME=]CRATE@VERSION")
+                        .action(clap::ArgAction::Append)
+                        .help("Codegen Settings: a crate the output depends on, whose types a subschema's x-rust-type extension may name; an extension whose version requirement VERSION meets uses the crate's type instead of generating one (e.g. my-types@1.2; * = any version, ! = never; RENAME= when the output knows the crate by another name); repeatable"),
+                )
+                .arg(
+                    Arg::new("cgs-unknown-crates")
+                        .long("cgs-unknown-crates")
+                        .value_name("MODE")
+                        .value_parser(["generate", "allow", "deny"])
+                        .help("Codegen Settings: what an x-rust-type naming a crate not given by --cgs-crate does: generate = ignore the extension and generate the type; allow = use the extension's type; deny = fail (default: generate)"),
+                )
                 .args(retrieval::retrieval_args()),
         )
         .subcommand(

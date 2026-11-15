@@ -104,6 +104,114 @@ pub struct TypePatch {
     pub attrs: Vec<String>,
 }
 
+/// What codegen does with an `x-rust-type` extension whose crate is not in
+/// [`CodeGenSettings::crates`].
+///
+/// `x-rust-type` (`{"crate": "my-types", "version": "^1.2", "path": "my_types::Thing"}`, with
+/// optional `"parameters": [schema, ..]` for generic types) says a subschema is a type of an
+/// existing crate. The JSON Schema specification ignores unknown keywords, so the default
+/// generates the subschema as usual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnknownCrates {
+    /// Generate the type from the subschema, as if the extension were absent.
+    #[default]
+    Generate,
+    /// Use the extension's type, assuming its crate is a dependency at a matching version.
+    Allow,
+    /// Fail: the schema names a crate the output may not depend on.
+    Deny,
+}
+
+/// The version of a crate in [`CodeGenSettings::crates`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CrateVersion {
+    /// The version the output depends on: an `x-rust-type` whose version requirement it meets
+    /// is used, any other is generated.
+    Version(semver::Version),
+    /// Any version (`*`): every `x-rust-type` of the crate is used.
+    Any,
+    /// Never use the crate (`!`): its `x-rust-type`s are generated, even under
+    /// [`UnknownCrates::Allow`] or [`UnknownCrates::Deny`].
+    Never,
+}
+
+impl std::str::FromStr for CrateVersion {
+    type Err = String;
+
+    /// `*` for [`Any`](CrateVersion::Any), `!` for [`Never`](CrateVersion::Never), otherwise a
+    /// version; missing minor and patch numbers are zero (`1.2` is `1.2.0`).
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "*" => return Ok(CrateVersion::Any),
+            "!" => return Ok(CrateVersion::Never),
+            _ => {}
+        }
+        let end: usize = text.find(['-', '+']).unwrap_or(text.len());
+        let padding: &str = match text[..end].matches('.').count() {
+            0 => ".0.0",
+            1 => ".0",
+            _ => "",
+        };
+        let full: String = format!("{}{padding}{}", &text[..end], &text[end..]);
+        semver::Version::parse(&full)
+            .map(CrateVersion::Version)
+            .map_err(|e| format!("`{text}` is not a crate version (`1.2.3`, `*` or `!`): {e}"))
+    }
+}
+
+/// One crate of [`CodeGenSettings::crates`]: its version and, when the output knows it under
+/// another name, that name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrateSpec {
+    /// The crate's version (see [`CrateVersion`]).
+    pub version: CrateVersion,
+    /// The name the output depends on the crate under, replacing the first segment of each
+    /// `x-rust-type` path (`-` read as `_`); `None` keeps the crate's own name.
+    pub rename: Option<String>,
+}
+
+impl CrateSpec {
+    /// Parses `[rename=]crate@version` (the CLI's `--cgs-crate`, typify's `--crate`) into the
+    /// crate's name and its spec; the version is as [`CrateVersion`] parses it.
+    ///
+    /// # Errors
+    ///
+    /// A message when the text is not of that form, a name is not a crate name, or the version
+    /// does not parse.
+    pub fn parse_named(text: &str) -> Result<(String, CrateSpec), String> {
+        let is_crate = |name: &str| {
+            name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        };
+        let (rename, rest): (Option<&str>, &str) = match text.split_once('=') {
+            Some((rename, rest)) => (Some(rename), rest),
+            None => (None, text),
+        };
+        let Some((name, version)) = rest.split_once('@') else {
+            return Err(format!(
+                "crate `{text}` is not of the form `[rename=]crate@version`"
+            ));
+        };
+        for part in rename.into_iter().chain([name]) {
+            if !is_crate(part) {
+                return Err(format!("crate `{text}`: `{part}` is not a crate name"));
+            }
+        }
+        let version: CrateVersion = version
+            .parse()
+            .map_err(|e: String| format!("crate `{text}`: {e}"))?;
+        Ok((
+            name.to_string(),
+            CrateSpec {
+                version,
+                rename: rename.map(str::to_string),
+            },
+        ))
+    }
+}
+
 /// One entry of [`CodeGenSettings::conversions`]: a subschema generated as a type of the
 /// user's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +295,18 @@ pub struct CodeGenSettings {
     /// [`conversions`](CodeGenSettings::conversions) asks. Generating fails when a key names no
     /// generated type, names a schema's root type, or a value is not a Rust path.
     pub replacements: BTreeMap<String, String>,
+    /// Crates the output depends on, by name (`my-types`), whose types an `x-rust-type`
+    /// extension may name (see [`UnknownCrates`]); default none. A subschema whose
+    /// `x-rust-type` names a listed crate at a version its requirement accepts is that type
+    /// (`::my_types::Thing`, with its `parameters` generated as the type's generic arguments)
+    /// instead of a generated one. The type must implement what the generated types derive, as
+    /// a type generated by this library does. Generating fails when an extension the settings
+    /// make count is malformed.
+    pub crates: BTreeMap<String, CrateSpec>,
+    /// What an `x-rust-type` naming a crate not in [`crates`](CodeGenSettings::crates) does
+    /// (default [`UnknownCrates::Generate`]: ignored, as the specification ignores unknown
+    /// keywords).
+    pub unknown_crates: UnknownCrates,
 }
 
 impl CodeGenSettings {
@@ -194,6 +314,12 @@ impl CodeGenSettings {
     /// newtypes.
     pub(crate) fn validates(&self) -> bool {
         self.self_validating || self.constrained_newtypes
+    }
+
+    /// Whether `x-rust-type` extensions can change the output: a crate is listed or unknown
+    /// crates do not generate.
+    pub(crate) fn honours_rust_types(&self) -> bool {
+        !self.crates.is_empty() || self.unknown_crates != UnknownCrates::Generate
     }
 }
 
@@ -213,6 +339,8 @@ impl Default for CodeGenSettings {
             patches: BTreeMap::new(),
             conversions: Vec::new(),
             replacements: BTreeMap::new(),
+            crates: BTreeMap::new(),
+            unknown_crates: UnknownCrates::Generate,
         }
     }
 }
@@ -233,6 +361,8 @@ pub struct CodeGenSettingsBuilder {
     patches: BTreeMap<String, TypePatch>,
     conversions: Vec<TypeConversion>,
     replacements: BTreeMap<String, String>,
+    crates: BTreeMap<String, CrateSpec>,
+    unknown_crates: Option<UnknownCrates>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -346,6 +476,21 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Let `x-rust-type` extensions naming the crate `name` use its types (see
+    /// [`CodeGenSettings::crates`]); a second spec for the same crate replaces the first.
+    #[must_use]
+    pub fn external_crate(mut self, name: impl Into<String>, spec: CrateSpec) -> Self {
+        self.crates.insert(name.into(), spec);
+        self
+    }
+
+    /// Set what an `x-rust-type` naming a crate not listed does (see [`UnknownCrates`]).
+    #[must_use]
+    pub fn unknown_crates(mut self, value: UnknownCrates) -> Self {
+        self.unknown_crates = Some(value);
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -365,6 +510,8 @@ impl CodeGenSettingsBuilder {
             patches: self.patches,
             conversions: self.conversions,
             replacements: self.replacements,
+            crates: self.crates,
+            unknown_crates: self.unknown_crates.unwrap_or_default(),
         }
     }
 }
@@ -374,5 +521,64 @@ impl CodeGenSettings {
     #[must_use]
     pub fn builder() -> CodeGenSettingsBuilder {
         CodeGenSettingsBuilder::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CrateSpec, CrateVersion};
+
+    #[test]
+    fn crate_versions_parse_with_missing_numbers_as_zero() {
+        let texts: [&str; 7] = ["1", "1.2", "1.2.3", "1.2-beta.1", "*", "!", "one"];
+        let expected: Vec<Result<CrateVersion, String>> = vec![
+            Ok(CrateVersion::Version(semver::Version::new(1, 0, 0))),
+            Ok(CrateVersion::Version(semver::Version::new(1, 2, 0))),
+            Ok(CrateVersion::Version(semver::Version::new(1, 2, 3))),
+            Ok(CrateVersion::Version(
+                semver::Version::parse("1.2.0-beta.1").unwrap(),
+            )),
+            Ok(CrateVersion::Any),
+            Ok(CrateVersion::Never),
+            Err("`one` is not a crate version (`1.2.3`, `*` or `!`): unexpected character 'o' while parsing major version number".to_string()),
+        ];
+        let actual: Vec<Result<CrateVersion, String>> =
+            texts.iter().map(|text: &&str| text.parse()).collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crate_specs_parse_with_and_without_a_rename() {
+        let texts: [&str; 6] = [
+            "my-types@1.2",
+            "types_v1=my-types@*",
+            "my-types",
+            "1x@1",
+            "a=b=c@1",
+            "my-types@x",
+        ];
+        let spec = |version: CrateVersion, rename: Option<&str>| CrateSpec {
+            version,
+            rename: rename.map(str::to_string),
+        };
+        let expected: Vec<Result<(String, CrateSpec), String>> = vec![
+            Ok((
+                "my-types".to_string(),
+                spec(CrateVersion::Version(semver::Version::new(1, 2, 0)), None),
+            )),
+            Ok((
+                "my-types".to_string(),
+                spec(CrateVersion::Any, Some("types_v1")),
+            )),
+            Err("crate `my-types` is not of the form `[rename=]crate@version`".to_string()),
+            Err("crate `1x@1`: `1x` is not a crate name".to_string()),
+            Err("crate `a=b=c@1`: `b=c` is not a crate name".to_string()),
+            Err("crate `my-types@x`: `x` is not a crate version (`1.2.3`, `*` or `!`): unexpected character 'x' while parsing major version number".to_string()),
+        ];
+        let actual: Vec<Result<(String, CrateSpec), String>> = texts
+            .iter()
+            .map(|text: &&str| CrateSpec::parse_named(text))
+            .collect();
+        assert_eq!(expected, actual);
     }
 }

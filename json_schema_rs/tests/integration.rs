@@ -1465,6 +1465,7 @@ const SCENARIOS: &[&str] = &[
     "doc_markup",
     "derived_traits",
     "converted_and_replaced_types",
+    "rust_type_extension",
 ];
 
 /// Build+deserialize scenarios that need the `indexmap` feature.
@@ -2424,6 +2425,56 @@ fn main() {
         schema["properties"]["addr"].clone(),
         schema["properties"]["backup"].clone(),
         schema["properties"]["peers"].clone(),
+    );
+    assert_eq!(expected, actual);
+}
+"##,
+            ),
+            "rust_type_extension" => (
+                // `x-rust-type` names types of crates the output uses (a parameterized one and a
+                // plain one) and of a crate it does not (generated as usual); the generated types
+                // deserialize into the named types.
+                r#"{"type":"object","properties":{"counts":{"type":"object","additionalProperties":{"type":"integer"},"x-rust-type":{"crate":"std","version":"*","path":"std::collections::BTreeMap","parameters":[{"type":"string"},{"type":"integer"}]}},"raw":{"x-rust-type":{"crate":"serde_json","version":"^1","path":"serde_json::Value"}},"local":{"type":"object","properties":{"note":{"type":"string"}},"required":["note"],"x-rust-type":{"crate":"elsewhere","version":"^2","path":"elsewhere::Local"}}},"required":["counts","raw","local"]}"#,
+                CodeGenSettings {
+                    crates: BTreeMap::from([
+                        (
+                            "std".to_string(),
+                            json_schema_rs::CrateSpec {
+                                version: json_schema_rs::CrateVersion::Any,
+                                rename: None,
+                            },
+                        ),
+                        (
+                            "serde_json".to_string(),
+                            json_schema_rs::CrateSpec {
+                                version: "1.0.0".parse::<json_schema_rs::CrateVersion>().unwrap(),
+                                rename: None,
+                            },
+                        ),
+                    ]),
+                    ..default_code_gen.clone()
+                },
+                r##"fn main() {
+    use std::collections::BTreeMap;
+    let root: compile_test::Root = serde_json::from_str(
+        r#"{"counts":{"a":1},"raw":[true],"local":{"note":"n"}}"#,
+    )
+    .unwrap();
+    let rejected: bool = serde_json::from_str::<compile_test::Root>(
+        r#"{"counts":{"a":"x"},"raw":1,"local":{"note":"n"}}"#,
+    )
+    .is_err();
+    let expected: (BTreeMap<String, i64>, serde_json::Value, String, bool) = (
+        BTreeMap::from([("a".to_string(), 1)]),
+        serde_json::json!([true]),
+        "n".to_string(),
+        true,
+    );
+    let actual: (BTreeMap<String, i64>, serde_json::Value, String, bool) = (
+        root.counts,
+        root.raw,
+        root.local.note,
+        rejected,
     );
     assert_eq!(expected, actual);
 }

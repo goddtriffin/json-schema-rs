@@ -7,10 +7,10 @@
 //! keeps its builder default.
 
 use json_schema_rs::{
-    CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
+    CodeGenSettings, ContentMode, CrateSpec, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
     IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-    SpecVersion, TypeConversion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties,
-    UnknownSchemaUri,
+    SpecVersion, TypeConversion, TypePatch, UniqueItemsType, UnknownCrates, UnknownFormats,
+    UnknownProperties, UnknownSchemaUri,
 };
 use proc_macro2::{Delimiter, Span, TokenTree};
 use quote::ToTokens;
@@ -37,6 +37,8 @@ pub(crate) enum SettingValue {
     Conversions(Span, Vec<(Span, TypeConversion)>),
     /// `replace = { Name = path, .. }`.
     Replacements(Span, Vec<(Ident, String)>),
+    /// `crates = ["[rename=]crate@version", ..]`.
+    Strings(Span, Vec<LitStr>),
 }
 
 impl SettingValue {
@@ -48,7 +50,8 @@ impl SettingValue {
             SettingValue::List(span, _)
             | SettingValue::Group(span, _)
             | SettingValue::Conversions(span, _)
-            | SettingValue::Replacements(span, _) => *span,
+            | SettingValue::Replacements(span, _)
+            | SettingValue::Strings(span, _) => *span,
         }
     }
 
@@ -58,7 +61,7 @@ impl SettingValue {
             SettingValue::Bool(lit) => lit.value.to_string(),
             SettingValue::Ident(ident) => ident.to_string(),
             SettingValue::Str(lit) => format!("{:?}", lit.value()),
-            SettingValue::List(..) => "[..]".to_string(),
+            SettingValue::List(..) | SettingValue::Strings(..) => "[..]".to_string(),
             SettingValue::Group(..)
             | SettingValue::Conversions(..)
             | SettingValue::Replacements(..) => "{..}".to_string(),
@@ -75,6 +78,11 @@ impl Parse for SettingArg {
             parse_conversions(input)?
         } else if name == "replace" && braced {
             parse_replacements(input)?
+        } else if name == "crates" && input.peek(syn::token::Bracket) {
+            let content;
+            let bracket = syn::bracketed!(content in input);
+            let items: Punctuated<LitStr, Token![,]> = Punctuated::parse_terminated(&content)?;
+            SettingValue::Strings(bracket.span.join(), items.into_iter().collect())
         } else if input.peek(LitBool) {
             SettingValue::Bool(input.parse()?)
         } else if input.peek(Ident) {
@@ -198,7 +206,7 @@ fn json_text(tree: TokenTree) -> String {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 24] = [
+const SETTING_NAMES: [&str; 26] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -212,6 +220,8 @@ const SETTING_NAMES: [&str; 24] = [
     "patch",
     "convert",
     "replace",
+    "crates",
+    "unknown_crates",
     "disallow_unknown_fields",
     "forced_spec_version",
     "default_spec_version",
@@ -223,6 +233,12 @@ const SETTING_NAMES: [&str; 24] = [
     "ref_siblings",
     "unknown_schema_uri",
     "metaschema_check",
+];
+
+const UNKNOWN_CRATES: &[(&str, UnknownCrates)] = &[
+    ("Generate", UnknownCrates::Generate),
+    ("Allow", UnknownCrates::Allow),
+    ("Deny", UnknownCrates::Deny),
 ];
 
 const MODEL_NAME_SOURCES: &[(&str, ModelNameSource)] = &[
@@ -318,6 +334,8 @@ struct Overrides {
     patches: Option<BTreeMap<String, TypePatch>>,
     conversions: Option<Vec<TypeConversion>>,
     replacements: Option<BTreeMap<String, String>>,
+    crates: Option<BTreeMap<String, CrateSpec>>,
+    unknown_crates: Option<UnknownCrates>,
     disallow_unknown_fields: Option<bool>,
     forced_spec_version: Option<SpecVersion>,
     default_spec_version: Option<SpecVersion>,
@@ -369,6 +387,10 @@ impl Overrides {
                 patches: self.patches.unwrap_or(code_gen_default.patches),
                 conversions: self.conversions.unwrap_or(code_gen_default.conversions),
                 replacements: self.replacements.unwrap_or(code_gen_default.replacements),
+                crates: self.crates.unwrap_or(code_gen_default.crates),
+                unknown_crates: self
+                    .unknown_crates
+                    .unwrap_or(code_gen_default.unknown_crates),
             },
             json_schema: JsonSchemaSettings {
                 disallow_unknown_fields: self
@@ -649,6 +671,37 @@ fn replacements(value: &SettingValue) -> SynResult<BTreeMap<String, String>> {
     }
 }
 
+/// The crates of `crates`, each `[rename=]crate@version`; a crate named twice is an error at
+/// its second spec.
+fn crates(value: &SettingValue) -> SynResult<BTreeMap<String, CrateSpec>> {
+    let SettingValue::Strings(_, specs) = value else {
+        return Err(syn::Error::new(
+            value.span(),
+            format!(
+                "`crates` takes `[\"[rename=]crate@version\", ..]`, not `{}`",
+                value.written()
+            ),
+        ));
+    };
+    let mut out: BTreeMap<String, CrateSpec> = BTreeMap::new();
+    let mut errors: Option<syn::Error> = None;
+    for lit in specs {
+        let error: Option<String> = match CrateSpec::parse_named(&lit.value()) {
+            Ok((name, spec)) => out
+                .insert(name.clone(), spec)
+                .map(|_| format!("crate `{name}` is listed more than once")),
+            Err(message) => Some(message),
+        };
+        if let Some(message) = error {
+            crate::push_error(&mut errors, syn::Error::new(lit.span(), message));
+        }
+    }
+    match errors {
+        Some(errors) => Err(errors),
+        None => Ok(out),
+    }
+}
+
 /// Store `value` in `slot`.
 fn set<T>(slot: &mut Option<T>, value: SynResult<T>) -> SynResult<()> {
     *slot = Some(value?);
@@ -687,6 +740,11 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
         "patch" => set(&mut overrides.patches, patches(value)),
         "convert" => set(&mut overrides.conversions, conversions(value)),
         "replace" => set(&mut overrides.replacements, replacements(value)),
+        "crates" => set(&mut overrides.crates, crates(value)),
+        "unknown_crates" => set(
+            &mut overrides.unknown_crates,
+            variant(setting, value, UNKNOWN_CRATES),
+        ),
         "disallow_unknown_fields" => set(
             &mut overrides.disallow_unknown_fields,
             boolean(setting, value),
@@ -779,10 +837,10 @@ pub(crate) fn resolve(args: &[SettingArg]) -> SynResult<MacroSettings> {
 mod tests {
     use super::{MacroSettings, SettingArg, resolve};
     use json_schema_rs::{
-        CodeGenSettings, ContentMode, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
-        IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
-        SpecVersion, TypeConversion, TypePatch, UniqueItemsType, UnknownFormats, UnknownProperties,
-        UnknownSchemaUri,
+        CodeGenSettings, ContentMode, CrateSpec, CrateVersion, DedupeMode, ExclusiveBounds,
+        FormatMode, FormatTypes, IntegerSemantics, JsonSchemaSettings, MetaschemaCheck,
+        ModelNameSource, RefSiblings, SpecVersion, TypeConversion, TypePatch, UniqueItemsType,
+        UnknownCrates, UnknownFormats, UnknownProperties, UnknownSchemaUri,
     };
     use proc_macro2::TokenStream;
     use std::collections::BTreeMap;
@@ -967,7 +1025,7 @@ mod tests {
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
              `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
-             `extra_attrs`, `patch`, `convert`, `replace`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+             `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
             1,
@@ -1051,7 +1109,7 @@ mod tests {
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
-                 `extra_attrs`, `patch`, `convert`, `replace`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+                 `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,
@@ -1234,6 +1292,65 @@ mod tests {
         let expected: Vec<Located> =
             vec![("type `Veg` is replaced more than once".to_string(), 1, 24)];
         let actual: Vec<Located> = errors("replace = { Veg = a::B, Veg = c::D }");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crates_and_unknown_crates_reach_their_fields() {
+        let expected: (BTreeMap<String, CrateSpec>, UnknownCrates) = (
+            BTreeMap::from([
+                (
+                    "my-types".to_string(),
+                    CrateSpec {
+                        version: "1.2.0".parse::<CrateVersion>().expect("version"),
+                        rename: Some("types".to_string()),
+                    },
+                ),
+                (
+                    "other".to_string(),
+                    CrateSpec {
+                        version: CrateVersion::Any,
+                        rename: None,
+                    },
+                ),
+            ]),
+            UnknownCrates::Deny,
+        );
+        let settings: MacroSettings =
+            resolve_source(r#"crates = ["types=my-types@1.2", "other@*"], unknown_crates = Deny"#)
+                .expect("resolve");
+        let actual: (BTreeMap<String, CrateSpec>, UnknownCrates) =
+            (settings.code_gen.crates, settings.code_gen.unknown_crates);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_list_for_crates_is_an_error_at_the_value() {
+        let expected: Vec<Located> = vec![(
+            "`crates` takes `[\"[rename=]crate@version\", ..]`, not `true`".to_string(),
+            1,
+            9,
+        )];
+        let actual: Vec<Located> = errors("crates = true");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crate_that_does_not_parse_is_an_error_at_it() {
+        let expected: Vec<Located> = vec![(
+            "crate `my-types` is not of the form `[rename=]crate@version`".to_string(),
+            1,
+            10,
+        )];
+        let actual: Vec<Located> = errors(r#"crates = ["my-types"]"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crate_listed_twice_is_an_error_at_its_second_spec() {
+        let expected: Vec<Located> =
+            vec![("crate `a` is listed more than once".to_string(), 1, 17)];
+        let actual: Vec<Located> = errors(r#"crates = ["a@1", "b=a@2"]"#);
         assert_eq!(expected, actual);
     }
 }

@@ -68,6 +68,7 @@ schemafy_lib = "0.6.0"
 # workspace links the latest schemars as a competitor.
 schemars = "0.8.22"
 self_cell = "1.3.0"
+semver = "1.0.28"
 # YAML documents for the CLI (`.yaml` / `.yml` files).
 serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
 serde = { version = "1.0.229", features = ["derive"] }

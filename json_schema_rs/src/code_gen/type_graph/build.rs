@@ -18,7 +18,9 @@ use super::{
     NumberConstraints, ObjectNode, SchemaRoots, StringConstraints, StringFormat, TypeGraph, TypeId,
     TypeNode, UnionKind, UnionNode, ValidationTarget, Variant,
 };
-use crate::code_gen::settings::{CodeGenSettings, FormatTypes, ModelNameSource, UnknownProperties};
+use crate::code_gen::settings::{
+    CodeGenSettings, CrateVersion, FormatTypes, ModelNameSource, UnknownCrates, UnknownProperties,
+};
 use crate::code_gen::{CodeGenError, CodeGenResult};
 use crate::json_pointer::JsonPointer;
 use crate::json_schema::{
@@ -139,6 +141,7 @@ impl RawSubschemas {
     pub(crate) fn collect<'a>(
         schemas: &[&'a Schema],
         registries: &'a [Registry<'a>],
+        rust_types: bool,
     ) -> CodeGenResult<RawSubschemas> {
         let mut out: RawSubschemas = RawSubschemas::default();
         let mut found: Vec<Found<'a>> = Vec::new();
@@ -152,7 +155,7 @@ impl RawSubschemas {
                     stack.push((s, registry.enter(target.scope, s)));
                 }
             }
-            walk_raw(stack, registry, &mut found);
+            walk_raw(stack, registry, rust_types, &mut found);
         }
         // Parse each value, then find the raw values nested in it (their addresses are inside the
         // boxes).
@@ -171,6 +174,7 @@ impl RawSubschemas {
             walk_raw(
                 vec![(out.parsed[index].as_ref(), scope)],
                 registry,
+                rust_types,
                 &mut nested,
             );
             found.extend(nested);
@@ -322,10 +326,12 @@ fn accepts_any_value(s: &JsonSchema) -> bool {
 }
 
 /// Walks the typed subschema objects from `stack` (each with its scope), queueing the raw
-/// subschema objects codegen types where the dialect defines their keyword.
+/// subschema objects codegen types where the dialect defines their keyword, and with
+/// `rust_types` the schema objects of each `x-rust-type`'s `parameters`.
 fn walk_raw<'a>(
     mut stack: Vec<(&JsonSchema, Scope)>,
     registry: &'a Registry<'a>,
+    rust_types: bool,
     found: &mut Vec<Found<'a>>,
 ) {
     let mut children: Vec<&JsonSchema> = Vec::new();
@@ -355,7 +361,29 @@ fn walk_raw<'a>(
         {
             patterns.values().for_each(&mut queue);
         }
+        if rust_types
+            && let Some(Value::Array(parameters)) = s
+                .extensions
+                .get(RUST_TYPE)
+                .and_then(|extension| extension.get("parameters"))
+        {
+            parameters.iter().for_each(&mut queue);
+        }
     }
+}
+
+/// The extension naming a subschema's type in an existing crate (see
+/// [`CodeGenSettings::crates`]).
+const RUST_TYPE: &str = "x-rust-type";
+
+/// An `x-rust-type` value, without its `parameters` (read in place: their raw values are found
+/// by address).
+#[derive(serde::Deserialize)]
+struct RustTypeExtension {
+    #[serde(rename = "crate")]
+    crate_name: String,
+    version: String,
+    path: String,
 }
 
 /// Parses a raw subschema object ([`walk_raw`] queues only objects) in `dialect`'s draft.
@@ -416,6 +444,7 @@ pub(crate) fn build<'r>(
     let mut sources: TargetSources<'r> = HashMap::new();
     let mut memo: HashMap<(usize, NodeKey), TypeId> = HashMap::new();
     let conversions: Vec<(Value, &str)> = conversion_keys(settings)?;
+    let mut problems: Vec<String> = Vec::new();
     let classes: Vec<usize> = if settings.validates() && registries.len() > 1 {
         registry_classes(registries)
     } else {
@@ -430,6 +459,8 @@ pub(crate) fn build<'r>(
             raw,
             settings,
             conversions: &conversions,
+            rust_types: settings.honours_rust_types(),
+            problems: &mut problems,
             schema_index: index,
             class: classes[index],
             queue: Vec::new(),
@@ -441,6 +472,11 @@ pub(crate) fn build<'r>(
                 source: Box::new(e),
             })?;
         graph.schemas.push(roots);
+    }
+    if !problems.is_empty() {
+        let mut seen: HashSet<String> = HashSet::new();
+        problems.retain(|p| seen.insert(p.clone()));
+        return Err(CodeGenError::Customization(problems));
     }
     sources.retain(|id, _| graph.targets[id.index()].is_some());
     Ok((graph, sources))
@@ -565,6 +601,10 @@ struct Builder<'g, 'r> {
     settings: &'g CodeGenSettings,
     /// [`CodeGenSettings::conversions`] as [`conversion_keys`] gives them.
     conversions: &'g [(Value, &'g str)],
+    /// See [`CodeGenSettings::honours_rust_types`].
+    rust_types: bool,
+    /// Problems with the schemas' `x-rust-type`s, reported together once every input is built.
+    problems: &'g mut Vec<String>,
     schema_index: usize,
     /// See [`ValidationTarget::class`].
     class: usize,
@@ -861,7 +901,8 @@ impl<'r> Builder<'_, 'r> {
                 && (contributes(s, c.skip)
                     || (is_seed && !had_ref && !c.skips(skip::ANNOTATIONS) && has_annotations(s))
                     || (self.settings.validates()
-                        && asserts_beyond_shape(s, self.registry.dialect(c.scope))));
+                        && asserts_beyond_shape(s, self.registry.dialect(c.scope)))
+                    || (self.rust_types && s.extensions.contains_key(RUST_TYPE)));
             if keep {
                 out.push(c);
             }
@@ -1051,6 +1092,7 @@ impl<'r> Builder<'_, 'r> {
             return Some(TypeNode::External {
                 path: self.conversions[index].1.to_string(),
                 conversion: Some(index),
+                parameters: Vec::new(),
             });
         }
         let key: Value = without_null_type(key)?;
@@ -1058,8 +1100,160 @@ impl<'r> Builder<'_, 'r> {
         let inner: TypeId = self.graph.push(TypeNode::External {
             path: self.conversions[index].1.to_string(),
             conversion: Some(index),
+            parameters: Vec::new(),
         });
         Some(TypeNode::Option(inner))
+    }
+
+    /// The Rust path of the `x-rust-type` `value` (at `location`) when the settings let the
+    /// output use it (see [`CodeGenSettings::crates`]). A malformed extension, or one naming an
+    /// unknown crate under [`UnknownCrates::Deny`], records a problem.
+    fn rust_type_path(&mut self, value: &Value, location: &str) -> Option<String> {
+        let extension: RustTypeExtension =
+            match <RustTypeExtension as serde::Deserialize>::deserialize(value) {
+                Ok(extension) => extension,
+                Err(e) => {
+                    self.problems.push(format!("{location} is malformed: {e}"));
+                    return None;
+                }
+            };
+        let requirement: semver::VersionReq = match semver::VersionReq::parse(&extension.version) {
+            Ok(requirement) => requirement,
+            Err(e) => {
+                self.problems.push(format!(
+                    "{location}: `{}` is not a version requirement: {e}",
+                    extension.version
+                ));
+                return None;
+            }
+        };
+        let crate_ident: String = extension.crate_name.replace('-', "_");
+        let rest: Option<&str> = extension
+            .path
+            .strip_prefix(crate_ident.as_str())
+            .and_then(|rest| rest.strip_prefix("::"))
+            .filter(|_| crate::code_gen::rust_backend::is_rust_type(&extension.path));
+        let Some(rest) = rest else {
+            self.problems.push(format!(
+                "{location}: path `{}` is not a Rust path in crate `{}`",
+                extension.path, extension.crate_name
+            ));
+            return None;
+        };
+        let prefix: String = match self.settings.crates.get(&extension.crate_name) {
+            Some(spec) => {
+                let usable: bool = match &spec.version {
+                    CrateVersion::Version(version) => requirement.matches(version),
+                    CrateVersion::Any => true,
+                    CrateVersion::Never => false,
+                };
+                if !usable {
+                    return None;
+                }
+                spec.rename
+                    .as_deref()
+                    .map_or_else(|| crate_ident.clone(), |name| name.replace('-', "_"))
+            }
+            None => match self.settings.unknown_crates {
+                UnknownCrates::Generate => return None,
+                UnknownCrates::Allow => crate_ident.clone(),
+                UnknownCrates::Deny => {
+                    self.problems.push(format!(
+                        "{location} names crate `{}` (version `{}`), which is not among the \
+                         crates the output may use",
+                        extension.crate_name, extension.version
+                    ));
+                    return None;
+                }
+            },
+        };
+        Some(format!("::{prefix}::{rest}"))
+    }
+
+    /// The node of a subschema a conversion matches, else of one whose `x-rust-type` (on any of
+    /// its conjuncts, the first wins) names a type the settings let the output use, with its
+    /// `parameters` as generic arguments; `None` generates the subschema as usual.
+    fn user_type(&mut self, flat: &Flat<'r>, context: &Context) -> CodeGenResult<Option<TypeNode>> {
+        if let Some(node) = self.converted(flat) {
+            return Ok(Some(node));
+        }
+        if !self.rust_types {
+            return Ok(None);
+        }
+        let Some(c) = flat
+            .conjuncts
+            .iter()
+            .find(|c| c.schema.extensions.contains_key(RUST_TYPE))
+        else {
+            return Ok(None);
+        };
+        let (pointer, scope): (String, Scope) = (c.pointer.clone(), c.scope);
+        let value: &'r Value = &c.schema.extensions[RUST_TYPE];
+        let location: String = format!("`{RUST_TYPE}` at `#{pointer}`");
+        let Some(path) = self.rust_type_path(value, &location) else {
+            return Ok(None);
+        };
+        let list: &'r [Value] = match value.get("parameters") {
+            None => &[],
+            Some(Value::Array(list)) => list,
+            Some(_) => {
+                self.problems
+                    .push(format!("{location}: `parameters` is not an array"));
+                return Ok(None);
+            }
+        };
+        let base: String = base_name(flat, context);
+        let mut parameters: Vec<TypeId> = Vec::with_capacity(list.len());
+        for (i, parameter) in list.iter().enumerate() {
+            let id: TypeId = match parameter {
+                Value::Bool(true) => self.any(),
+                Value::Object(_) => {
+                    let Some(index) = self.raw.of_value(parameter) else {
+                        unreachable!("every parameter object of a counted extension is parsed")
+                    };
+                    let parameter: &'r JsonSchema = self.raw.parsed[index].as_ref();
+                    // The parameter sits at no schema location the validator evaluates: the
+                    // extension's own subschema validates the value.
+                    let at: String = format!(
+                        "{BUILT}{}",
+                        pointer_push(
+                            &pointer_push(&pointer_push(&pointer, RUST_TYPE), "parameters"),
+                            &i.to_string()
+                        )
+                    );
+                    self.request(
+                        Request {
+                            conjuncts: vec![Conjunct {
+                                schema: parameter,
+                                scope: self.registry.enter(scope, parameter),
+                                pointer: at.clone(),
+                                skip: 0,
+                            }],
+                            mask: all_types(),
+                        },
+                        &Context {
+                            schema_index: self.schema_index,
+                            origin: at,
+                            key_name: Some(format!("{base}_Parameter")),
+                            parent: context.parent.clone(),
+                            is_root: false,
+                        },
+                    )?
+                }
+                _ => {
+                    self.problems.push(format!(
+                        "{location}: parameter {i} is not a schema object or `true`"
+                    ));
+                    return Ok(None);
+                }
+            };
+            parameters.push(id);
+        }
+        Ok(Some(TypeNode::External {
+            path,
+            conversion: None,
+            parameters,
+        }))
     }
 
     /// Builds the node for a reserved id.
@@ -1073,7 +1267,7 @@ impl<'r> Builder<'_, 'r> {
         if flat.never {
             return Ok(uninhabited(annotations));
         }
-        if let Some(node) = self.converted(flat) {
+        if let Some(node) = self.user_type(flat, context)? {
             return Ok(node);
         }
         // A union keyword: one variant per branch, with the other conjuncts distributed in.
