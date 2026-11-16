@@ -10,7 +10,7 @@ use json_schema_rs::{
     CodeGenSettings, ContentMode, CrateSpec, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
     IntegerSemantics, JsonSchemaSettings, MapType, MetaschemaCheck, ModelNameSource, RefSiblings,
     SpecVersion, TypeConversion, TypePatch, UniqueItemsType, UnknownCrates, UnknownFormats,
-    UnknownProperties, UnknownSchemaUri,
+    UnknownProperties, UnknownSchemaUri, Visibility,
 };
 use proc_macro2::{Delimiter, Span, TokenTree};
 use quote::ToTokens;
@@ -206,7 +206,7 @@ fn json_text(tree: TokenTree) -> String {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 30] = [
+const SETTING_NAMES: [&str; 32] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -226,6 +226,8 @@ const SETTING_NAMES: [&str; 30] = [
     "replace",
     "crates",
     "unknown_crates",
+    "root_name",
+    "visibility",
     "disallow_unknown_fields",
     "forced_spec_version",
     "default_spec_version",
@@ -244,6 +246,9 @@ const UNKNOWN_CRATES: &[(&str, UnknownCrates)] = &[
     ("Allow", UnknownCrates::Allow),
     ("Deny", UnknownCrates::Deny),
 ];
+
+const VISIBILITIES: &[(&str, Visibility)] =
+    &[("Public", Visibility::Public), ("Crate", Visibility::Crate)];
 
 const MODEL_NAME_SOURCES: &[(&str, ModelNameSource)] = &[
     ("TitleFirst", ModelNameSource::TitleFirst),
@@ -347,6 +352,8 @@ struct Overrides {
     replacements: Option<BTreeMap<String, String>>,
     crates: Option<BTreeMap<String, CrateSpec>>,
     unknown_crates: Option<UnknownCrates>,
+    root_name: Option<String>,
+    visibility: Option<Visibility>,
     disallow_unknown_fields: Option<bool>,
     forced_spec_version: Option<SpecVersion>,
     default_spec_version: Option<SpecVersion>,
@@ -410,6 +417,12 @@ impl Overrides {
                 unknown_crates: self
                     .unknown_crates
                     .unwrap_or(code_gen_default.unknown_crates),
+                root_name: self.root_name.or(code_gen_default.root_name),
+                visibility: self.visibility.unwrap_or(code_gen_default.visibility),
+                // The macro lays out its own modules (`shared` beside each schema's) and its
+                // output carries no comments, so these two keep their defaults.
+                shared_path: code_gen_default.shared_path,
+                header: code_gen_default.header,
             },
             json_schema: JsonSchemaSettings {
                 disallow_unknown_fields: self
@@ -462,6 +475,17 @@ fn boolean(setting: &str, value: &SettingValue) -> SynResult<bool> {
                 "`{setting}` takes `true` or `false`, not `{}`",
                 value.written()
             ),
+        )),
+    }
+}
+
+/// The string `value` holds, for setting `setting`.
+fn string(setting: &str, value: &SettingValue) -> SynResult<String> {
+    match value {
+        SettingValue::Str(lit) => Ok(lit.value()),
+        _ => Err(syn::Error::new(
+            value.span(),
+            format!("`{setting}` takes a string, not `{}`", value.written()),
         )),
     }
 }
@@ -802,6 +826,11 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
             &mut overrides.unknown_crates,
             variant(setting, value, UNKNOWN_CRATES),
         ),
+        "root_name" => set(&mut overrides.root_name, string(setting, value)),
+        "visibility" => set(
+            &mut overrides.visibility,
+            variant(setting, value, VISIBILITIES),
+        ),
         "disallow_unknown_fields" => set(
             &mut overrides.disallow_unknown_fields,
             boolean(setting, value),
@@ -897,7 +926,7 @@ mod tests {
         CodeGenSettings, ContentMode, CrateSpec, CrateVersion, DedupeMode, ExclusiveBounds,
         FormatMode, FormatTypes, IntegerSemantics, JsonSchemaSettings, MapType, MetaschemaCheck,
         ModelNameSource, RefSiblings, SpecVersion, TypeConversion, TypePatch, UniqueItemsType,
-        UnknownCrates, UnknownFormats, UnknownProperties, UnknownSchemaUri,
+        UnknownCrates, UnknownFormats, UnknownProperties, UnknownSchemaUri, Visibility,
     };
     use proc_macro2::TokenStream;
     use std::collections::BTreeMap;
@@ -967,6 +996,8 @@ mod tests {
                     },
                 )
                 .patch("Fruit", TypePatch::default())
+                .root_name("Config")
+                .visibility(Visibility::Crate)
                 .build(),
             json_schema: JsonSchemaSettings::builder()
                 .disallow_unknown_fields(true)
@@ -990,7 +1021,7 @@ mod tests {
              extra_derives = [schemars::JsonSchema, ::core::hash::Hash], \
              extra_attrs = [non_exhaustive, serde(rename_all = \"camelCase\")], \
              patch = { Veg = { rename = \"Vegetable\", derives = [Hash], attrs = [must_use] }, Fruit = {} }, \
-             disallow_unknown_fields = true, \
+             root_name = \"Config\", visibility = Crate, disallow_unknown_fields = true, \
              forced_spec_version = Draft07, default_spec_version = Draft04, \
              format_mode = Assertion, content_mode = Annotation, unknown_formats = Reject, integer_semantics = Lexical, \
              exclusive_bounds = BooleanModifier, ref_siblings = Evaluated, \
@@ -1016,6 +1047,7 @@ mod tests {
                 .string_enum_impls(true)
                 .schema_defaults(false)
                 .format_types(FormatTypes::Typed)
+                .visibility(Visibility::Public)
                 .build(),
             json_schema: JsonSchemaSettings::builder()
                 .disallow_unknown_fields(false)
@@ -1035,7 +1067,7 @@ mod tests {
             "model_name_source = TitleFirst, dedupe_mode = Functional, \
              unknown_properties = Capture, unique_items = HashSet, map_type = BTreeMap, \
              flatten_single_entry_combinators = false, self_validating = true, \
-             constrained_newtypes = true, builders = false, string_enum_impls = true, schema_defaults = false, format_types = Typed, disallow_unknown_fields = false, \
+             constrained_newtypes = true, builders = false, string_enum_impls = true, schema_defaults = false, format_types = Typed, visibility = Public, disallow_unknown_fields = false, \
              forced_spec_version = Draft201909, default_spec_version = Draft06, \
              format_mode = Annotation, content_mode = Assertion, unknown_formats = Ignore, integer_semantics = Numeric, \
              exclusive_bounds = Numeric, ref_siblings = Ignored, \
@@ -1090,7 +1122,7 @@ mod tests {
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
              `self_validating`, `constrained_newtypes`, `builders`, `string_enum_impls`, `schema_defaults`, `format_types`, `extra_derives`, \
-             `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+             `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
             1,
@@ -1132,6 +1164,28 @@ mod tests {
             18,
         )];
         let actual: Vec<Located> = errors("self_validating = On");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn identifier_for_root_name_is_an_error_at_the_value() {
+        let expected: Vec<Located> = vec![(
+            "`root_name` takes a string, not `Config`".to_string(),
+            1,
+            12,
+        )];
+        let actual: Vec<Located> = errors("root_name = Config");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unknown_visibility_value_lists_variants() {
+        let expected: Vec<Located> = vec![(
+            "unknown value `Private` for `visibility`; expected `Public` or `Crate`".to_string(),
+            1,
+            13,
+        )];
+        let actual: Vec<Located> = errors("visibility = Private");
         assert_eq!(expected, actual);
     }
 
@@ -1210,7 +1264,7 @@ mod tests {
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `builders`, `string_enum_impls`, `schema_defaults`, `format_types`, `extra_derives`, \
-                 `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+                 `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,

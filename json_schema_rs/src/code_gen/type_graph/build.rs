@@ -825,10 +825,14 @@ impl<'r> Builder<'_, 'r> {
             });
         }
         if context.is_root {
+            let (tier, text): (NameTier, String) = match self.settings.root_name {
+                Some(ref name) => (NameTier::Given, name.clone()),
+                None => (NameTier::Root, "Root".to_string()),
+            };
             self.graph.proposals[id.index()].push(NameProposal {
-                tier: NameTier::Root,
+                tier,
                 origin,
-                text: "Root".to_string(),
+                text,
                 qualifier: None,
             });
         }
@@ -1206,7 +1210,7 @@ impl<'r> Builder<'_, 'r> {
                 return Ok(None);
             }
         };
-        let base: String = base_name(flat, context);
+        let base: String = base_name(flat, context, self.settings.root_name.as_deref());
         let mut parameters: Vec<TypeId> = Vec::with_capacity(list.len());
         for (i, parameter) in list.iter().enumerate() {
             let id: TypeId = match parameter {
@@ -1396,7 +1400,11 @@ impl<'r> Builder<'_, 'r> {
                         schema_index: self.schema_index,
                         origin: pointer,
                         key_name: Some(key.clone()),
-                        parent: Some(parent_name(flat, context)),
+                        parent: Some(parent_name(
+                            flat,
+                            context,
+                            self.settings.root_name.as_deref(),
+                        )),
                         is_root: false,
                     },
                 )?
@@ -1419,7 +1427,7 @@ impl<'r> Builder<'_, 'r> {
             None
         } else if !facts.additional.is_empty() {
             let pointer: String = facts.additional[0].pointer.clone();
-            let base: String = base_name(flat, context);
+            let base: String = base_name(flat, context, self.settings.root_name.as_deref());
             Some(self.request(
                 Request {
                     conjuncts: facts.additional.clone(),
@@ -1608,7 +1616,7 @@ impl<'r> Builder<'_, 'r> {
                 }
             }
         }
-        let base_name: String = base_name(flat, context);
+        let base_name: String = base_name(flat, context, self.settings.root_name.as_deref());
         let mut variants: Vec<Variant> = Vec::new();
         let mut combined_done: bool = false;
         let labels: Vec<String> = variant_labels(&base_name, &live, &string_values);
@@ -1628,7 +1636,11 @@ impl<'r> Builder<'_, 'r> {
                         schema_index: self.schema_index,
                         origin: branch.pointer.clone(),
                         key_name: Some(format!("{base_name}_Variant{i}")),
-                        parent: Some(parent_name(flat, context)),
+                        parent: Some(parent_name(
+                            flat,
+                            context,
+                            self.settings.root_name.as_deref(),
+                        )),
                         is_root: false,
                     },
                 );
@@ -1655,7 +1667,11 @@ impl<'r> Builder<'_, 'r> {
                     schema_index: self.schema_index,
                     origin,
                     key_name: Some(format!("{base_name}_{label}")),
-                    parent: Some(parent_name(flat, context)),
+                    parent: Some(parent_name(
+                        flat,
+                        context,
+                        self.settings.root_name.as_deref(),
+                    )),
                     is_root: false,
                 },
             )?;
@@ -1804,11 +1820,13 @@ fn both_patterns(a: &str, b: &str) -> String {
 }
 
 /// The text a node's derived names (union variants, map values) start from: the key it is
-/// reached under, else its `$defs` key, else its title, else `Root`.
-fn base_name(flat: &Flat<'_>, context: &Context) -> String {
-    context
-        .key_name
-        .clone()
+/// reached under, else its `$defs` key, else its title, else `Root`. A root named by
+/// `root_name` takes that name first.
+fn base_name(flat: &Flat<'_>, context: &Context, root_name: Option<&str>) -> String {
+    root_name
+        .filter(|_| context.is_root)
+        .map(str::to_string)
+        .or_else(|| context.key_name.clone())
         .or_else(|| {
             flat.conjuncts
                 .first()
@@ -1913,10 +1931,15 @@ fn singular(key: &str) -> String {
 /// The provisional name of the type `flat` builds, as its children's qualifier (see
 /// [`NameProposal::qualifier`]): in the order its own name is chosen, the `$defs` key, the title,
 /// then the key it is reached under.
-fn parent_name(flat: &Flat<'_>, context: &Context) -> String {
-    flat.conjuncts
-        .first()
-        .and_then(|c| definition_name(&c.pointer))
+fn parent_name(flat: &Flat<'_>, context: &Context, root_name: Option<&str>) -> String {
+    root_name
+        .filter(|_| context.is_root)
+        .map(str::to_string)
+        .or_else(|| {
+            flat.conjuncts
+                .first()
+                .and_then(|c| definition_name(&c.pointer))
+        })
         .or_else(|| {
             flat.conjuncts
                 .iter()

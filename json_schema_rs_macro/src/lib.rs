@@ -542,7 +542,7 @@ mod tests {
                 "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `builders`, `string_enum_impls`, `schema_defaults`, `format_types`, `extra_derives`, `extra_attrs`, \
-                 `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, \
+                 `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `disallow_unknown_fields`, \
                  `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),

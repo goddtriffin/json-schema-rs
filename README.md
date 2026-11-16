@@ -319,6 +319,13 @@ have defaults) implement `Default` with it, when the default is valid for both t
 and the Rust type; otherwise `default` stays an annotation, read through the
 `<field>_or_default()` accessors.
 
+**Fitting the output into your crate.** `.root_name("Config")` (`--cgs-root-name Config`)
+names each schema's root type, as written, ahead of its title. `.visibility(Visibility::Crate)`
+(`--cgs-visibility crate`) makes every generated item and field `pub(crate)`.
+`.shared_path("crate::common")` (`--cgs-shared-path`) is where each file imports deduplicated
+types from (default `super::shared`), and `.header("Copyright ...")` (`--cgs-header`) opens
+every generated file with `//` comment lines.
+
 **Integers.** From draft 6 on an integer is any number with a zero fraction, so generated
 integer types accept `1.0` and `2e0` (fields, items, map values, union variants and
 newtypes read through `json_schema_rs::integer`); draft 4 accepts only numbers written as
@@ -547,7 +554,9 @@ json_schema_to_rust!(
   `convert = { {"type":"string","format":"decimal"} => rust_decimal::Decimal }`,
   `replace = { Ipv4 = my::Ipv4 }`, `crates = ["my-types@1.2"]`,
   `unknown_crates = Generate|Allow|Deny`, `builders`, `string_enum_impls`,
-  `schema_defaults`.
+  `schema_defaults`, `root_name = "Config"`, `visibility = Public|Crate`. (The macro places the
+  shared module itself and its expansion carries no comments, so `shared_path` and `header`
+  are library and CLI settings.)
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,

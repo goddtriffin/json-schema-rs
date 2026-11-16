@@ -3,8 +3,8 @@
 use json_schema_rs::{
     CodeGenInput, CodeGenSettings, CompileError, CompileErrors, DedupeMode, FormatTypes,
     JsonSchema, JsonType, MapType, ModelNameSource, RegistryError, RegistryErrors, Schema,
-    SchemaError, SpecVersion, UniqueItemsType, UnknownProperties, ValidateError, generate_rust,
-    validate,
+    SchemaError, SpecVersion, UniqueItemsType, UnknownProperties, ValidateError, Visibility,
+    generate_rust, validate,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1478,6 +1478,7 @@ const SCENARIOS: &[&str] = &[
     "rust_type_extension",
     "builders",
     "std_impls",
+    "crate_visibility",
 ];
 
 /// Build+deserialize scenarios that need the `indexmap` feature.
@@ -2720,6 +2721,70 @@ fn write_workspace_scenario_member(
             let lib_rs: Vec<u8> = "pub mod shared;\npub mod a;\npub mod b;\n".into();
             let extra: Vec<(PathBuf, Vec<u8>)> = vec![
                 (PathBuf::from("shared.rs"), shared_bytes),
+                (PathBuf::from("a.rs"), output.per_schema[0].clone()),
+                (PathBuf::from("b.rs"), output.per_schema[1].clone()),
+            ];
+            (lib_rs, extra, main_rs)
+        }
+        "crate_visibility" => {
+            // Crate-visible items with builders, a given root name, a header and the shared items
+            // in a module named `common`: the generated code builds lint-clean, and only the
+            // crate's own code reaches the types.
+            let schema_json: &str = r#"{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1},"kind":{"enum":["a","b"]}}}"#;
+            let parsed_a: Schema = Schema::try_from(schema_json).expect("parse a");
+            let parsed_b: Schema = Schema::try_from(schema_json).expect("parse b");
+            let code_gen: CodeGenSettings = CodeGenSettings::builder()
+                .dedupe_mode(DedupeMode::Full)
+                .builders(true)
+                .visibility(Visibility::Crate)
+                .root_name("Config")
+                .shared_path("crate::common")
+                .header("Copyright Example.\n\nRegenerate with `make models`.")
+                .build();
+            let output = generate_rust(&[parsed_a, parsed_b], &code_gen).expect("generate");
+            let shared_bytes: Vec<u8> = output
+                .shared
+                .clone()
+                .expect("dedupe with two identical schemas produces shared");
+            let main_rs = r##"fn main() {
+    let expected: (Option<String>, Option<String>, bool) = (
+        Some(r#"{"kind":"b","name":"x"}"#.to_string()),
+        None,
+        true,
+    );
+    let actual: (Option<String>, Option<String>, bool) = (
+        compile_test::round_trip(r#"{"name":"x","kind":"b"}"#),
+        compile_test::round_trip(r#"{"name":""}"#),
+        compile_test::builds_from_b(),
+    );
+    assert_eq!(expected, actual);
+}
+"##;
+            let lib_rs: Vec<u8> =
+                r#"#[expect(dead_code, reason = "the crate uses part of the generated API")]
+mod common;
+mod a;
+mod b;
+
+/// Deserializes `json` into the first document's root and serializes it back, `None` when it
+/// is not a valid `Config`.
+#[must_use]
+pub fn round_trip(json: &str) -> Option<String> {
+    let config: a::Config = serde_json::from_str(json).ok()?;
+    serde_json::to_string(&config).ok()
+}
+
+/// Whether the second document's root builds through its builder.
+#[must_use]
+pub fn builds_from_b() -> bool {
+    let built: Result<b::Config, json_schema_rs::BuilderError> =
+        b::Config::builder().name("x").try_into();
+    built.is_ok()
+}
+"#
+                .into();
+            let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                (PathBuf::from("common.rs"), shared_bytes),
                 (PathBuf::from("a.rs"), output.per_schema[0].clone()),
                 (PathBuf::from("b.rs"), output.per_schema[1].clone()),
             ];
