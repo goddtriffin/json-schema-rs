@@ -261,13 +261,16 @@ pub(crate) enum TypeNode {
     Object(ObjectNode),
     Enum(EnumNode),
     Union(UnionNode),
-    /// A type of the user's, as a Rust path: a subschema matched by a conversion or a named type
-    /// replaced (see [`CodeGenSettings::conversions`](crate::CodeGenSettings::conversions)).
+    /// A type of the user's, as a Rust path: a subschema matched by a conversion, a named type
+    /// replaced (see [`CodeGenSettings::conversions`](crate::CodeGenSettings::conversions)), or
+    /// a subschema's `x-rust-type` (see [`CodeGenSettings::crates`](crate::CodeGenSettings::crates)).
     External {
         /// The type as written by the user.
         path: String,
-        /// The index of the matching conversion in the settings; `None` for a replacement.
+        /// The index of the matching conversion in the settings; `None` otherwise.
         conversion: Option<usize>,
+        /// The type's generic arguments (an `x-rust-type`'s `parameters`).
+        parameters: Vec<TypeId>,
     },
 }
 
@@ -290,8 +293,8 @@ impl TypeNode {
             | TypeNode::Integer(..)
             | TypeNode::Number
             | TypeNode::String { .. }
-            | TypeNode::Enum(_)
-            | TypeNode::External { .. } => Vec::new(),
+            | TypeNode::Enum(_) => Vec::new(),
+            TypeNode::External { parameters, .. } => parameters.clone(),
             TypeNode::Array { items, .. } => vec![*items],
             TypeNode::Map { values } => vec![*values],
             TypeNode::Option(inner) | TypeNode::Box(inner) => vec![*inner],
@@ -310,8 +313,8 @@ impl TypeNode {
             | TypeNode::Integer(..)
             | TypeNode::Number
             | TypeNode::String { .. }
-            | TypeNode::Enum(_)
-            | TypeNode::External { .. } => Vec::new(),
+            | TypeNode::Enum(_) => Vec::new(),
+            TypeNode::External { parameters, .. } => parameters.iter_mut().collect(),
             TypeNode::Array { items, .. } => vec![items],
             TypeNode::Map { values } => vec![values],
             TypeNode::Option(inner) | TypeNode::Box(inner) => vec![inner],

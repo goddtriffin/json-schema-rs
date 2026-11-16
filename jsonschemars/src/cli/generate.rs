@@ -7,8 +7,9 @@ use super::utils::{
 };
 use clap::ArgMatches;
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, DedupeMode, FormatTypes, JsonSchemaSettings, ModelNameSource,
-    Schema, TypePatch, UniqueItemsType, UnknownProperties, file_uri, generate_rust,
+    CodeGenInput, CodeGenSettings, CrateSpec, DedupeMode, FormatTypes, JsonSchemaSettings,
+    ModelNameSource, Schema, TypePatch, UniqueItemsType, UnknownCrates, UnknownProperties,
+    file_uri, generate_rust,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -173,7 +174,7 @@ fn read_patches(path: &Path) -> Result<BTreeMap<String, TypePatch>, String> {
 
 /// Codegen settings from the `--cgs-*` flags. Fails when the `--cgs-patch` file cannot be read
 /// or is malformed, when a `--cgs-convert` or `--cgs-replace` is not `X=Y` (or its schema is not
-/// JSON), and for `--cgs-unique-items index-set` when `jsonschemars` is built without
+/// JSON), when a `--cgs-crate` is not `[rename=]crate@version`, and for `--cgs-unique-items index-set` when `jsonschemars` is built without
 /// the `indexmap` feature.
 pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings, String> {
     let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
@@ -236,6 +237,18 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
             .split_once('=')
             .ok_or_else(|| format!("--cgs-replace {value}: expected NAME=TYPE"))?;
         b = b.replace(name, rust_type);
+    }
+    for value in many("cgs-crate") {
+        let (name, spec): (String, CrateSpec) =
+            CrateSpec::parse_named(&value).map_err(|e| format!("--cgs-crate: {e}"))?;
+        b = b.external_crate(name, spec);
+    }
+    if let Some(mode) = flag("cgs-unknown-crates") {
+        b = b.unknown_crates(match mode {
+            "allow" => UnknownCrates::Allow,
+            "deny" => UnknownCrates::Deny,
+            _ => UnknownCrates::Generate,
+        });
     }
     if let Some(kind) = flag("cgs-unique-items") {
         b = b.unique_items(match kind {

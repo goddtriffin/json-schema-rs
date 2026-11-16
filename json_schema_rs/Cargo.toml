@@ -59,6 +59,8 @@ num-bigint = { workspace = true, optional = true }
 regex = { workspace = true, optional = true, features = ["std", "unicode-bool", "unicode-gencat", "unicode-script", "perf-dfa"] }
 regress.workspace = true
 reqwest = { workspace = true, optional = true, features = ["blocking"] }
+# Crate versions and version requirements of `x-rust-type` (codegen).
+semver.workspace = true
 serde.workspace = true
 # `float_roundtrip`: parse every float to the nearest `f64` (the default parser can be one ULP off),
 # so numbers written by this crate read back exactly.

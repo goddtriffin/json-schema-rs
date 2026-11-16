@@ -402,6 +402,20 @@ Self-validating types validate the JSON before converting it (`TryFrom<Value>`,
 `Validated<T>`, and union variants while deserializing); a plain `Deserialize` takes
 what your type takes.
 
+**Types of other crates (`x-rust-type`).** A subschema carrying
+`"x-rust-type": {"crate": "my-types", "version": "^1.2", "path": "my_types::Thing"}` (with
+optional `"parameters": [schema, ..]` for a generic type) is ignored by default, as JSON
+Schema ignores unknown keywords. `.external_crate("my-types", CrateSpec { version:
+"1.2".parse()?, rename: None })`
+(`--cgs-crate my-types@1.2`, `[rename=]crate@version`, `*` for any version, `!` for none)
+uses `::my_types::Thing` wherever the crate's version satisfies the requirement, and
+generates the subschema otherwise; `.unknown_crates(UnknownCrates::Allow)`
+(`--cgs-unknown-crates allow`) uses the types of unlisted crates too, and `Deny` makes them
+an error. The named types implement `Serialize`, `Deserialize` and `ToJsonSchema`, as types
+generated from the same schema do. From typify: `cargo typify s.json --crate my-types@1.2
+--unknown-crates deny` is `jsonschemars generate rust -o out/ s.json --cgs-crate
+my-types@1.2 --cgs-unknown-crates deny`.
+
 **Cross-document `$ref`.** Give each schema its retrieval URI and a retriever with
 `CodeGenInput`; input schemas reach each other by URI or root `$id`, and types a
 document shares with another input go in the shared buffer:
@@ -510,7 +524,8 @@ json_schema_to_rust!(
   `extra_derives = [schemars::JsonSchema]`, `extra_attrs = [non_exhaustive]`,
   `patch = { Veg = { rename = "Vegetable", derives = [Hash], attrs = [..] } }`,
   `convert = { {"type":"string","format":"decimal"} => rust_decimal::Decimal }`,
-  `replace = { Ipv4 = my::Ipv4 }`.
+  `replace = { Ipv4 = my::Ipv4 }`, `crates = ["my-types@1.2"]`,
+  `unknown_crates = Generate|Allow|Deny`.
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,
