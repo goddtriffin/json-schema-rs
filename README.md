@@ -304,6 +304,13 @@ one entry as that entry's type instead of a one-variant enum (off by default, so
 derive gives the combinator back); `#[json_schema(flatten_single_entry)]` on a
 one-variant untagged enum derives its payload's schema instead of a one-entry `anyOf`.
 
+**Builders.** `.builders(true)` (`--cgs-builders`) adds a `builder` submodule to each
+generated file with a builder per struct: `Veg::builder().name("carrot").weight(3_u8).try_into()?`.
+Each setter takes anything `TryInto` the field's type (an optional field's setter takes the
+inner type), and `try_into()` (`TryFrom<builder::Veg>`) reports every missing required field
+and failed conversion together in a `json_schema_rs::BuilderError`; a self-validating struct
+is validated as well. `builder::Veg::from(veg)` starts from an existing value.
+
 **Integers.** From draft 6 on an integer is any number with a zero fraction, so generated
 integer types accept `1.0` and `2e0` (fields, items, map values, union variants and
 newtypes read through `json_schema_rs::integer`); draft 4 accepts only numbers written as
@@ -531,7 +538,7 @@ json_schema_to_rust!(
   `patch = { Veg = { rename = "Vegetable", derives = [Hash], attrs = [..] } }`,
   `convert = { {"type":"string","format":"decimal"} => rust_decimal::Decimal }`,
   `replace = { Ipv4 = my::Ipv4 }`, `crates = ["my-types@1.2"]`,
-  `unknown_crates = Generate|Allow|Deny`.
+  `unknown_crates = Generate|Allow|Deny`, `builders`.
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,

@@ -206,7 +206,7 @@ fn json_text(tree: TokenTree) -> String {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 27] = [
+const SETTING_NAMES: [&str; 28] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -215,6 +215,7 @@ const SETTING_NAMES: [&str; 27] = [
     "flatten_single_entry_combinators",
     "self_validating",
     "constrained_newtypes",
+    "builders",
     "format_types",
     "extra_derives",
     "extra_attrs",
@@ -333,6 +334,7 @@ struct Overrides {
     flatten_single_entry_combinators: Option<bool>,
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
+    builders: Option<bool>,
     format_types: Option<FormatTypes>,
     extra_derives: Option<Vec<String>>,
     extra_attrs: Option<Vec<String>>,
@@ -387,6 +389,7 @@ impl Overrides {
                 constrained_newtypes: self
                     .constrained_newtypes
                     .unwrap_or(code_gen_default.constrained_newtypes),
+                builders: self.builders.unwrap_or(code_gen_default.builders),
                 format_types: self.format_types.unwrap_or(code_gen_default.format_types),
                 extra_derives: self.extra_derives.unwrap_or(code_gen_default.extra_derives),
                 extra_attrs: self.extra_attrs.unwrap_or(code_gen_default.extra_attrs),
@@ -772,6 +775,7 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
         ),
         "self_validating" => set(&mut overrides.self_validating, boolean(setting, value)),
         "constrained_newtypes" => set(&mut overrides.constrained_newtypes, boolean(setting, value)),
+        "builders" => set(&mut overrides.builders, boolean(setting, value)),
         "format_types" => set(
             &mut overrides.format_types,
             variant(setting, value, FORMAT_TYPES),
@@ -936,6 +940,7 @@ mod tests {
                 .flatten_single_entry_combinators(true)
                 .self_validating(false)
                 .constrained_newtypes(false)
+                .builders(true)
                 .format_types(FormatTypes::FollowDialect)
                 .extra_derives(["schemars::JsonSchema", "::core::hash::Hash"])
                 .extra_attrs(["non_exhaustive", "serde (rename_all = \"camelCase\")"])
@@ -967,7 +972,7 @@ mod tests {
             "model_name_source = PropertyKeyFirst, dedupe_mode = Disabled, \
              unknown_properties = Drop, unique_items = BTreeSet, map_type = HashMap, \
              flatten_single_entry_combinators = true, self_validating = false, \
-             constrained_newtypes = false, format_types = FollowDialect, \
+             constrained_newtypes = false, builders = true, format_types = FollowDialect, \
              extra_derives = [schemars::JsonSchema, ::core::hash::Hash], \
              extra_attrs = [non_exhaustive, serde(rename_all = \"camelCase\")], \
              patch = { Veg = { rename = \"Vegetable\", derives = [Hash], attrs = [must_use] }, Fruit = {} }, \
@@ -993,6 +998,7 @@ mod tests {
                 .flatten_single_entry_combinators(false)
                 .self_validating(true)
                 .constrained_newtypes(true)
+                .builders(false)
                 .format_types(FormatTypes::Typed)
                 .build(),
             json_schema: JsonSchemaSettings::builder()
@@ -1013,7 +1019,7 @@ mod tests {
             "model_name_source = TitleFirst, dedupe_mode = Functional, \
              unknown_properties = Capture, unique_items = HashSet, map_type = BTreeMap, \
              flatten_single_entry_combinators = false, self_validating = true, \
-             constrained_newtypes = true, format_types = Typed, disallow_unknown_fields = false, \
+             constrained_newtypes = true, builders = false, format_types = Typed, disallow_unknown_fields = false, \
              forced_spec_version = Draft201909, default_spec_version = Draft06, \
              format_mode = Annotation, content_mode = Assertion, unknown_formats = Ignore, integer_semantics = Numeric, \
              exclusive_bounds = Numeric, ref_siblings = Ignored, \
@@ -1067,7 +1073,7 @@ mod tests {
         let expected: Vec<Located> = vec![(
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
-             `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
+             `self_validating`, `constrained_newtypes`, `builders`, `format_types`, `extra_derives`, \
              `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
@@ -1187,7 +1193,7 @@ mod tests {
             (
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
-                 `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
+                 `self_validating`, `constrained_newtypes`, `builders`, `format_types`, `extra_derives`, \
                  `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
