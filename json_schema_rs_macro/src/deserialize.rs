@@ -201,7 +201,8 @@ pub fn expand_deserialize(input: &DeriveInput) -> SynResult<TokenStream2> {
     if let Some(errors) = errors {
         return Err(errors);
     }
-    Ok(render(name, deny, &fields, flatten))
+    let krate: syn::Path = crate::derive::crate_path(&input.attrs)?;
+    Ok(render(&krate, name, deny, &fields, flatten))
 }
 
 /// The tokens one field contributes to the impl.
@@ -351,12 +352,13 @@ fn replace_self(tokens: TokenStream2, name: &Ident) -> TokenStream2 {
 
 /// The impl for the checked struct `name`.
 fn render(
+    krate: &syn::Path,
     name: &Ident,
     deny: bool,
     fields: &[&FieldSpec],
     flatten: Option<&FieldSpec>,
 ) -> TokenStream2 {
-    let private: TokenStream2 = quote! { ::json_schema_rs::generated_serde::__private };
+    let private: TokenStream2 = quote! { #krate::generated_serde::__private };
     let expecting: String = format!("struct {name}");
     let mut wrappers: Vec<TokenStream2> = Vec::new();
     let tokens: Vec<FieldTokens> = fields

@@ -830,3 +830,32 @@ fn visibility_crate_types_deserialize() {
     .map(|name| name.to_string());
     assert_eq!(expected, actual);
 }
+
+// --- crate_path and macro_crate_path ---
+
+/// The library and its derives under other paths, as a crate wrapping them offers them.
+mod facade {
+    pub use json_schema_rs as jsr;
+    pub use json_schema_rs_macro as jsr_macro;
+}
+
+mod crate_path {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"title":"Veg","type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1},"note":{"type":["string","null"]}}}"#,
+        crate_path = "crate::facade::jsr",
+        macro_crate_path = "crate::facade::jsr_macro"
+    );
+}
+
+#[test]
+fn crate_path_types_validate_through_the_given_paths() {
+    let expected: (Option<serde_json::Value>, bool) = (
+        Some(serde_json::json!({"name": "pea", "note": null})),
+        false,
+    );
+    let actual: (Option<serde_json::Value>, bool) = (
+        round_trip::<crate_path::schema_0::Veg>(serde_json::json!({"name": "pea", "note": null})),
+        accepts::<crate_path::schema_0::Veg>(serde_json::json!({"name": ""})),
+    );
+    assert_eq!(expected, actual);
+}

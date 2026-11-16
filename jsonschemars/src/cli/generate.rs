@@ -333,5 +333,11 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
     if let Some(header) = flag("cgs-header") {
         b = b.header(header);
     }
+    if let Some(path) = flag("cgs-crate-path") {
+        b = b.crate_path(path);
+    }
+    if let Some(path) = flag("cgs-macro-crate-path") {
+        b = b.macro_crate_path(path);
+    }
     Ok(b.build())
 }

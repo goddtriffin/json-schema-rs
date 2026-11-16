@@ -29,7 +29,7 @@ use crate::sanitizers::{
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 use std::io::Write;
 
 /// Backend that emits Rust structs (serde-compatible).
@@ -254,6 +254,13 @@ struct Plan {
     shared_path: String,
     /// The text written as `//` comments at the top of every buffer (`header`).
     header: Option<String>,
+    /// The path the generated code reaches the library through (`crate_path`).
+    runtime: String,
+    /// The path the generated code reaches the derive macros through (`macro_crate_path`).
+    macros: String,
+    /// The `#[json_schema(crate = ...)]` attribute every derived item carries when the library
+    /// is reached through another path, so the derives find it there too.
+    crate_attr: Option<String>,
     /// Per item with an `impl Default` from its schema `default` (`schema_defaults`), the
     /// default as compact JSON.
     defaults: HashMap<TypeId, String>,
@@ -351,6 +358,7 @@ impl Plan {
         };
         let ord_items: BTreeSet<TypeId> = ord_items(graph, &set_item);
         let eq_nodes: Vec<bool> = eq_nodes(graph);
+        let (runtime, macros, crate_attr) = crate_paths(settings);
         Ok(Plan {
             items: placed.items,
             root_aliases: placed.root_aliases,
@@ -368,6 +376,9 @@ impl Plan {
                 .clone()
                 .unwrap_or_else(|| "super::shared".to_string()),
             header: settings.header.clone(),
+            runtime,
+            macros,
+            crate_attr,
             defaults: HashMap::new(),
             extra_derives: settings.extra_derives.clone(),
             extra_attrs: settings.extra_attrs.clone(),
@@ -553,6 +564,20 @@ fn apply_patches<'s>(
     {
         problems.push(format!("shared path `{path}` is not a Rust path"));
     }
+    for (what, path) in [
+        ("crate path", &settings.crate_path),
+        ("macro crate path", &settings.macro_crate_path),
+    ] {
+        if let Some(path) = path {
+            if !is_rust_path(path) {
+                problems.push(format!("{what} `{path}` is not a Rust path"));
+            } else if matches!(first_segment(path), "self" | "super") {
+                problems.push(format!(
+                    "{what} `{path}` must name a crate: an extern crate path (`my_sdk::jsr`, `::my_sdk`) or a `crate::` path"
+                ));
+            }
+        }
+    }
     let patched: Vec<Option<&TypePatch>> = names
         .iter()
         .map(|name: &String| settings.patches.get(name))
@@ -613,16 +638,35 @@ fn is_rust_identifier(text: &str) -> bool {
         && !is_rust_keyword(text)
 }
 
-/// Whether `text` is a Rust path (`Hash`, `serde::Serialize`, `::schemars::JsonSchema`).
+/// Whether `text` is made of identifier characters (a keyword included).
+fn is_identifier_text(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|c: char| c.is_alphabetic() || c == '_')
+        && chars.all(|c: char| c.is_alphanumeric() || c == '_')
+}
+
+/// The first segment of a path (empty for a path that starts with `::`).
+fn first_segment(text: &str) -> &str {
+    text.split("::").next().unwrap_or(text)
+}
+
+/// Whether `text` is a Rust path (`Hash`, `serde::Serialize`, `::schemars::JsonSchema`). No
+/// segment is a keyword, except that `crate`, `self` and `super` may start a path without a
+/// leading `::`.
 fn is_rust_path(text: &str) -> bool {
-    let path: &str = text.strip_prefix("::").unwrap_or(text);
-    path.split("::").all(|segment: &str| {
-        let mut chars = segment.chars();
-        chars
-            .next()
-            .is_some_and(|c: char| c.is_alphabetic() || c == '_')
-            && chars.all(|c: char| c.is_alphanumeric() || c == '_')
-    })
+    let (path, rooted): (&str, bool) = match text.strip_prefix("::") {
+        Some(rest) => (rest, true),
+        None => (text, false),
+    };
+    path.split("::")
+        .enumerate()
+        .all(|(index, segment): (usize, &str)| {
+            is_identifier_text(segment)
+                && (!is_rust_keyword(segment)
+                    || (index == 0 && !rooted && matches!(segment, "crate" | "self" | "super")))
+        })
 }
 
 /// Whether `text` is a Rust type that is a path, each segment optionally with generic arguments
@@ -640,7 +684,7 @@ pub(crate) fn is_rust_type(text: &str) -> bool {
                 let path_ok: bool = if closed {
                     piece.trim().is_empty() && c != '<'
                 } else if let Some(lifetime) = piece.trim().strip_prefix('\'') {
-                    depth > 0 && c != '<' && is_rust_path(lifetime) && !lifetime.contains("::")
+                    depth > 0 && c != '<' && is_identifier_text(lifetime)
                 } else {
                     is_rust_path(piece.trim())
                 };
@@ -1574,7 +1618,17 @@ enum FieldShape {
 }
 
 /// `skip_serializing_if` for a `Nullable` field: an absent key is not written.
-const SKIP_ABSENT: &str = "skip_serializing_if = \"json_schema_rs::Nullable::is_absent\"";
+struct SkipAbsent<'a>(&'a str);
+
+impl fmt::Display for SkipAbsent<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "skip_serializing_if = \"{}::Nullable::is_absent\"",
+            self.0
+        )
+    }
+}
 
 /// One rendered field.
 #[derive(Debug)]
@@ -1693,7 +1747,10 @@ fn render_fields(
         // The map's values read by the integer rule (see [`reads_integers`]): with `flatten`,
         // `json_schema_rs_macro::Deserialize` reads each value through the `deserialize_with`.
         let attrs: String = if reads_integers(graph, plan, additional) {
-            format!("    #[serde(flatten, deserialize_with = \"{INTEGER_READ}\")]\n")
+            format!(
+                "    #[serde(flatten, deserialize_with = \"{}\")]\n",
+                IntegerRead(&plan.runtime)
+            )
         } else {
             "    #[serde(flatten)]\n".to_string()
         };
@@ -1736,7 +1793,13 @@ fn reads_integers(graph: &TypeGraph, plan: &Plan, id: TypeId) -> bool {
 }
 
 /// The path generated code reads an integer-holding value through (see [`reads_integers`]).
-const INTEGER_READ: &str = "json_schema_rs::integer::deserialize";
+struct IntegerRead<'a>(&'a str);
+
+impl fmt::Display for IntegerRead<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::integer::deserialize", self.0)
+    }
+}
 
 /// The Rust type of a field's value (without the field's own `Option`s), and the set type when
 /// it is a `uniqueItems` array held in a set (`UniqueItemsType`). A set applies only where the
@@ -1769,6 +1832,7 @@ fn field_value_type(
 /// The serde arguments for a field's presence and nullability (`shape`), reading a set field
 /// through the `unique_items` helper that rejects a duplicate item.
 fn shape_serde_args(
+    rt: &str,
     shape: FieldShape,
     set: Option<SetKind>,
     integers: bool,
@@ -1776,7 +1840,7 @@ fn shape_serde_args(
     serde_args: &mut Vec<String>,
 ) {
     if integers {
-        integer_serde_args(shape, set, imports, serde_args);
+        integer_serde_args(rt, shape, set, imports, serde_args);
         return;
     }
     if set.is_some() {
@@ -1797,7 +1861,7 @@ fn shape_serde_args(
         (FieldShape::OptionalNullable, Some(_)) => {
             serde_args.push("default".to_string());
             serde_args.push("deserialize_with = \"unique_items::optional_nullable\"".to_string());
-            serde_args.push(SKIP_ABSENT.to_string());
+            serde_args.push(SkipAbsent(rt).to_string());
         }
         (FieldShape::Plain, None) => {}
         (FieldShape::Optional, None) => {
@@ -1808,7 +1872,7 @@ fn shape_serde_args(
         }
         (FieldShape::OptionalNullable, None) => {
             serde_args.push("default".to_string());
-            serde_args.push(SKIP_ABSENT.to_string());
+            serde_args.push(SkipAbsent(rt).to_string());
         }
         // A set never holds `null`, so this shape has none.
         (FieldShape::OptionalHoldingNull, _) => {
@@ -1824,6 +1888,7 @@ fn shape_serde_args(
 /// reads through `json_schema_rs::integer` (a set through the `unique_items` helpers that read
 /// their items the same way).
 fn integer_serde_args(
+    rt: &str,
     shape: FieldShape,
     set: Option<SetKind>,
     imports: &mut Imports,
@@ -1850,13 +1915,13 @@ fn integer_serde_args(
             )
         }
         (FieldShape::OptionalHoldingNull, None) => {
-            "json_schema_rs::integer::deserialize_some".to_string()
+            format!("{rt}::integer::deserialize_some")
         }
-        (_, None) => INTEGER_READ.to_string(),
+        (_, None) => IntegerRead(rt).to_string(),
     };
     serde_args.push(format!("deserialize_with = \"{path}\""));
     if shape == FieldShape::OptionalNullable {
-        serde_args.push(SKIP_ABSENT.to_string());
+        serde_args.push(SkipAbsent(rt).to_string());
     } else if optional {
         serde_args.push("skip_serializing_if = \"Option::is_none\"".to_string());
     }
@@ -1931,7 +1996,7 @@ fn render_field(
         FieldShape::Optional | FieldShape::RequiredNullable | FieldShape::OptionalHoldingNull => {
             format!("Option<{value_ty}>")
         }
-        FieldShape::OptionalNullable => format!("json_schema_rs::Nullable<{value_ty}>"),
+        FieldShape::OptionalNullable => format!("{}::Nullable<{value_ty}>", plan.runtime),
     };
     let mut serde_args: Vec<String> = Vec::new();
     if rename {
@@ -1948,7 +2013,14 @@ fn render_field(
         render_default_accessor(name, shape, node, &value_ty, &literal)
     });
     let integers: bool = reads_integers(graph, plan, value_id);
-    shape_serde_args(shape, set, integers, imports, &mut serde_args);
+    shape_serde_args(
+        &plan.runtime,
+        shape,
+        set,
+        integers,
+        imports,
+        &mut serde_args,
+    );
     let mut attrs: String = String::new();
     let (doc_lines, stated): (Vec<String>, Option<String>) =
         annotation_docs(field.description.as_deref(), None);
@@ -1976,7 +2048,7 @@ fn render_field(
         let with: String = match shape {
             FieldShape::Plain | FieldShape::Optional | FieldShape::OptionalHoldingNull => schema,
             FieldShape::RequiredNullable => format!("Option<{schema}>"),
-            FieldShape::OptionalNullable => format!("json_schema_rs::Nullable<{schema}>"),
+            FieldShape::OptionalNullable => format!("{}::Nullable<{schema}>", plan.runtime),
         };
         schema_args.push(format!("with = \"{with}\""));
     }
@@ -2056,7 +2128,24 @@ fn derive_block(
             traits.push(extra);
         }
     }
-    let mut out: String = format!("#[derive({})]\n", traits.join(", "));
+    let mut out: String = String::from("#[derive(");
+    for (index, t) in traits.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        match t.strip_prefix("json_schema_rs_macro::") {
+            Some(name) => {
+                out.push_str(&plan.macros);
+                out.push_str("::");
+                out.push_str(name);
+            }
+            None => out.push_str(t),
+        }
+    }
+    out.push_str(")]\n");
+    if let Some(ref attr) = plan.crate_attr {
+        out.push_str(attr);
+    }
     let patch_attrs: &[String] = patch.map_or(&[], |p: &TypePatch| &p.attrs);
     for attr in plan.extra_attrs.iter().chain(patch_attrs) {
         let _ = writeln!(out, "#[{}]", attr.trim());
@@ -2168,10 +2257,10 @@ fn render_builder(
         out.push('\n');
     }
     if fields.is_empty() {
-        let _ = writeln!(out, "    json_schema_rs::builder!({marker}{name} {{}});");
+        let _ = writeln!(out, "    {}::builder!({marker}{name} {{}});", plan.runtime);
         return;
     }
-    let _ = writeln!(out, "    json_schema_rs::builder!({marker}{name} {{");
+    let _ = writeln!(out, "    {}::builder!({marker}{name} {{", plan.runtime);
     for field in &fields {
         let (kind, ty) = &field.builder;
         let _ = writeln!(out, "        {kind} {}: {ty},", field.name);
@@ -2292,7 +2381,7 @@ fn render_newtype(
         }
         _ => format!("scalar, {name}, {inner}, {validators}, {index}"),
     };
-    let _ = writeln!(out, "json_schema_rs::constrained_newtype!({call});\n");
+    let _ = writeln!(out, "{}::constrained_newtype!({call});\n", plan.runtime);
     out
 }
 
@@ -2371,13 +2460,20 @@ fn render_root_alias(
     let mut out: String = derive_block(plan, patch, &traits, false);
     out.push_str("#[serde(transparent)]\n");
     let field_attrs: String = if reads_integers(graph, plan, root) {
-        format!("#[serde(deserialize_with = \"{INTEGER_READ}\")] ")
+        format!(
+            "#[serde(deserialize_with = \"{}\")] ",
+            IntegerRead(&plan.runtime)
+        )
     } else {
         String::new()
     };
     let vis: &str = plan.vis;
     let _ = writeln!(out, "{vis} struct {name}({field_attrs}{vis} {ty});\n");
-    out.push_str(&rust_validators::render_item_impls(name, entry));
+    out.push_str(&rust_validators::render_item_impls(
+        &plan.runtime,
+        name,
+        entry,
+    ));
     out
 }
 
@@ -2441,7 +2537,7 @@ fn render_enum(
         }
         out.push_str("}\n\n");
         if plan.string_enum_impls && !e.values.is_empty() {
-            let _ = writeln!(out, "json_schema_rs::string_enum!({name});\n");
+            let _ = writeln!(out, "{}::string_enum!({name});\n", plan.runtime);
         }
         return out;
     }
@@ -2483,7 +2579,8 @@ fn render_enum(
     for (value, variant) in e.values.iter().zip(&variants) {
         let _ = writeln!(
             out,
-            "        if json_schema_rs::json_equal(&value, &serde_json::json!({})) {{\n            return Ok(Self::{variant});\n        }}",
+            "        if {}::json_equal(&value, &serde_json::json!({})) {{\n            return Ok(Self::{variant});\n        }}",
+            plan.runtime,
             json_tokens(value)
         );
     }
@@ -2589,7 +2686,11 @@ fn render_union(
         // Only an arm reading through serde's own `Deserialize` names the trait.
         imports.deserialize |= variants.iter().any(|variant| !variant.integers);
         out.push_str(&rust_validators::render_union_deserialize(
-            name, union.kind, entries, &variants,
+            &plan.runtime,
+            name,
+            union.kind,
+            entries,
+            &variants,
         ));
     } else {
         // serde's untagged derive buffers the input through its `Content`, which breaks numbers
@@ -2598,7 +2699,12 @@ fn render_union(
             .iter()
             .map(|v| {
                 if v.integers {
-                    format!("{}({} = with({INTEGER_READ}))", v.name, v.ty)
+                    format!(
+                        "{}({} = with({}))",
+                        v.name,
+                        v.ty,
+                        IntegerRead(&plan.runtime)
+                    )
                 } else {
                     format!("{}({})", v.name, v.ty)
                 }
@@ -2611,7 +2717,8 @@ fn render_union(
         };
         let _ = writeln!(
             out,
-            "json_schema_rs::deserialize_untagged!({name} {{{list}}});\n"
+            "{}::deserialize_untagged!({name} {{{list}}});\n",
+            plan.runtime
         );
     }
     out
@@ -2674,7 +2781,11 @@ fn ordered_items(graph: &TypeGraph, plan: &Plan, home: Home) -> Vec<TypeId> {
 /// [`json_schema_rs::schema_default!`](crate::schema_default!) line.
 fn push_schema_default(body: &mut String, plan: &Plan, id: TypeId, name: &str) {
     if let Some(json) = plan.defaults.get(&id) {
-        let _ = writeln!(body, "json_schema_rs::schema_default!({name}, {json:?});\n");
+        let _ = writeln!(
+            body,
+            "{}::schema_default!({name}, {json:?});\n",
+            plan.runtime
+        );
     }
 }
 
@@ -2744,12 +2855,16 @@ fn render_buffer(
         };
         body.push_str(&item);
         if let Some(entry) = entry {
-            body.push_str(&rust_validators::render_item_impls(name, &entry));
+            body.push_str(&rust_validators::render_item_impls(
+                &plan.runtime,
+                name,
+                &entry,
+            ));
         }
         push_schema_default(&mut body, plan, id, name);
     }
     if let (Some(validators), Some(sets)) = (&validators, sets) {
-        body.push_str(&validators.render(sets)?);
+        body.push_str(&validators.render(&plan.runtime, sets)?);
     }
     if !imports.builders.is_empty() {
         let _ = writeln!(
@@ -2823,7 +2938,7 @@ fn render_buffer(
         out.write_all(DESERIALIZE_SOME.as_bytes())?;
     }
     if !imports.unique_shapes.is_empty() || !imports.unique_integer_shapes.is_empty() {
-        out.write_all(unique_items_module(&imports).as_bytes())?;
+        out.write_all(unique_items_module(plan, &imports).as_bytes())?;
     }
     if !imports.converted.is_empty() {
         out.write_all(render_converted_schemas(plan, &imports).as_bytes())?;
@@ -2841,7 +2956,8 @@ fn render_converted_schemas(plan: &Plan, imports: &Imports) -> String {
         let (name, json) = &plan.converted[index];
         let _ = writeln!(
             out,
-            "    json_schema_rs::schema_marker!({name}, {});",
+            "    {}::schema_marker!({name}, {});",
+            plan.runtime,
             rust_validators::raw_string(json)
         );
     }
@@ -2877,10 +2993,30 @@ where
 
 ";
 
+/// The paths the generated code reaches the library and the derive macros through, and the
+/// attribute that points the derives at the library's path when it is not the default.
+fn crate_paths(settings: &CodeGenSettings) -> (String, String, Option<String>) {
+    let runtime: String = settings
+        .crate_path
+        .clone()
+        .unwrap_or_else(|| "json_schema_rs".to_string());
+    let macros: String = settings
+        .macro_crate_path
+        .clone()
+        .unwrap_or_else(|| "json_schema_rs_macro".to_string());
+    let attr: Option<String> = settings
+        .crate_path
+        .as_ref()
+        .map(|path: &String| format!("#[json_schema(crate = \"{path}\")]\n"));
+    (runtime, macros, attr)
+}
+
 /// The `unique_items` helper module for a buffer: the `UniqueSet` impls and the deserialize
 /// functions its `uniqueItems` set fields use. A duplicate item is a deserialize error, so an
 /// invalid instance is never silently turned into a different, valid one.
-fn unique_items_module(imports: &Imports) -> String {
+/// The templates name the library `json_schema_rs`; with another
+/// [`crate_path`](CodeGenSettings::crate_path) the module names it by that path.
+fn unique_items_module(plan: &Plan, imports: &Imports) -> String {
     let mut out: String = String::from(UNIQUE_ITEMS_HEAD);
     for kind in &imports.unique_sets {
         out.push_str(kind.helper_impl());
@@ -2908,7 +3044,11 @@ fn unique_items_module(imports: &Imports) -> String {
         });
     }
     out.push_str("}\n\n");
-    out
+    if plan.runtime == "json_schema_rs" {
+        out
+    } else {
+        out.replace("json_schema_rs::", &format!("{}::", plan.runtime))
+    }
 }
 
 const UNIQUE_ITEMS_HEAD: &str =
@@ -17020,6 +17160,267 @@ pub type Names = Vec<String>;
             .build();
         let actual: String = generate_rust(&[schema], &settings).unwrap_err().to_string();
         let expected: &str = r"the settings cannot be applied: root name `my-config` is not a Rust identifier; shared path `crate::bad path` is not a Rust path";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crate_paths_rejected_when_not_rust() {
+        let schema: Schema = Schema::try_from(r#"{"type":"object"}"#).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .crate_path("my facade")
+            .macro_crate_path("::")
+            .build();
+        let actual: String = generate_rust(&[schema], &settings).unwrap_err().to_string();
+        let expected: &str = r"the settings cannot be applied: crate path `my facade` is not a Rust path; macro crate path `::` is not a Rust path";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crate_paths_rejected_when_relative() {
+        let schema: Schema = Schema::try_from(r#"{"type":"object"}"#).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .crate_path("super::jsr")
+            .macro_crate_path("self::macros")
+            .build();
+        let actual: String = generate_rust(&[schema], &settings).unwrap_err().to_string();
+        let expected: &str = r"the settings cannot be applied: crate path `super::jsr` must name a crate: an extern crate path (`my_sdk::jsr`, `::my_sdk`) or a `crate::` path; macro crate path `self::macros` must name a crate: an extern crate path (`my_sdk::jsr`, `::my_sdk`) or a `crate::` path";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crate_path_rejected_with_keyword_segment() {
+        let schema: Schema = Schema::try_from(r#"{"type":"object"}"#).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder().crate_path("jsr::type").build();
+        let actual: String = generate_rust(&[schema], &settings).unwrap_err().to_string();
+        let expected: &str =
+            r"the settings cannot be applied: crate path `jsr::type` is not a Rust path";
+        assert_eq!(expected, actual);
+    }
+
+    /// With crate paths set, every path to the library and to the derives goes through them:
+    /// the derives, the `#[json_schema(crate = ...)]` attribute, the macros, `Nullable`, the
+    /// integer readers, the unique-items helpers and the embedded validators.
+    #[test]
+    #[expect(clippy::too_many_lines)]
+    fn crate_paths_reach_every_library_item() {
+        let schema: &str = r#"{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1},"kind":{"enum":["a","b"]},"size":{"anyOf":[{"type":"integer"},{"type":"string"}]},"note":{"type":["string","null"]},"ids":{"type":"array","items":{"type":"integer"},"uniqueItems":true},"level":{"enum":[1,"x"]}}}"#;
+        let actual: String = generate_buffers(
+            &[schema],
+            &CodeGenSettings::builder()
+                .crate_path("crate::facade::jsr")
+                .macro_crate_path("crate::facade::jsr_macro")
+                .unique_items(UniqueItemsType::BTreeSet)
+                .builders(true)
+                .build(),
+        );
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
+/// Deserializes `uniqueItems` arrays into sets: a duplicate item is an error, never dropped.
+mod unique_items {
+    use serde::Deserialize;
+
+    /// A set that reports whether an inserted item was new.
+    pub(super) trait UniqueSet: Default {
+        type Item;
+        fn with_capacity(capacity: usize) -> Self;
+        fn insert_new(&mut self, item: Self::Item) -> bool;
+    }
+
+    impl<T: Ord> UniqueSet for std::collections::BTreeSet<T> {
+        type Item = T;
+        fn with_capacity(_capacity: usize) -> Self {
+            Self::new()
+        }
+        fn insert_new(&mut self, item: T) -> bool {
+            self.insert(item)
+        }
+    }
+
+    /// Reads integer items by JSON Schema's integer rule (`1.0` is the integer 1).
+    struct IntegerVisitor<S>(std::marker::PhantomData<S>);
+
+    impl<'de, S> serde::de::Visitor<'de> for IntegerVisitor<S>
+    where
+        S: UniqueSet,
+        S::Item: crate::facade::jsr::integer::DeserializeInteger<'de>,
+    {
+        type Value = S;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array with unique items")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<S, A::Error> {
+            let mut set: S = S::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+            let mut index: usize = 0;
+            while let Some(crate::facade::jsr::integer::Integer(item)) = seq.next_element()? {
+                if !set.insert_new(item) {
+                    return Err(serde::de::Error::custom(format_args!(
+                        "duplicate item at index {index} of an array with uniqueItems"
+                    )));
+                }
+                index += 1;
+            }
+            Ok(set)
+        }
+    }
+
+    /// An array of integers read into the set `S`.
+    struct UniqueIntegers<S>(S);
+
+    impl<'de, S> Deserialize<'de> for UniqueIntegers<S>
+    where
+        S: UniqueSet,
+        S::Item: crate::facade::jsr::integer::DeserializeInteger<'de>,
+    {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer
+                .deserialize_seq(IntegerVisitor(std::marker::PhantomData))
+                .map(UniqueIntegers)
+        }
+    }
+
+    pub(super) fn optional_integer<'de, D, S>(deserializer: D) -> Result<Option<S>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        S: UniqueSet,
+        S::Item: crate::facade::jsr::integer::DeserializeInteger<'de>,
+    {
+        UniqueIntegers::deserialize(deserializer).map(|unique: UniqueIntegers<S>| Some(unique.0))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, crate::facade::jsr_macro::ToJsonSchema)]
+#[json_schema(crate = "crate::facade::jsr")]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    A,
+    B,
+}
+
+crate::facade::jsr::string_enum!(Kind);
+
+crate::facade::jsr::self_validating!(Kind, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, crate::facade::jsr_macro::ToJsonSchema)]
+#[json_schema(crate = "crate::facade::jsr")]
+pub enum Level {
+    #[json_schema(value = "x")]
+    X,
+    #[json_schema(value = 1)]
+    N1,
+}
+
+impl Serialize for Level {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value: serde_json::Value = match self {
+            Self::X => serde_json::json!("x"),
+            Self::N1 => serde_json::json!(1),
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Level {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        if crate::facade::jsr::json_equal(&value, &serde_json::json!("x")) {
+            return Ok(Self::X);
+        }
+        if crate::facade::jsr::json_equal(&value, &serde_json::json!(1)) {
+            return Ok(Self::N1);
+        }
+        Err(serde::de::Error::custom(format!("value {value} not in enum (allowed: {})", "\"x\", 1")))
+    }
+}
+
+crate::facade::jsr::self_validating!(Level, TYPE_VALIDATORS, 1);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, crate::facade::jsr_macro::ToJsonSchema)]
+#[json_schema(crate = "crate::facade::jsr")]
+#[serde(transparent)]
+#[json_schema(min_length = 1)]
+pub struct Name(String);
+
+crate::facade::jsr::constrained_newtype!(string, Name, TYPE_VALIDATORS, 2);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, crate::facade::jsr_macro::ToJsonSchema)]
+#[json_schema(crate = "crate::facade::jsr")]
+#[serde(untagged)]
+pub enum SizeAnyOf {
+    Integer(i64),
+    String(String),
+}
+
+crate::facade::jsr::deserialize_union!(SizeAnyOf, TYPE_VALIDATORS, AnyOf, Some(3), [4, 5], |value| {
+    0 => crate::facade::jsr::integer::deserialize::<_, i64>(value).map(Self::Integer),
+    _ => <String as Deserialize>::deserialize(value).map(Self::String),
+});
+
+crate::facade::jsr::self_validating!(SizeAnyOf, TYPE_VALIDATORS, 3);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, crate::facade::jsr_macro::Deserialize, crate::facade::jsr_macro::ToJsonSchema)]
+#[json_schema(crate = "crate::facade::jsr")]
+pub struct Root {
+    #[serde(default, deserialize_with = "unique_items::optional_integer", skip_serializing_if = "Option::is_none")]
+    #[json_schema(unique_items)]
+    pub ids: Option<BTreeSet<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<Level>,
+    pub name: Name,
+    #[serde(default, skip_serializing_if = "crate::facade::jsr::Nullable::is_absent")]
+    pub note: crate::facade::jsr::Nullable<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<SizeAnyOf>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+crate::facade::jsr::self_validating!(Root, TYPE_VALIDATORS, 6);
+
+static TYPE_VALIDATORS: crate::facade::jsr::TypeValidators<'static> = crate::facade::jsr::TypeValidators::new(
+    None,
+    &[
+        crate::facade::jsr::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"ids":{"items":{"type":"integer"},"type":"array","uniqueItems":true},"kind":{"enum":["a","b"]},"level":{"enum":[1,"x"]},"name":{"minLength":1,"type":"string"},"note":{"type":["null","string"]},"size":{"anyOf":[{"type":"integer"},{"type":"string"}]}},"required":["name"],"type":"object"}"#,
+            kind: crate::facade::jsr::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/properties/kind"],
+        &["#/properties/level"],
+        &["#/properties/name"],
+        &["#/properties/size"],
+        &["#/properties/size/anyOf/0"],
+        &["#/properties/size/anyOf/1"],
+        &["#"],
+    ],
+);
+
+/// The builders of this module's structs (`Name::builder()`).
+pub mod builder {
+    use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
+
+    crate::facade::jsr::builder!(@validated Root {
+        optional ids: BTreeSet<i64>,
+        optional kind: super::Kind,
+        optional level: super::Level,
+        required name: super::Name,
+        defaulted note: crate::facade::jsr::Nullable<String>,
+        optional size: super::SizeAnyOf,
+        defaulted additional: BTreeMap<String, serde_json::Value>,
+    });
+}
+
+"##;
         assert_eq!(expected, actual);
     }
 

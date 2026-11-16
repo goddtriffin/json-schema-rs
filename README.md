@@ -324,7 +324,10 @@ names each schema's root type, as written, ahead of its title. `.visibility(Visi
 (`--cgs-visibility crate`) makes every generated item and field `pub(crate)`.
 `.shared_path("crate::common")` (`--cgs-shared-path`) is where each file imports deduplicated
 types from (default `super::shared`), and `.header("Copyright ...")` (`--cgs-header`) opens
-every generated file with `//` comment lines.
+every generated file with `//` comment lines. When your crate reaches the library through
+a re-export (a crate that wraps it), `.crate_path("my_sdk::jsr")` (`--cgs-crate-path`) and
+`.macro_crate_path("my_sdk::jsr_macro")` (`--cgs-macro-crate-path`) point every path in the
+generated code there; the derives take the same path as `#[json_schema(crate = "my_sdk::jsr")]`.
 
 **Integers.** From draft 6 on an integer is any number with a zero fraction, so generated
 integer types accept `1.0` and `2e0` (fields, items, map values, union variants and
@@ -554,7 +557,8 @@ json_schema_to_rust!(
   `convert = { {"type":"string","format":"decimal"} => rust_decimal::Decimal }`,
   `replace = { Ipv4 = my::Ipv4 }`, `crates = ["my-types@1.2"]`,
   `unknown_crates = Generate|Allow|Deny`, `builders`, `string_enum_impls`,
-  `schema_defaults`, `root_name = "Config"`, `visibility = Public|Crate`. (The macro places the
+  `schema_defaults`, `root_name = "Config"`, `visibility = Public|Crate`,
+  `crate_path = "my_sdk::jsr"`, `macro_crate_path = "my_sdk::jsr_macro"`. (The macro places the
   shared module itself and its expansion carries no comments, so `shared_path` and `header`
   are library and CLI settings.)
 - Schema ingestion: `disallow_unknown_fields`,

@@ -444,3 +444,23 @@ fn rename_all_reads_the_same_keys_as_serde() {
     });
     assert_eq!(expected, actual);
 }
+
+/// The library under another path, as a crate that re-exports it would offer it.
+mod facade {
+    pub use json_schema_rs as jsr;
+}
+
+#[derive(Debug, PartialEq, json_schema_rs_macro::Deserialize)]
+#[json_schema(crate = "crate::facade::jsr")]
+struct ThroughFacade {
+    name: String,
+}
+
+#[test]
+fn crate_attribute_reaches_the_library_through_its_path() {
+    let expected: ThroughFacade = ThroughFacade {
+        name: "x".to_string(),
+    };
+    let actual: ThroughFacade = serde_json::from_str(r#"{"name":"x"}"#).unwrap();
+    assert_eq!(expected, actual);
+}

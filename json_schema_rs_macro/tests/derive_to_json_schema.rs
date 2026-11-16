@@ -3630,3 +3630,29 @@ fn derive_chrono_fields_json_schema() {
         .collect();
     assert_eq!(expected, actual);
 }
+
+/// The library under another path, as a crate that re-exports it would offer it.
+mod facade {
+    pub use json_schema_rs as jsr;
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(crate = "crate::facade::jsr", title = "Through")]
+#[expect(dead_code, reason = "only the derived schema is read")]
+struct ThroughFacade {
+    name: String,
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(title = "Through")]
+#[expect(dead_code, reason = "only the derived schema is read")]
+struct Direct {
+    name: String,
+}
+
+#[test]
+fn crate_attribute_reaches_the_library_through_its_path() {
+    let expected: ReverseCodeGenResult = Direct::json_schema();
+    let actual: ReverseCodeGenResult = ThroughFacade::json_schema();
+    assert_eq!(expected, actual);
+}

@@ -391,6 +391,20 @@ pub struct CodeGenSettings {
     /// Text written at the top of every generated buffer, each line as a `//` comment; default
     /// none.
     pub header: Option<String>,
+    /// The path through which the generated code reaches this library (default
+    /// `json_schema_rs`), for a crate that depends on it through a re-export
+    /// (`my_facade::json_schema_rs`). The derived items then carry
+    /// `#[json_schema(crate = "...")]` so the derives reach it there too. The path must name a
+    /// crate: an extern crate path (`my_facade::json_schema_rs`, `::my_facade`) or a `crate::`
+    /// path; a bare first segment must be a crate name in scope everywhere (the generated code
+    /// has nested modules), as with serde's `crate` attribute, so `self` and `super` paths are
+    /// rejected. Generating fails when it is not such a path.
+    pub crate_path: Option<String>,
+    /// The path through which the generated code reaches the derive macros (default
+    /// `json_schema_rs_macro`). Like [`crate_path`](CodeGenSettings::crate_path), it must name a
+    /// crate (an extern crate path or a `crate::` path, never `self` or `super`). Generating
+    /// fails when it is not such a path.
+    pub macro_crate_path: Option<String>,
 }
 
 impl CodeGenSettings {
@@ -433,6 +447,8 @@ impl Default for CodeGenSettings {
             visibility: Visibility::Public,
             shared_path: None,
             header: None,
+            crate_path: None,
+            macro_crate_path: None,
         }
     }
 }
@@ -463,6 +479,8 @@ pub struct CodeGenSettingsBuilder {
     visibility: Option<Visibility>,
     shared_path: Option<String>,
     header: Option<String>,
+    crate_path: Option<String>,
+    macro_crate_path: Option<String>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -650,6 +668,20 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Set the path to this library (see [`CodeGenSettings::crate_path`]).
+    #[must_use]
+    pub fn crate_path(mut self, value: impl Into<String>) -> Self {
+        self.crate_path = Some(value.into());
+        self
+    }
+
+    /// Set the path to the derive macros (see [`CodeGenSettings::macro_crate_path`]).
+    #[must_use]
+    pub fn macro_crate_path(mut self, value: impl Into<String>) -> Self {
+        self.macro_crate_path = Some(value.into());
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -679,6 +711,8 @@ impl CodeGenSettingsBuilder {
             visibility: self.visibility.unwrap_or_default(),
             shared_path: self.shared_path,
             header: self.header,
+            crate_path: self.crate_path,
+            macro_crate_path: self.macro_crate_path,
         }
     }
 }
