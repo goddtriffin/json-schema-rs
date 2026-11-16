@@ -278,6 +278,13 @@ pub fn run() {
                         .help("Codegen Settings: Rust collection for uniqueItems arrays; a set rejects a duplicate item when deserializing (default: vec; index-set needs the `indexmap` feature)"),
                 )
                 .arg(
+                    Arg::new("cgs-map-type")
+                        .long("cgs-map-type")
+                        .value_name("TYPE")
+                        .value_parser(["btree-map", "hash-map", "index-map"])
+                        .help("Codegen Settings: Rust map type for objects' string-keyed entries (maps and a struct's additional properties) (default: btree-map; index-map needs the `indexmap` feature)"),
+                )
+                .arg(
                     Arg::new("cgs-flatten-single-entry-combinators")
                         .long("cgs-flatten-single-entry-combinators")
                         .action(clap::ArgAction::SetTrue)

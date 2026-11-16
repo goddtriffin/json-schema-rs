@@ -69,6 +69,30 @@ pub enum UniqueItemsType {
     IndexSet,
 }
 
+/// The Rust map type for an object's string-keyed entries: a schema whose only keyword for keys
+/// is `additionalProperties` (a map type alias, field or item), and a struct's flattened
+/// additional properties.
+///
+/// A JSON object is an unordered set of members (RFC 8259 §4), so every map keeps the instance's
+/// meaning; the choice is which Rust properties the map has. The default,
+/// [`BTreeMap`](MapType::BTreeMap), serializes in sorted key order (deterministic output) and lets
+/// the types holding it derive `Hash` and `Ord` (a `uniqueItems` set item).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MapType {
+    /// `std::collections::BTreeMap<String, V>`: sorted keys.
+    #[default]
+    BTreeMap,
+    /// `std::collections::HashMap<String, V>`: fast lookup; serializes in an unspecified order
+    /// that can differ between runs. A type holding one does not derive `Hash` or `Ord`, so it
+    /// is not a `uniqueItems` set item.
+    HashMap,
+    /// `indexmap::IndexMap<String, V>`: keeps the instance's key order. A type holding one does
+    /// not derive `Ord`, so it is not a `uniqueItems` set item. The generated code needs the
+    /// `indexmap` crate with its `serde` feature.
+    #[cfg(feature = "indexmap")]
+    IndexMap,
+}
+
 /// Whether a `format` codegen has a Rust type for gets that type when the schema's dialect only
 /// annotates formats. The typed formats: `uuid` → `uuid::Uuid` (the `uuid` feature),
 /// `date-time` → `chrono::DateTime<chrono::FixedOffset>` and `date` → `chrono::NaiveDate` (the
@@ -236,6 +260,8 @@ pub struct CodeGenSettings {
     pub unknown_properties: Option<UnknownProperties>,
     /// The Rust collection for `uniqueItems` arrays (default `Vec`).
     pub unique_items: UniqueItemsType,
+    /// The Rust map type for objects' string-keyed entries (default `BTreeMap`).
+    pub map_type: MapType,
     /// Generate an `anyOf` / `oneOf` with exactly one entry as that entry's type instead of a
     /// one-variant union (default `false`). The two are equivalent for validation, so the type
     /// accepts the same instances either way; a one-variant union keeps the combinator on a
@@ -330,6 +356,7 @@ impl Default for CodeGenSettings {
             dedupe_mode: DedupeMode::Full,
             unknown_properties: None,
             unique_items: UniqueItemsType::Vec,
+            map_type: MapType::BTreeMap,
             flatten_single_entry_combinators: false,
             self_validating: true,
             constrained_newtypes: true,
@@ -352,6 +379,7 @@ pub struct CodeGenSettingsBuilder {
     dedupe_mode: Option<DedupeMode>,
     unknown_properties: Option<UnknownProperties>,
     unique_items: Option<UniqueItemsType>,
+    map_type: Option<MapType>,
     flatten_single_entry_combinators: Option<bool>,
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
@@ -391,6 +419,13 @@ impl CodeGenSettingsBuilder {
     #[must_use]
     pub fn unique_items(mut self, value: UniqueItemsType) -> Self {
         self.unique_items = Some(value);
+        self
+    }
+
+    /// Set the Rust map type for objects' string-keyed entries (see [`MapType`]).
+    #[must_use]
+    pub fn map_type(mut self, value: MapType) -> Self {
+        self.map_type = Some(value);
         self
     }
 
@@ -499,6 +534,7 @@ impl CodeGenSettingsBuilder {
             dedupe_mode: self.dedupe_mode.unwrap_or_default(),
             unknown_properties: self.unknown_properties,
             unique_items: self.unique_items.unwrap_or_default(),
+            map_type: self.map_type.unwrap_or_default(),
             flatten_single_entry_combinators: self
                 .flatten_single_entry_combinators
                 .unwrap_or_default(),

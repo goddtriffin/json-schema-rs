@@ -256,6 +256,13 @@ impl<T, S: BuildHasher + Default> StringMap<T> for HashMap<String, T, S> {
     }
 }
 
+#[cfg(feature = "indexmap")]
+impl<T, S: BuildHasher + Default> StringMap<T> for indexmap::IndexMap<String, T, S> {
+    fn insert_entry(&mut self, key: String, value: T) {
+        self.insert(key, value);
+    }
+}
+
 struct MapVisitor<M, T>(PhantomData<(M, T)>);
 
 impl<'de, M: StringMap<T>, T: DeserializeInteger<'de>> Visitor<'de> for MapVisitor<M, T> {
@@ -281,6 +288,17 @@ impl<'de, T: DeserializeInteger<'de>> DeserializeInteger<'de> for BTreeMap<Strin
 }
 
 impl<'de, T, S> DeserializeInteger<'de> for HashMap<String, T, S>
+where
+    T: DeserializeInteger<'de>,
+    S: BuildHasher + Default,
+{
+    fn deserialize_integer<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(MapVisitor::<Self, T>(PhantomData))
+    }
+}
+
+#[cfg(feature = "indexmap")]
+impl<'de, T, S> DeserializeInteger<'de> for indexmap::IndexMap<String, T, S>
 where
     T: DeserializeInteger<'de>,
     S: BuildHasher + Default,

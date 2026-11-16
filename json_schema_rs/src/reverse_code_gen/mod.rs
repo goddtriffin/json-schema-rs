@@ -1382,17 +1382,43 @@ impl<T: ToJsonSchema, S> ToJsonSchema for indexmap::IndexSet<T, S> {
     }
 }
 
+/// The schema of a map from strings to `V`: an object whose every value is a `V`.
+fn map_schema<V: ToJsonSchema>(generator: &mut SchemaGenerator) -> JsonSchema {
+    JsonSchema {
+        type_: Some(JsonType::Object.into()),
+        additional_properties: Some(V::json_schema_with(generator).into()),
+        ..Default::default()
+    }
+}
+
 impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
     fn json_schema() -> ReverseCodeGenResult {
         root_schema_for::<Self>()
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
-        JsonSchema {
-            type_: Some(JsonType::Object.into()),
-            additional_properties: Some(V::json_schema_with(generator).into()),
-            ..Default::default()
-        }
+        map_schema::<V>(generator)
+    }
+}
+
+impl<V: ToJsonSchema, S> ToJsonSchema for std::collections::HashMap<String, V, S> {
+    fn json_schema() -> ReverseCodeGenResult {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        map_schema::<V>(generator)
+    }
+}
+
+#[cfg(feature = "indexmap")]
+impl<V: ToJsonSchema, S> ToJsonSchema for indexmap::IndexMap<String, V, S> {
+    fn json_schema() -> ReverseCodeGenResult {
+        root_schema_for::<Self>()
+    }
+
+    fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
+        map_schema::<V>(generator)
     }
 }
 

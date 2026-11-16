@@ -2,8 +2,9 @@
 
 use json_schema_rs::{
     CodeGenInput, CodeGenSettings, CompileError, CompileErrors, DedupeMode, FormatTypes,
-    JsonSchema, JsonType, ModelNameSource, RegistryError, RegistryErrors, Schema, SchemaError,
-    SpecVersion, UniqueItemsType, UnknownProperties, ValidateError, generate_rust, validate,
+    JsonSchema, JsonType, MapType, ModelNameSource, RegistryError, RegistryErrors, Schema,
+    SchemaError, SpecVersion, UniqueItemsType, UnknownProperties, ValidateError, generate_rust,
+    validate,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1429,6 +1430,7 @@ const SCENARIOS: &[&str] = &[
     "unique_items_round_trip",
     "unique_items_sets",
     "unique_items_generated_item_sets",
+    "map_type_hash_map",
     "examples_annotation",
     "deprecated_property",
     "self_reference_root",
@@ -1473,6 +1475,7 @@ const SCENARIOS: &[&str] = &[
 const INDEXMAP_SCENARIOS: &[&str] = &[
     "unique_items_index_set",
     "unique_items_index_set_generated_items",
+    "map_type_index_map",
 ];
 #[cfg(not(feature = "indexmap"))]
 const INDEXMAP_SCENARIOS: &[&str] = &[];
@@ -1512,6 +1515,25 @@ fn unique_items_generated_item_modules(modules: &[(&str, UniqueItemsType)]) -> V
     let mut lib_rs: Vec<u8> = Vec::new();
     for (name, setting) in modules {
         let settings: CodeGenSettings = CodeGenSettings::builder().unique_items(*setting).build();
+        let code: Vec<u8> = generate_single(schema_json, &settings);
+        lib_rs.extend_from_slice(format!("pub mod {name} {{\n").as_bytes());
+        lib_rs.extend_from_slice(&code);
+        lib_rs.extend_from_slice(b"}\n");
+    }
+    lib_rs
+}
+
+/// One module per `(name, map type)`, generated from a struct with an integer map property, a
+/// `uniqueItems` array of structs with typed unknown keys (`BTreeSet` where the map type
+/// allows), and typed unknown keys of its own.
+fn map_type_modules(modules: &[(&str, MapType)]) -> Vec<u8> {
+    let schema_json: &str = r##"{"type":"object","properties":{"labels":{"type":"object","additionalProperties":{"type":"integer"}},"tags":{"type":"array","items":{"$ref":"#/$defs/Tag"},"uniqueItems":true}},"required":["tags"],"additionalProperties":{"type":"string"},"$defs":{"Tag":{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":{"type":"boolean"}}}}"##;
+    let mut lib_rs: Vec<u8> = Vec::new();
+    for (name, map_type) in modules {
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .map_type(*map_type)
+            .unique_items(UniqueItemsType::BTreeSet)
+            .build();
         let code: Vec<u8> = generate_single(schema_json, &settings);
         lib_rs.extend_from_slice(format!("pub mod {name} {{\n").as_bytes());
         lib_rs.extend_from_slice(&code);
@@ -3144,6 +3166,55 @@ fn main() {
     assert_eq!(expected, actual);
 }
 "#;
+            (lib_rs, vec![], main_rs)
+        }
+        "map_type_hash_map" => {
+            // `MapType::HashMap`: map properties and unknown keys are `HashMap`s (integer values
+            // read by the dialect's rule), the struct holding one stays out of the `BTreeSet`,
+            // and the derive gives the map schemas back.
+            let lib_rs: Vec<u8> = map_type_modules(&[("hash_map", MapType::HashMap)]);
+            let main_rs = r##"use std::collections::HashMap;
+
+fn main() {
+    use json_schema_rs::ToJsonSchema;
+    let instance: serde_json::Value = serde_json::json!({
+        "labels": {"a": 1.0, "b": 2},
+        "tags": [{"name": "t", "x": true}, {"name": "t", "x": true}],
+        "extra": "e"
+    });
+    let root: compile_test::hash_map::Root = serde_json::from_value(instance).unwrap();
+    let schema: json_schema_rs::JsonSchema = compile_test::hash_map::Root::json_schema().unwrap();
+    let expected: (Option<HashMap<String, i64>>, HashMap<String, String>, usize, String) = (
+        Some(HashMap::from([("a".to_string(), 1), ("b".to_string(), 2)])),
+        HashMap::from([("extra".to_string(), "e".to_string())]),
+        2,
+        r#"{"type":"object","additionalProperties":{"type":"integer","minimum":-9223372036854775808,"maximum":9223372036854775807}}"#
+            .to_string(),
+    );
+    let actual: (Option<HashMap<String, i64>>, HashMap<String, String>, usize, String) = (
+        root.labels,
+        root.additional,
+        root.tags.len(),
+        serde_json::to_string(&schema.properties["labels"]).unwrap(),
+    );
+    assert_eq!(expected, actual);
+}
+"##;
+            (lib_rs, vec![], main_rs)
+        }
+        #[cfg(feature = "indexmap")]
+        "map_type_index_map" => {
+            // `MapType::IndexMap`: map properties and unknown keys keep the instance's key
+            // order through a round trip.
+            let lib_rs: Vec<u8> = map_type_modules(&[("index_map", MapType::IndexMap)]);
+            let main_rs = r###"fn main() {
+    let text: &str = r##"{"labels":{"b":2,"a":1},"tags":[{"name":"t","z":true,"y":false}],"z":"1","y":"2"}"##;
+    let root: compile_test::index_map::Root = serde_json::from_str(text).unwrap();
+    let expected: &str = text;
+    let actual: String = serde_json::to_string(&root).unwrap();
+    assert_eq!(expected, actual);
+}
+"###;
             (lib_rs, vec![], main_rs)
         }
         "unique_items_round_trip" => {

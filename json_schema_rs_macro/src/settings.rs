@@ -8,7 +8,7 @@
 
 use json_schema_rs::{
     CodeGenSettings, ContentMode, CrateSpec, DedupeMode, ExclusiveBounds, FormatMode, FormatTypes,
-    IntegerSemantics, JsonSchemaSettings, MetaschemaCheck, ModelNameSource, RefSiblings,
+    IntegerSemantics, JsonSchemaSettings, MapType, MetaschemaCheck, ModelNameSource, RefSiblings,
     SpecVersion, TypeConversion, TypePatch, UniqueItemsType, UnknownCrates, UnknownFormats,
     UnknownProperties, UnknownSchemaUri,
 };
@@ -206,11 +206,12 @@ fn json_text(tree: TokenTree) -> String {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 26] = [
+const SETTING_NAMES: [&str; 27] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
     "unique_items",
+    "map_type",
     "flatten_single_entry_combinators",
     "self_validating",
     "constrained_newtypes",
@@ -318,6 +319,9 @@ const METASCHEMA_CHECKS: &[(&str, MetaschemaCheck)] = &[
 /// The variant names of `unique_items`, whether or not this build has `IndexSet`.
 const UNIQUE_ITEMS_NAMES: &[&str] = &["Vec", "HashSet", "BTreeSet", "IndexSet"];
 
+/// The variant names of `map_type`, whether or not this build has `IndexMap`.
+const MAP_TYPE_NAMES: &[&str] = &["BTreeMap", "HashMap", "IndexMap"];
+
 /// The settings the arguments set; `None` keeps the builder default.
 #[derive(Default)]
 struct Overrides {
@@ -325,6 +329,7 @@ struct Overrides {
     dedupe_mode: Option<DedupeMode>,
     unknown_properties: Option<UnknownProperties>,
     unique_items: Option<UniqueItemsType>,
+    map_type: Option<MapType>,
     flatten_single_entry_combinators: Option<bool>,
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
@@ -372,6 +377,7 @@ impl Overrides {
                     .unknown_properties
                     .or(code_gen_default.unknown_properties),
                 unique_items: self.unique_items.unwrap_or(code_gen_default.unique_items),
+                map_type: self.map_type.unwrap_or(code_gen_default.map_type),
                 flatten_single_entry_combinators: self
                     .flatten_single_entry_combinators
                     .unwrap_or(code_gen_default.flatten_single_entry_combinators),
@@ -503,6 +509,40 @@ fn unique_items(value: &SettingValue) -> SynResult<UniqueItemsType> {
             ],
         )
         .map_err(|_| unknown_value("unique_items", value, UNIQUE_ITEMS_NAMES)),
+    }
+}
+
+#[cfg(feature = "indexmap")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "fails only without the `indexmap` feature"
+)]
+fn index_map(_span: Span) -> SynResult<MapType> {
+    Ok(MapType::IndexMap)
+}
+
+/// `map_type = IndexMap` when the macro is built without its `indexmap` feature.
+#[cfg(not(feature = "indexmap"))]
+fn index_map(span: Span) -> SynResult<MapType> {
+    Err(syn::Error::new(
+        span,
+        "`map_type = IndexMap` needs the `indexmap` feature of `json-schema-rs-macro`",
+    ))
+}
+
+/// The `map_type` variant `value` names.
+fn map_type(value: &SettingValue) -> SynResult<MapType> {
+    match value {
+        SettingValue::Ident(ident) if ident == "IndexMap" => index_map(ident.span()),
+        _ => variant(
+            "map_type",
+            value,
+            &[
+                ("BTreeMap", MapType::BTreeMap),
+                ("HashMap", MapType::HashMap),
+            ],
+        )
+        .map_err(|_| unknown_value("map_type", value, MAP_TYPE_NAMES)),
     }
 }
 
@@ -725,6 +765,7 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
             variant(setting, value, UNKNOWN_PROPERTIES),
         ),
         "unique_items" => set(&mut overrides.unique_items, unique_items(value)),
+        "map_type" => set(&mut overrides.map_type, map_type(value)),
         "flatten_single_entry_combinators" => set(
             &mut overrides.flatten_single_entry_combinators,
             boolean(setting, value),
@@ -838,7 +879,7 @@ mod tests {
     use super::{MacroSettings, SettingArg, resolve};
     use json_schema_rs::{
         CodeGenSettings, ContentMode, CrateSpec, CrateVersion, DedupeMode, ExclusiveBounds,
-        FormatMode, FormatTypes, IntegerSemantics, JsonSchemaSettings, MetaschemaCheck,
+        FormatMode, FormatTypes, IntegerSemantics, JsonSchemaSettings, MapType, MetaschemaCheck,
         ModelNameSource, RefSiblings, SpecVersion, TypeConversion, TypePatch, UniqueItemsType,
         UnknownCrates, UnknownFormats, UnknownProperties, UnknownSchemaUri,
     };
@@ -891,6 +932,7 @@ mod tests {
                 .dedupe_mode(DedupeMode::Disabled)
                 .unknown_properties(UnknownProperties::Drop)
                 .unique_items(UniqueItemsType::BTreeSet)
+                .map_type(MapType::HashMap)
                 .flatten_single_entry_combinators(true)
                 .self_validating(false)
                 .constrained_newtypes(false)
@@ -923,7 +965,7 @@ mod tests {
         };
         let actual: MacroSettings = resolve_source(
             "model_name_source = PropertyKeyFirst, dedupe_mode = Disabled, \
-             unknown_properties = Drop, unique_items = BTreeSet, \
+             unknown_properties = Drop, unique_items = BTreeSet, map_type = HashMap, \
              flatten_single_entry_combinators = true, self_validating = false, \
              constrained_newtypes = false, format_types = FollowDialect, \
              extra_derives = [schemars::JsonSchema, ::core::hash::Hash], \
@@ -947,6 +989,7 @@ mod tests {
                 .dedupe_mode(DedupeMode::Functional)
                 .unknown_properties(UnknownProperties::Capture)
                 .unique_items(UniqueItemsType::HashSet)
+                .map_type(MapType::BTreeMap)
                 .flatten_single_entry_combinators(false)
                 .self_validating(true)
                 .constrained_newtypes(true)
@@ -968,7 +1011,7 @@ mod tests {
         };
         let actual: MacroSettings = resolve_source(
             "model_name_source = TitleFirst, dedupe_mode = Functional, \
-             unknown_properties = Capture, unique_items = HashSet, \
+             unknown_properties = Capture, unique_items = HashSet, map_type = BTreeMap, \
              flatten_single_entry_combinators = false, self_validating = true, \
              constrained_newtypes = true, format_types = Typed, disallow_unknown_fields = false, \
              forced_spec_version = Draft201909, default_spec_version = Draft06, \
@@ -1023,7 +1066,7 @@ mod tests {
     fn unknown_setting_is_an_error_at_its_name() {
         let expected: Vec<Located> = vec![(
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
-             `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
+             `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
              `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
              `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
@@ -1084,6 +1127,42 @@ mod tests {
     }
 
     #[test]
+    fn unknown_map_type_value_lists_index_map() {
+        let expected: Vec<Located> = vec![(
+            "unknown value `Map` for `map_type`; expected `BTreeMap`, `HashMap` or `IndexMap`"
+                .to_string(),
+            1,
+            11,
+        )];
+        let actual: Vec<Located> = errors("map_type = Map");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    #[cfg(feature = "indexmap")]
+    fn index_map_with_feature_is_index_map() {
+        let expected: MapType = MapType::IndexMap;
+        let actual: MapType = resolve_source("map_type = IndexMap")
+            .expect("resolve")
+            .code_gen
+            .map_type;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    #[cfg(not(feature = "indexmap"))]
+    fn index_map_without_feature_is_an_error_naming_the_feature() {
+        let expected: Vec<Located> = vec![(
+            "`map_type = IndexMap` needs the `indexmap` feature of `json-schema-rs-macro`"
+                .to_string(),
+            1,
+            11,
+        )];
+        let actual: Vec<Located> = errors("map_type = IndexMap");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn repeated_setting_is_an_error_at_each_repeat() {
         let expected: Vec<Located> = vec![
             (
@@ -1107,7 +1186,7 @@ mod tests {
         let expected: Vec<Located> = vec![
             (
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
-                 `unknown_properties`, `unique_items`, `flatten_single_entry_combinators`, \
+                 `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `format_types`, `extra_derives`, \
                  `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"

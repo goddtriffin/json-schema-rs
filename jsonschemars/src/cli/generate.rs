@@ -7,7 +7,7 @@ use super::utils::{
 };
 use clap::ArgMatches;
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, CrateSpec, DedupeMode, FormatTypes, JsonSchemaSettings,
+    CodeGenInput, CodeGenSettings, CrateSpec, DedupeMode, FormatTypes, JsonSchemaSettings, MapType,
     ModelNameSource, Schema, TypePatch, UniqueItemsType, UnknownCrates, UnknownProperties,
     file_uri, generate_rust,
 };
@@ -172,10 +172,33 @@ fn read_patches(path: &Path) -> Result<BTreeMap<String, TypePatch>, String> {
     Ok(patches)
 }
 
+/// The `--cgs-map-type` value's [`MapType`]; `index-map` fails when `jsonschemars` is built
+/// without the `indexmap` feature.
+#[cfg_attr(
+    feature = "indexmap",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fails only without the `indexmap` feature"
+    )
+)]
+fn map_type(kind: &str) -> Result<MapType, String> {
+    match kind {
+        "hash-map" => Ok(MapType::HashMap),
+        #[cfg(feature = "indexmap")]
+        "index-map" => Ok(MapType::IndexMap),
+        #[cfg(not(feature = "indexmap"))]
+        "index-map" => Err(
+            "--cgs-map-type index-map needs jsonschemars built with the `indexmap` feature"
+                .to_string(),
+        ),
+        _ => Ok(MapType::BTreeMap),
+    }
+}
+
 /// Codegen settings from the `--cgs-*` flags. Fails when the `--cgs-patch` file cannot be read
 /// or is malformed, when a `--cgs-convert` or `--cgs-replace` is not `X=Y` (or its schema is not
-/// JSON), when a `--cgs-crate` is not `[rename=]crate@version`, and for `--cgs-unique-items index-set` when `jsonschemars` is built without
-/// the `indexmap` feature.
+/// JSON), when a `--cgs-crate` is not `[rename=]crate@version`, for `--cgs-unique-items index-set` when
+/// `jsonschemars` is built without the `indexmap` feature, and as [`map_type`] does.
 pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings, String> {
     let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
     let mut b = CodeGenSettings::builder()
@@ -265,6 +288,9 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
             }
             _ => UniqueItemsType::Vec,
         });
+    }
+    if let Some(kind) = flag("cgs-map-type") {
+        b = b.map_type(map_type(kind)?);
     }
     Ok(b.build())
 }
