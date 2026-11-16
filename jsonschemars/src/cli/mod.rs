@@ -285,6 +285,31 @@ pub fn run() {
                         .help("Codegen Settings: Rust map type for objects' string-keyed entries (maps and a struct's additional properties) (default: btree-map; index-map needs the `indexmap` feature)"),
                 )
                 .arg(
+                    Arg::new("cgs-root-name")
+                        .long("cgs-root-name")
+                        .value_name("NAME")
+                        .help("Codegen Settings: the name of each schema's root type, used as written; it outranks the title and keeps it when another type wants the same name (default: from the title or file name)"),
+                )
+                .arg(
+                    Arg::new("cgs-visibility")
+                        .long("cgs-visibility")
+                        .value_name("VIS")
+                        .value_parser(["public", "crate"])
+                        .help("Codegen Settings: visibility of every generated item and field: public = pub, crate = pub(crate) (default: public)"),
+                )
+                .arg(
+                    Arg::new("cgs-shared-path")
+                        .long("cgs-shared-path")
+                        .value_name("PATH")
+                        .help("Codegen Settings: the Rust path each schema's file re-exports deduplicated types from (default: super::shared)"),
+                )
+                .arg(
+                    Arg::new("cgs-header")
+                        .long("cgs-header")
+                        .value_name("TEXT")
+                        .help("Codegen Settings: text written as // comments at the top of every generated file, one per line (e.g. a license or a regenerate command)"),
+                )
+                .arg(
                     Arg::new("cgs-flatten-single-entry-combinators")
                         .long("cgs-flatten-single-entry-combinators")
                         .action(clap::ArgAction::SetTrue)

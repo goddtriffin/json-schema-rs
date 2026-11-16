@@ -248,6 +248,12 @@ struct Plan {
     builders: bool,
     /// Whether string enums get `as_str`, `Display` and `FromStr` (`string_enum_impls`).
     string_enum_impls: bool,
+    /// The visibility of every item, field and re-export (`visibility`): `pub`, `pub(crate)`.
+    vis: &'static str,
+    /// The path a per-schema buffer reaches the shared items through (`shared_path`).
+    shared_path: String,
+    /// The text written as `//` comments at the top of every buffer (`header`).
+    header: Option<String>,
     /// Per item with an `impl Default` from its schema `default` (`schema_defaults`), the
     /// default as compact JSON.
     defaults: HashMap<TypeId, String>,
@@ -276,25 +282,7 @@ impl Plan {
     }
 
     fn new(graph: &mut TypeGraph, settings: &CodeGenSettings) -> CodeGenResult<Plan> {
-        let reach: Vec<BTreeSet<TypeId>> = passes::reachable(graph);
-        // Which schemas use each named node.
-        let mut users: BTreeMap<TypeId, BTreeSet<usize>> = BTreeMap::new();
-        for (schema, ids) in reach.iter().enumerate() {
-            for &id in ids {
-                if graph.is_named(id) {
-                    users.entry(id).or_default().insert(schema);
-                }
-            }
-        }
-        let shared: BTreeSet<TypeId> = if settings.dedupe_mode == DedupeMode::Disabled {
-            BTreeSet::new()
-        } else {
-            shared_items(graph, &users)
-        };
-        let uses_shared: Vec<bool> = reach
-            .iter()
-            .map(|ids| ids.iter().any(|id| shared.contains(id)))
-            .collect();
+        let (users, shared, uses_shared) = users_and_shared(graph, settings.dedupe_mode);
         let home_of = |id: TypeId| -> Home {
             if shared.contains(&id) {
                 Home::Shared
@@ -322,6 +310,9 @@ impl Plan {
             .map(|(proposal, key, home)| {
                 let base: String = match key {
                     ItemKey::Node(id) => item_base_name(graph, *id, proposal),
+                    ItemKey::RootAlias(_) if proposal.tier == NameTier::Given => {
+                        proposal.text.clone()
+                    }
                     ItemKey::RootAlias(_) => sanitize_struct_name(&proposal.text),
                 };
                 (base, *home)
@@ -337,7 +328,11 @@ impl Plan {
             }
         };
         let wanted: Vec<(String, Home)> = qualify_collisions(&wanted, &candidates, &clash);
-        let names: Vec<String> = allocate_names(&wanted, clash);
+        let given: Vec<bool> = candidates
+            .iter()
+            .map(|(proposal, _, _)| proposal.tier == NameTier::Given)
+            .collect();
+        let names: Vec<String> = allocate_names(&wanted, &given, clash);
         let (candidates, mut names): (Vec<Candidate>, Vec<String>) =
             if settings.replacements.is_empty() {
                 (candidates, names)
@@ -367,6 +362,12 @@ impl Plan {
             self_validating: settings.self_validating,
             builders: settings.builders,
             string_enum_impls: settings.string_enum_impls,
+            vis: settings.visibility.keyword(),
+            shared_path: settings
+                .shared_path
+                .clone()
+                .unwrap_or_else(|| "super::shared".to_string()),
+            header: settings.header.clone(),
             defaults: HashMap::new(),
             extra_derives: settings.extra_derives.clone(),
             extra_attrs: settings.extra_attrs.clone(),
@@ -477,6 +478,37 @@ fn apply_replacements(
         .unzip())
 }
 
+/// Which schemas use each named node, the nodes the shared module holds, and whether each
+/// schema uses the shared module.
+fn users_and_shared(
+    graph: &TypeGraph,
+    dedupe_mode: DedupeMode,
+) -> (
+    BTreeMap<TypeId, BTreeSet<usize>>,
+    BTreeSet<TypeId>,
+    Vec<bool>,
+) {
+    let reach: Vec<BTreeSet<TypeId>> = passes::reachable(graph);
+    let mut users: BTreeMap<TypeId, BTreeSet<usize>> = BTreeMap::new();
+    for (schema, ids) in reach.iter().enumerate() {
+        for &id in ids {
+            if graph.is_named(id) {
+                users.entry(id).or_default().insert(schema);
+            }
+        }
+    }
+    let shared: BTreeSet<TypeId> = if dedupe_mode == DedupeMode::Disabled {
+        BTreeSet::new()
+    } else {
+        shared_items(graph, &users)
+    };
+    let uses_shared: Vec<bool> = reach
+        .iter()
+        .map(|ids| ids.iter().any(|id| shared.contains(id)))
+        .collect();
+    (users, shared, uses_shared)
+}
+
 /// Applies `settings.patches` to the allocated `names` (one per item, in `homes`): renames each
 /// patched item and returns each item's patch. Every problem is collected: a patch whose key
 /// names no item, a new name that is not a Rust identifier or that another item it `clash`es
@@ -507,6 +539,20 @@ fn apply_patches<'s>(
     };
     check_derives(&settings.extra_derives, &mut problems);
     check_attrs(&settings.extra_attrs, &mut problems);
+    if let Some(ref name) = settings.root_name {
+        if !is_rust_identifier(name) {
+            problems.push(format!("root name `{name}` is not a Rust identifier"));
+        } else if RESERVED_NAMES.contains(&name.as_str()) {
+            problems.push(format!(
+                "root name `{name}` is a type the generated code uses"
+            ));
+        }
+    }
+    if let Some(ref path) = settings.shared_path
+        && !is_rust_path(path)
+    {
+        problems.push(format!("shared path `{path}` is not a Rust path"));
+    }
     let patched: Vec<Option<&TypePatch>> = names
         .iter()
         .map(|name: &String| settings.patches.get(name))
@@ -656,8 +702,12 @@ fn root_alias_proposal(graph: &TypeGraph, schema: usize, root: TypeId) -> NamePr
 }
 
 /// The base name of a named node from its best proposal: a union reached through a property or
-/// title gets an `AnyOf` / `OneOf` suffix; a `$defs` key is used as written.
+/// title gets an `AnyOf` / `OneOf` suffix; a `$defs` key is used as written, and a given root
+/// name exactly as written.
 fn item_base_name(graph: &TypeGraph, id: TypeId, proposal: &NameProposal) -> String {
+    if proposal.tier == NameTier::Given {
+        return proposal.text.clone();
+    }
     let base: String = sanitize_struct_name(&proposal.text);
     match (graph.node(id), proposal.tier) {
         (TypeNode::Union(u), tier) if tier != NameTier::Definition => match u.kind {
@@ -725,8 +775,13 @@ fn qualify_collisions<K>(
 /// names are equal and that `clash` (would be visible in one module) form a group; when a group
 /// has two or more items, or its name is reserved, every item in it gets a numeric suffix
 /// (`Name0`, `Name1`) in allocation order. A suffixed name already used where the item is
-/// visible moves to the next number.
-fn allocate_names(wanted: &[(String, Home)], clash: impl Fn(Home, Home) -> bool) -> Vec<String> {
+/// visible moves to the next number. A `given` item (a root named by `root_name`) keeps its name
+/// while it is the only given one in its group, and the others are numbered around it.
+fn allocate_names(
+    wanted: &[(String, Home)],
+    given: &[bool],
+    clash: impl Fn(Home, Home) -> bool,
+) -> Vec<String> {
     let n: usize = wanted.len();
     // Union-find over items with the same base that clash.
     let mut parent: Vec<usize> = (0..n).collect();
@@ -748,13 +803,22 @@ fn allocate_names(wanted: &[(String, Home)], clash: impl Fn(Home, Home) -> bool)
     }
     let roots: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
     let mut group_size: HashMap<usize, usize> = HashMap::new();
-    for root in &roots {
+    let mut group_given: HashMap<usize, usize> = HashMap::new();
+    for (root, is_given) in roots.iter().zip(given) {
         *group_size.entry(*root).or_insert(0) += 1;
+        *group_given.entry(*root).or_insert(0) += usize::from(*is_given);
     }
     let suffixed: Vec<bool> = wanted
         .iter()
         .zip(&roots)
-        .map(|((base, _), root)| group_size[root] > 1 || RESERVED_NAMES.contains(&base.as_str()))
+        .zip(given)
+        .map(|(((base, _), root), is_given)| {
+            if *is_given && group_given[root] == 1 {
+                false
+            } else {
+                group_size[root] > 1 || RESERVED_NAMES.contains(&base.as_str())
+            }
+        })
         .collect();
     // Names in use per home: every unsuffixed base first, so a suffix never takes one.
     let mut taken: Vec<(Home, String)> = wanted
@@ -2063,10 +2127,10 @@ fn render_struct(
     if !container_args.is_empty() {
         let _ = writeln!(out, "#[serde({})]", container_args.join(", "));
     }
-    let _ = writeln!(out, "pub struct {name} {{");
+    let _ = writeln!(out, "{} struct {name} {{", plan.vis);
     for field in &fields {
         out.push_str(&field.attrs);
-        let _ = writeln!(out, "    pub {}: {},", field.name, field.ty);
+        let _ = writeln!(out, "    {} {}: {},", plan.vis, field.name, field.ty);
     }
     out.push_str("}\n\n");
     if !default_accessors.is_empty() {
@@ -2216,7 +2280,7 @@ fn render_newtype(
     if !schema_args.is_empty() {
         let _ = writeln!(out, "#[json_schema({})]", schema_args.join(", "));
     }
-    let _ = writeln!(out, "pub struct {name}({inner});\n");
+    let _ = writeln!(out, "{} struct {name}({inner});\n", plan.vis);
     let Entry { validators, index } = entry;
     let call: String = match inner {
         "String" => format!("string, {name}, {validators}, {index}"),
@@ -2292,7 +2356,7 @@ fn render_root_alias(
     let patch: Option<&TypePatch> = plan.alias_patches[schema].as_ref();
     let ty: String = rust_type(graph, plan, home, root, imports);
     let Some(entry) = entry else {
-        return format!("pub type {name} = {ty};\n\n");
+        return format!("{} type {name} = {ty};\n\n", plan.vis);
     };
     imports.deserialize = true;
     let mut traits: Vec<&str> = vec!["Debug", "Clone", "PartialEq"];
@@ -2311,7 +2375,8 @@ fn render_root_alias(
     } else {
         String::new()
     };
-    let _ = writeln!(out, "pub struct {name}({field_attrs}pub {ty});\n");
+    let vis: &str = plan.vis;
+    let _ = writeln!(out, "{vis} struct {name}({field_attrs}{vis} {ty});\n");
     out.push_str(&rust_validators::render_item_impls(name, entry));
     out
 }
@@ -2366,7 +2431,7 @@ fn render_enum(
         if let Some(rule) = rule {
             let _ = writeln!(out, "#[serde(rename_all = \"{}\")]", rule.serde_name());
         }
-        let _ = writeln!(out, "pub enum {name} {{");
+        let _ = writeln!(out, "{} enum {name} {{", plan.vis);
         let mut buffer: String = String::new();
         for (variant, raw) in members {
             if needs_rename(rule, RenameRule::write_variant, variant, raw, &mut buffer) {
@@ -2389,7 +2454,7 @@ fn render_enum(
         schema_default,
     ));
     out.push_str(&description_attr(stated.as_ref()));
-    let _ = writeln!(out, "pub enum {name} {{");
+    let _ = writeln!(out, "{} enum {name} {{", plan.vis);
     for (value, variant) in e.values.iter().zip(&variants) {
         let _ = writeln!(out, "    #[json_schema(value = {})]", json_tokens(value));
         let _ = writeln!(out, "    {variant},");
@@ -2498,7 +2563,7 @@ fn render_union(
     if union.kind == UnionKind::OneOf {
         out.push_str("#[json_schema(one_of)]\n");
     }
-    let _ = writeln!(out, "pub enum {name} {{");
+    let _ = writeln!(out, "{} enum {name} {{", plan.vis);
     let mut variants: Vec<rust_validators::UnionVariant> = Vec::with_capacity(union.variants.len());
     for (variant, variant_name) in union.variants.iter().zip(&names) {
         let ty: String = rust_type(graph, plan, home, variant.ty, imports);
@@ -2687,8 +2752,10 @@ fn render_buffer(
         body.push_str(&validators.render(sets)?);
     }
     if !imports.builders.is_empty() {
-        body.push_str(
-            "/// The builders of this module's structs (`Name::builder()`).\npub mod builder {\n",
+        let _ = writeln!(
+            body,
+            "/// The builders of this module's structs (`Name::builder()`).\n{} mod builder {{",
+            plan.vis
         );
         for path in &imports.builder_uses {
             let _ = writeln!(body, "    use {path};");
@@ -2717,6 +2784,15 @@ fn render_buffer(
         }
     }
     let mut out: Vec<u8> = Vec::new();
+    if let Some(ref header) = plan.header {
+        for line in header.lines() {
+            if line.is_empty() {
+                writeln!(out, "//")?;
+            } else {
+                writeln!(out, "// {line}")?;
+            }
+        }
+    }
     writeln!(
         out,
         "//! Generated by json-schema-rs. Do not edit manually."
@@ -2739,7 +2815,7 @@ fn render_buffer(
     }
     if !imports.shared.is_empty() {
         for name in &imports.shared {
-            writeln!(out, "pub use super::shared::{name};")?;
+            writeln!(out, "{} use {}::{name};", plan.vis, plan.shared_path)?;
         }
         writeln!(out)?;
     }
@@ -3079,7 +3155,7 @@ mod tests {
     use super::{CodeGenBackend, CodeGenInput, RustBackend, generate_rust};
     use crate::code_gen::settings::{
         CodeGenSettings, DedupeMode, FormatTypes, MapType, ModelNameSource, TypePatch,
-        UniqueItemsType, UnknownProperties,
+        UniqueItemsType, UnknownProperties, Visibility,
     };
     use crate::json_schema::{
         FormatMode, JsonSchema, JsonSchemaSettings, JsonType, RegistryError, Schema,
@@ -16792,6 +16868,446 @@ static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs
         &["#"],
     ],
 );
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    // --- root name, visibility, shared path, header ---
+
+    /// Every buffer of one generation with `settings`, shared first, joined with a marker line.
+    fn generate_buffers(schemas: &[&str], settings: &CodeGenSettings) -> String {
+        let parsed: Vec<Schema> = schemas
+            .iter()
+            .map(|json: &&str| Schema::try_from(*json).unwrap())
+            .collect();
+        let output: super::GenerateRustOutput = generate_rust(&parsed, settings).unwrap();
+        output
+            .shared
+            .into_iter()
+            .chain(output.per_schema)
+            .map(|buffer: Vec<u8>| String::from_utf8(buffer).unwrap())
+            .collect::<Vec<String>>()
+            .join("// ---\n")
+    }
+
+    /// The root takes the given name over its title.
+    #[test]
+    fn root_name_outranks_title() {
+        let actual: String = generate_buffers(
+            &[r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string"}}}"#],
+            &CodeGenSettings::builder().root_name("Config").build(),
+        );
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Config {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Config, TYPE_VALIDATORS, 0);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"name":{"type":"string"}},"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+    ],
+);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    /// A given root name is used as written: a union root gets no `OneOf` suffix, and a
+    /// `$defs` key with the same name gives way.
+    #[test]
+    fn root_name_used_as_written() {
+        let actual: String = generate_buffers(
+            &[
+                r##"{"oneOf":[{"type":"integer"},{"$ref":"#/$defs/Config"}],"$defs":{"Config":{"type":"object","properties":{"name":{"type":"string"}}}}}"##,
+            ],
+            &CodeGenSettings::builder().root_name("Config").build(),
+        );
+        let expected: &str = r###"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Config0 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Config0, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+#[json_schema(one_of)]
+pub enum Config {
+    Integer(i64),
+    Config0(Config0),
+}
+
+json_schema_rs::deserialize_union!(Config, TYPE_VALIDATORS, OneOf, Some(1), [2, 0], |value| {
+    0 => json_schema_rs::integer::deserialize::<_, i64>(value).map(Self::Integer),
+    _ => <Config0 as Deserialize>::deserialize(value).map(Self::Config0),
+});
+
+json_schema_rs::self_validating!(Config, TYPE_VALIDATORS, 1);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r##"{"$defs":{"Config":{"properties":{"name":{"type":"string"}},"type":"object"}},"oneOf":[{"type":"integer"},{"$ref":"#/$defs/Config"}]}"##,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/$defs/Config"],
+        &["#"],
+        &["#/oneOf/0"],
+    ],
+);
+
+"###;
+        assert_eq!(expected, actual);
+    }
+
+    /// A root that is not a named item (a type alias) takes the given name too.
+    #[test]
+    fn root_name_names_root_alias() {
+        let actual: String = generate_buffers(
+            &[r#"{"type":"array","items":{"type":"string"}}"#],
+            &CodeGenSettings::builder()
+                .root_name("Names")
+                .self_validating(false)
+                .build(),
+        );
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Names = Vec<String>;
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A root name or shared path that is not Rust is a customization error.
+    #[test]
+    fn root_name_and_shared_path_rejected_when_not_rust() {
+        let schema: Schema = Schema::try_from(r#"{"type":"object"}"#).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .root_name("my-config")
+            .shared_path("crate::bad path")
+            .build();
+        let actual: String = generate_rust(&[schema], &settings).unwrap_err().to_string();
+        let expected: &str = r"the settings cannot be applied: root name `my-config` is not a Rust identifier; shared path `crate::bad path` is not a Rust path";
+        assert_eq!(expected, actual);
+    }
+
+    /// Crate visibility on every kind of item: structs and their fields, string enums,
+    /// unions, constrained newtypes, the builder module and the re-exports of shared items.
+    #[test]
+    fn visibility_crate_on_every_item() {
+        let schema: &str = r#"{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1},"kind":{"enum":["a","b"]},"size":{"anyOf":[{"type":"integer"},{"type":"string"}]}}}"#;
+        let actual: String = generate_buffers(
+            &[schema, schema],
+            &CodeGenSettings::builder()
+                .visibility(Visibility::Crate)
+                .builders(true)
+                .dedupe_mode(DedupeMode::Full)
+                .build(),
+        );
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Kind {
+    A,
+    B,
+}
+
+json_schema_rs::string_enum!(Kind);
+
+json_schema_rs::self_validating!(Kind, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(min_length = 1)]
+pub(crate) struct Name(String);
+
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 1);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub(crate) enum SizeAnyOf {
+    Integer(i64),
+    String(String),
+}
+
+json_schema_rs::deserialize_union!(SizeAnyOf, TYPE_VALIDATORS, AnyOf, Some(2), [3, 4], |value| {
+    0 => json_schema_rs::integer::deserialize::<_, i64>(value).map(Self::Integer),
+    _ => <String as Deserialize>::deserialize(value).map(Self::String),
+});
+
+json_schema_rs::self_validating!(SizeAnyOf, TYPE_VALIDATORS, 2);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub(crate) struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) kind: Option<Kind>,
+    pub(crate) name: Name,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) size: Option<SizeAnyOf>,
+    #[serde(flatten)]
+    pub(crate) additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 5);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"kind":{"enum":["a","b"]},"name":{"minLength":1,"type":"string"},"size":{"anyOf":[{"type":"integer"},{"type":"string"}]}},"required":["name"],"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/properties/kind"],
+        &["#/properties/name"],
+        &["#/properties/size"],
+        &["#/properties/size/anyOf/0"],
+        &["#/properties/size/anyOf/1"],
+        &["#"],
+    ],
+);
+
+/// The builders of this module's structs (`Name::builder()`).
+pub(crate) mod builder {
+    use std::collections::BTreeMap;
+
+    json_schema_rs::builder!(@validated Root {
+        optional kind: super::Kind,
+        required name: super::Name,
+        optional size: super::SizeAnyOf,
+        defaulted additional: BTreeMap<String, serde_json::Value>,
+    });
+}
+
+// ---
+//! Generated by json-schema-rs. Do not edit manually.
+
+pub(crate) use super::shared::Root;
+
+// ---
+//! Generated by json-schema-rs. Do not edit manually.
+
+pub(crate) use super::shared::Root;
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    /// A root type alias and a root newtype are crate-visible too.
+    #[test]
+    fn visibility_crate_on_root_alias_and_newtype() {
+        let actual: String = generate_buffers(
+            &[
+                r#"{"type":"array","items":{"type":"string"}}"#,
+                r#"{"type":"array","items":{"type":"string"},"minItems":1}"#,
+            ],
+            &CodeGenSettings::builder()
+                .visibility(Visibility::Crate)
+                .build(),
+        );
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"items":{"type":"string"},"type":"array"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+    ],
+);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+pub(crate) struct Root(pub(crate) Vec<String>);
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 0);
+
+// ---
+//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"items":{"type":"string"},"minItems":1,"type":"array"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+    ],
+);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+pub(crate) struct Root(pub(crate) Vec<String>);
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 0);
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    /// Per-schema buffers re-export the shared items through the given path.
+    #[test]
+    fn shared_path_used_by_re_exports() {
+        let schema: &str = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
+        let actual: String = generate_buffers(
+            &[schema, schema],
+            &CodeGenSettings::builder()
+                .dedupe_mode(DedupeMode::Full)
+                .shared_path("crate::models::common")
+                .build(),
+        );
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 0);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"id":{"type":"string"}},"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+    ],
+);
+
+// ---
+//! Generated by json-schema-rs. Do not edit manually.
+
+pub use crate::models::common::Root;
+
+// ---
+//! Generated by json-schema-rs. Do not edit manually.
+
+pub use crate::models::common::Root;
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    /// The header opens every buffer, one `//` comment per line, an empty line as `//`.
+    #[test]
+    fn header_opens_every_buffer() {
+        let schema: &str = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
+        let actual: String = generate_buffers(
+            &[schema, schema],
+            &CodeGenSettings::builder()
+                .dedupe_mode(DedupeMode::Full)
+                .header("Copyright Example.\n\nRegenerate with `make models`.")
+                .build(),
+        );
+        let expected: &str = r##"// Copyright Example.
+//
+// Regenerate with `make models`.
+//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 0);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"id":{"type":"string"}},"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+    ],
+);
+
+// ---
+// Copyright Example.
+//
+// Regenerate with `make models`.
+//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
+
+// ---
+// Copyright Example.
+//
+// Regenerate with `make models`.
+//! Generated by json-schema-rs. Do not edit manually.
+
+pub use super::shared::Root;
 
 "##;
         assert_eq!(expected, actual);

@@ -785,3 +785,48 @@ fn schema_defaults_struct_default_holds_property_defaults() {
         serde_json::to_value(schema_defaults::schema_0::Veg::default()).expect("serialize");
     assert_eq!(expected, actual);
 }
+
+// --- root_name ---
+
+mod root_name {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string"}}}"#,
+        root_name = "Config"
+    );
+}
+
+#[test]
+fn root_name_names_root_type() {
+    let expected: serde_json::Value = serde_json::json!({"name": "pea"});
+    let actual: serde_json::Value = serde_json::to_value(
+        serde_json::from_value::<root_name::schema_0::Config>(serde_json::json!({"name": "pea"}))
+            .expect("deserialize"),
+    )
+    .expect("serialize");
+    assert_eq!(expected, actual);
+}
+
+// --- visibility ---
+
+#[expect(
+    dead_code,
+    reason = "crate-visible generated items the test does not use are dead code"
+)]
+mod visibility_crate {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string","minLength":1}}}"#,
+        visibility = Crate
+    );
+}
+
+#[test]
+fn visibility_crate_types_deserialize() {
+    let expected: Option<String> = Some("pea".to_string());
+    let actual: Option<String> = serde_json::from_value::<visibility_crate::schema_0::Veg>(
+        serde_json::json!({"name": "pea"}),
+    )
+    .expect("deserialize")
+    .name
+    .map(|name| name.to_string());
+    assert_eq!(expected, actual);
+}

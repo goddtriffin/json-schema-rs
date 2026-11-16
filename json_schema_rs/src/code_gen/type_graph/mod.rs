@@ -350,6 +350,9 @@ pub(crate) struct NameProposal {
 /// How strongly a name is wanted (lower wins).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum NameTier {
+    /// The root's name from [`CodeGenSettings::root_name`](crate::CodeGenSettings::root_name),
+    /// used as written.
+    Given,
     /// The key of a `$defs` / `definitions` entry.
     Definition,
     /// The schema's `title` (or the property key, with `ModelNameSource::PropertyKeyFirst`).

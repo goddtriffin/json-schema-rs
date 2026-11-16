@@ -216,6 +216,7 @@ pub(crate) fn write_mod_rs_files(
     output_dir: &Path,
     output_relatives: &[PathBuf],
     has_shared: bool,
+    header: Option<&str>,
 ) -> Result<(), String> {
     let by_dir = mod_rs_content_by_dir(output_relatives);
     for (dir_rel, modules) in by_dir {
@@ -230,6 +231,17 @@ pub(crate) fn write_mod_rs_files(
                 .map_err(|e| format!("failed to create output dir {}: {e}", parent.display()))?;
         }
         let mut content: String = String::new();
+        if let Some(header) = header {
+            for line in header.lines() {
+                content.push_str("//");
+                if !line.is_empty() {
+                    content.push(' ');
+                    content.push_str(line);
+                }
+                content.push('\n');
+            }
+            content.push('\n');
+        }
         for name in &modules {
             content.push_str("pub mod ");
             content.push_str(name);

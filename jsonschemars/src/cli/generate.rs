@@ -7,9 +7,9 @@ use super::utils::{
 };
 use clap::ArgMatches;
 use json_schema_rs::{
-    CodeGenInput, CodeGenSettings, CrateSpec, DedupeMode, FormatTypes, JsonSchemaSettings, MapType,
-    ModelNameSource, Schema, TypePatch, UniqueItemsType, UnknownCrates, UnknownProperties,
-    file_uri, generate_rust,
+    CodeGenInput, CodeGenSettings, CodeGenSettingsBuilder, CrateSpec, DedupeMode, FormatTypes,
+    JsonSchemaSettings, MapType, ModelNameSource, Schema, TypePatch, UniqueItemsType,
+    UnknownCrates, UnknownProperties, Visibility, file_uri, generate_rust,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -115,7 +115,12 @@ pub(crate) fn run_generate(
     } else {
         output_relatives.clone()
     };
-    write_mod_rs_files(output_dir, &mod_relatives, output.shared.is_some())?;
+    write_mod_rs_files(
+        output_dir,
+        &mod_relatives,
+        output.shared.is_some(),
+        code_gen_settings.header.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -195,6 +200,52 @@ fn map_type(kind: &str) -> Result<MapType, String> {
     }
 }
 
+/// Applies the `--cgs-patch`, `--cgs-convert`, `--cgs-replace`, `--cgs-crate` and
+/// `--cgs-unknown-crates` flags to `b`.
+fn type_customizations(
+    mut b: CodeGenSettingsBuilder,
+    matches: &ArgMatches,
+) -> Result<CodeGenSettingsBuilder, String> {
+    let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
+    let many = |name: &str| -> Vec<String> {
+        matches
+            .get_many::<String>(name)
+            .map_or_else(Vec::new, |values| values.cloned().collect())
+    };
+    if let Some(path) = flag("cgs-patch") {
+        for (name, patch) in read_patches(Path::new(path))? {
+            b = b.patch(name, patch);
+        }
+    }
+    for value in many("cgs-convert") {
+        let (rust_type, schema) = value
+            .split_once('=')
+            .ok_or_else(|| format!("--cgs-convert {value}: expected TYPE=SCHEMA"))?;
+        let schema: serde_json::Value = serde_json::from_str(schema)
+            .map_err(|e| format!("--cgs-convert {value}: the schema is not JSON: {e}"))?;
+        b = b.convert(schema, rust_type);
+    }
+    for value in many("cgs-replace") {
+        let (name, rust_type) = value
+            .split_once('=')
+            .ok_or_else(|| format!("--cgs-replace {value}: expected NAME=TYPE"))?;
+        b = b.replace(name, rust_type);
+    }
+    for value in many("cgs-crate") {
+        let (name, spec): (String, CrateSpec) =
+            CrateSpec::parse_named(&value).map_err(|e| format!("--cgs-crate: {e}"))?;
+        b = b.external_crate(name, spec);
+    }
+    if let Some(mode) = flag("cgs-unknown-crates") {
+        b = b.unknown_crates(match mode {
+            "allow" => UnknownCrates::Allow,
+            "deny" => UnknownCrates::Deny,
+            _ => UnknownCrates::Generate,
+        });
+    }
+    Ok(b)
+}
+
 /// Codegen settings from the `--cgs-*` flags. Fails when the `--cgs-patch` file cannot be read
 /// or is malformed, when a `--cgs-convert` or `--cgs-replace` is not `X=Y` (or its schema is not
 /// JSON), when a `--cgs-crate` is not `[rename=]crate@version`, for `--cgs-unique-items index-set` when
@@ -247,37 +298,7 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
     b = b
         .extra_derives(many("cgs-derive"))
         .extra_attrs(many("cgs-attr"));
-    if let Some(path) = flag("cgs-patch") {
-        for (name, patch) in read_patches(Path::new(path))? {
-            b = b.patch(name, patch);
-        }
-    }
-    for value in many("cgs-convert") {
-        let (rust_type, schema) = value
-            .split_once('=')
-            .ok_or_else(|| format!("--cgs-convert {value}: expected TYPE=SCHEMA"))?;
-        let schema: serde_json::Value = serde_json::from_str(schema)
-            .map_err(|e| format!("--cgs-convert {value}: the schema is not JSON: {e}"))?;
-        b = b.convert(schema, rust_type);
-    }
-    for value in many("cgs-replace") {
-        let (name, rust_type) = value
-            .split_once('=')
-            .ok_or_else(|| format!("--cgs-replace {value}: expected NAME=TYPE"))?;
-        b = b.replace(name, rust_type);
-    }
-    for value in many("cgs-crate") {
-        let (name, spec): (String, CrateSpec) =
-            CrateSpec::parse_named(&value).map_err(|e| format!("--cgs-crate: {e}"))?;
-        b = b.external_crate(name, spec);
-    }
-    if let Some(mode) = flag("cgs-unknown-crates") {
-        b = b.unknown_crates(match mode {
-            "allow" => UnknownCrates::Allow,
-            "deny" => UnknownCrates::Deny,
-            _ => UnknownCrates::Generate,
-        });
-    }
+    b = type_customizations(b, matches)?;
     if let Some(kind) = flag("cgs-unique-items") {
         b = b.unique_items(match kind {
             "hash-set" => UniqueItemsType::HashSet,
@@ -296,6 +317,21 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
     }
     if let Some(kind) = flag("cgs-map-type") {
         b = b.map_type(map_type(kind)?);
+    }
+    if let Some(name) = flag("cgs-root-name") {
+        b = b.root_name(name);
+    }
+    if let Some(kind) = flag("cgs-visibility") {
+        b = b.visibility(match kind {
+            "crate" => Visibility::Crate,
+            _ => Visibility::Public,
+        });
+    }
+    if let Some(path) = flag("cgs-shared-path") {
+        b = b.shared_path(path);
+    }
+    if let Some(header) = flag("cgs-header") {
+        b = b.header(header);
     }
     Ok(b.build())
 }

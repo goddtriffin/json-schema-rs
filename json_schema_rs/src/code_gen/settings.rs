@@ -93,6 +93,27 @@ pub enum MapType {
     IndexMap,
 }
 
+/// The visibility of every generated item, field, accessor and re-export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Visibility {
+    /// `pub`: the types are part of the crate's public API.
+    #[default]
+    Public,
+    /// `pub(crate)`: the types are internal to the crate that generates them.
+    Crate,
+}
+
+impl Visibility {
+    /// The visibility as written before an item (`pub`, `pub(crate)`).
+    #[must_use]
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::Public => "pub",
+            Self::Crate => "pub(crate)",
+        }
+    }
+}
+
 /// Whether a `format` codegen has a Rust type for gets that type when the schema's dialect only
 /// annotates formats. The typed formats: `uuid` → `uuid::Uuid` (the `uuid` feature),
 /// `date-time` → `chrono::DateTime<chrono::FixedOffset>` and `date` → `chrono::NaiveDate` (the
@@ -357,6 +378,19 @@ pub struct CodeGenSettings {
     /// (default [`UnknownCrates::Generate`]: ignored, as the specification ignores unknown
     /// keywords).
     pub unknown_crates: UnknownCrates,
+    /// The name of every schema's root type, used as written; default none (the root's
+    /// `title`, else `Root`). It outranks every other name the root could take, a `$defs` key
+    /// included. Generating fails when it is not a Rust identifier.
+    pub root_name: Option<String>,
+    /// The visibility of the generated items (default [`Visibility::Public`]).
+    pub visibility: Visibility,
+    /// The path through which a per-schema buffer reaches the shared items (default
+    /// `super::shared`: the shared buffer in a sibling module named `shared`). Generating fails
+    /// when it is not a Rust path.
+    pub shared_path: Option<String>,
+    /// Text written at the top of every generated buffer, each line as a `//` comment; default
+    /// none.
+    pub header: Option<String>,
 }
 
 impl CodeGenSettings {
@@ -395,6 +429,10 @@ impl Default for CodeGenSettings {
             replacements: BTreeMap::new(),
             crates: BTreeMap::new(),
             unknown_crates: UnknownCrates::Generate,
+            root_name: None,
+            visibility: Visibility::Public,
+            shared_path: None,
+            header: None,
         }
     }
 }
@@ -421,6 +459,10 @@ pub struct CodeGenSettingsBuilder {
     replacements: BTreeMap<String, String>,
     crates: BTreeMap<String, CrateSpec>,
     unknown_crates: Option<UnknownCrates>,
+    root_name: Option<String>,
+    visibility: Option<Visibility>,
+    shared_path: Option<String>,
+    header: Option<String>,
 }
 
 impl CodeGenSettingsBuilder {
@@ -579,6 +621,35 @@ impl CodeGenSettingsBuilder {
         self
     }
 
+    /// Set the name of every schema's root type (see [`CodeGenSettings::root_name`]).
+    #[must_use]
+    pub fn root_name(mut self, value: impl Into<String>) -> Self {
+        self.root_name = Some(value.into());
+        self
+    }
+
+    /// Set the visibility of the generated items (see [`Visibility`]).
+    #[must_use]
+    pub fn visibility(mut self, value: Visibility) -> Self {
+        self.visibility = Some(value);
+        self
+    }
+
+    /// Set the path to the shared items (see [`CodeGenSettings::shared_path`]).
+    #[must_use]
+    pub fn shared_path(mut self, value: impl Into<String>) -> Self {
+        self.shared_path = Some(value.into());
+        self
+    }
+
+    /// Set the text written at the top of every generated buffer (see
+    /// [`CodeGenSettings::header`]).
+    #[must_use]
+    pub fn header(mut self, value: impl Into<String>) -> Self {
+        self.header = Some(value.into());
+        self
+    }
+
     /// Build the settings. Any option not set uses its per-option default.
     #[must_use]
     pub fn build(self) -> CodeGenSettings {
@@ -604,6 +675,10 @@ impl CodeGenSettingsBuilder {
             replacements: self.replacements,
             crates: self.crates,
             unknown_crates: self.unknown_crates.unwrap_or_default(),
+            root_name: self.root_name,
+            visibility: self.visibility.unwrap_or_default(),
+            shared_path: self.shared_path,
+            header: self.header,
         }
     }
 }
