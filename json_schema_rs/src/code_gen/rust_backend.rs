@@ -233,6 +233,8 @@ struct Plan {
     eq_nodes: Vec<bool>,
     /// Whether structs, enums and unions validate themselves (`self_validating`).
     self_validating: bool,
+    /// Whether every struct gets a builder (`builders`).
+    builders: bool,
     /// The settings' derives and attributes for every item (`extra_derives`, `extra_attrs`).
     extra_derives: Vec<String>,
     extra_attrs: Vec<String>,
@@ -347,6 +349,7 @@ impl Plan {
             ord_items,
             eq_nodes,
             self_validating: settings.self_validating,
+            builders: settings.builders,
             extra_derives: settings.extra_derives.clone(),
             extra_attrs: settings.extra_attrs.clone(),
             node_patches: placed.node_patches,
@@ -826,6 +829,12 @@ struct Imports {
     unique_integer_shapes: BTreeSet<FieldShape>,
     /// The conversions whose schema markers the buffer names (indices into the settings).
     converted: BTreeSet<usize>,
+    /// What a named item's name is written after: `super::` from the `builder` submodule.
+    item_prefix: &'static str,
+    /// The builders of the buffer's structs, and the `use` paths their field types need (see
+    /// [`render_builder`]).
+    builders: String,
+    builder_uses: BTreeSet<&'static str>,
 }
 
 /// A set type a `uniqueItems` field can be.
@@ -938,6 +947,7 @@ fn render_type(
             Part::Node(id) => id,
         };
         if let Some((item_home, name)) = plan.items.get(&id) {
+            out.push_str(imports.item_prefix);
             out.push_str(name);
             if *item_home == Home::Shared && home != Home::Shared {
                 imports.shared.insert(name.clone());
@@ -1492,6 +1502,11 @@ struct RenderedField {
     attrs: String,
     /// `pub fn <name>_or_default(&self) -> T { ... }` when the field has a default accessor.
     default_accessor: Option<String>,
+    /// The field's kind and type in its struct's [`json_schema_rs::builder!`](crate::builder!):
+    /// `required` (`ty`), `optional` (`ty` is `Option` of the type given, which the setter
+    /// takes), or `defaulted` (absent is the type's default: the unknown-keys map, a
+    /// `Nullable`).
+    builder: (&'static str, String),
 }
 
 /// The `#[serde(rename_all = "...")]` rule for members named `(Rust name, serde name)`, if one
@@ -1606,9 +1621,11 @@ fn render_fields(
             }
             None => attrs,
         };
+        let ty: String = format!("{map}<String, {value}>");
         out.push(RenderedField {
             name: names.last().expect("additional field name").clone(),
-            ty: format!("{map}<String, {value}>"),
+            builder: ("defaulted", ty.clone()),
+            ty,
             attrs,
             default_accessor: None,
         });
@@ -1888,11 +1905,17 @@ fn render_field(
     if !schema_args.is_empty() {
         let _ = writeln!(attrs, "    #[json_schema({})]", schema_args.join(", "));
     }
+    let builder: (&'static str, String) = match shape {
+        FieldShape::Plain | FieldShape::RequiredNullable => ("required", ty.clone()),
+        FieldShape::Optional | FieldShape::OptionalHoldingNull => ("optional", value_ty),
+        FieldShape::OptionalNullable => ("defaulted", ty.clone()),
+    };
     RenderedField {
         name: name.to_string(),
         ty,
         attrs,
         default_accessor,
+        builder,
     }
 }
 
@@ -2026,6 +2049,44 @@ fn render_struct(
         out.push_str("}\n\n");
     }
     out
+}
+
+/// Records the builder of the struct `name` (see [`CodeGenSettings::builders`]) in `imports`: one
+/// [`json_schema_rs::builder!`](crate::builder!) for the buffer's `builder` submodule, with the
+/// struct's fields typed as seen from there (named items through `super::`) and each field's
+/// kind (see [`RenderedField::builder`]). `validated` (the struct validates itself) validates
+/// the built struct.
+fn render_builder(
+    graph: &TypeGraph,
+    plan: &Plan,
+    home: Home,
+    name: &str,
+    object: &ObjectNode,
+    validated: bool,
+    imports: &mut Imports,
+) {
+    let mut scoped: Imports = Imports {
+        item_prefix: "super::",
+        ..Imports::default()
+    };
+    let (fields, _): (Vec<RenderedField>, Option<RenameRule>) =
+        render_fields(graph, plan, home, object, &mut scoped);
+    imports.builder_uses.extend(scoped.uses);
+    let marker: &str = if validated { "@validated " } else { "" };
+    let out: &mut String = &mut imports.builders;
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    if fields.is_empty() {
+        let _ = writeln!(out, "    json_schema_rs::builder!({marker}{name} {{}});");
+        return;
+    }
+    let _ = writeln!(out, "    json_schema_rs::builder!({marker}{name} {{");
+    for field in &fields {
+        let (kind, ty) = &field.builder;
+        let _ = writeln!(out, "        {kind} {}: {ty},", field.name);
+    }
+    out.push_str("    });\n");
 }
 
 /// A constrained newtype: the scalar behind a private field, so every value it holds was
@@ -2501,6 +2562,10 @@ fn ordered_items(graph: &TypeGraph, plan: &Plan, home: Home) -> Vec<TypeId> {
 
 /// Renders one output buffer. `sets` (with self-validating types) holds each input's embedded
 /// documents.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over the buffer's items, its validators and its builders, in output order"
+)]
 fn render_buffer(
     graph: &TypeGraph,
     plan: &Plan,
@@ -2531,7 +2596,12 @@ fn render_buffer(
             continue;
         }
         let item: String = match graph.node(id) {
-            TypeNode::Object(o) => render_struct(graph, plan, home, id, name, o, &mut imports),
+            TypeNode::Object(o) => {
+                if plan.builders {
+                    render_builder(graph, plan, home, name, o, entry.is_some(), &mut imports);
+                }
+                render_struct(graph, plan, home, id, name, o, &mut imports)
+            }
             TypeNode::Enum(e) => {
                 render_enum(plan, plan.node_patches.get(&id), name, e, &mut imports)
             }
@@ -2554,6 +2624,19 @@ fn render_buffer(
     }
     if let (Some(validators), Some(sets)) = (&validators, sets) {
         body.push_str(&validators.render(sets)?);
+    }
+    if !imports.builders.is_empty() {
+        body.push_str(
+            "/// The builders of this module's structs (`Name::builder()`).\npub mod builder {\n",
+        );
+        for path in &imports.builder_uses {
+            let _ = writeln!(body, "    use {path};");
+        }
+        if !imports.builder_uses.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&imports.builders);
+        body.push_str("}\n\n");
     }
     if let Home::Schema(s) = home {
         let roots = &graph.schemas[s];
@@ -16102,6 +16185,155 @@ pub struct Root {
     #[serde(flatten)]
     pub additional: HashMap<String, serde_json::Value>,
 }
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    // --- builders ---
+
+    /// The per-schema buffer for one schema generated with builders, and `self_validating`.
+    fn generate_with_builders(schema_json: &str, self_validating: bool) -> String {
+        let schema: Schema = Schema::try_from(schema_json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .builders(true)
+            .self_validating(self_validating)
+            .constrained_newtypes(false)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        String::from_utf8(output.per_schema[0].clone()).unwrap()
+    }
+
+    /// Required and optional properties, a named struct field (through `super::`) and the
+    /// unknown-keys map (a `use` in the `builder` module).
+    #[test]
+    fn builders_emit_required_optional_and_additional_fields() {
+        let actual: String = generate_with_builders(
+            r#"{"title":"Veg","type":"object","required":["name"],"properties":{"name":{"type":"string"},"weight":{"type":"integer","minimum":0,"maximum":255},"origin":{"type":"object","properties":{"country":{"type":"string"}}}},"additionalProperties":{"type":"integer"}}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub struct Origin {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u8>,
+    #[serde(flatten, deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub additional: BTreeMap<String, i64>,
+}
+
+/// The builders of this module's structs (`Name::builder()`).
+pub mod builder {
+    use std::collections::BTreeMap;
+
+    json_schema_rs::builder!(Origin {
+        optional country: String,
+        defaulted additional: BTreeMap<String, serde_json::Value>,
+    });
+
+    json_schema_rs::builder!(Veg {
+        required name: String,
+        optional origin: super::Origin,
+        optional weight: u8,
+        defaulted additional: BTreeMap<String, i64>,
+    });
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A self-validating struct's builder validates the built struct.
+    #[test]
+    fn builders_validate_self_validating_struct() {
+        let actual: String = generate_with_builders(
+            r#"{"type":"object","properties":{"name":{"type":"string","minLength":1}},"additionalProperties":false}"#,
+            true,
+        );
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(min_length = 1)]
+    pub name: Option<String>,
+}
+
+json_schema_rs::self_validating!(Root, TYPE_VALIDATORS, 0);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#"],
+    ],
+);
+
+/// The builders of this module's structs (`Name::builder()`).
+pub mod builder {
+    json_schema_rs::builder!(@validated Root {
+        optional name: String,
+    });
+}
+
+"##;
+        assert_eq!(expected, actual);
+    }
+
+    /// A struct without fields gets a builder with no setters.
+    #[test]
+    fn builders_emit_builder_for_struct_without_fields() {
+        let actual: String =
+            generate_with_builders(r#"{"type":"object","additionalProperties":false}"#, false);
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Root {
+}
+
+/// The builders of this module's structs (`Name::builder()`).
+pub mod builder {
+    json_schema_rs::builder!(Root {});
+}
+
+";
+        assert_eq!(expected, actual);
+    }
+
+    /// A buffer without structs has no `builder` module.
+    #[test]
+    fn builders_emit_nothing_without_structs() {
+        let actual: String = generate_with_builders(r#"{"type":"string"}"#, false);
+        let expected: &str = r"//! Generated by json-schema-rs. Do not edit manually.
+
+pub type Root = String;
 
 ";
         assert_eq!(expected, actual);

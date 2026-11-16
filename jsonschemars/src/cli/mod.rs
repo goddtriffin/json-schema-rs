@@ -291,6 +291,12 @@ pub fn run() {
                         .help("Codegen Settings: generate an anyOf / oneOf with exactly one entry as that entry's type instead of a one-variant enum (default: off)"),
                 )
                 .arg(
+                    Arg::new("cgs-builders")
+                        .long("cgs-builders")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Codegen Settings: generate a builder for every struct (Name::builder(), a setter per field, then try_into(); every missing or unconvertible field is reported, and a self-validating struct is validated) (default: off)"),
+                )
+                .arg(
                     Arg::new("cgs-self-validating")
                         .long("cgs-self-validating")
                         .value_name("BOOL")

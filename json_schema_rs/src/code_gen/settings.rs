@@ -251,6 +251,10 @@ pub struct TypeConversion {
 
 /// Language-agnostic code generation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent on/off setting, mirrored by a CLI flag and a macro argument"
+)]
 pub struct CodeGenSettings {
     /// Which source to prefer for struct/type names: title or property key.
     pub model_name_source: ModelNameSource,
@@ -291,6 +295,14 @@ pub struct CodeGenSettings {
     /// depends on `json-schema-rs` and `serde_json`. Off, such scalars are the plain Rust scalar
     /// (`String`, `u8`, `f64`), checked only by a self-validating parent's `validate` / `TryFrom`.
     pub constrained_newtypes: bool,
+    /// Generate a builder for every struct (default `false`): `Name::builder()` returns
+    /// `builder::Name`, whose setter per field takes any value that converts into the field's type
+    /// (`TryInto`), and which builds the struct with `try_into()` (or `Name::try_from`). Building
+    /// fails with a [`BuilderError`](crate::BuilderError) listing every required field left unset
+    /// and every value that did not convert; a [`self_validating`](CodeGenSettings::self_validating)
+    /// struct is then validated against its schema. A field left unset that is not required is
+    /// absent. Each generated module gets a `builder` submodule holding its structs' builders.
+    pub builders: bool,
     /// Whether a typed `format` (`uuid`) gets its Rust type when the dialect only annotates
     /// formats (default [`FormatTypes::Typed`], a deliberate divergence from 2019-09 and
     /// 2020-12; see [`FormatTypes`]).
@@ -360,6 +372,7 @@ impl Default for CodeGenSettings {
             flatten_single_entry_combinators: false,
             self_validating: true,
             constrained_newtypes: true,
+            builders: false,
             format_types: FormatTypes::Typed,
             extra_derives: Vec::new(),
             extra_attrs: Vec::new(),
@@ -383,6 +396,7 @@ pub struct CodeGenSettingsBuilder {
     flatten_single_entry_combinators: Option<bool>,
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
+    builders: Option<bool>,
     format_types: Option<FormatTypes>,
     extra_derives: Vec<String>,
     extra_attrs: Vec<String>,
@@ -442,6 +456,13 @@ impl CodeGenSettingsBuilder {
     #[must_use]
     pub fn self_validating(mut self, value: bool) -> Self {
         self.self_validating = Some(value);
+        self
+    }
+
+    /// Generate a builder for every struct (see [`CodeGenSettings::builders`]).
+    #[must_use]
+    pub fn builders(mut self, value: bool) -> Self {
+        self.builders = Some(value);
         self
     }
 
@@ -540,6 +561,7 @@ impl CodeGenSettingsBuilder {
                 .unwrap_or_default(),
             self_validating: self.self_validating.unwrap_or(true),
             constrained_newtypes: self.constrained_newtypes.unwrap_or(true),
+            builders: self.builders.unwrap_or_default(),
             format_types: self.format_types.unwrap_or_default(),
             extra_derives: self.extra_derives,
             extra_attrs: self.extra_attrs,

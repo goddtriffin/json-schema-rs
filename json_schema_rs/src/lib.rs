@@ -3,6 +3,7 @@
 //! Accepts a JSON Schema, parses it into an in-memory model, and emits Rust source
 //! to a writer. Supported keywords and types are documented in the README.
 
+mod builder;
 pub mod code_gen;
 pub mod error_list;
 #[doc(hidden)]
@@ -18,6 +19,7 @@ pub mod sanitizers;
 mod validated;
 pub mod validator;
 
+pub use builder::{BuilderError, BuilderField, BuilderFieldError, BuilderProblem};
 pub use code_gen::{
     CodeGenBackend, CodeGenError, CodeGenInput, CodeGenResult, CodeGenSettings,
     CodeGenSettingsBuilder, CrateSpec, CrateVersion, DedupeMode, FormatTypes, GenerateRustOutput,

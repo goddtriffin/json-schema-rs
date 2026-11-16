@@ -1468,6 +1468,7 @@ const SCENARIOS: &[&str] = &[
     "derived_traits",
     "converted_and_replaced_types",
     "rust_type_extension",
+    "builders",
 ];
 
 /// Build+deserialize scenarios that need the `indexmap` feature.
@@ -2679,6 +2680,72 @@ fn write_workspace_scenario_member(
                 (PathBuf::from("shared.rs"), shared_bytes),
                 (PathBuf::from("a.rs"), output.per_schema[0].clone()),
                 (PathBuf::from("b.rs"), output.per_schema[1].clone()),
+            ];
+            (lib_rs, extra, main_rs)
+        }
+        "builders" => {
+            // Builders with the defaults (self-validating, constrained newtypes) across two
+            // documents sharing `Address`: setters convert (`&str` into a newtype, a struct into
+            // `Option`), every missing or unconvertible field is reported, the built struct is
+            // validated, and a struct converts back into its builder.
+            let order: Schema = Schema::try_from(r#"{"title":"Order","type":"object","properties":{"id":{"type":"string"},"note":{"type":"string"},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}},"dependentRequired":{"note":["id"]}}"#).expect("parse order");
+            let customer: Schema = Schema::try_from(r#"{"title":"Customer","type":"object","required":["name"],"properties":{"name":{"type":"string"},"age":{"type":"integer","minimum":0,"maximum":200},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}}}"#).expect("parse customer");
+            let settings: CodeGenSettings = CodeGenSettings::builder().builders(true).build();
+            let output = generate_rust(&[order, customer], &settings).expect("generate");
+            let shared_bytes: Vec<u8> = output
+                .shared
+                .clone()
+                .expect("two documents defining the same type produce shared");
+            let main_rs = r#"use compile_test::customer::Customer;
+use compile_test::order::{self, Order};
+use compile_test::shared::Address;
+
+fn main() {
+    let address: Address = Address::builder().street("Main").try_into().unwrap();
+    let order: Order = Order::builder().id("1").address(address.clone()).try_into().unwrap();
+    let customer: Customer = Customer::builder()
+        .name("Ada")
+        .age(36_u8)
+        .address(address)
+        .try_into()
+        .unwrap();
+    let rebuilt: Order = order::builder::Order::from(order.clone())
+        .note("n")
+        .try_into()
+        .unwrap();
+    let invalid: Result<Order, json_schema_rs::BuilderError> = Order::builder().note("n").try_into();
+    let unconvertible: Result<Address, json_schema_rs::BuilderError> =
+        Address::builder().street("").try_into();
+    let missing: Result<Customer, json_schema_rs::BuilderError> =
+        Customer::builder().age(201_u8).try_into();
+    let expected: (serde_json::Value, serde_json::Value, serde_json::Value, Vec<String>) = (
+        serde_json::json!({"id": "1", "address": {"street": "Main"}}),
+        serde_json::json!({"name": "Ada", "age": 36, "address": {"street": "Main"}}),
+        serde_json::json!({"id": "1", "note": "n", "address": {"street": "Main"}}),
+        vec![
+            "missing property \"id\", required when \"note\" is present".to_string(),
+            "the value supplied for `street` did not convert: string has 0 code points, minLength is 1".to_string(),
+            "the value supplied for `age` did not convert: value 201 is above maximum 200\nno value supplied for `name`".to_string(),
+        ],
+    );
+    let actual: (serde_json::Value, serde_json::Value, serde_json::Value, Vec<String>) = (
+        serde_json::to_value(&order).unwrap(),
+        serde_json::to_value(&customer).unwrap(),
+        serde_json::to_value(&rebuilt).unwrap(),
+        vec![
+            invalid.unwrap_err().to_string(),
+            unconvertible.unwrap_err().to_string(),
+            missing.unwrap_err().to_string(),
+        ],
+    );
+    assert_eq!(expected, actual);
+}
+"#;
+            let lib_rs: Vec<u8> = "pub mod shared;\npub mod order;\npub mod customer;\n".into();
+            let extra: Vec<(PathBuf, Vec<u8>)> = vec![
+                (PathBuf::from("shared.rs"), shared_bytes),
+                (PathBuf::from("order.rs"), output.per_schema[0].clone()),
+                (PathBuf::from("customer.rs"), output.per_schema[1].clone()),
             ];
             (lib_rs, extra, main_rs)
         }

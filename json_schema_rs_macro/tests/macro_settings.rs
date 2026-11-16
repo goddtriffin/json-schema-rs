@@ -341,6 +341,44 @@ fn unique_items_hash_set_holds_items_in_hash_set() {
     assert_eq!(expected, actual);
 }
 
+// --- builders ---
+
+mod builders {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"title":"Veg","type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1},"weight":{"type":"integer","minimum":0,"maximum":255}}}"#,
+        builders = true
+    );
+}
+
+#[test]
+fn builders_build_struct_with_setters() {
+    let built: Result<builders::schema_0::Veg, json_schema_rs::BuilderError> =
+        builders::schema_0::Veg::builder()
+            .name("carrot")
+            .weight(3_u8)
+            .try_into();
+    let expected: Option<serde_json::Value> =
+        Some(serde_json::json!({"name": "carrot", "weight": 3}));
+    let actual: Option<serde_json::Value> = built
+        .ok()
+        .map(|veg: builders::schema_0::Veg| serde_json::to_value(veg).expect("serialize"));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn builders_reject_value_the_schema_rejects() {
+    let built: Result<builders::schema_0::Veg, json_schema_rs::BuilderError> =
+        builders::schema_0::Veg::builder().name("").try_into();
+    let expected: Option<String> = Some(
+        "the value supplied for `name` did not convert: string has 0 code points, minLength is 1"
+            .to_string(),
+    );
+    let actual: Option<String> = built
+        .err()
+        .map(|error: json_schema_rs::BuilderError| error.to_string());
+    assert_eq!(expected, actual);
+}
+
 // --- map_type ---
 
 mod map_type_hash_map {
