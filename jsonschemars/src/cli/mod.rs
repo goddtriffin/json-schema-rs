@@ -310,6 +310,18 @@ pub fn run() {
                         .help("Codegen Settings: text written as // comments at the top of every generated file, one per line (e.g. a license or a regenerate command)"),
                 )
                 .arg(
+                    Arg::new("cgs-crate-path")
+                        .long("cgs-crate-path")
+                        .value_name("PATH")
+                        .help("Codegen Settings: the Rust path the generated code reaches json_schema_rs through, for a crate that depends on it through a re-export (default: json_schema_rs)"),
+                )
+                .arg(
+                    Arg::new("cgs-macro-crate-path")
+                        .long("cgs-macro-crate-path")
+                        .value_name("PATH")
+                        .help("Codegen Settings: the Rust path the generated code reaches the json_schema_rs_macro derives through (default: json_schema_rs_macro)"),
+                )
+                .arg(
                     Arg::new("cgs-flatten-single-entry-combinators")
                         .long("cgs-flatten-single-entry-combinators")
                         .action(clap::ArgAction::SetTrue)

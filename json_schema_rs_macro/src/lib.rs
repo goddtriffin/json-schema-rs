@@ -232,7 +232,7 @@ pub fn derive_to_json_schema(input: TokenStream) -> TokenStream {
 /// (container `deny_unknown_fields` and `rename_all`; field `rename`, `default`, `deserialize_with`, `flatten` for
 /// the map of additional properties, and `skip_serializing_if`, which it ignores); any other
 /// serde attribute, a generic struct, an enum or a tuple struct is a compile error.
-#[proc_macro_derive(Deserialize, attributes(serde))]
+#[proc_macro_derive(Deserialize, attributes(serde, json_schema))]
 pub fn derive_deserialize(input: TokenStream) -> TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input as DeriveInput);
     match expand_deserialize(&input) {
@@ -542,7 +542,7 @@ mod tests {
                 "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `builders`, `string_enum_impls`, `schema_defaults`, `format_types`, `extra_derives`, `extra_attrs`, \
-                 `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `disallow_unknown_fields`, \
+                 `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `crate_path`, `macro_crate_path`, `disallow_unknown_fields`, \
                  `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),

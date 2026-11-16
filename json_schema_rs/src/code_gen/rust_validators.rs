@@ -401,7 +401,7 @@ impl BufferValidators {
 
     /// The statics, after compiling each one as the generated code will (an error here is a
     /// schema the validator cannot use, reported at generation time).
-    pub(crate) fn render(&self, sets: &[EmbeddedSet]) -> CodeGenResult<String> {
+    pub(crate) fn render(&self, rt: &str, sets: &[EmbeddedSet]) -> CodeGenResult<String> {
         let mut out: String = String::new();
         for (&schema, entries) in &self.sets {
             let (documents, entries): (Vec<OwnedDocument>, Vec<Vec<String>>) =
@@ -412,22 +412,22 @@ impl BufferValidators {
             let set: &EmbeddedSet = &sets[schema];
             let _ = writeln!(
                 out,
-                "static {}: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(",
+                "static {}: {rt}::TypeValidators<'static> = {rt}::TypeValidators::new(",
                 self.static_name(schema)
             );
-            let _ = writeln!(out, "    {},", dialect_settings_tokens(set.settings));
+            let _ = writeln!(out, "    {},", dialect_settings_tokens(rt, set.settings));
             out.push_str("    &[\n");
             for document in &documents {
-                out.push_str("        json_schema_rs::EmbeddedDocument {\n");
+                let _ = writeln!(out, "        {rt}::EmbeddedDocument {{");
                 let _ = writeln!(out, "            uri: {},", string_literal(&document.uri));
                 let _ = writeln!(out, "            json: {},", raw_string(&document.json));
                 let kind: String = match document.kind {
                     EmbeddedDocumentKind::Parsed(settings) => format!(
-                        "json_schema_rs::EmbeddedDocumentKind::Parsed({})",
-                        dialect_settings_tokens(settings)
+                        "{rt}::EmbeddedDocumentKind::Parsed({})",
+                        dialect_settings_tokens(rt, settings)
                     ),
                     EmbeddedDocumentKind::Loaded => {
-                        "json_schema_rs::EmbeddedDocumentKind::Loaded".to_string()
+                        format!("{rt}::EmbeddedDocumentKind::Loaded")
                     }
                 };
                 let _ = writeln!(out, "            kind: {kind},");
@@ -591,9 +591,9 @@ fn compile<T>(
 
 /// `validate` and `TryFrom<serde_json::Value>` for the item `name`: one
 /// `json_schema_rs::self_validating!` line.
-pub(crate) fn render_item_impls(name: &str, entry: &Entry) -> String {
+pub(crate) fn render_item_impls(rt: &str, name: &str, entry: &Entry) -> String {
     let Entry { validators, index } = entry;
-    format!("json_schema_rs::self_validating!({name}, {validators}, {index});\n\n")
+    format!("{rt}::self_validating!({name}, {validators}, {index});\n\n")
 }
 
 /// One variant of a generated union.
@@ -610,6 +610,7 @@ pub(crate) struct UnionVariant {
 /// takes the first variant whose branch it satisfies (for `oneOf`, the one) and that
 /// deserializes. Each arm reads the variant of the branches at its positions.
 pub(crate) fn render_union_deserialize(
+    rt: &str,
     name: &str,
     kind: UnionKind,
     entries: &UnionEntries,
@@ -626,7 +627,7 @@ pub(crate) fn render_union_deserialize(
     let mut out: String = String::new();
     let _ = writeln!(
         out,
-        "json_schema_rs::deserialize_union!({name}, {}, {mode}, {union}, [{}], |value| {{",
+        "{rt}::deserialize_union!({name}, {}, {mode}, {union}, [{}], |value| {{",
         entries.validators,
         indexes.join(", ")
     );
@@ -653,7 +654,7 @@ pub(crate) fn render_union_deserialize(
                 .join(" | ")
         };
         let read: String = if *integers {
-            format!("json_schema_rs::integer::deserialize::<_, {ty}>(value).map(Self::{variant})")
+            format!("{rt}::integer::deserialize::<_, {ty}>(value).map(Self::{variant})")
         } else {
             format!("<{ty} as Deserialize>::deserialize(value).map(Self::{variant})")
         };
@@ -687,7 +688,7 @@ pub(crate) fn raw_string(s: &str) -> String {
 }
 
 /// `None`, or the `DialectSettings` struct literal.
-fn dialect_settings_tokens(settings: Option<DialectSettings>) -> String {
+fn dialect_settings_tokens(rt: &str, settings: Option<DialectSettings>) -> String {
     let Some(s) = settings else {
         return "None".to_string();
     };
@@ -695,39 +696,30 @@ fn dialect_settings_tokens(settings: Option<DialectSettings>) -> String {
         value.map_or_else(|| "None".to_string(), |v| format!("Some({v})"))
     };
     format!(
-        "Some(json_schema_rs::DialectSettings {{ forced_spec_version: {}, default_spec_version: {}, format_mode: {}, content_mode: {}, unknown_formats: {}, integer_semantics: {}, exclusive_bounds: {}, ref_siblings: {} }})",
+        "Some({rt}::DialectSettings {{ forced_spec_version: {}, default_spec_version: {}, format_mode: {}, content_mode: {}, unknown_formats: {}, integer_semantics: {}, exclusive_bounds: {}, ref_siblings: {} }})",
         field(
             s.forced_spec_version
-                .map(|v| format!("json_schema_rs::SpecVersion::{v:?}"))
+                .map(|v| format!("{rt}::SpecVersion::{v:?}"))
         ),
         field(
             s.default_spec_version
-                .map(|v| format!("json_schema_rs::SpecVersion::{v:?}"))
+                .map(|v| format!("{rt}::SpecVersion::{v:?}"))
         ),
-        field(
-            s.format_mode
-                .map(|v| format!("json_schema_rs::FormatMode::{v:?}"))
-        ),
-        field(
-            s.content_mode
-                .map(|v| format!("json_schema_rs::ContentMode::{v:?}"))
-        ),
+        field(s.format_mode.map(|v| format!("{rt}::FormatMode::{v:?}"))),
+        field(s.content_mode.map(|v| format!("{rt}::ContentMode::{v:?}"))),
         field(
             s.unknown_formats
-                .map(|v| format!("json_schema_rs::UnknownFormats::{v:?}"))
+                .map(|v| format!("{rt}::UnknownFormats::{v:?}"))
         ),
         field(
             s.integer_semantics
-                .map(|v| format!("json_schema_rs::IntegerSemantics::{v:?}"))
+                .map(|v| format!("{rt}::IntegerSemantics::{v:?}"))
         ),
         field(
             s.exclusive_bounds
-                .map(|v| format!("json_schema_rs::ExclusiveBounds::{v:?}"))
+                .map(|v| format!("{rt}::ExclusiveBounds::{v:?}"))
         ),
-        field(
-            s.ref_siblings
-                .map(|v| format!("json_schema_rs::RefSiblings::{v:?}"))
-        ),
+        field(s.ref_siblings.map(|v| format!("{rt}::RefSiblings::{v:?}"))),
     )
 }
 

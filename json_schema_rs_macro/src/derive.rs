@@ -31,7 +31,7 @@ fn doc_exprs(attrs: &[Attribute]) -> Vec<&Expr> {
 
 /// Path of the library's run-time support for this derive (`FieldSpec`, the builders).
 fn support() -> TokenStream2 {
-    quote! { ::json_schema_rs::reverse_code_gen::derive_support }
+    quote! { __json_schema_rs::reverse_code_gen::derive_support }
 }
 
 /// Builds an `Option<String>` expression from doc values through the library's non-generic
@@ -746,7 +746,55 @@ fn container_exprs(attrs: &[Attribute]) -> SynResult<ContainerExprs> {
     })
 }
 
+/// The `#[derive(ToJsonSchema)]` expansion, inside `const _: () = { ... };` with the library
+/// imported as `__json_schema_rs` from its `#[json_schema(crate = "...")]` path (default
+/// `::json_schema_rs`), as serde does for its own `crate` attribute: every path in the
+/// expansion goes through that one import.
 pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
+    let krate: syn::Path = crate_path(&input.attrs)?;
+    let body: TokenStream2 = expand_body(input)?;
+    Ok(quote! {
+        const _: () = {
+            use #krate as __json_schema_rs;
+            #body
+        };
+    })
+}
+
+/// The path of the library for a derive on an item with `attrs`: its
+/// `#[json_schema(crate = "path")]`, else `::json_schema_rs`.
+pub(crate) fn crate_path(attrs: &[Attribute]) -> SynResult<syn::Path> {
+    for attr in attrs {
+        if !attr.path().is_ident("json_schema") {
+            continue;
+        }
+        let mut found: Option<syn::Path> = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("crate") {
+                let value: LitStr = meta.value()?.parse()?;
+                found = Some(value.parse().map_err(|_| {
+                    Error::new(
+                        value.span(),
+                        format!("`{}` is not a Rust path", value.value()),
+                    )
+                })?);
+            } else if meta.input.peek(Token![=]) {
+                let _: Expr = meta.value()?.parse()?;
+            } else if meta.input.peek(syn::token::Paren) {
+                let content;
+                syn::parenthesized!(content in meta.input);
+                let _: TokenStream2 = content.parse()?;
+            }
+            Ok(())
+        })?;
+        if let Some(path) = found {
+            return Ok(path);
+        }
+    }
+    Ok(syn::parse_quote!(::json_schema_rs))
+}
+
+fn expand_body(input: DeriveInput) -> SynResult<TokenStream2> {
     let name: Ident = input.ident;
     let attrs: &[Attribute] = &input.attrs;
 
@@ -793,7 +841,7 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
                 .collect();
             quote! {
                 static ITEMS: &[#support::SchemaFn] = &[
-                    #(<#items as ::json_schema_rs::ToJsonSchema>::json_schema_with),*
+                    #(<#items as __json_schema_rs::ToJsonSchema>::json_schema_with),*
                 ];
                 #support::tuple_schema(generator, ITEMS)
             }
@@ -801,9 +849,9 @@ pub fn expand_to_json_schema(input: DeriveInput) -> SynResult<TokenStream2> {
         // A unit struct deserializes from `null`.
         Fields::Unit => quote! {
             let _ = generator;
-            ::json_schema_rs::JsonSchema {
-                type_: Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::Null)),
-                ..::json_schema_rs::JsonSchema::default()
+            __json_schema_rs::JsonSchema {
+                type_: Some(__json_schema_rs::TypeSet::from(__json_schema_rs::JsonType::Null)),
+                ..__json_schema_rs::JsonSchema::default()
             }
         },
     };
@@ -823,8 +871,8 @@ fn with_container(container: &ContainerExprs, schema_expr: &TokenStream2) -> Tok
         ..
     } = container;
     quote! {
-        let schema: ::json_schema_rs::JsonSchema = { #schema_expr };
-        ::json_schema_rs::JsonSchema {
+        let schema: __json_schema_rs::JsonSchema = { #schema_expr };
+        __json_schema_rs::JsonSchema {
             id: #id_expr.or(schema.id),
             title: #title.or(schema.title),
             description: #description.or(schema.description),
@@ -883,25 +931,25 @@ fn transparent_field(
 /// has exactly `ty`'s schema and shares its `$defs` entry.
 fn forwarding_impl(name: &Ident, ty: &Type) -> TokenStream2 {
     quote! {
-        impl ::json_schema_rs::ToJsonSchema for #name {
-            fn json_schema() -> ::json_schema_rs::ReverseCodeGenResult {
-                <#ty as ::json_schema_rs::ToJsonSchema>::json_schema()
+        impl __json_schema_rs::ToJsonSchema for #name {
+            fn json_schema() -> __json_schema_rs::ReverseCodeGenResult {
+                <#ty as __json_schema_rs::ToJsonSchema>::json_schema()
             }
 
             fn json_schema_with(
-                generator: &mut ::json_schema_rs::SchemaGenerator,
-            ) -> ::json_schema_rs::JsonSchema {
-                <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator)
+                generator: &mut __json_schema_rs::SchemaGenerator,
+            ) -> __json_schema_rs::JsonSchema {
+                <#ty as __json_schema_rs::ToJsonSchema>::json_schema_with(generator)
             }
 
             fn json_schema_flattened(
-                generator: &mut ::json_schema_rs::SchemaGenerator,
-            ) -> ::json_schema_rs::JsonSchema {
-                <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_flattened(generator)
+                generator: &mut __json_schema_rs::SchemaGenerator,
+            ) -> __json_schema_rs::JsonSchema {
+                <#ty as __json_schema_rs::ToJsonSchema>::json_schema_flattened(generator)
             }
 
             fn schema_id() -> &'static str {
-                <#ty as ::json_schema_rs::ToJsonSchema>::schema_id()
+                <#ty as __json_schema_rs::ToJsonSchema>::schema_id()
             }
         }
     }
@@ -938,7 +986,7 @@ fn object_spec<'a>(
             let ty: Type = replace_self(&ty, name);
             flattens.push(quote! {
                 #support::FlattenSpec {
-                    schema: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_flattened,
+                    schema: <#ty as __json_schema_rs::ToJsonSchema>::json_schema_flattened,
                     optional: #optional,
                 }
             });
@@ -1021,7 +1069,7 @@ fn field_spec(
             ty.clone()
         };
         let schema_ty: Type = replace_self(&schema_ty, name);
-        quote! { <#schema_ty as ::json_schema_rs::ToJsonSchema>::json_schema_with }
+        quote! { <#schema_ty as __json_schema_rs::ToJsonSchema>::json_schema_with }
     };
     // `#[json_schema(description = "...")]` replaces the doc comments (a blank one is no
     // description).
@@ -1136,8 +1184,8 @@ fn expand_newtype_to_json_schema(
         },
     );
     let body: TokenStream2 = quote! {
-        let mut schema: ::json_schema_rs::JsonSchema =
-            <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with(generator);
+        let mut schema: __json_schema_rs::JsonSchema =
+            <#ty as __json_schema_rs::ToJsonSchema>::json_schema_with(generator);
         schema.id = #id_expr.or(schema.id);
         schema.title = #title_expr.or(schema.title);
         schema.description = #description_expr.or(schema.description);
@@ -1180,7 +1228,7 @@ fn named_type_impl(
         (
             quote! {
                 .into_resource_root_schema(
-                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    <Self as __json_schema_rs::ToJsonSchema>::schema_id(),
                     #name_lit,
                     #id_lit,
                     Self::__json_schema_rs_body,
@@ -1188,7 +1236,7 @@ fn named_type_impl(
             },
             quote! {
                 generator.resource_subschema(
-                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    <Self as __json_schema_rs::ToJsonSchema>::schema_id(),
                     #name_lit,
                     #id_lit,
                     Self::__json_schema_rs_body,
@@ -1199,14 +1247,14 @@ fn named_type_impl(
         (
             quote! {
                 .into_named_root_schema(
-                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    <Self as __json_schema_rs::ToJsonSchema>::schema_id(),
                     #name_lit,
                     Self::__json_schema_rs_body,
                 )
             },
             quote! {
                 generator.named_subschema(
-                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                    <Self as __json_schema_rs::ToJsonSchema>::schema_id(),
                     #name_lit,
                     Self::__json_schema_rs_body,
                 )
@@ -1218,8 +1266,8 @@ fn named_type_impl(
             quote! {
                 #[doc(hidden)]
                 fn __json_schema_rs_flattened_body(
-                    generator: &mut ::json_schema_rs::SchemaGenerator,
-                ) -> ::json_schema_rs::JsonSchema {
+                    generator: &mut __json_schema_rs::SchemaGenerator,
+                ) -> __json_schema_rs::JsonSchema {
                     #flattened_body
                 }
             },
@@ -1231,37 +1279,37 @@ fn named_type_impl(
         impl #name {
             #[doc(hidden)]
             fn __json_schema_rs_body(
-                generator: &mut ::json_schema_rs::SchemaGenerator,
-            ) -> ::json_schema_rs::JsonSchema {
+                generator: &mut __json_schema_rs::SchemaGenerator,
+            ) -> __json_schema_rs::JsonSchema {
                 #body
             }
 
             #flattened_fn
         }
 
-        impl ::json_schema_rs::ToJsonSchema for #name {
-            fn json_schema() -> ::json_schema_rs::ReverseCodeGenResult {
-                let mut schema: ::json_schema_rs::JsonSchema = ::json_schema_rs::SchemaGenerator::new()
+        impl __json_schema_rs::ToJsonSchema for #name {
+            fn json_schema() -> __json_schema_rs::ReverseCodeGenResult {
+                let mut schema: __json_schema_rs::JsonSchema = __json_schema_rs::SchemaGenerator::new()
                     #root_call?;
-                schema.schema = Some(::json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string());
+                schema.schema = Some(__json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string());
                 ::core::result::Result::Ok(schema)
             }
 
             fn json_schema_with(
-                generator: &mut ::json_schema_rs::SchemaGenerator,
-            ) -> ::json_schema_rs::JsonSchema {
+                generator: &mut __json_schema_rs::SchemaGenerator,
+            ) -> __json_schema_rs::JsonSchema {
                 #subschema_call
             }
 
             fn json_schema_flattened(
-                generator: &mut ::json_schema_rs::SchemaGenerator,
-            ) -> ::json_schema_rs::JsonSchema {
-                let schema: ::json_schema_rs::JsonSchema = generator.inline_named(
-                    <Self as ::json_schema_rs::ToJsonSchema>::schema_id(),
+                generator: &mut __json_schema_rs::SchemaGenerator,
+            ) -> __json_schema_rs::JsonSchema {
+                let schema: __json_schema_rs::JsonSchema = generator.inline_named(
+                    <Self as __json_schema_rs::ToJsonSchema>::schema_id(),
                     #flattened_path,
-                    <Self as ::json_schema_rs::ToJsonSchema>::json_schema_with,
+                    <Self as __json_schema_rs::ToJsonSchema>::json_schema_with,
                 );
-                ::json_schema_rs::JsonSchema { id: None, ..schema }
+                __json_schema_rs::JsonSchema { id: None, ..schema }
             }
 
             fn schema_id() -> &'static str {
@@ -1394,8 +1442,8 @@ fn enum_spec_body(
                 let ty: Type = replace_self(&schema_type(&unnamed.unnamed[0])?, name);
                 quote! {
                     #support::VariantShape::Newtype {
-                        schema: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_with,
-                        flattened: <#ty as ::json_schema_rs::ToJsonSchema>::json_schema_flattened,
+                        schema: <#ty as __json_schema_rs::ToJsonSchema>::json_schema_with,
+                        flattened: <#ty as __json_schema_rs::ToJsonSchema>::json_schema_flattened,
                     }
                 }
             }
@@ -1407,7 +1455,7 @@ fn enum_spec_body(
                     .collect::<SynResult<Vec<Type>>>()?;
                 quote! {
                     #support::VariantShape::Tuple(&[
-                        #(<#items as ::json_schema_rs::ToJsonSchema>::json_schema_with),*
+                        #(<#items as __json_schema_rs::ToJsonSchema>::json_schema_with),*
                     ])
                 }
             }
@@ -1483,7 +1531,7 @@ fn value_enum_body(
     let type_expr: TokenStream2 = if any_explicit_value || values.is_empty() {
         quote! { None }
     } else {
-        quote! { Some(::json_schema_rs::TypeSet::from(::json_schema_rs::JsonType::String)) }
+        quote! { Some(__json_schema_rs::TypeSet::from(__json_schema_rs::JsonType::String)) }
     };
 
     let ContainerExprs {
@@ -1500,7 +1548,7 @@ fn value_enum_body(
             ::core::option::Option<::std::vec::Vec<::serde_json::Value>>,
             ::core::option::Option<::serde_json::Value>,
         ) = #support::value_enum_keywords(VALUES);
-        ::json_schema_rs::JsonSchema {
+        __json_schema_rs::JsonSchema {
             id: #id_expr,
             type_: #type_expr,
             title: #title,
@@ -1508,7 +1556,7 @@ fn value_enum_body(
             comment: #comment,
             enum_values,
             const_value,
-            ..::json_schema_rs::JsonSchema::default()
+            ..__json_schema_rs::JsonSchema::default()
         }
     })
 }
@@ -1524,6 +1572,23 @@ mod tests {
         expand_to_json_schema(input)
             .err()
             .map(|error: syn::Error| error.to_string())
+    }
+
+    #[test]
+    fn crate_that_is_not_a_path_is_an_error() {
+        let expected: Option<String> = Some("`not a path` is not a Rust path".to_string());
+        let actual: Option<String> =
+            expansion_error(r#"#[json_schema(crate = "not a path")] struct S { a: i32 }"#);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn crate_beside_other_container_keys_expands() {
+        let expected: Option<String> = None;
+        let actual: Option<String> = expansion_error(
+            r#"#[json_schema(title = "T", crate = "crate::facade::jsr", id = "urn:t")] struct S { a: i32 }"#,
+        );
+        assert_eq!(expected, actual);
     }
 
     #[test]

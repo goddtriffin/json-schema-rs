@@ -206,7 +206,7 @@ fn json_text(tree: TokenTree) -> String {
 }
 
 /// Every setting name, in the order the error for an unknown name lists them.
-const SETTING_NAMES: [&str; 32] = [
+const SETTING_NAMES: [&str; 34] = [
     "model_name_source",
     "dedupe_mode",
     "unknown_properties",
@@ -228,6 +228,8 @@ const SETTING_NAMES: [&str; 32] = [
     "unknown_crates",
     "root_name",
     "visibility",
+    "crate_path",
+    "macro_crate_path",
     "disallow_unknown_fields",
     "forced_spec_version",
     "default_spec_version",
@@ -354,6 +356,8 @@ struct Overrides {
     unknown_crates: Option<UnknownCrates>,
     root_name: Option<String>,
     visibility: Option<Visibility>,
+    crate_path: Option<String>,
+    macro_crate_path: Option<String>,
     disallow_unknown_fields: Option<bool>,
     forced_spec_version: Option<SpecVersion>,
     default_spec_version: Option<SpecVersion>,
@@ -419,6 +423,8 @@ impl Overrides {
                     .unwrap_or(code_gen_default.unknown_crates),
                 root_name: self.root_name.or(code_gen_default.root_name),
                 visibility: self.visibility.unwrap_or(code_gen_default.visibility),
+                crate_path: self.crate_path.or(code_gen_default.crate_path),
+                macro_crate_path: self.macro_crate_path.or(code_gen_default.macro_crate_path),
                 // The macro lays out its own modules (`shared` beside each schema's) and its
                 // output carries no comments, so these two keep their defaults.
                 shared_path: code_gen_default.shared_path,
@@ -827,6 +833,8 @@ fn apply(overrides: &mut Overrides, setting: &str, arg: &SettingArg) -> SynResul
             variant(setting, value, UNKNOWN_CRATES),
         ),
         "root_name" => set(&mut overrides.root_name, string(setting, value)),
+        "crate_path" => set(&mut overrides.crate_path, string(setting, value)),
+        "macro_crate_path" => set(&mut overrides.macro_crate_path, string(setting, value)),
         "visibility" => set(
             &mut overrides.visibility,
             variant(setting, value, VISIBILITIES),
@@ -998,6 +1006,8 @@ mod tests {
                 .patch("Fruit", TypePatch::default())
                 .root_name("Config")
                 .visibility(Visibility::Crate)
+                .crate_path("crate::facade::jsr")
+                .macro_crate_path("crate::facade::jsr_macro")
                 .build(),
             json_schema: JsonSchemaSettings::builder()
                 .disallow_unknown_fields(true)
@@ -1021,7 +1031,8 @@ mod tests {
              extra_derives = [schemars::JsonSchema, ::core::hash::Hash], \
              extra_attrs = [non_exhaustive, serde(rename_all = \"camelCase\")], \
              patch = { Veg = { rename = \"Vegetable\", derives = [Hash], attrs = [must_use] }, Fruit = {} }, \
-             root_name = \"Config\", visibility = Crate, disallow_unknown_fields = true, \
+             root_name = \"Config\", visibility = Crate, crate_path = \"crate::facade::jsr\", \
+             macro_crate_path = \"crate::facade::jsr_macro\", disallow_unknown_fields = true, \
              forced_spec_version = Draft07, default_spec_version = Draft04, \
              format_mode = Assertion, content_mode = Annotation, unknown_formats = Reject, integer_semantics = Lexical, \
              exclusive_bounds = BooleanModifier, ref_siblings = Evaluated, \
@@ -1122,7 +1133,7 @@ mod tests {
             "unknown setting `dedupe`; expected `model_name_source`, `dedupe_mode`, \
              `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
              `self_validating`, `constrained_newtypes`, `builders`, `string_enum_impls`, `schema_defaults`, `format_types`, `extra_derives`, \
-             `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+             `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `crate_path`, `macro_crate_path`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
              `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                 .to_string(),
             1,
@@ -1264,7 +1275,7 @@ mod tests {
                 "unknown setting `colour`; expected `model_name_source`, `dedupe_mode`, \
                  `unknown_properties`, `unique_items`, `map_type`, `flatten_single_entry_combinators`, \
                  `self_validating`, `constrained_newtypes`, `builders`, `string_enum_impls`, `schema_defaults`, `format_types`, `extra_derives`, \
-                 `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
+                 `extra_attrs`, `patch`, `convert`, `replace`, `crates`, `unknown_crates`, `root_name`, `visibility`, `crate_path`, `macro_crate_path`, `disallow_unknown_fields`, `forced_spec_version`, `default_spec_version`, `format_mode`, `content_mode`, `unknown_formats`, \
                  `integer_semantics`, `exclusive_bounds`, `ref_siblings`, `unknown_schema_uri` or `metaschema_check`"
                     .to_string(),
                 1,

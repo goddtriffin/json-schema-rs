@@ -1479,6 +1479,7 @@ const SCENARIOS: &[&str] = &[
     "builders",
     "std_impls",
     "crate_visibility",
+    "crate_path",
 ];
 
 /// Build+deserialize scenarios that need the `indexmap` feature.
@@ -2788,6 +2789,61 @@ pub fn builds_from_b() -> bool {
                 (PathBuf::from("a.rs"), output.per_schema[0].clone()),
                 (PathBuf::from("b.rs"), output.per_schema[1].clone()),
             ];
+            (lib_rs, extra, main_rs)
+        }
+        "crate_path" => {
+            // The library and its derives reached through a re-export, as a crate that wraps
+            // them would offer them: every path in the generated code (derives, macros,
+            // `Nullable`, integer readers, unique-items helpers, validators) resolves there.
+            let schema_json: &str = r#"{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1},"kind":{"enum":["a","b"]},"size":{"anyOf":[{"type":"integer"},{"type":"string"}]},"note":{"type":["string","null"]},"ids":{"type":"array","items":{"type":"integer"},"uniqueItems":true},"level":{"enum":[1,"x"]}}}"#;
+            let code_gen: CodeGenSettings = CodeGenSettings::builder()
+                .crate_path("crate::facade::jsr")
+                .macro_crate_path("crate::facade::jsr_macro")
+                .unique_items(UniqueItemsType::BTreeSet)
+                .builders(true)
+                .build();
+            let main_rs = r##"fn main() {
+    let expected: (Option<String>, Option<String>, bool) = (
+        Some(r#"{"ids":[1,2],"kind":"b","level":1,"name":"x","note":null,"size":3}"#.to_string()),
+        None,
+        true,
+    );
+    let actual: (Option<String>, Option<String>, bool) = (
+        compile_test::round_trip(r#"{"name":"x","kind":"b","size":3,"note":null,"ids":[2,1],"level":1}"#),
+        compile_test::round_trip(r#"{"name":""}"#),
+        compile_test::builds(),
+    );
+    assert_eq!(expected, actual);
+}
+"##;
+            let lib_rs: Vec<u8> = r#"/// The library and its derives under other paths.
+mod facade {
+    pub use json_schema_rs as jsr;
+    pub use json_schema_rs_macro as jsr_macro;
+}
+pub mod models;
+
+/// Deserializes `json` into the root and serializes it back, `None` when it is not a valid
+/// `Root`.
+#[must_use]
+pub fn round_trip(json: &str) -> Option<String> {
+    let root: models::Root = serde_json::from_str(json).ok()?;
+    serde_json::to_string(&root).ok()
+}
+
+/// Whether the root builds through its builder.
+#[must_use]
+pub fn builds() -> bool {
+    let built: Result<models::Root, facade::jsr::BuilderError> =
+        models::Root::builder().name("x").try_into();
+    built.is_ok()
+}
+"#
+            .into();
+            let extra: Vec<(PathBuf, Vec<u8>)> = vec![(
+                PathBuf::from("models.rs"),
+                generate_single(schema_json, &code_gen),
+            )];
             (lib_rs, extra, main_rs)
         }
         "builders" => {
