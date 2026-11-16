@@ -735,3 +735,53 @@ fn ref_siblings_default_evaluates_keyword_next_to_ref() {
         accepts::<ref_siblings_default::schema_0::Root>(serde_json::json!({"name": "abc"}));
     assert_eq!(expected, actual);
 }
+
+// --- string_enum_impls ---
+
+mod string_enum_impls {
+    json_schema_rs_macro::json_schema_to_rust!(r#"{"title":"Veg","enum":["pea","sweet potato"]}"#);
+}
+
+#[test]
+fn string_enum_impls_parse_json_value() {
+    let expected: Result<string_enum_impls::schema_0::Veg, String> =
+        Ok(string_enum_impls::schema_0::Veg::SweetPotato);
+    let actual: Result<string_enum_impls::schema_0::Veg, String> = "sweet potato"
+        .parse::<string_enum_impls::schema_0::Veg>()
+        .map_err(|error: json_schema_rs::ParseEnumError| error.to_string());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn string_enum_impls_display_json_value() {
+    let expected: String = "sweet potato".to_string();
+    let actual: String = string_enum_impls::schema_0::Veg::SweetPotato.to_string();
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn string_enum_impls_reject_unknown_value() {
+    let expected: Result<string_enum_impls::schema_0::Veg, String> =
+        Err("unknown variant `kale`, expected `pea` or `sweet potato`".to_string());
+    let actual: Result<string_enum_impls::schema_0::Veg, String> = "kale"
+        .parse::<string_enum_impls::schema_0::Veg>()
+        .map_err(|error: json_schema_rs::ParseEnumError| error.to_string());
+    assert_eq!(expected, actual);
+}
+
+// --- schema_defaults ---
+
+mod schema_defaults {
+    json_schema_rs_macro::json_schema_to_rust!(
+        r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string","default":"carrot"},"weight":{"type":"integer","minimum":0,"maximum":255,"default":3}}}"#,
+        schema_defaults = true
+    );
+}
+
+#[test]
+fn schema_defaults_struct_default_holds_property_defaults() {
+    let expected: serde_json::Value = serde_json::json!({"name": "carrot", "weight": 3});
+    let actual: serde_json::Value =
+        serde_json::to_value(schema_defaults::schema_0::Veg::default()).expect("serialize");
+    assert_eq!(expected, actual);
+}

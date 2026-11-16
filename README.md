@@ -311,6 +311,14 @@ inner type), and `try_into()` (`TryFrom<builder::Veg>`) reports every missing re
 and failed conversion together in a `json_schema_rs::BuilderError`; a self-validating struct
 is validated as well. `builder::Veg::from(veg)` starts from an existing value.
 
+**Enum and default impls.** String enums implement `as_str()`, `Display` and `FromStr`
+with their JSON values (`"sweet potato".parse::<Veg>()`); `.string_enum_impls(false)`
+(`--cgs-string-enum-impls false`) leaves them out. `.schema_defaults(true)`
+(`--cgs-schema-defaults`) makes a type with a schema `default` (or a struct whose properties
+have defaults) implement `Default` with it, when the default is valid for both the schema
+and the Rust type; otherwise `default` stays an annotation, read through the
+`<field>_or_default()` accessors.
+
 **Integers.** From draft 6 on an integer is any number with a zero fraction, so generated
 integer types accept `1.0` and `2e0` (fields, items, map values, union variants and
 newtypes read through `json_schema_rs::integer`); draft 4 accepts only numbers written as
@@ -538,7 +546,8 @@ json_schema_to_rust!(
   `patch = { Veg = { rename = "Vegetable", derives = [Hash], attrs = [..] } }`,
   `convert = { {"type":"string","format":"decimal"} => rust_decimal::Decimal }`,
   `replace = { Ipv4 = my::Ipv4 }`, `crates = ["my-types@1.2"]`,
-  `unknown_crates = Generate|Allow|Deny`, `builders`.
+  `unknown_crates = Generate|Allow|Deny`, `builders`, `string_enum_impls`,
+  `schema_defaults`.
 - Schema ingestion: `disallow_unknown_fields`,
   `forced_spec_version` / `default_spec_version = Draft04|Draft06|Draft07|Draft201909|Draft202012`
   (and `Draft00` to `Draft05`), `format_mode = Annotation|Assertion`,

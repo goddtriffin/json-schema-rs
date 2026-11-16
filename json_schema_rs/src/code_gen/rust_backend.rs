@@ -13,6 +13,7 @@ use super::GenerateRustOutput;
 use super::doc_text;
 use super::input::{CachingRetriever, CodeGenInput};
 use super::rust_validators::{self, BufferValidators, EmbeddedSet, Entry, UnionEntries};
+use super::schema_defaults::schema_defaults;
 use super::settings::{CodeGenSettings, DedupeMode, MapType, TypePatch, UniqueItemsType};
 use super::type_graph::passes;
 use super::type_graph::{
@@ -58,7 +59,17 @@ impl CodeGenBackend for RustBackend {
             .collect::<CodeGenResult<Vec<Registry<'_>>>>()?;
         let (mut graph, sets, _): (TypeGraph, Option<Vec<EmbeddedSet>>, Vec<TypeId>) =
             prepare_graph(&schemas, &registries, input.retrieval_settings(), settings)?;
-        let plan: Plan = Plan::new(&mut graph, settings)?;
+        let mut plan: Plan = Plan::new(&mut graph, settings)?;
+        if settings.schema_defaults {
+            let read: Vec<EmbeddedSet>;
+            let sets: &[EmbeddedSet] = if let Some(sets) = &sets {
+                sets
+            } else {
+                read = rust_validators::embedded_sets(&registries, input.retrieval_settings())?;
+                &read
+            };
+            plan.defaults = schema_defaults(&graph, sets, plan.items.keys().copied());
+        }
         let shared: Option<Vec<u8>> = if plan.has_shared() {
             Some(render_buffer(&graph, &plan, Home::Shared, sets.as_deref())?)
         } else {
@@ -235,6 +246,11 @@ struct Plan {
     self_validating: bool,
     /// Whether every struct gets a builder (`builders`).
     builders: bool,
+    /// Whether string enums get `as_str`, `Display` and `FromStr` (`string_enum_impls`).
+    string_enum_impls: bool,
+    /// Per item with an `impl Default` from its schema `default` (`schema_defaults`), the
+    /// default as compact JSON.
+    defaults: HashMap<TypeId, String>,
     /// The settings' derives and attributes for every item (`extra_derives`, `extra_attrs`).
     extra_derives: Vec<String>,
     extra_attrs: Vec<String>,
@@ -350,6 +366,8 @@ impl Plan {
             eq_nodes,
             self_validating: settings.self_validating,
             builders: settings.builders,
+            string_enum_impls: settings.string_enum_impls,
+            defaults: HashMap::new(),
             extra_derives: settings.extra_derives.clone(),
             extra_attrs: settings.extra_attrs.clone(),
             node_patches: placed.node_patches,
@@ -1929,8 +1947,9 @@ fn render_field(
 /// build compiles in superlinear time (minutes for a struct with hundreds of fields). A union's
 /// `Deserialize` is hand-written (see [`render_union`]).
 fn item_derive(plan: &Plan, id: TypeId, default: bool, deserialize: bool) -> String {
+    let schema_default: bool = plan.defaults.contains_key(&id);
     let mut traits: Vec<&str> = vec!["Debug", "Clone"];
-    if default {
+    if default && !schema_default {
         traits.push("Default");
     }
     traits.push("PartialEq");
@@ -1944,15 +1963,21 @@ fn item_derive(plan: &Plan, id: TypeId, default: bool, deserialize: bool) -> Str
         traits.push("json_schema_rs_macro::Deserialize");
     }
     traits.push("json_schema_rs_macro::ToJsonSchema");
-    derive_block(plan, plan.node_patches.get(&id), &traits)
+    derive_block(plan, plan.node_patches.get(&id), &traits, schema_default)
 }
 
 /// The derive line of an item deriving `base`, then its attribute lines: the settings' extra
 /// derives and those of the item's `patch` that `base` lacks (compared by last path segment, so
 /// `serde::Deserialize` matches a generated `Deserialize`; every item implements `Serialize` and
 /// `Deserialize`, derived or written by hand, so those two are never added), then the settings'
-/// extra attributes and the patch's. Ends with a newline.
-fn derive_block(plan: &Plan, patch: Option<&TypePatch>, base: &[&str]) -> String {
+/// extra attributes and the patch's. Ends with a newline. With `schema_default` (the item
+/// implements `Default` from its schema `default`) no `Default` derive is added.
+fn derive_block(
+    plan: &Plan,
+    patch: Option<&TypePatch>,
+    base: &[&str],
+    schema_default: bool,
+) -> String {
     let last =
         |path: &str| -> String { path.rsplit("::").next().unwrap_or(path).trim().to_string() };
     let mut traits: Vec<&str> = base.to_vec();
@@ -1961,6 +1986,7 @@ fn derive_block(plan: &Plan, patch: Option<&TypePatch>, base: &[&str]) -> String
         let name: String = last(extra);
         if name != "Serialize"
             && name != "Deserialize"
+            && !(schema_default && name == "Default")
             && !traits.iter().any(|t: &&str| last(t) == name)
         {
             traits.push(extra);
@@ -2093,9 +2119,14 @@ fn render_builder(
 /// validated against its schema (by `TryFrom` or `Deserialize`, through the embedded validator).
 /// Reading goes through `Deref`, `AsRef`, `into_inner` and `From<Name>` for the scalar;
 /// `Serialize` is the scalar's own.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the newtype's node, names, patch and default flag all shape its one rendering"
+)]
 fn render_newtype(
     plan: &Plan,
     patch: Option<&TypePatch>,
+    schema_default: bool,
     node: &TypeNode,
     name: &str,
     newtype: &Newtype,
@@ -2141,7 +2172,7 @@ fn render_newtype(
             "json_schema_rs_macro::ToJsonSchema",
         ],
     };
-    out.push_str(&derive_block(plan, patch, base));
+    out.push_str(&derive_block(plan, patch, base, schema_default));
     out.push_str("#[serde(transparent)]\n");
     let mut schema_args: Vec<String> = Vec::new();
     if let Some(ref title) = a.title {
@@ -2273,7 +2304,7 @@ fn render_root_alias(
         "Deserialize",
         "json_schema_rs_macro::ToJsonSchema",
     ]);
-    let mut out: String = derive_block(plan, patch, &traits);
+    let mut out: String = derive_block(plan, patch, &traits, false);
     out.push_str("#[serde(transparent)]\n");
     let field_attrs: String = if reads_integers(graph, plan, root) {
         format!("#[serde(deserialize_with = \"{INTEGER_READ}\")] ")
@@ -2308,6 +2339,7 @@ fn value_variant_base(value: &Value) -> String {
 fn render_enum(
     plan: &Plan,
     patch: Option<&TypePatch>,
+    schema_default: bool,
     name: &str,
     e: &EnumNode,
     imports: &mut Imports,
@@ -2317,7 +2349,12 @@ fn render_enum(
     let (mut out, stated): (String, Option<String>) = item_docs(&e.annotations);
     imports.deserialize = true;
     if e.is_string_enum() {
-        out.push_str(&derive_block(plan, patch, STRING_ENUM_DERIVE));
+        out.push_str(&derive_block(
+            plan,
+            patch,
+            STRING_ENUM_DERIVE,
+            schema_default,
+        ));
         out.push_str(&description_attr(stated.as_ref()));
         let members: Vec<(&str, &str)> = e
             .values
@@ -2338,11 +2375,19 @@ fn render_enum(
             let _ = writeln!(out, "    {variant},");
         }
         out.push_str("}\n\n");
+        if plan.string_enum_impls && !e.values.is_empty() {
+            let _ = writeln!(out, "json_schema_rs::string_enum!({name});\n");
+        }
         return out;
     }
     // Values of other JSON types: serde goes through `serde_json::Value` and compares by JSON
     // Schema equality (`1` equals `1.0`).
-    out.push_str(&derive_block(plan, patch, VALUE_ENUM_DERIVE));
+    out.push_str(&derive_block(
+        plan,
+        patch,
+        VALUE_ENUM_DERIVE,
+        schema_default,
+    ));
     out.push_str(&description_attr(stated.as_ref()));
     let _ = writeln!(out, "pub enum {name} {{");
     for (value, variant) in e.values.iter().zip(&variants) {
@@ -2560,6 +2605,14 @@ fn ordered_items(graph: &TypeGraph, plan: &Plan, home: Home) -> Vec<TypeId> {
     out
 }
 
+/// The `impl Default` of item `id` from its schema `default`, when it has one: one
+/// [`json_schema_rs::schema_default!`](crate::schema_default!) line.
+fn push_schema_default(body: &mut String, plan: &Plan, id: TypeId, name: &str) {
+    if let Some(json) = plan.defaults.get(&id) {
+        let _ = writeln!(body, "json_schema_rs::schema_default!({name}, {json:?});\n");
+    }
+}
+
 /// Renders one output buffer. `sets` (with self-validating types) holds each input's embedded
 /// documents.
 #[expect(
@@ -2587,12 +2640,14 @@ fn render_buffer(
             body.push_str(&render_newtype(
                 plan,
                 plan.node_patches.get(&id),
+                plan.defaults.contains_key(&id),
                 graph.node(id),
                 name,
                 newtype,
                 entry,
                 &mut imports,
             ));
+            push_schema_default(&mut body, plan, id, name);
             continue;
         }
         let item: String = match graph.node(id) {
@@ -2602,9 +2657,14 @@ fn render_buffer(
                 }
                 render_struct(graph, plan, home, id, name, o, &mut imports)
             }
-            TypeNode::Enum(e) => {
-                render_enum(plan, plan.node_patches.get(&id), name, e, &mut imports)
-            }
+            TypeNode::Enum(e) => render_enum(
+                plan,
+                plan.node_patches.get(&id),
+                plan.defaults.contains_key(&id),
+                name,
+                e,
+                &mut imports,
+            ),
             TypeNode::Union(u) => render_union(
                 graph,
                 plan,
@@ -2621,6 +2681,7 @@ fn render_buffer(
         if let Some(entry) = entry {
             body.push_str(&rust_validators::render_item_impls(name, &entry));
         }
+        push_schema_default(&mut body, plan, id, name);
     }
     if let (Some(validators), Some(sets)) = (&validators, sets) {
         body.push_str(&validators.render(sets)?);
@@ -4087,6 +4148,8 @@ pub enum Status {
     Open,
 }
 
+json_schema_rs::string_enum!(Status);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub status: Status,
@@ -4115,6 +4178,8 @@ pub enum Key {
     #[serde(rename = "only")]
     Only,
 }
+
+json_schema_rs::string_enum!(Key);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -4339,6 +4404,8 @@ pub enum Level {
     Medium,
 }
 
+json_schema_rs::string_enum!(Level);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4369,6 +4436,8 @@ pub enum A {
     X,
     Y,
 }
+
+json_schema_rs::string_enum!(A);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -4403,6 +4472,8 @@ pub enum T {
     A1,
 }
 
+json_schema_rs::string_enum!(T);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub t: T,
@@ -4434,6 +4505,8 @@ pub enum T {
     A1,
 }
 
+json_schema_rs::string_enum!(T);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub t: T,
@@ -4464,6 +4537,8 @@ pub enum Id {
     #[serde(rename = "todd.griffin")]
     ToddGriffin,
 }
+
+json_schema_rs::string_enum!(Id);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -6189,6 +6264,8 @@ pub enum Team {
     Team3,
 }
 
+json_schema_rs::string_enum!(Team);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub team: Team,
@@ -6223,6 +6300,8 @@ pub enum Level {
     #[serde(rename = "other")]
     Other,
 }
+
+json_schema_rs::string_enum!(Level);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -7063,6 +7142,8 @@ pub enum Status {
     Open,
 }
 
+json_schema_rs::string_enum!(Status);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     /// Issue status
@@ -7389,6 +7470,8 @@ pub enum Status {
     #[serde(rename = "open")]
     Open,
 }
+
+json_schema_rs::string_enum!(Status);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -8047,6 +8130,8 @@ pub enum X {
     Same,
 }
 
+json_schema_rs::string_enum!(X);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8210,6 +8295,8 @@ pub enum S {
     B,
     C,
 }
+
+json_schema_rs::string_enum!(S);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -8796,6 +8883,8 @@ pub enum LineKind {
     D,
 }
 
+json_schema_rs::string_enum!(LineKind);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "Line")]
 pub struct Line {
@@ -8811,6 +8900,8 @@ pub enum PointKind {
     A,
     B,
 }
+
+json_schema_rs::string_enum!(PointKind);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[json_schema(title = "Point")]
@@ -8867,6 +8958,8 @@ pub enum AuthAnonymous {
     #[serde(rename = "anonymous")]
     Anonymous,
 }
+
+json_schema_rs::string_enum!(AuthAnonymous);
 
 json_schema_rs::self_validating!(AuthAnonymous, TYPE_VALIDATORS, 2);
 
@@ -12414,6 +12507,8 @@ pub enum Color {
     Red,
 }
 
+json_schema_rs::string_enum!(Color);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(deserialize_with = "unique_items::required")]
@@ -13432,6 +13527,8 @@ pub enum Level {
     Error,
 }
 
+json_schema_rs::string_enum!(Level);
+
 json_schema_rs::self_validating!(Level, TYPE_VALIDATORS, 0);
 
 static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
@@ -13657,6 +13754,8 @@ pub enum ParserVariant0 {
     Flow,
 }
 
+json_schema_rs::string_enum!(ParserVariant0);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
 pub enum ParserAnyOf {
@@ -13722,6 +13821,8 @@ pub enum XVariant0 {
     A,
     B,
 }
+
+json_schema_rs::string_enum!(XVariant0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
 #[serde(untagged)]
@@ -14790,6 +14891,8 @@ pub enum Kind {
     B,
 }
 
+json_schema_rs::string_enum!(Kind);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
 pub struct Veg {
     pub name: String,
@@ -14844,6 +14947,8 @@ pub enum Kind {
     B,
 }
 
+json_schema_rs::string_enum!(Kind);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 #[non_exhaustive]
 #[doc(alias = "x")]
@@ -14892,6 +14997,8 @@ pub enum Kind {
     B,
 }
 
+json_schema_rs::string_enum!(Kind);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Vegetable {
     pub name: String,
@@ -14937,6 +15044,8 @@ pub enum Kind {
     A,
     B,
 }
+
+json_schema_rs::string_enum!(Kind);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema, schemars::JsonSchema)]
 pub struct Veg {
@@ -15112,6 +15221,8 @@ pub enum Veg {
     A,
     B,
 }
+
+json_schema_rs::string_enum!(Veg);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Kind {
@@ -16336,6 +16447,353 @@ pub mod builder {
 pub type Root = String;
 
 ";
+        assert_eq!(expected, actual);
+    }
+
+    fn generate_with_schema_defaults(schema_json: &str, validating: bool) -> String {
+        let schema: Schema = Schema::try_from(schema_json).unwrap();
+        let settings: CodeGenSettings = CodeGenSettings::builder()
+            .schema_defaults(true)
+            .self_validating(validating)
+            .constrained_newtypes(validating)
+            .build();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        String::from_utf8(output.per_schema[0].clone()).unwrap()
+    }
+
+    /// A struct's own `default` becomes its `impl Default`, in place of the empty-object derive.
+    #[test]
+    fn schema_defaults_struct_own_default() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string"},"weight":{"type":"integer","minimum":0,"maximum":255}},"default":{"name":"carrot","weight":3}}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u8>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::schema_default!(Veg, "{\"name\":\"carrot\",\"weight\":3}");
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A struct without its own `default` defaults to the object of its properties' `default`s.
+    #[test]
+    fn schema_defaults_struct_from_property_defaults() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string","default":"carrot"},"weight":{"type":"integer","minimum":0,"maximum":255}}}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "carrot")]
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u8>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Veg {
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn name_or_default(&self) -> &str {
+        self.name.as_deref().unwrap_or("carrot")
+    }
+}
+
+json_schema_rs::schema_default!(Veg, "{\"name\":\"carrot\"}");
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// Property defaults that leave a required property out are not a valid value: no impl.
+    #[test]
+    fn schema_defaults_skip_property_defaults_missing_required() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"object","required":["weight"],"properties":{"name":{"type":"string","default":"carrot"},"weight":{"type":"integer","minimum":0,"maximum":255}}}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = "carrot")]
+    pub name: Option<String>,
+    #[serde(deserialize_with = "json_schema_rs::integer::deserialize")]
+    pub weight: u8,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl Veg {
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn name_or_default(&self) -> &str {
+        self.name.as_deref().unwrap_or("carrot")
+    }
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A `default` the schema rejects gets no impl (the empty-object derive stays).
+    #[test]
+    fn schema_defaults_skip_default_invalid_against_schema() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string","minLength":3}},"default":{"name":"x"}}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(min_length = 3)]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A `default` whose string is not valid for its typed `format` gets no impl, though 2020-12 only annotates `format`.
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn schema_defaults_skip_typed_format_invalid_value() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"object","properties":{"id":{"type":"string","format":"uuid"}},"default":{"id":"not a uuid"}}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Uuid>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A schema-valid `default` that does not fit the Rust type (an integer past `i64`) gets no impl.
+    #[test]
+    fn schema_defaults_skip_integer_out_of_rust_range() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"object","properties":{"weight":{"type":"integer"}},"default":{"weight":1e30}}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    pub weight: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A string enum's `default` variant.
+    #[test]
+    fn schema_defaults_string_enum() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"string","enum":["sweet potato","pea"],"default":"pea"}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, json_schema_rs_macro::ToJsonSchema)]
+pub enum Veg {
+    #[serde(rename = "pea")]
+    Pea,
+    #[serde(rename = "sweet potato")]
+    SweetPotato,
+}
+
+json_schema_rs::string_enum!(Veg);
+
+json_schema_rs::schema_default!(Veg, "\"pea\"");
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A union's `default`, read through its untagged `Deserialize`.
+    #[test]
+    fn schema_defaults_union() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Size","type":["integer","string"],"default":"large"}"#,
+            false,
+        );
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(untagged)]
+pub enum Size {
+    Integer(i64),
+    String(String),
+}
+
+json_schema_rs::deserialize_untagged!(Size { Integer(i64 = with(json_schema_rs::integer::deserialize)), String(String) });
+
+json_schema_rs::schema_default!(Size, "\"large\"");
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    /// A constrained newtype's `default`.
+    #[test]
+    fn schema_defaults_newtype() {
+        let actual: String = generate_with_schema_defaults(
+            r##"{"title":"Veg","type":"object","properties":{"name":{"$ref":"#/$defs/name"}},"$defs":{"name":{"type":"string","minLength":2,"default":"pea"}}}"##,
+            true,
+        );
+        let expected: &str = r###"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(min_length = 2)]
+pub struct Name(String);
+
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
+
+json_schema_rs::schema_default!(Name, "\"pea\"");
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Name>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Veg, TYPE_VALIDATORS, 1);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r##"{"$defs":{"name":{"minLength":2,"type":"string"}},"properties":{"name":{"$ref":"#/$defs/name"}},"type":"object"}"##,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/$defs/name"],
+        &["#"],
+    ],
+);
+
+"###;
+        assert_eq!(expected, actual);
+    }
+
+    /// A self-validating struct's `default`.
+    #[test]
+    fn schema_defaults_self_validating_struct() {
+        let actual: String = generate_with_schema_defaults(
+            r#"{"title":"Veg","type":"object","properties":{"name":{"type":"string","minLength":2}},"default":{"name":"pea"}}"#,
+            true,
+        );
+        let expected: &str = r##"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(min_length = 2)]
+pub struct Name(String);
+
+json_schema_rs::constrained_newtype!(string, Name, TYPE_VALIDATORS, 0);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Veg")]
+pub struct Veg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Name>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+json_schema_rs::self_validating!(Veg, TYPE_VALIDATORS, 1);
+
+json_schema_rs::schema_default!(Veg, "{\"name\":\"pea\"}");
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r#"{"properties":{"name":{"minLength":2,"type":"string"}},"type":"object"}"#,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/properties/name"],
+        &["#"],
+    ],
+);
+
+"##;
         assert_eq!(expected, actual);
     }
 }

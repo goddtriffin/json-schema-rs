@@ -7,6 +7,8 @@ mod builder;
 pub mod code_gen;
 pub mod error_list;
 #[doc(hidden)]
+pub mod generated_impls;
+#[doc(hidden)]
 pub mod generated_serde;
 pub mod integer;
 pub mod json_pointer;
@@ -27,6 +29,7 @@ pub use code_gen::{
     UnknownCrates, UnknownProperties, generate_rust,
 };
 pub use error_list::ErrorList;
+pub use generated_impls::ParseEnumError;
 pub use json_pointer::{JsonPointer, JsonPointerError};
 #[cfg(feature = "http")]
 pub use json_schema::HttpRetriever;

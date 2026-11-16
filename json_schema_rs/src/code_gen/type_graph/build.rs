@@ -706,6 +706,10 @@ impl<'r> Builder<'_, 'r> {
                 self.graph.targets[id.index()] = Some(target);
                 self.sources.insert(id, sources);
             }
+            if self.settings.schema_defaults {
+                self.graph.default_targets[id.index()] =
+                    self.validation_target(&flat).map(|(target, _)| target);
+            }
             self.add_intrinsic_proposals(id, &flat, context.parent.as_deref());
             self.queue.push((id, flat, request.mask, context.clone()));
             id
@@ -1019,7 +1023,7 @@ impl<'r> Builder<'_, 'r> {
         };
         Some(Newtype {
             numbers,
-            annotations: annotations_of(flat),
+            annotations: annotations_of(flat, self.settings.schema_defaults),
         })
     }
 
@@ -1263,7 +1267,7 @@ impl<'r> Builder<'_, 'r> {
         mask: TypeSet,
         context: &Context,
     ) -> CodeGenResult<TypeNode> {
-        let annotations: Annotations = annotations_of(flat);
+        let annotations: Annotations = annotations_of(flat, self.settings.schema_defaults);
         if flat.never {
             return Ok(uninhabited(annotations));
         }
@@ -1555,6 +1559,10 @@ impl<'r> Builder<'_, 'r> {
         {
             self.graph.targets[id.index()] = Some(target);
             self.sources.insert(id, sources);
+        }
+        if self.settings.schema_defaults {
+            self.graph.default_targets[id.index()] =
+                self.validation_target(flat).map(|(target, _)| target);
         }
         self.add_intrinsic_proposals(id, flat, context.parent.as_deref());
         self.add_context_proposals(id, context);
@@ -2111,8 +2119,9 @@ fn first_union<'r>(flat: &Flat<'r>) -> Option<(usize, UnionKind, &'r [Schema])> 
     })
 }
 
-/// The first non-empty value of each annotation, in conjunction order.
-fn annotations_of(flat: &Flat<'_>) -> Annotations {
+/// The first non-empty value of each annotation, in conjunction order; `default` only with
+/// `defaults`.
+fn annotations_of(flat: &Flat<'_>, defaults: bool) -> Annotations {
     let mut a: Annotations = Annotations::default();
     for c in flat
         .conjuncts
@@ -2137,6 +2146,9 @@ fn annotations_of(flat: &Flat<'_>) -> Annotations {
         }
         if a.id.is_none() {
             a.id.clone_from(&s.id);
+        }
+        if defaults && a.default.is_none() {
+            a.default.clone_from(&s.default_value);
         }
     }
     a

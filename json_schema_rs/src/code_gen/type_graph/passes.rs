@@ -97,10 +97,15 @@ pub(crate) fn collapse_wrapper_cycles(graph: &mut TypeGraph) {
 }
 
 /// The parts of a node's identity that are not its children, as text (deterministic and
-/// cheap to hash). `mode` decides whether documentation takes part.
+/// cheap to hash). `mode` decides whether documentation takes part; a schema `default` always
+/// does (it is recorded only when it becomes an `impl Default`).
 fn local_signature(node: &TypeNode, mode: DedupeMode) -> String {
     let annotations = |a: &Annotations| -> String {
-        match mode {
+        let default: String = a
+            .default
+            .as_ref()
+            .map_or_else(String::new, |d: &serde_json::Value| format!("|default={d}"));
+        let docs: String = match mode {
             DedupeMode::Full => format!(
                 "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
                 a.title,
@@ -111,7 +116,8 @@ fn local_signature(node: &TypeNode, mode: DedupeMode) -> String {
                 a.id
             ),
             DedupeMode::Functional | DedupeMode::Disabled => format!("{:?}", a.title),
-        }
+        };
+        docs + &default
     };
     match node {
         TypeNode::Object(o) => {

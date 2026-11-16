@@ -540,6 +540,31 @@ fn embedding(
     Ok((set.documents.clone(), entries.to_vec()))
 }
 
+/// Per check (a schema `default` and the target of its type), whether the value satisfies the
+/// target, as the generated type's own validation would check it. `false` for a check whose
+/// schemas do not compile.
+pub(crate) fn defaults_satisfy(
+    sets: &[EmbeddedSet],
+    checks: &[(&ValidationTarget, &Value)],
+) -> Vec<bool> {
+    let mut valid: Vec<bool> = vec![false; checks.len()];
+    let mut by_schema: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, (target, _)) in checks.iter().enumerate() {
+        by_schema.entry(target.schema).or_default().push(i);
+    }
+    for (schema, members) in by_schema {
+        let set: &EmbeddedSet = &sets[schema];
+        let entries: Vec<Vec<String>> = members.iter().map(|&i| checks[i].0.uris.clone()).collect();
+        let _ = compile(set.settings, &set.documents, &entries, |v| {
+            for (index, &i) in members.iter().enumerate() {
+                valid[i] = v.is_valid(index, checks[i].1);
+            }
+            Ok(())
+        });
+    }
+    valid
+}
+
 /// Runs `compile` on a [`TypeValidators`] over `documents` and `entries`, as the generated
 /// static would.
 fn compile<T>(

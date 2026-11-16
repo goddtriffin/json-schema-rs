@@ -303,6 +303,18 @@ pub struct CodeGenSettings {
     /// struct is then validated against its schema. A field left unset that is not required is
     /// absent. Each generated module gets a `builder` submodule holding its structs' builders.
     pub builders: bool,
+    /// Whether every string enum gets `as_str`, `Display` and `FromStr` (default `true`), all
+    /// through the enum's JSON names, via [`json_schema_rs::string_enum!`](crate::string_enum).
+    /// They add no constraint and change no serialization; off, write your own.
+    pub string_enum_impls: bool,
+    /// Whether an item gets `impl Default` from the schema's `default` (default `false`): the
+    /// item's own `default`, or for a struct, the object of its properties' `default`s when at
+    /// least one property has one. The value is checked against the item's schema at generation
+    /// time; one that does not satisfy it (or an item that has no schema location to check it
+    /// against) gives no impl, and the item keeps its usual derives. The JSON spec makes
+    /// `default` an annotation, so this is opt-in; the per-field `default` accessors are
+    /// generated either way.
+    pub schema_defaults: bool,
     /// Whether a typed `format` (`uuid`) gets its Rust type when the dialect only annotates
     /// formats (default [`FormatTypes::Typed`], a deliberate divergence from 2019-09 and
     /// 2020-12; see [`FormatTypes`]).
@@ -373,6 +385,8 @@ impl Default for CodeGenSettings {
             self_validating: true,
             constrained_newtypes: true,
             builders: false,
+            string_enum_impls: true,
+            schema_defaults: false,
             format_types: FormatTypes::Typed,
             extra_derives: Vec::new(),
             extra_attrs: Vec::new(),
@@ -397,6 +411,8 @@ pub struct CodeGenSettingsBuilder {
     self_validating: Option<bool>,
     constrained_newtypes: Option<bool>,
     builders: Option<bool>,
+    string_enum_impls: Option<bool>,
+    schema_defaults: Option<bool>,
     format_types: Option<FormatTypes>,
     extra_derives: Vec<String>,
     extra_attrs: Vec<String>,
@@ -463,6 +479,22 @@ impl CodeGenSettingsBuilder {
     #[must_use]
     pub fn builders(mut self, value: bool) -> Self {
         self.builders = Some(value);
+        self
+    }
+
+    /// Give every string enum `as_str`, `Display` and `FromStr` (see
+    /// [`CodeGenSettings::string_enum_impls`]).
+    #[must_use]
+    pub fn string_enum_impls(mut self, value: bool) -> Self {
+        self.string_enum_impls = Some(value);
+        self
+    }
+
+    /// Implement `Default` from the schema's `default` (see
+    /// [`CodeGenSettings::schema_defaults`]).
+    #[must_use]
+    pub fn schema_defaults(mut self, value: bool) -> Self {
+        self.schema_defaults = Some(value);
         self
     }
 
@@ -562,6 +594,8 @@ impl CodeGenSettingsBuilder {
             self_validating: self.self_validating.unwrap_or(true),
             constrained_newtypes: self.constrained_newtypes.unwrap_or(true),
             builders: self.builders.unwrap_or_default(),
+            string_enum_impls: self.string_enum_impls.unwrap_or(true),
+            schema_defaults: self.schema_defaults.unwrap_or_default(),
             format_types: self.format_types.unwrap_or_default(),
             extra_derives: self.extra_derives,
             extra_attrs: self.extra_attrs,

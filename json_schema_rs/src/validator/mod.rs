@@ -11,7 +11,7 @@ mod ecma_regex;
 mod equivalence;
 mod error;
 mod eval;
-mod format;
+pub(crate) mod format;
 mod generated;
 mod instance;
 #[cfg(feature = "linear-regex")]

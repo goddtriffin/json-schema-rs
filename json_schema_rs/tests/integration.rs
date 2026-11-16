@@ -228,6 +228,8 @@ pub enum Status {
     Open,
 }
 
+json_schema_rs::string_enum!(Status);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub status: Status,
@@ -291,6 +293,8 @@ pub enum Level {
     Medium,
 }
 
+json_schema_rs::string_enum!(Level);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,6 +330,8 @@ pub enum Id {
     ToddGriffin,
 }
 
+json_schema_rs::string_enum!(Id);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
     pub id: Id,
@@ -359,6 +365,8 @@ pub enum T {
     #[serde(rename = "a")]
     A1,
 }
+
+json_schema_rs::string_enum!(T);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
 pub struct Root {
@@ -1469,6 +1477,7 @@ const SCENARIOS: &[&str] = &[
     "converted_and_replaced_types",
     "rust_type_extension",
     "builders",
+    "std_impls",
 ];
 
 /// Build+deserialize scenarios that need the `indexmap` feature.
@@ -2376,6 +2385,39 @@ fn main() {
     assert_eq!(expected, actual);
 }
 "##,
+            ),
+            "std_impls" => (
+                // String enums parse from and display as their JSON values; with schema defaults,
+                // a struct's `Default` is its schema `default`, its property defaults, or, when a
+                // default does not fit the type, the derived empty struct; a self-validating newtype and enum take theirs.
+                r##"{"type":"object","properties":{"veg":{"$ref":"#/$defs/Veg"},"name":{"$ref":"#/$defs/Name"},"basket":{"$ref":"#/$defs/Basket"},"bad":{"$ref":"#/$defs/Bad"}},"default":{"veg":"pea","name":"kale"},"$defs":{"Veg":{"enum":["pea","sweet potato"],"default":"sweet potato"},"Name":{"type":"string","minLength":2,"default":"bean"},"Basket":{"type":"object","properties":{"size":{"type":"integer","minimum":0,"maximum":255,"default":3},"label":{"type":"string","default":"x"}}},"Bad":{"type":"object","properties":{"size":{"type":"integer","minimum":0,"maximum":255,"default":-1}}}}}"##,
+                CodeGenSettings::builder().schema_defaults(true).build(),
+                r#"fn main() {
+    use compile_test::{Bad, Basket, Name, Root, Veg};
+    let parsed: Veg = "sweet potato".parse().unwrap();
+    let expected: (String, Veg, &str, bool, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value) = (
+        "sweet potato".to_string(),
+        Veg::SweetPotato,
+        "pea",
+        true,
+        serde_json::json!({"veg": "pea", "name": "kale"}),
+        serde_json::json!({"size": 3, "label": "x"}),
+        serde_json::json!("bean"),
+        serde_json::json!({}),
+    );
+    let actual: (String, Veg, &str, bool, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value) = (
+        Veg::SweetPotato.to_string(),
+        parsed,
+        Veg::Pea.as_str(),
+        "kale".parse::<Veg>().is_err() && Veg::default() == Veg::SweetPotato,
+        serde_json::to_value(Root::default()).unwrap(),
+        serde_json::to_value(Basket::default()).unwrap(),
+        serde_json::to_value(Name::default()).unwrap(),
+        serde_json::to_value(Bad::default()).unwrap(),
+    );
+    assert_eq!(expected, actual);
+}
+"#,
             ),
             "doc_markup" => (
                 // Descriptions and examples full of what clippy's and rustdoc's documentation
