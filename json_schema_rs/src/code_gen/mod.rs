@@ -12,6 +12,7 @@ mod input;
 mod merge_check_tests;
 mod rust_backend;
 mod rust_validators;
+mod schema_defaults;
 mod settings;
 mod type_graph;
 

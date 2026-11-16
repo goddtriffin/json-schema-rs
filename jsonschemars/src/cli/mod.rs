@@ -297,6 +297,19 @@ pub fn run() {
                         .help("Codegen Settings: generate a builder for every struct (Name::builder(), a setter per field, then try_into(); every missing or unconvertible field is reported, and a self-validating struct is validated) (default: off)"),
                 )
                 .arg(
+                    Arg::new("cgs-string-enum-impls")
+                        .long("cgs-string-enum-impls")
+                        .value_name("BOOL")
+                        .value_parser(clap::value_parser!(bool))
+                        .help("Codegen Settings: string enums implement Display, FromStr and as_str() with their JSON values (default: true)"),
+                )
+                .arg(
+                    Arg::new("cgs-schema-defaults")
+                        .long("cgs-schema-defaults")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Codegen Settings: a type with a schema default (its own, or a struct's property defaults) implements Default with it, when the default is valid for the type (default: off)"),
+                )
+                .arg(
                     Arg::new("cgs-self-validating")
                         .long("cgs-self-validating")
                         .value_name("BOOL")

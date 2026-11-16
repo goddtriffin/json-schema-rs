@@ -146,6 +146,9 @@ pub(crate) struct Annotations {
     pub(crate) examples: Option<Vec<Value>>,
     pub(crate) deprecated: Option<bool>,
     pub(crate) id: Option<String>,
+    /// The schema's `default` (only with
+    /// [`CodeGenSettings::schema_defaults`](crate::CodeGenSettings::schema_defaults)).
+    pub(crate) default: Option<Value>,
 }
 
 /// One field of an [`ObjectNode`].
@@ -414,6 +417,9 @@ pub(crate) struct TypeGraph {
     /// newtype has a target).
     /// Boxed, so a node that is not a newtype costs one pointer.
     pub(crate) newtypes: Vec<Option<Box<Newtype>>>,
+    /// Per node, the target its schema `default` is checked against (only with
+    /// [`CodeGenSettings::schema_defaults`](crate::CodeGenSettings::schema_defaults)).
+    pub(crate) default_targets: Vec<Option<ValidationTarget>>,
     /// Per input schema, the root and its definitions.
     pub(crate) schemas: Vec<SchemaRoots>,
     /// Per `anyOf` / `oneOf` union with a variant target, its branches' targets as the union's
@@ -434,6 +440,7 @@ impl TypeGraph {
         self.proposals.push(Vec::new());
         self.targets.push(None);
         self.newtypes.push(None);
+        self.default_targets.push(None);
         id
     }
 

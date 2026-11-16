@@ -203,7 +203,11 @@ pub(crate) fn code_gen_settings(matches: &ArgMatches) -> Result<CodeGenSettings,
     let flag = |name: &str| matches.get_one::<String>(name).map(String::as_str);
     let mut b = CodeGenSettings::builder()
         .flatten_single_entry_combinators(matches.get_flag("cgs-flatten-single-entry-combinators"))
-        .builders(matches.get_flag("cgs-builders"));
+        .builders(matches.get_flag("cgs-builders"))
+        .schema_defaults(matches.get_flag("cgs-schema-defaults"));
+    if let Some(&on) = matches.get_one::<bool>("cgs-string-enum-impls") {
+        b = b.string_enum_impls(on);
+    }
     if let Some(&on) = matches.get_one::<bool>("cgs-self-validating") {
         b = b.self_validating(on);
     }
