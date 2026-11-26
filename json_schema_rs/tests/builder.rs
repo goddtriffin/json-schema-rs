@@ -28,7 +28,7 @@ mod types {
     }
 }
 
-/// A struct with a deprecated field: its builder compiles under `deny(deprecated)` (#271).
+/// A struct with a deprecated field: its builder compiles under `deny(deprecated)`.
 #[deny(deprecated)]
 mod deprecated_types {
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +145,7 @@ fn builder_of_struct_without_fields_builds() {
 }
 
 #[test]
+#[expect(deprecated, reason = "the expected value names the deprecated field")]
 fn builder_round_trips_struct_with_deprecated_field() {
     let item: Option<deprecated_types::Item> = deprecated_types::Item::builder()
         .id("1")
@@ -154,6 +155,9 @@ fn builder_round_trips_struct_with_deprecated_field() {
     let actual: Option<deprecated_types::Item> = item
         .map(deprecated_types::builder::Item::from)
         .and_then(|builder: deprecated_types::builder::Item| builder.try_into().ok());
-    let expected: Option<String> = Some("1".to_string());
-    assert_eq!(expected, actual.map(|item: deprecated_types::Item| item.id));
+    let expected: Option<deprecated_types::Item> = Some(deprecated_types::Item {
+        id: "1".to_string(),
+        name: Some("one".to_string()),
+    });
+    assert_eq!(expected, actual);
 }
