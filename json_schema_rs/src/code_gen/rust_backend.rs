@@ -3298,9 +3298,7 @@ mod tests {
         CodeGenSettings, DedupeMode, FormatTypes, MapType, ModelNameSource, TypePatch,
         UniqueItemsType, UnknownProperties, Visibility,
     };
-    use crate::json_schema::{
-        FormatMode, JsonSchema, JsonSchemaSettings, JsonType, RegistryError, Schema,
-    };
+    use crate::json_schema::{JsonSchema, JsonType, RegistryError, Schema};
 
     /// The defaults with self-validation off: these goldens show the shape of the generated
     /// types; the self-validating output has its own tests (see *Self-validating types*).
@@ -11297,6 +11295,8 @@ pub struct Root {
     #[cfg(feature = "uuid")]
     #[test]
     fn format_types_follow_dialect_maps_asserted_uuid_to_uuid() {
+        use crate::json_schema::{FormatMode, JsonSchemaSettings};
+
         let json: &str =
             r#"{"type":"object","properties":{"id":{"type":"string","format":"uuid"}}}"#;
         let schema_settings: JsonSchemaSettings = JsonSchemaSettings::builder()

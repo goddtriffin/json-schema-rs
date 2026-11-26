@@ -40,6 +40,8 @@ test: ## runs tests twice: every feature but arbitrary-precision (64-bit numbers
 	cargo check
 	# The macro's unit tests without `indexmap`, where `unique_items = IndexSet` is a compile error.
 	cargo test -p json-schema-rs-macro --lib
+	# Every crate's tests with default features alone, where feature-gated tests drop out.
+	cargo clippy --tests
 	cargo clippy --tests --features $(FEATURES_WITHOUT_ARBITRARY_PRECISION)
 	cargo clippy --tests --all-features
 	CARGO_TARGET_DIR=$(CURDIR)/target cargo clippy --all-targets --manifest-path $(BENCHMARK_ISOLATED) --features corvus
