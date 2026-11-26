@@ -21,10 +21,10 @@ const MAX_ROUNDS: usize = 16;
 /// Stand-ins for a variant that is its enum's own name, tried in order.
 const REPLACEMENTS: [&str; 3] = ["Value", "Member", "Case"];
 
-/// The words of `name`: a word starts at every uppercase letter. Finer than clippy's own split
-/// (it keeps a run of capitals together, though a name from a schema value only has runs of
-/// single-letter words, `ENOne` from `e_n_one`), so any word prefix or suffix clippy sees every
-/// variant share is one here too.
+/// The words of `name`: a word starts at every uppercase letter. Clippy splits the same way
+/// inside a name that ends in a lowercase letter (`HTTPOne` is `H`, `T`, `T`, `P`, `One`, so it
+/// reports the shared prefix `HTTP`); a name that does not end in a lowercase letter is one word
+/// to clippy, which `strip_shared_words` handles before it splits.
 fn words(name: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current: String = String::new();
@@ -111,10 +111,10 @@ fn strip_enum_name(enum_name: &str, names: &[String]) -> Vec<String> {
 fn strip_shared_words(enum_name: &str, names: &[String]) -> Option<Vec<String>> {
     let split: Vec<Vec<String>> = names.iter().map(|n| words(n)).collect();
     // A variant of one word breaks every shared run, as in clippy, which also reads a name that
-    // ends in a digit (`NMinus1`) as one word.
+    // does not end in a lowercase letter (a digit, `NMinus1`; a capital, `OptA`) as one word.
     if names
         .iter()
-        .any(|n| n.ends_with(|c: char| c.is_ascii_digit()))
+        .any(|n| n.ends_with(|c: char| !c.is_lowercase()))
     {
         return None;
     }
@@ -325,6 +325,20 @@ mod tests {
     fn names_ending_in_a_digit_are_kept() {
         let expected: Vec<String> = strings(&["N1Point5", "N2Point5", "N3Point5"]);
         let actual: Vec<String> = clean("Kind", &["N1Point5", "N2Point5", "N3Point5"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn names_ending_in_a_capital_are_kept() {
+        let expected: Vec<String> = strings(&["OptA", "OptB", "OptC"]);
+        let actual: Vec<String> = clean("Kind", &["OptA", "OptB", "OptC"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn shared_trailing_capital_is_kept() {
+        let expected: Vec<String> = strings(&["OneX", "TwoX", "ThreeX"]);
+        let actual: Vec<String> = clean("Kind", &["OneX", "TwoX", "ThreeX"]);
         assert_eq!(expected, actual);
     }
 
