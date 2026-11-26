@@ -2851,9 +2851,10 @@ pub fn builds() -> bool {
             // Builders with the defaults (self-validating, constrained newtypes) across two
             // documents sharing `Address`: setters convert (`&str` into a newtype, a struct into
             // `Option`), every missing or unconvertible field is reported, the built struct is
-            // validated, and a struct converts back into its builder.
+            // validated, and a struct converts back into its builder. `Customer`'s deprecated
+            // `nickname` checks the builder compiles without `use of deprecated field` (#271).
             let order: Schema = Schema::try_from(r#"{"title":"Order","type":"object","properties":{"id":{"type":"string"},"note":{"type":"string"},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}},"dependentRequired":{"note":["id"]}}"#).expect("parse order");
-            let customer: Schema = Schema::try_from(r#"{"title":"Customer","type":"object","required":["name"],"properties":{"name":{"type":"string"},"age":{"type":"integer","minimum":0,"maximum":200},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}}}"#).expect("parse customer");
+            let customer: Schema = Schema::try_from(r#"{"title":"Customer","type":"object","required":["name"],"properties":{"name":{"type":"string"},"age":{"type":"integer","minimum":0,"maximum":200},"nickname":{"type":"string","deprecated":true,"description":"Use name instead."},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}}}"#).expect("parse customer");
             let settings: CodeGenSettings = CodeGenSettings::builder().builders(true).build();
             let output = generate_rust(&[order, customer], &settings).expect("generate");
             let shared_bytes: Vec<u8> = output
