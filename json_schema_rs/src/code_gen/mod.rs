@@ -15,6 +15,7 @@ mod rust_validators;
 mod schema_defaults;
 mod settings;
 mod type_graph;
+mod variant_names;
 
 pub use error::{CodeGenError, CodeGenResult};
 pub use input::CodeGenInput;

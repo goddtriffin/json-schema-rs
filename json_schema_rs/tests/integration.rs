@@ -1418,6 +1418,7 @@ const SCENARIOS: &[&str] = &[
     "round_trip",
     "enum_non_rust_compliant",
     "enum_variants",
+    "enum_variant_lint_names",
     "nested_modules",
     "multi_schema",
     "hyphenated_paths",
@@ -3748,6 +3749,59 @@ fn main() {
 }
 "##;
             (lib_rs, extra, main_rs)
+        }
+        "enum_variant_lint_names" => {
+            // String enums whose variant names would trip `clippy::enum_variant_names`: a shared
+            // leading word, a shared trailing word, variants starting and ending with the enum's
+            // own name, a digit left after the cut, names equal after the cut, and a union whose
+            // branches share a trailing word. The strict
+            // lint gate lints this member; the program checks every value still round-trips.
+            let schema_json = r#"{"type":"object","properties":{
+                "kind":{"enum":["OPT_ONE","OPT_TWO","OPT_THREE"]},
+                "suffix":{"enum":["ONE_OPT","TWO_OPT","THREE_OPT"]},
+                "shape":{"enum":["shape_circle","square_shape","triangle","shape"]},
+                "rank":{"enum":["rank_1st","two","three"]},
+                "tier":{"enum":["tier_foo","foo","other"]},
+                "pet":{"oneOf":[
+                    {"title":"CatPet","type":"object","properties":{"meow":{"type":"boolean"}},"required":["meow"],"additionalProperties":false},
+                    {"title":"DogPet","type":"object","properties":{"bark":{"type":"boolean"}},"required":["bark"],"additionalProperties":false},
+                    {"title":"BirdPet","type":"object","properties":{"tweet":{"type":"boolean"}},"required":["tweet"],"additionalProperties":false}
+                ]}
+            },"required":["kind","suffix","shape","rank","tier","pet"]}"#;
+            let main_rs = r##"fn main() {
+    let values: [(&str, [&str; 3]); 5] = [
+        ("kind", ["OPT_ONE", "OPT_TWO", "OPT_THREE"]),
+        ("suffix", ["ONE_OPT", "TWO_OPT", "THREE_OPT"]),
+        ("shape", ["shape_circle", "square_shape", "triangle"]),
+        ("rank", ["rank_1st", "two", "three"]),
+        ("tier", ["tier_foo", "foo", "other"]),
+    ];
+    for i in 0..3 {
+        let mut object = serde_json::Map::new();
+        for (key, options) in &values {
+            let option: &str = options.get(i).unwrap();
+            object.insert((*key).to_string(), serde_json::Value::String(option.to_string()));
+        }
+        let pets: [&str; 3] = ["meow", "bark", "tweet"];
+        let pet: &str = pets.get(i).unwrap();
+        object.insert("pet".to_string(), serde_json::json!({ pet: true }));
+        let expected: serde_json::Value = serde_json::Value::Object(object);
+        let root: compile_test::Root = serde_json::from_value(expected.clone()).unwrap();
+        let actual: serde_json::Value = serde_json::to_value(&root).unwrap();
+        assert_eq!(expected, actual);
+    }
+    let text: &str = r#"{"kind":"OPT_ONE","suffix":"ONE_OPT","shape":"shape","rank":"two","tier":"foo","pet":{"meow":true}}"#;
+    let lone: compile_test::Root = serde_json::from_str(text).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(text).unwrap();
+    let actual: serde_json::Value = serde_json::to_value(&lone).unwrap();
+    assert_eq!(expected, actual);
+}
+"##;
+            (
+                generate_single(schema_json, default_code_gen),
+                vec![],
+                main_rs,
+            )
         }
         "examples_annotation" => {
             let schema_json = r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"examples":["foo"]}"#;
