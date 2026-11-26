@@ -3845,10 +3845,13 @@ fn main() {
             // alias names a deprecated type of the first. Naming them there is generated code's
             // own, so only `main`'s uses of them warn (`#[expect(deprecated)]`); the driver
             // denies unfulfilled expectations, so a consumer use that stops warning fails too.
+            // `Priced` is deprecated with defaulted optional fields (a scalar and a deprecated
+            // newtype) and `Plain` is not, yet its default accessor names the deprecated newtype:
+            // each accessor impl and method expects the deprecation itself.
             let documents: Vec<(&str, &str)> = vec![
                 (
                     "catalog",
-                    r##"{"title":"Catalog","type":"object","properties":{"old":{"$ref":"#/$defs/Old"},"olds":{"type":"array","items":{"$ref":"#/$defs/Old"}},"either":{"anyOf":[{"$ref":"#/$defs/Old"},{"type":"integer"}]},"code":{"$ref":"#/$defs/Code"},"node":{"$ref":"#/$defs/Node"}},"additionalProperties":{"$ref":"#/$defs/Old"},"$defs":{"Old":{"title":"Old","type":"object","deprecated":true,"properties":{"x":{"type":"string"}}},"Code":{"title":"Code","type":"string","minLength":2,"deprecated":true},"Node":{"title":"Node","type":"object","deprecated":true,"properties":{"children":{"type":"array","items":{"$ref":"#/$defs/Node"}},"next":{"$ref":"#/$defs/Node"}}}}}"##,
+                    r##"{"title":"Catalog","type":"object","properties":{"old":{"$ref":"#/$defs/Old"},"olds":{"type":"array","items":{"$ref":"#/$defs/Old"}},"either":{"anyOf":[{"$ref":"#/$defs/Old"},{"type":"integer"}]},"code":{"$ref":"#/$defs/Code"},"node":{"$ref":"#/$defs/Node"},"priced":{"$ref":"#/$defs/Priced"},"plain":{"$ref":"#/$defs/Plain"}},"additionalProperties":{"$ref":"#/$defs/Old"},"$defs":{"Old":{"title":"Old","type":"object","deprecated":true,"properties":{"x":{"type":"string"}}},"Code":{"title":"Code","type":"string","minLength":2,"deprecated":true},"Level":{"title":"Level","type":"integer","minimum":1,"deprecated":true},"Priced":{"title":"Priced","type":"object","deprecated":true,"default":{"n":1},"properties":{"n":{"type":"integer","default":3},"level":{"$ref":"#/$defs/Level","default":2}}},"Plain":{"title":"Plain","type":"object","properties":{"level":{"$ref":"#/$defs/Level","default":2}}},"Node":{"title":"Node","type":"object","deprecated":true,"properties":{"children":{"type":"array","items":{"$ref":"#/$defs/Node"}},"next":{"$ref":"#/$defs/Node"}}}}}"##,
                 ),
                 (
                     "olds",
@@ -3863,7 +3866,12 @@ fn main() {
             for (name, schema) in &schemas {
                 input = input.schema_at(format!("file:///schemas/{name}.json"), schema);
             }
-            let output = generate_rust(input, default_code_gen).expect("generate");
+            // Builders and schema defaults add generated items that name the types too.
+            let settings: CodeGenSettings = CodeGenSettings::builder()
+                .builders(true)
+                .schema_defaults(true)
+                .build();
+            let output = generate_rust(input, &settings).expect("generate");
             let shared_bytes: Vec<u8> = output
                 .shared
                 .clone()
@@ -3884,13 +3892,21 @@ fn main() {
 #[expect(deprecated)]
 fn main() {
     let catalog: compile_test::catalog::Catalog = serde_json::from_str(
-        r#"{"old":{"x":"a"},"olds":[{"x":"b"}],"either":{"x":"c"},"code":"ab","node":{"children":[{}],"next":{}},"extra":{"x":"d"}}"#,
+        r#"{"old":{"x":"a"},"olds":[{"x":"b"}],"either":{"x":"c"},"code":"ab","node":{"children":[{}],"next":{}},"priced":{"n":5},"plain":{"level":4},"extra":{"x":"d"}}"#,
     )
     .unwrap();
     let olds: compile_test::olds::Olds = serde_json::from_str(r#"[{"x":"e"}]"#).unwrap();
     // The consumer names the deprecated types itself: these uses warn (and so fulfil the expect).
     let node: compile_test::catalog::Node = serde_json::from_str(r#"{"next":{}}"#).unwrap();
     let old: compile_test::catalog::Old = serde_json::from_str(r#"{"x":"f"}"#).unwrap();
+    // The accessors apply the schema defaults: the key's value, else the `default`.
+    let priced: compile_test::catalog::Priced = serde_json::from_str(r#"{"n":5}"#).unwrap();
+    assert_eq!((priced.n_or_default(), priced.level_or_default()), (5, 2));
+    // The schema's own `default` builds through `Default`, which is implemented for the type.
+    let default_priced: compile_test::catalog::Priced = Default::default();
+    assert_eq!(default_priced.n_or_default(), 1);
+    let plain: compile_test::catalog::Plain = serde_json::from_str(r#"{}"#).unwrap();
+    assert_eq!(plain.level_or_default(), 2);
     let expected: (serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value) = (
         serde_json::json!({
             "old": {"x": "a"},
@@ -3898,6 +3914,8 @@ fn main() {
             "either": {"x": "c"},
             "code": "ab",
             "node": {"children": [{}], "next": {}},
+            "priced": {"n": 5},
+            "plain": {"level": 4},
             "extra": {"x": "d"},
         }),
         serde_json::json!([{"x": "e"}]),

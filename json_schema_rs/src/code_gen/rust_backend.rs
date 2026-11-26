@@ -1622,12 +1622,15 @@ fn render_default_accessor(
 /// The default accessor for an optional newtype field: the newtype's inner value (`&str` for a
 /// string), or the default when the key is absent. The default is the schema's annotation and
 /// need not satisfy the newtype's constraints, so it is never turned into a newtype value.
+/// With `deprecated` (the newtype is `#[deprecated]`) a body that names it expects the
+/// deprecation: that mention is generated code's own.
 fn render_newtype_default_accessor(
     name: &str,
     shape: FieldShape,
     node: &TypeNode,
     newtype: &str,
     literal: &str,
+    deprecated: bool,
 ) -> Option<String> {
     let string: bool = matches!(node, TypeNode::String { .. });
     let inner: &str = scalar_type(node, &mut Imports::default());
@@ -1652,9 +1655,35 @@ fn render_newtype_default_accessor(
             return None;
         }
     };
+    // Only a body naming the newtype (`{newtype}::into_inner`) fires `deprecated`: the string
+    // arms read through `String::as_str` and name nothing.
+    let expect: &str = if deprecated && !string {
+        "    #[expect(deprecated)]\n"
+    } else {
+        ""
+    };
     Some(format!(
-        "    /// The field's value, or its schema `default` when the key is absent.\n    #[must_use]\n    pub fn {name}_or_default(&self) -> {ret} {{\n        {body}\n    }}\n"
+        "    /// The field's value, or its schema `default` when the key is absent.\n    #[must_use]\n{expect}    pub fn {name}_or_default(&self) -> {ret} {{\n        {body}\n    }}\n"
     ))
+}
+
+/// The default accessor of the optional field `name` whose value type is `value_id` (rendered as
+/// `value_ty`) and whose schema `default` is `value`, if it has one.
+fn field_default_accessor(
+    graph: &TypeGraph,
+    value_id: TypeId,
+    name: &str,
+    shape: FieldShape,
+    value_ty: &str,
+    value: &Value,
+) -> Option<String> {
+    let node: &TypeNode = graph.node(value_id);
+    let literal: String = default_literal(value, node)?;
+    if graph.newtypes[value_id.index()].is_some() {
+        let deprecated: bool = is_deprecated_item(graph, value_id);
+        return render_newtype_default_accessor(name, shape, node, value_ty, &literal, deprecated);
+    }
+    render_default_accessor(name, shape, node, value_ty, &literal)
 }
 
 /// How a field holds its value: presence and nullability (absent and `null` are different).
@@ -2073,12 +2102,7 @@ fn render_field(
     // `default` is an annotation: deserializing never fills it in (absent stays absent, and a
     // required key stays required). An optional scalar field gets an accessor that applies it.
     let default_accessor: Option<String> = field.default.as_ref().and_then(|value: &Value| {
-        let node: &TypeNode = graph.node(value_id);
-        let literal: String = default_literal(value, node)?;
-        if graph.newtypes[value_id.index()].is_some() {
-            return render_newtype_default_accessor(name, shape, node, &value_ty, &literal);
-        }
-        render_default_accessor(name, shape, node, &value_ty, &literal)
+        field_default_accessor(graph, value_id, name, shape, &value_ty, value)
     });
     let integers: bool = reads_integers(graph, plan, value_id);
     shape_serde_args(
@@ -2342,12 +2366,26 @@ fn render_struct(
     if dropped_eq {
         out.push_str(&manual_eq_impl(name, a.deprecated == Some(true)));
     }
-    if !default_accessors.is_empty() {
-        let _ = writeln!(out, "impl {name} {{");
-        out.push_str(&default_accessors.join("\n"));
-        out.push_str("}\n\n");
-    }
+    out.push_str(&default_accessor_impl(
+        name,
+        a.deprecated == Some(true),
+        &default_accessors,
+    ));
     out
+}
+
+/// The `impl Name { ... }` of the default accessors (see [`render_default_accessor`]), or nothing
+/// without any. For a `deprecated` struct the header names it, which is generated code's own use.
+fn default_accessor_impl(name: &str, deprecated: bool, accessors: &[String]) -> String {
+    if accessors.is_empty() {
+        return String::new();
+    }
+    let expect: &str = if deprecated {
+        "#[expect(deprecated)]\n"
+    } else {
+        ""
+    };
+    format!("{expect}impl {name} {{\n{}}}\n\n", accessors.join("\n"))
 }
 
 /// Records the builder of the struct `name` (see [`CodeGenSettings::builders`]) in `imports`: one
@@ -12616,6 +12654,107 @@ impl Root {
 }
 
 "#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn default_accessors_of_deprecated_items_expect_the_deprecation() {
+        let actual: String = newtype_buffers(
+            &[serde_json::json!({
+                "$defs": {
+                    "Level": {"title": "Level", "type": "integer", "minimum": 1, "deprecated": true},
+                    "Old": {
+                        "title": "Old", "type": "object", "deprecated": true,
+                        "properties": {"n": {"type": "integer", "default": 3}}
+                    },
+                    "Plain": {
+                        "title": "Plain", "type": "object",
+                        "properties": {"level": {"$ref": "#/$defs/Level", "default": 2}}
+                    }
+                }
+            })],
+            true,
+        )
+        .1
+        .remove(0);
+        let expected: &str = r###"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[deprecated]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, json_schema_rs_macro::ToJsonSchema)]
+#[serde(transparent)]
+#[json_schema(title = "Level", minimum = 1)]
+pub struct Level(i64);
+
+json_schema_rs::constrained_newtype!(integer, Level, i64, TYPE_VALIDATORS, 0);
+
+#[deprecated]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Old")]
+pub struct Old {
+    #[serde(default, deserialize_with = "json_schema_rs::integer::deserialize", skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 3)]
+    pub n: Option<i64>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[expect(deprecated)]
+impl Old {
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    pub fn n_or_default(&self) -> i64 {
+        self.n.unwrap_or(3)
+    }
+}
+
+json_schema_rs::self_validating!(Old, TYPE_VALIDATORS, 1);
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Plain")]
+pub struct Plain {
+    #[expect(deprecated)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[json_schema(default = 2)]
+    pub level: Option<Level>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+impl ::core::cmp::Eq for Plain {}
+
+impl Plain {
+    /// The field's value, or its schema `default` when the key is absent.
+    #[must_use]
+    #[expect(deprecated)]
+    pub fn level_or_default(&self) -> i64 {
+        self.level.map_or(2, Level::into_inner)
+    }
+}
+
+json_schema_rs::self_validating!(Plain, TYPE_VALIDATORS, 2);
+
+static TYPE_VALIDATORS: json_schema_rs::TypeValidators<'static> = json_schema_rs::TypeValidators::new(
+    None,
+    &[
+        json_schema_rs::EmbeddedDocument {
+            uri: "json-schema:///",
+            json: r##"{"$defs":{"Level":{"minimum":1,"type":"integer"},"Old":{"properties":{"n":{"type":"integer"}},"type":"object"},"Plain":{"properties":{"level":{"$ref":"#/$defs/Level"}},"type":"object"}}}"##,
+            kind: json_schema_rs::EmbeddedDocumentKind::Parsed(None),
+        },
+    ],
+    &[
+        &["#/$defs/Level"],
+        &["#/$defs/Old"],
+        &["#/$defs/Plain"],
+    ],
+);
+
+pub type Root = serde_json::Value;
+
+"###;
         assert_eq!(expected, actual);
     }
 
