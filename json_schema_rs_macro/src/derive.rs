@@ -931,6 +931,7 @@ fn transparent_field(
 /// has exactly `ty`'s schema and shares its `$defs` entry.
 fn forwarding_impl(name: &Ident, ty: &Type) -> TokenStream2 {
     quote! {
+        #[allow(deprecated)]
         impl __json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> __json_schema_rs::ReverseCodeGenResult {
                 <#ty as __json_schema_rs::ToJsonSchema>::json_schema()
@@ -1276,6 +1277,8 @@ fn named_type_impl(
         None => (quote! {}, quote! { Self::__json_schema_rs_body }),
     };
     quote! {
+        // A deprecated type is still described, as serde's derive reads and writes it.
+        #[allow(deprecated)]
         impl #name {
             #[doc(hidden)]
             fn __json_schema_rs_body(
@@ -1287,6 +1290,7 @@ fn named_type_impl(
             #flattened_fn
         }
 
+        #[allow(deprecated)]
         impl __json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> __json_schema_rs::ReverseCodeGenResult {
                 let mut schema: __json_schema_rs::JsonSchema = __json_schema_rs::SchemaGenerator::new()

@@ -1451,6 +1451,41 @@ fn json_tokens(value: &Value) -> String {
     out
 }
 
+/// Whether the Rust type of `id` names a `#[deprecated]` item of the generated code (a struct
+/// or constrained newtype whose schema is `deprecated`), however deep inside `Vec`, `Option`,
+/// a map or a generic: the place that names it carries `#[expect(deprecated)]`, as that mention
+/// is generated code, never the consumer's own use. Iterative, like [`render_type`].
+fn names_deprecated_item(graph: &TypeGraph, plan: &Plan, id: TypeId) -> bool {
+    let mut stack: Vec<TypeId> = vec![id];
+    while let Some(id) = stack.pop() {
+        if plan.items.contains_key(&id) {
+            let deprecated: Option<bool> = match graph.node(id) {
+                TypeNode::Object(object) => object.annotations.deprecated,
+                _ => graph.newtypes[id.index()]
+                    .as_deref()
+                    .and_then(|newtype: &Newtype| newtype.annotations.deprecated),
+            };
+            if deprecated == Some(true) {
+                return true;
+            }
+            continue;
+        }
+        stack.extend(graph.node(id).children());
+    }
+    false
+}
+
+/// `#[expect(deprecated)]` for a place that names the type `id` when it names a deprecated item
+/// (see [`names_deprecated_item`]), else nothing. Only an `expect`: the strictest generated-code
+/// lint set forbids `allow`, and the expectation is always fulfilled where it is written.
+fn expect_deprecated(graph: &TypeGraph, plan: &Plan, id: TypeId, indent: &str) -> String {
+    if names_deprecated_item(graph, plan, id) {
+        format!("{indent}#[expect(deprecated)]\n")
+    } else {
+        String::new()
+    }
+}
+
 /// `#[deprecated]` (or `#[deprecated = "<first description line>"]`) when `deprecated` is true.
 fn deprecated_attr(deprecated: Option<bool>, description: Option<&str>, indent: &str) -> String {
     if deprecated != Some(true) {
@@ -1755,6 +1790,10 @@ fn render_fields(
         } else {
             "    #[serde(flatten)]\n".to_string()
         };
+        let attrs: String = format!(
+            "{}{attrs}",
+            expect_deprecated(graph, plan, additional, "    ")
+        );
         let attrs: String = match schema_type(graph, plan, home, additional, imports) {
             Some(schema) => {
                 format!("{attrs}    #[json_schema(with = \"{map}<String, {schema}>\")]\n")
@@ -2038,6 +2077,7 @@ fn render_field(
         field.description.as_deref(),
         "    ",
     ));
+    attrs.push_str(&expect_deprecated(graph, plan, field.ty, "    "));
     if !serde_args.is_empty() {
         let _ = writeln!(attrs, "    #[serde({})]", serde_args.join(", "));
     }
@@ -2083,7 +2123,13 @@ fn render_field(
 /// reader: serde's derive inlines every field's read into one function, which an optimized
 /// build compiles in superlinear time (minutes for a struct with hundreds of fields). A union's
 /// `Deserialize` is hand-written (see [`render_union`]).
-fn item_derive(plan: &Plan, id: TypeId, default: bool, deserialize: bool) -> String {
+fn item_derive(
+    plan: &Plan,
+    id: TypeId,
+    default: bool,
+    deserialize: bool,
+    manual_eq: bool,
+) -> (String, bool) {
     let schema_default: bool = plan.defaults.contains_key(&id);
     let mut traits: Vec<&str> = vec!["Debug", "Clone"];
     if default && !schema_default {
@@ -2100,7 +2146,25 @@ fn item_derive(plan: &Plan, id: TypeId, default: bool, deserialize: bool) -> Str
         traits.push("json_schema_rs_macro::Deserialize");
     }
     traits.push("json_schema_rs_macro::ToJsonSchema");
-    derive_block(plan, plan.node_patches.get(&id), &traits, schema_default)
+    derive_block(
+        plan,
+        plan.node_patches.get(&id),
+        &traits,
+        schema_default,
+        manual_eq,
+    )
+}
+
+/// The `Eq` impl of an item whose `Eq` derive is left out (see [`derive_block`]): `Eq` has no
+/// method, so the impl is the whole of the derive except its assertion that every field is `Eq`.
+/// A `deprecated` item names itself, so the impl expects that.
+fn manual_eq_impl(name: &str, deprecated: bool) -> String {
+    let expect: &str = if deprecated {
+        "#[expect(deprecated)]\n"
+    } else {
+        ""
+    };
+    format!("{expect}impl ::core::cmp::Eq for {name} {{}}\n\n")
 }
 
 /// The derive line of an item deriving `base`, then its attribute lines: the settings' extra
@@ -2108,13 +2172,19 @@ fn item_derive(plan: &Plan, id: TypeId, default: bool, deserialize: bool) -> Str
 /// `serde::Deserialize` matches a generated `Deserialize`; every item implements `Serialize` and
 /// `Deserialize`, derived or written by hand, so those two are never added), then the settings'
 /// extra attributes and the patch's. Ends with a newline. With `schema_default` (the item
-/// implements `Default` from its schema `default`) no `Default` derive is added.
+/// implements `Default` from its schema `default`) no `Default` derive is added. Also whether
+/// the `Eq` derive was left out. With
+/// `manual_eq` (the item names a `#[deprecated]` item, see [`names_deprecated_item`]) the `Eq`
+/// derive is left out and the caller writes [`manual_eq_impl`] instead: the derive asserts each
+/// field's type is `Eq` and so names the deprecated type in code no attribute reaches, which
+/// rustc reports as the consumer's use.
 fn derive_block(
     plan: &Plan,
     patch: Option<&TypePatch>,
     base: &[&str],
     schema_default: bool,
-) -> String {
+    manual_eq: bool,
+) -> (String, bool) {
     let last =
         |path: &str| -> String { path.rsplit("::").next().unwrap_or(path).trim().to_string() };
     let mut traits: Vec<&str> = base.to_vec();
@@ -2129,6 +2199,11 @@ fn derive_block(
             traits.push(extra);
         }
     }
+    let before: usize = traits.len();
+    if manual_eq {
+        traits.retain(|t: &&str| last(t) != "Eq");
+    }
+    let dropped_eq: bool = traits.len() != before;
     let mut out: String = String::from("#[derive(");
     for (index, t) in traits.iter().enumerate() {
         if index > 0 {
@@ -2151,7 +2226,7 @@ fn derive_block(
     for attr in plan.extra_attrs.iter().chain(patch_attrs) {
         let _ = writeln!(out, "#[{}]", attr.trim());
     }
-    out
+    (out, dropped_eq)
 }
 
 /// Unit variants, one per distinct JSON value: equality, hashing and order are exact and cheap.
@@ -2199,7 +2274,14 @@ fn render_struct(
     out.push_str(&docs);
     out.push_str(&deprecated_attr(a.deprecated, a.description.as_deref(), ""));
     let default: bool = object.fields.iter().all(|field: &Field| !field.required);
-    out.push_str(&item_derive(plan, id, default, true));
+    let manual_eq: bool = object
+        .fields
+        .iter()
+        .map(|field: &Field| field.ty)
+        .chain(object.additional)
+        .any(|ty: TypeId| names_deprecated_item(graph, plan, ty));
+    let (derive, dropped_eq): (String, bool) = item_derive(plan, id, default, true, manual_eq);
+    out.push_str(&derive);
     out.push_str(&description_attr(stated.as_ref()));
     if let Some(ref title) = a.title {
         let _ = writeln!(out, "#[json_schema(title = \"{}\")]", escape(title));
@@ -2223,6 +2305,9 @@ fn render_struct(
         let _ = writeln!(out, "    {} {}: {},", plan.vis, field.name, field.ty);
     }
     out.push_str("}\n\n");
+    if dropped_eq {
+        out.push_str(&manual_eq_impl(name, a.deprecated == Some(true)));
+    }
     if !default_accessors.is_empty() {
         let _ = writeln!(out, "impl {name} {{");
         out.push_str(&default_accessors.join("\n"));
@@ -2326,7 +2411,7 @@ fn render_newtype(
             "json_schema_rs_macro::ToJsonSchema",
         ],
     };
-    out.push_str(&derive_block(plan, patch, base, schema_default));
+    out.push_str(&derive_block(plan, patch, base, schema_default, false).0);
     out.push_str("#[serde(transparent)]\n");
     let mut schema_args: Vec<String> = Vec::new();
     if let Some(ref title) = a.title {
@@ -2445,8 +2530,9 @@ fn render_root_alias(
     let root: TypeId = graph.schemas[schema].root;
     let patch: Option<&TypePatch> = plan.alias_patches[schema].as_ref();
     let ty: String = rust_type(graph, plan, home, root, imports);
+    let expect: String = expect_deprecated(graph, plan, root, "");
     let Some(entry) = entry else {
-        return format!("{} type {name} = {ty};\n\n", plan.vis);
+        return format!("{expect}{} type {name} = {ty};\n\n", plan.vis);
     };
     imports.deserialize = true;
     let mut traits: Vec<&str> = vec!["Debug", "Clone", "PartialEq"];
@@ -2458,7 +2544,9 @@ fn render_root_alias(
         "Deserialize",
         "json_schema_rs_macro::ToJsonSchema",
     ]);
-    let mut out: String = derive_block(plan, patch, &traits, false);
+    let manual_eq: bool = names_deprecated_item(graph, plan, root);
+    let (mut out, dropped_eq): (String, bool) =
+        derive_block(plan, patch, &traits, false, manual_eq);
     out.push_str("#[serde(transparent)]\n");
     let field_attrs: String = if reads_integers(graph, plan, root) {
         format!(
@@ -2469,7 +2557,15 @@ fn render_root_alias(
         String::new()
     };
     let vis: &str = plan.vis;
+    let field_attrs: String = if expect.is_empty() {
+        field_attrs
+    } else {
+        format!("#[expect(deprecated)] {field_attrs}")
+    };
     let _ = writeln!(out, "{vis} struct {name}({field_attrs}{vis} {ty});\n");
+    if dropped_eq {
+        out.push_str(&manual_eq_impl(name, false));
+    }
     out.push_str(&rust_validators::render_item_impls(
         &plan.runtime,
         name,
@@ -2511,12 +2607,7 @@ fn render_enum(
     let (mut out, stated): (String, Option<String>) = item_docs(&e.annotations);
     imports.deserialize = true;
     if e.is_string_enum() {
-        out.push_str(&derive_block(
-            plan,
-            patch,
-            STRING_ENUM_DERIVE,
-            schema_default,
-        ));
+        out.push_str(&derive_block(plan, patch, STRING_ENUM_DERIVE, schema_default, false).0);
         out.push_str(&description_attr(stated.as_ref()));
         let members: Vec<(&str, &str)> = e
             .values
@@ -2544,12 +2635,7 @@ fn render_enum(
     }
     // Values of other JSON types: serde goes through `serde_json::Value` and compares by JSON
     // Schema equality (`1` equals `1.0`).
-    out.push_str(&derive_block(
-        plan,
-        patch,
-        VALUE_ENUM_DERIVE,
-        schema_default,
-    ));
+    out.push_str(&derive_block(plan, patch, VALUE_ENUM_DERIVE, schema_default, false).0);
     out.push_str(&description_attr(stated.as_ref()));
     let _ = writeln!(out, "{} enum {name} {{", plan.vis);
     for (value, variant) in e.values.iter().zip(&variants) {
@@ -2655,7 +2741,12 @@ fn render_union(
         .collect();
     let names: Vec<String> = lint_clean_variant_names(name, unique_idents(&bases, ""));
     let (mut out, stated): (String, Option<String>) = item_docs(&union.annotations);
-    out.push_str(&item_derive(plan, id, false, false));
+    let manual_eq: bool = union
+        .variants
+        .iter()
+        .any(|variant: &type_graph::Variant| names_deprecated_item(graph, plan, variant.ty));
+    let (derive, dropped_eq): (String, bool) = item_derive(plan, id, false, false, manual_eq);
+    out.push_str(&derive);
     out.push_str(&description_attr(stated.as_ref()));
     out.push_str("#[serde(untagged)]\n");
     if union.kind == UnionKind::OneOf {
@@ -2665,6 +2756,7 @@ fn render_union(
     let mut variants: Vec<rust_validators::UnionVariant> = Vec::with_capacity(union.variants.len());
     for (variant, variant_name) in union.variants.iter().zip(&names) {
         let ty: String = rust_type(graph, plan, home, variant.ty, imports);
+        out.push_str(&expect_deprecated(graph, plan, variant.ty, "    "));
         match schema_type(graph, plan, home, variant.ty, imports) {
             Some(schema) => {
                 let _ = writeln!(
@@ -2683,6 +2775,9 @@ fn render_union(
         });
     }
     out.push_str("}\n\n");
+    if dropped_eq {
+        out.push_str(&manual_eq_impl(name, false));
+    }
     if let Some(entries) = validated {
         // Only an arm reading through serde's own `Deserialize` names the trait.
         imports.deserialize |= variants.iter().any(|variant| !variant.integers);
@@ -3708,6 +3803,49 @@ pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
+
+"#;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn deprecated_type_named_by_another_item_expects_the_deprecation_and_implements_eq_by_hand() {
+        let json = r#"{"title":"Item","type":"object","deprecated":true,"properties":{"id":{"type":"string"},"old":{"title":"Old","type":"object","deprecated":true,"properties":{"x":{"type":"string"}}}}}"#;
+        let schema: Schema = serde_json::from_str(json).unwrap();
+        let settings: CodeGenSettings = default_settings();
+        let output: super::GenerateRustOutput = generate_rust(&[schema], &settings).unwrap();
+        let actual: String = String::from_utf8(output.per_schema[0].clone()).unwrap();
+        let expected: &str = r#"//! Generated by json-schema-rs. Do not edit manually.
+
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[deprecated]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Old")]
+pub struct Old {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[deprecated]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, json_schema_rs_macro::Deserialize, json_schema_rs_macro::ToJsonSchema)]
+#[json_schema(title = "Item")]
+pub struct Item {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[deprecated]
+    #[expect(deprecated)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old: Option<Old>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, serde_json::Value>,
+}
+
+#[expect(deprecated)]
+impl ::core::cmp::Eq for Item {}
 
 "#;
         assert_eq!(expected, actual);

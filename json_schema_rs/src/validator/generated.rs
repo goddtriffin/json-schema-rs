@@ -936,6 +936,7 @@ macro_rules! deserialize_union {
         $name:ident, $validators:expr, $kind:ident, $union:expr, [$($variant:expr),* $(,)?],
         |$value:ident| { $($position:pat => $read:expr),+ $(,)? }
     ) => {
+        #[allow(deprecated)]
         impl $crate::UnionVariants for $name {
             fn read_variant<'de, D: ::serde::Deserializer<'de>>(
                 position: usize,
@@ -947,6 +948,7 @@ macro_rules! deserialize_union {
             }
         }
 
+        #[allow(deprecated)]
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(
                 deserializer: D,
@@ -998,6 +1000,7 @@ macro_rules! deserialize_union {
 #[macro_export]
 macro_rules! self_validating {
     ($name:ident, $validators:ident, $index:expr) => {
+        #[allow(deprecated)]
         impl $name {
             /// Validates this value against its schema.
             ///
@@ -1014,6 +1017,7 @@ macro_rules! self_validating {
             }
         }
 
+        #[allow(deprecated)]
         impl TryFrom<::serde_json::Value> for $name {
             type Error = $crate::TypeValidationError;
 
@@ -1070,6 +1074,7 @@ macro_rules! self_validating {
 #[macro_export]
 macro_rules! constrained_newtype {
     (string, $name:ident, $validators:ident, $index:expr) => {
+        #[allow(deprecated)]
         impl TryFrom<String> for $name {
             type Error = $crate::TypeValidationError;
 
@@ -1079,6 +1084,7 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl TryFrom<&str> for $name {
             type Error = $crate::TypeValidationError;
 
@@ -1088,6 +1094,7 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl ::std::str::FromStr for $name {
             type Err = $crate::TypeValidationError;
 
@@ -1097,12 +1104,14 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl AsRef<str> for $name {
             fn as_ref(&self) -> &str {
                 &self.0
             }
         }
 
+        #[allow(deprecated)]
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 $validators
@@ -1115,6 +1124,7 @@ macro_rules! constrained_newtype {
         $crate::constrained_newtype!(@readers, $name, String);
     };
     (scalar, $name:ident, $inner:ty, $validators:ident, $index:expr) => {
+        #[allow(deprecated)]
         impl TryFrom<$inner> for $name {
             type Error = $crate::TypeValidationError;
 
@@ -1124,6 +1134,7 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 $validators
@@ -1137,6 +1148,7 @@ macro_rules! constrained_newtype {
         $crate::constrained_newtype!(@readers, $name, $inner);
     };
     (integer, $name:ident, $inner:ty, $validators:ident, $index:expr) => {
+        #[allow(deprecated)]
         impl TryFrom<$inner> for $name {
             type Error = $crate::TypeValidationError;
 
@@ -1146,6 +1158,7 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 $validators
@@ -1159,6 +1172,7 @@ macro_rules! constrained_newtype {
         $crate::constrained_newtype!(@readers, $name, $inner);
     };
     (parsed, $name:ident, $inner:ty, $validators:ident, $index:expr) => {
+        #[allow(deprecated)]
         impl TryFrom<$inner> for $name {
             type Error = $crate::TypeValidationError;
 
@@ -1170,6 +1184,7 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl<'de> ::serde::Deserialize<'de> for $name {
             fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 // The string as read, validated before it is parsed.
@@ -1188,6 +1203,7 @@ macro_rules! constrained_newtype {
         $crate::constrained_newtype!(@readers, $name, $inner);
     };
     (@as_ref, $name:ident, $inner:ty) => {
+        #[allow(deprecated)]
         impl AsRef<$inner> for $name {
             fn as_ref(&self) -> &$inner {
                 &self.0
@@ -1195,6 +1211,7 @@ macro_rules! constrained_newtype {
         }
     };
     (@readers, $name:ident, $inner:ty) => {
+        #[allow(deprecated)]
         impl $name {
             /// The validated value.
             #[must_use]
@@ -1203,12 +1220,14 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl From<$name> for $inner {
             fn from(value: $name) -> Self {
                 value.0
             }
         }
 
+        #[allow(deprecated)]
         impl ::std::ops::Deref for $name {
             type Target = $inner;
 
@@ -1217,6 +1236,7 @@ macro_rules! constrained_newtype {
             }
         }
 
+        #[allow(deprecated)]
         impl ::std::fmt::Display for $name {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 ::std::fmt::Display::fmt(&self.0, f)
@@ -2047,27 +2067,6 @@ mod tests {
         ],
     );
 
-    #[derive(Debug, PartialEq, Deserialize)]
-    struct Circle {
-        r: f64,
-    }
-
-    #[derive(Debug, PartialEq, Deserialize)]
-    struct Square {
-        side: f64,
-    }
-
-    #[derive(Debug, PartialEq)]
-    enum Shape {
-        Circle(Circle),
-        Square(Square),
-    }
-
-    crate::deserialize_union!(Shape, SHAPE_VALIDATORS, OneOf, Some(0), [1, 2], |value| {
-        0 => Circle::deserialize(value).map(Self::Circle),
-        _ => Square::deserialize(value).map(Self::Square),
-    });
-
     #[test]
     fn validation_records_the_branch_a_union_chose() {
         let instance: Value = json!({"side": 2});
@@ -2111,26 +2110,8 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[test]
-    fn try_from_reads_the_recorded_variant() {
-        let expected: Result<Shape, String> = Ok(Shape::Square(Square { side: 2.0 }));
-        let actual: Result<Shape, String> = SHAPE_VALIDATORS
-            .deserialize(0, json!({"side": 2}))
-            .map_err(|error: TypeValidationError| error.to_string());
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn plain_deserialization_of_a_union_takes_the_buffered_path() {
-        let expected: Result<Shape, String> = Ok(Shape::Circle(Circle { r: 1.0 }));
-        let actual: Result<Shape, String> = serde_json::from_str::<Shape>(r#"{"r": 1}"#)
-            .map_err(|error: serde_json::Error| error.to_string());
-        assert_eq!(expected, actual);
-    }
-
     /// A parent whose schema allows any string name, and a `Name` newtype that needs five
-    /// characters: narrower than its position, which codegen never generates, so trusting the
-    /// parent's validation is observable.
+    /// characters (see `tests/generated_macros.rs`): the trusted scope is observable.
     const TRUST: &str = r#"{"type":"object","properties":{"name":{"type":"string"}},"$defs":{"Name":{"type":"string","minLength":5}}}"#;
 
     static TRUST_VALIDATORS: TypeValidators<'static> = TypeValidators::new(
@@ -2143,42 +2124,9 @@ mod tests {
         &[&["json-schema:///#"], &["json-schema:///#/$defs/Name"]],
     );
 
-    #[derive(Debug, PartialEq, Serialize)]
-    #[serde(transparent)]
-    struct Name(String);
-
-    crate::constrained_newtype!(string, Name, TRUST_VALIDATORS, 1);
-
-    #[derive(Debug, PartialEq, Deserialize)]
-    struct Named {
-        name: Name,
-    }
-
-    #[test]
-    fn deserialize_reads_newtypes_trusted_after_validating_the_instance() {
-        let expected: Result<String, Outcome> = Ok("ab".to_string());
-        let actual: Result<String, Outcome> = outcome(
-            TRUST_VALIDATORS
-                .deserialize::<Named>(0, json!({"name": "ab"}))
-                .map(|named: Named| named.name.into_inner()),
-        );
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn plain_deserialize_checks_each_newtype() {
-        let name_errors: Vec<ValidationError> =
-            library_errors(r#"{"type":"string","minLength":5}"#, &json!("ab")).unwrap_err();
-        let expected: Result<Named, String> =
-            Err(TypeValidationError::Invalid(name_errors).to_string());
-        let actual: Result<Named, String> = serde_json::from_value::<Named>(json!({"name": "ab"}))
-            .map_err(|error: serde_json::Error| error.to_string());
-        assert_eq!(expected, actual);
-    }
-
     #[test]
     fn trusted_scope_ends_with_its_deserialization() {
-        let _ = TRUST_VALIDATORS.deserialize::<Named>(0, json!({"name": "ab"}));
+        let _ = TRUST_VALIDATORS.deserialize::<Value>(0, json!({"name": "ab"}));
         let expected: bool = false;
         let actual: bool = trusted();
         assert_eq!(expected, actual);

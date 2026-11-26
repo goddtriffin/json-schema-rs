@@ -1442,6 +1442,7 @@ const SCENARIOS: &[&str] = &[
     "map_type_hash_map",
     "examples_annotation",
     "deprecated_property",
+    "deprecated_types",
     "self_reference_root",
     "self_reference_defs",
     "mutual_recursion_defs",
@@ -2852,9 +2853,10 @@ pub fn builds() -> bool {
             // documents sharing `Address`: setters convert (`&str` into a newtype, a struct into
             // `Option`), every missing or unconvertible field is reported, the built struct is
             // validated, and a struct converts back into its builder. `Customer`'s deprecated
-            // `nickname` checks the builder compiles without `use of deprecated field`.
+            // `nickname` and deprecated `Previous` type check the builder compiles without `use of
+            // deprecated field` or `use of deprecated struct`.
             let order: Schema = Schema::try_from(r#"{"title":"Order","type":"object","properties":{"id":{"type":"string"},"note":{"type":"string"},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}},"dependentRequired":{"note":["id"]}}"#).expect("parse order");
-            let customer: Schema = Schema::try_from(r#"{"title":"Customer","type":"object","required":["name"],"properties":{"name":{"type":"string"},"age":{"type":"integer","minimum":0,"maximum":200},"nickname":{"type":"string","deprecated":true,"description":"Use name instead."},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}}}"#).expect("parse customer");
+            let customer: Schema = Schema::try_from(r#"{"title":"Customer","type":"object","required":["name"],"properties":{"name":{"type":"string"},"age":{"type":"integer","minimum":0,"maximum":200},"nickname":{"type":"string","deprecated":true,"description":"Use name instead."},"previous":{"title":"Previous","type":"object","deprecated":true,"properties":{"street":{"type":"string"}}},"address":{"title":"Address","type":"object","required":["street"],"properties":{"street":{"type":"string","minLength":1}}}}}"#).expect("parse customer");
             let settings: CodeGenSettings = CodeGenSettings::builder().builders(true).build();
             let output = generate_rust(&[order, customer], &settings).expect("generate");
             let shared_bytes: Vec<u8> = output
@@ -3825,6 +3827,34 @@ fn main() {
     let root: compile_test::Root = serde_json::from_str(r#"{"legacy":"still-valid"}"#).unwrap();
     let expected: Option<String> = Some("still-valid".to_string());
     let actual: Option<String> = root.legacy;
+    assert_eq!(expected, actual);
+}
+"##;
+            (
+                generate_single(schema_json, default_code_gen),
+                vec![],
+                main_rs,
+            )
+        }
+        "deprecated_types" => {
+            // Deprecated object and newtype types named by generated code: a field, array items,
+            // a union variant and `additionalProperties`. Naming them there is generated code's
+            // own, so only `main`'s uses of them warn (`#[expect(deprecated)]`).
+            let schema_json = r##"{"title":"Catalog","type":"object","properties":{"old":{"$ref":"#/$defs/Old"},"olds":{"type":"array","items":{"$ref":"#/$defs/Old"}},"either":{"anyOf":[{"$ref":"#/$defs/Old"},{"type":"integer"}]},"code":{"$ref":"#/$defs/Code"}},"additionalProperties":{"$ref":"#/$defs/Old"},"$defs":{"Old":{"title":"Old","type":"object","deprecated":true,"properties":{"x":{"type":"string"}}},"Code":{"title":"Code","type":"string","minLength":2,"deprecated":true}}}"##;
+            let main_rs = r##"#[expect(deprecated)]
+fn main() {
+    let catalog: compile_test::Catalog = serde_json::from_str(
+        r#"{"old":{"x":"a"},"olds":[{"x":"b"}],"either":{"x":"c"},"code":"ab","extra":{"x":"d"}}"#,
+    )
+    .unwrap();
+    let expected: serde_json::Value = serde_json::json!({
+        "old": {"x": "a"},
+        "olds": [{"x": "b"}],
+        "either": {"x": "c"},
+        "code": "ab",
+        "extra": {"x": "d"},
+    });
+    let actual: serde_json::Value = serde_json::to_value(&catalog).unwrap();
     assert_eq!(expected, actual);
 }
 "##;
