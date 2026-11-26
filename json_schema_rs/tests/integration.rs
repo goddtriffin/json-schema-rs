@@ -3822,7 +3822,9 @@ fn main() {
             // Property with deprecated: true; a valid instance still deserializes.
             let schema_json =
                 r#"{"type":"object","properties":{"legacy":{"type":"string","deprecated":true}}}"#;
-            let main_rs = r##"#[expect(deprecated)]
+            let main_rs = r##"#![deny(unfulfilled_lint_expectations)]
+
+#[expect(deprecated)]
 fn main() {
     let root: compile_test::Root = serde_json::from_str(r#"{"legacy":"still-valid"}"#).unwrap();
     let expected: Option<String> = Some("still-valid".to_string());
@@ -3838,31 +3840,80 @@ fn main() {
         }
         "deprecated_types" => {
             // Deprecated object and newtype types named by generated code: a field, array items,
-            // a union variant and `additionalProperties`. Naming them there is generated code's
-            // own, so only `main`'s uses of them warn (`#[expect(deprecated)]`).
-            let schema_json = r##"{"title":"Catalog","type":"object","properties":{"old":{"$ref":"#/$defs/Old"},"olds":{"type":"array","items":{"$ref":"#/$defs/Old"}},"either":{"anyOf":[{"$ref":"#/$defs/Old"},{"type":"integer"}]},"code":{"$ref":"#/$defs/Code"}},"additionalProperties":{"$ref":"#/$defs/Old"},"$defs":{"Old":{"title":"Old","type":"object","deprecated":true,"properties":{"x":{"type":"string"}}},"Code":{"title":"Code","type":"string","minLength":2,"deprecated":true}}}"##;
-            let main_rs = r##"#[expect(deprecated)]
+            // a union variant, `additionalProperties`, a self-referencing deprecated struct
+            // (`Node`, whose own uses need no expectation) and a second document whose root
+            // alias names a deprecated type of the first. Naming them there is generated code's
+            // own, so only `main`'s uses of them warn (`#[expect(deprecated)]`); the driver
+            // denies unfulfilled expectations, so a consumer use that stops warning fails too.
+            let documents: Vec<(&str, &str)> = vec![
+                (
+                    "catalog",
+                    r##"{"title":"Catalog","type":"object","properties":{"old":{"$ref":"#/$defs/Old"},"olds":{"type":"array","items":{"$ref":"#/$defs/Old"}},"either":{"anyOf":[{"$ref":"#/$defs/Old"},{"type":"integer"}]},"code":{"$ref":"#/$defs/Code"},"node":{"$ref":"#/$defs/Node"}},"additionalProperties":{"$ref":"#/$defs/Old"},"$defs":{"Old":{"title":"Old","type":"object","deprecated":true,"properties":{"x":{"type":"string"}}},"Code":{"title":"Code","type":"string","minLength":2,"deprecated":true},"Node":{"title":"Node","type":"object","deprecated":true,"properties":{"children":{"type":"array","items":{"$ref":"#/$defs/Node"}},"next":{"$ref":"#/$defs/Node"}}}}}"##,
+                ),
+                (
+                    "olds",
+                    r#"{"title":"Olds","type":"array","items":{"$ref":"catalog.json#/$defs/Old"}}"#,
+                ),
+            ];
+            let schemas: Vec<(&str, Schema)> = documents
+                .iter()
+                .map(|(name, json)| (*name, Schema::try_from(*json).expect("parse")))
+                .collect();
+            let mut input: CodeGenInput<'_> = CodeGenInput::new();
+            for (name, schema) in &schemas {
+                input = input.schema_at(format!("file:///schemas/{name}.json"), schema);
+            }
+            let output = generate_rust(input, default_code_gen).expect("generate");
+            let shared_bytes: Vec<u8> = output
+                .shared
+                .clone()
+                .expect("types used by two documents are shared");
+            let lib_rs: String = std::iter::once("shared")
+                .chain(schemas.iter().map(|(name, _)| *name))
+                .map(|name| format!("pub mod {name};"))
+                .collect::<Vec<String>>()
+                .join("\n")
+                + "\n";
+            let mut extra: Vec<(PathBuf, Vec<u8>)> =
+                vec![(PathBuf::from("shared.rs"), shared_bytes)];
+            for ((name, _), bytes) in schemas.iter().zip(output.per_schema) {
+                extra.push((PathBuf::from(format!("{name}.rs")), bytes));
+            }
+            let main_rs = r##"#![deny(unfulfilled_lint_expectations)]
+
+#[expect(deprecated)]
 fn main() {
-    let catalog: compile_test::Catalog = serde_json::from_str(
-        r#"{"old":{"x":"a"},"olds":[{"x":"b"}],"either":{"x":"c"},"code":"ab","extra":{"x":"d"}}"#,
+    let catalog: compile_test::catalog::Catalog = serde_json::from_str(
+        r#"{"old":{"x":"a"},"olds":[{"x":"b"}],"either":{"x":"c"},"code":"ab","node":{"children":[{}],"next":{}},"extra":{"x":"d"}}"#,
     )
     .unwrap();
-    let expected: serde_json::Value = serde_json::json!({
-        "old": {"x": "a"},
-        "olds": [{"x": "b"}],
-        "either": {"x": "c"},
-        "code": "ab",
-        "extra": {"x": "d"},
-    });
-    let actual: serde_json::Value = serde_json::to_value(&catalog).unwrap();
+    let olds: compile_test::olds::Olds = serde_json::from_str(r#"[{"x":"e"}]"#).unwrap();
+    // The consumer names the deprecated types itself: these uses warn (and so fulfil the expect).
+    let node: compile_test::catalog::Node = serde_json::from_str(r#"{"next":{}}"#).unwrap();
+    let old: compile_test::catalog::Old = serde_json::from_str(r#"{"x":"f"}"#).unwrap();
+    let expected: (serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value) = (
+        serde_json::json!({
+            "old": {"x": "a"},
+            "olds": [{"x": "b"}],
+            "either": {"x": "c"},
+            "code": "ab",
+            "node": {"children": [{}], "next": {}},
+            "extra": {"x": "d"},
+        }),
+        serde_json::json!([{"x": "e"}]),
+        serde_json::json!({"next": {}}),
+        serde_json::json!({"x": "f"}),
+    );
+    let actual: (serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value) = (
+        serde_json::to_value(&catalog).unwrap(),
+        serde_json::to_value(&olds).unwrap(),
+        serde_json::to_value(&node).unwrap(),
+        serde_json::to_value(&old).unwrap(),
+    );
     assert_eq!(expected, actual);
 }
 "##;
-            (
-                generate_single(schema_json, default_code_gen),
-                vec![],
-                main_rs,
-            )
+            (lib_rs.into_bytes(), extra, main_rs)
         }
         "cross_file_refs" => {
             // Five documents at `file:` URIs that refer to each other by relative `$ref`: a

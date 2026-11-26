@@ -1,6 +1,7 @@
-//! `Validated` and `self_validating!` used outside this crate, as generated code uses them:
-//! clippy's `allow_attributes` (forbidden in this crate) skips external macros, so the
-//! expansion's `#[allow(deprecated)]` is checked here as consumers see it.
+//! `Validated` and `self_validating!` used outside this crate, as generated code uses them.
+//! They live here because clippy's `allow_attributes` (forbidden in this crate) fires on an
+//! in-crate expansion's `#[allow(deprecated)]` but skips external macros; that `#[allow]` is
+//! covered by the generated-code gate's `deprecated_types` scenario.
 
 use json_schema_rs::{
     EmbeddedDocument, EmbeddedDocumentKind, TypeValidationError, TypeValidators, Validated,
