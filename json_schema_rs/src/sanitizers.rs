@@ -28,7 +28,7 @@ const RUST_KEYWORDS_FIELD: &[&str] = &[
 ];
 
 /// The only `PascalCase` keyword in Rust is `Self`. Used for type/struct names.
-const RUST_KEYWORD_TYPE_SELF: &str = "Self";
+pub(crate) const RUST_KEYWORD_TYPE_SELF: &str = "Self";
 
 fn is_rust_keyword_field(s: &str) -> bool {
     RUST_KEYWORDS_FIELD.contains(&s)
