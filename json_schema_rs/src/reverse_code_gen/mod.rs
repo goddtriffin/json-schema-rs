@@ -451,22 +451,29 @@ impl SchemaGenerator {
                 }
             }));
         }
+        let model_path: &str = model_definitions_path(target, &path);
         let (schema, definitions): (JsonSchema, BTreeMap<String, Schema>) =
             if self.resources.is_empty() {
                 let existing: ExistingDefinitions = existing_definitions(&settings, &path, &body);
-                std::mem::take(&mut self.document).finish(body, &path, &existing, &mut errors)
+                std::mem::take(&mut self.document).finish(body, model_path, &existing, &mut errors)
             } else {
                 let existing: ExistingDefinitions = existing_definitions(&settings, &path, &body);
                 self.into_root_schema_with_resources(
                     body,
-                    &path,
+                    model_path,
                     &existing,
                     target.needs_conversion(),
                     &mut errors,
                 )
             };
-        let generated: GeneratedSchema =
-            finish_document(&settings, &path, schema, definitions, &mut errors);
+        let generated: GeneratedSchema = finish_document(
+            &settings,
+            &path,
+            model_path,
+            schema,
+            definitions,
+            &mut errors,
+        );
         if errors.is_empty() {
             Ok(generated)
         } else {
@@ -1234,6 +1241,24 @@ fn report_duplicate_ids(
 /// (2020-12) layout.
 const DEFS_PATH: &str = "/$defs";
 
+/// The JSON Pointer the 2020-12 model places the definitions under, and writes their refs
+/// against. Conversion to draft 4-7 moves `$defs` into `definitions` and rewrites `#/$defs/..`
+/// refs, so for `/definitions` the model keeps them in `$defs`: its refs resolve, and read like
+/// the hand-written `#/$defs/..` refs the root may hold to the same definitions. Any other path
+/// is the same in the model and the target document.
+fn model_definitions_path(target: TargetDialect, path: &str) -> &str {
+    if path == "/definitions"
+        && matches!(
+            target,
+            TargetDialect::Draft04 | TargetDialect::Draft06 | TargetDialect::Draft07
+        )
+    {
+        DEFS_PATH
+    } else {
+        path
+    }
+}
+
 /// The normalized JSON Pointer the document root's definitions go under: the setting with one
 /// leading `#` and one trailing `/` removed, or the dialect's own container.
 fn definitions_path(settings: &ReverseCodeGenSettings) -> Result<String, ReverseCodeGenError> {
@@ -1296,6 +1321,7 @@ fn definitions_path(settings: &ReverseCodeGenSettings) -> Result<String, Reverse
 fn finish_document(
     settings: &ReverseCodeGenSettings,
     path: &str,
+    model_path: &str,
     mut body: JsonSchema,
     definitions: BTreeMap<String, Schema>,
     errors: &mut Vec<ReverseCodeGenError>,
@@ -1317,7 +1343,7 @@ fn finish_document(
     };
     if !target.needs_conversion() {
         body.schema = schema_uri;
-        return GeneratedSchema::native(place_definitions(body, path, definitions, errors));
+        return GeneratedSchema::native(place_definitions(body, model_path, definitions, errors));
     }
     let root_siblings: bool = schema_uri.is_some() || !definitions.is_empty();
     let mut pass: dialect::Converter<'_> =
@@ -1341,7 +1367,7 @@ fn finish_document(
         _ => Some(SpecVersion::Draft202012.schema_uri().to_string()),
     };
     GeneratedSchema::converted(
-        place_definitions(body, path, definitions, errors),
+        place_definitions(body, model_path, definitions, errors),
         target_json,
     )
 }
@@ -4572,7 +4598,7 @@ mod tests {
     }
 
     #[test]
-    fn the_model_of_a_converted_document_keeps_its_definitions_under_the_target_path() {
+    fn the_model_of_a_draft_07_document_keeps_its_definitions_in_defs_where_its_refs_resolve() {
         let expected: Option<BTreeMap<String, Schema>> = Some(BTreeMap::from([(
             "A".to_string(),
             Schema::from(string_schema()),
@@ -4584,7 +4610,7 @@ mod tests {
             .into_root_schema(object_schema(&[("a", reference)]))
             .expect("a representable schema")
             .into_schema()
-            .definitions;
+            .defs;
         assert_eq!(expected, actual);
     }
 
@@ -5083,6 +5109,119 @@ mod tests {
             settings_for(TargetDialect::Draft07),
             serde_json::json!({"type": "object", "$defs": {"A": {"type": "string"}}}),
         );
+        assert_eq!(expected, actual);
+    }
+
+    // --- A hand-written `$defs` entry that refs a hoisted definition, on a draft-07 target ---
+
+    /// A root whose `$defs` entry `C` refs the hoisted definition `B`, which the root's own
+    /// `$defs` does not hold.
+    fn generated_with_ref_to_hoisted_definition(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings);
+        let standalone: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"B": {"type": "string"}},
+            "$ref": "#/$defs/B"
+        }))
+        .expect("a schema");
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let mut body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "$defs": {"C": {"$ref": "#/$defs/B"}}
+        }))
+        .expect("a schema");
+        body.properties
+            .insert("b".to_string(), Schema::from(inlined));
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    #[test]
+    fn a_defs_entry_ref_to_a_hoisted_definition_resolves_in_the_model_on_a_converted_target() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}, "C": {"$ref": "#/$defs/B"}},
+            "properties": {"b": {"$ref": "#/$defs/B"}}
+        });
+        let generated: GeneratedSchema =
+            generated_with_ref_to_hoisted_definition(settings_for(TargetDialect::Draft07));
+        let actual: serde_json::Value = serde_json::to_value(generated.schema()).expect("json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_defs_entry_ref_to_a_hoisted_definition_resolves_in_the_document_on_a_converted_target() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"B": {"type": "string"}, "C": {"$ref": "#/definitions/B"}},
+            "properties": {"b": {"$ref": "#/definitions/B"}}
+        });
+        let actual: serde_json::Value =
+            generated_with_ref_to_hoisted_definition(settings_for(TargetDialect::Draft07))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn the_model_and_the_document_agree_on_instances_through_a_ref_to_a_hoisted_definition() {
+        let generated: GeneratedSchema =
+            generated_with_ref_to_hoisted_definition(settings_for(TargetDialect::Draft07));
+        let model: serde_json::Value = serde_json::to_value(generated.schema()).expect("json");
+        let document: serde_json::Value = generated.to_value();
+        let instances: Vec<serde_json::Value> =
+            vec![serde_json::json!({"b": "x"}), serde_json::json!({"b": 5})];
+        let expected: Vec<bool> = vec![true, false];
+        let through_model: Vec<bool> = instances
+            .iter()
+            .map(|instance: &serde_json::Value| instance_is_valid(&model, instance))
+            .collect();
+        let through_document: Vec<bool> = instances
+            .iter()
+            .map(|instance: &serde_json::Value| instance_is_valid(&document, instance))
+            .collect();
+        assert_eq!(
+            (expected.clone(), expected),
+            (through_model, through_document)
+        );
+    }
+
+    #[test]
+    fn a_generated_definition_ref_to_a_hoisted_definition_merges_into_an_equal_hand_written_entry()
+    {
+        let mut generator: SchemaGenerator =
+            SchemaGenerator::new(settings_for(TargetDialect::Draft07));
+        let standalone: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"B": {"type": "string"}},
+            "$ref": "#/$defs/B"
+        }))
+        .expect("a schema");
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let reference: JsonSchema = generator.named_subschema("a::A", "A", |_| JsonSchema {
+            properties: BTreeMap::from([("x".to_string(), Schema::from(inlined.clone()))]),
+            ..object_schema(&[])
+        });
+        let mut body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "$defs": {"A": {"type": "object", "properties": {"x": {"$ref": "#/$defs/B"}}}}
+        }))
+        .expect("a schema");
+        body.properties
+            .insert("a".to_string(), Schema::from(reference));
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {
+                "A": {"type": "object", "properties": {"x": {"$ref": "#/definitions/B"}}},
+                "B": {"type": "string"}
+            },
+            "properties": {"a": {"$ref": "#/definitions/A"}}
+        });
+        let actual: serde_json::Value = generator
+            .into_root_schema(body)
+            .expect("generated")
+            .to_value();
         assert_eq!(expected, actual);
     }
 
