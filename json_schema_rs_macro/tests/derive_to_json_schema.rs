@@ -2355,6 +2355,7 @@ fn derive_enum_field_emits_defs_entry_without_schema_keyword() {
 #[test]
 fn vec_of_derived_type_json_schema_is_standalone_with_defs() {
     let expected: ReverseCodeGenResult = Ok(JsonSchema {
+        schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         defs: Some(BTreeMap::from([
             (
                 "MutualA".to_string(),

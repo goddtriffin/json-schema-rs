@@ -881,12 +881,12 @@ mod tests {
     }
 
     fn build(fields: &[FieldSpec]) -> Properties {
-        object_properties(&mut SchemaGenerator::new(), fields)
+        object_properties(&mut SchemaGenerator::default(), fields)
     }
 
     #[test]
     fn field_without_attributes_keeps_type_schema() {
-        let expected: Properties = one_property(base_schema(&mut SchemaGenerator::new()));
+        let expected: Properties = one_property(base_schema(&mut SchemaGenerator::default()));
         let actual: Properties = build(&[PLAIN]);
         assert_eq!(expected, actual);
     }
@@ -933,7 +933,7 @@ mod tests {
 
     #[test]
     fn non_finite_float_attribute_keeps_type_keyword() {
-        let expected: Properties = one_property(base_schema(&mut SchemaGenerator::new()));
+        let expected: Properties = one_property(base_schema(&mut SchemaGenerator::default()));
         let actual: Properties = build(&[FieldSpec {
             minimum: Some(NumberLiteral::Float(f64::INFINITY)),
             ..PLAIN
@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn blank_doc_keeps_type_description() {
-        let expected: Properties = one_property(base_schema(&mut SchemaGenerator::new()));
+        let expected: Properties = one_property(base_schema(&mut SchemaGenerator::default()));
         let actual: Properties = build(&[FieldSpec {
             doc: &["  ", ""],
             ..PLAIN
@@ -955,7 +955,7 @@ mod tests {
     fn bool_default_replaces_type_default() {
         let expected: Properties = one_property(JsonSchema {
             default_value: Some(serde_json::Value::Bool(true)),
-            ..base_schema(&mut SchemaGenerator::new())
+            ..base_schema(&mut SchemaGenerator::default())
         });
         let actual: Properties = build(&[FieldSpec {
             default: Some(DefaultLiteral::Bool(true)),
@@ -968,7 +968,7 @@ mod tests {
     fn integer_default_replaces_type_default() {
         let expected: Properties = one_property(JsonSchema {
             default_value: Some(serde_json::Value::Number(serde_json::Number::from(-3_i64))),
-            ..base_schema(&mut SchemaGenerator::new())
+            ..base_schema(&mut SchemaGenerator::default())
         });
         let actual: Properties = build(&[FieldSpec {
             default: Some(DefaultLiteral::Number(NumberLiteral::Signed(-3))),
@@ -981,7 +981,7 @@ mod tests {
     fn float_default_replaces_type_default() {
         let expected: Properties = one_property(JsonSchema {
             default_value: serde_json::Number::from_f64(2.5).map(serde_json::Value::Number),
-            ..base_schema(&mut SchemaGenerator::new())
+            ..base_schema(&mut SchemaGenerator::default())
         });
         let actual: Properties = build(&[FieldSpec {
             default: Some(DefaultLiteral::Number(NumberLiteral::Float(2.5))),
@@ -994,7 +994,7 @@ mod tests {
     fn non_finite_float_default_removes_type_default() {
         let expected: Properties = one_property(JsonSchema {
             default_value: None,
-            ..base_schema(&mut SchemaGenerator::new())
+            ..base_schema(&mut SchemaGenerator::default())
         });
         let actual: Properties = build(&[FieldSpec {
             default: Some(DefaultLiteral::Number(NumberLiteral::Float(f64::NAN))),
@@ -1155,12 +1155,12 @@ mod tests {
             flattens,
             closed: true,
         };
-        object_schema(&mut SchemaGenerator::new(), &spec)
+        object_schema(&mut SchemaGenerator::default(), &spec)
     }
 
     #[test]
     fn object_schema_flattening_a_closed_object_stays_closed() {
-        let expected: JsonSchema = closed_object(&mut SchemaGenerator::new());
+        let expected: JsonSchema = closed_object(&mut SchemaGenerator::default());
         let actual: JsonSchema = flattened(&[FlattenSpec {
             schema: closed_object,
             optional: false,
@@ -1170,7 +1170,7 @@ mod tests {
 
     #[test]
     fn object_schema_flattening_an_open_object_opens_the_parent() {
-        let expected: JsonSchema = open_object(&mut SchemaGenerator::new());
+        let expected: JsonSchema = open_object(&mut SchemaGenerator::default());
         let actual: JsonSchema = flattened(&[FlattenSpec {
             schema: open_object,
             optional: false,
@@ -1182,7 +1182,7 @@ mod tests {
     fn object_schema_optional_flatten_requires_none_of_its_keys() {
         let expected: JsonSchema = JsonSchema {
             required: None,
-            ..closed_object(&mut SchemaGenerator::new())
+            ..closed_object(&mut SchemaGenerator::default())
         };
         let actual: JsonSchema = flattened(&[FlattenSpec {
             schema: closed_object,
@@ -1197,8 +1197,8 @@ mod tests {
             type_: Some(JsonType::Object.into()),
             additional_properties: Some(Schema::from(JsonSchema {
                 all_of: Some(vec![
-                    Schema::from(string_schema(&mut SchemaGenerator::new())),
-                    Schema::from(integer_schema(&mut SchemaGenerator::new())),
+                    Schema::from(string_schema(&mut SchemaGenerator::default())),
+                    Schema::from(integer_schema(&mut SchemaGenerator::default())),
                 ]),
                 ..JsonSchema::default()
             })),
@@ -1228,7 +1228,7 @@ mod tests {
             type_: Some(JsonType::Object.into()),
             ..JsonSchema::default()
         };
-        let actual: JsonSchema = object_schema(&mut SchemaGenerator::new(), &spec);
+        let actual: JsonSchema = object_schema(&mut SchemaGenerator::default(), &spec);
         assert_eq!(expected, actual);
     }
 }

@@ -937,6 +937,12 @@ fn forwarding_impl(name: &Ident, ty: &Type) -> TokenStream2 {
                 <#ty as __json_schema_rs::ToJsonSchema>::json_schema()
             }
 
+            fn json_schema_root(
+                generator: __json_schema_rs::SchemaGenerator,
+            ) -> __json_schema_rs::GeneratedSchemaResult {
+                <#ty as __json_schema_rs::ToJsonSchema>::json_schema_root(generator)
+            }
+
             fn json_schema_with(
                 generator: &mut __json_schema_rs::SchemaGenerator,
             ) -> __json_schema_rs::JsonSchema {
@@ -1209,8 +1215,8 @@ fn expand_newtype_to_json_schema(
 ///
 /// The body lives in a hidden inherent fn so it is written once: `json_schema_with` registers
 /// it in the generator's `$defs` and returns a `$ref`; `json_schema` builds it as the root
-/// with a fresh generator and adds `$schema`; `json_schema_flattened` inlines it (without
-/// `$id`) for `#[serde(flatten)]`, or inlines `flattened_body` when the type reads differently
+/// through `json_schema_root` (the generator adds `$schema`); `json_schema_flattened` inlines it
+/// (without `$id`) for `#[serde(flatten)]`, or inlines `flattened_body` when the type reads differently
 /// there (an externally tagged enum's unit variants). The type's identity in the generator is
 /// its full path (`module_path!()` expands where the type is defined), so same-name types from
 /// different modules get separate `$defs` entries.
@@ -1293,10 +1299,16 @@ fn named_type_impl(
         #[allow(deprecated)]
         impl __json_schema_rs::ToJsonSchema for #name {
             fn json_schema() -> __json_schema_rs::ReverseCodeGenResult {
-                let mut schema: __json_schema_rs::JsonSchema = __json_schema_rs::SchemaGenerator::new()
-                    #root_call?;
-                schema.schema = Some(__json_schema_rs::SpecVersion::Draft202012.schema_uri().to_string());
-                ::core::result::Result::Ok(schema)
+                <Self as __json_schema_rs::ToJsonSchema>::json_schema_root(
+                    __json_schema_rs::SchemaGenerator::default(),
+                )
+                .map(__json_schema_rs::GeneratedSchema::into_schema)
+            }
+
+            fn json_schema_root(
+                generator: __json_schema_rs::SchemaGenerator,
+            ) -> __json_schema_rs::GeneratedSchemaResult {
+                generator #root_call
             }
 
             fn json_schema_with(
