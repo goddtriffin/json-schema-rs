@@ -57,8 +57,8 @@ pub enum ReverseCodeGenError {
         /// Why it cannot hold definitions.
         reason: String,
     },
-    /// Something already sits where the definitions go, so writing them there would overwrite or
-    /// merge into it.
+    /// A value that is not an object already sits where the definitions go (or on the way
+    /// there), so writing them there would overwrite it.
     DefinitionsPathOccupied {
         /// The normalized path.
         path: String,
