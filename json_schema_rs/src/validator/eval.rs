@@ -1423,61 +1423,63 @@ impl CompiledSchema {
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        match (keyword, at.instance.view()) {
-            (Keyword::False, _) => self.false_schema::<M, _>(at, cx),
-            (
-                Keyword::Type {
-                    types,
-                    integer_semantics,
-                },
-                _,
-            ) => {
-                types.matches(at.instance, *integer_semantics)
+        // Each arm views the instance only for the type it needs, so the view folds into one
+        // test of the instance's own tag; viewing it once ahead of the match built the whole
+        // view (a second dispatch on the type) for every keyword, including those that ignore it.
+        let instance: &I = at.instance;
+        match keyword {
+            Keyword::False => self.false_schema::<M, _>(at, cx),
+            Keyword::Type {
+                types,
+                integer_semantics,
+            } => {
+                types.matches(instance, *integer_semantics)
                     || self.type_error::<M, _>(*types, at, cx)
             }
-            (Keyword::Const(expected), _) => self.const_check::<M, _>(expected, at, cx),
-            (Keyword::Enum(id), _) => self.enum_check::<M, _>(*id, at, cx),
-            (
-                Keyword::Minimum(_)
-                | Keyword::Maximum(_)
-                | Keyword::ExclusiveMinimum(_)
-                | Keyword::ExclusiveMaximum(_)
-                | Keyword::MultipleOf(_),
-                InstanceRef::Number(n),
-            ) => self.numeric::<M, _>(keyword, &n, at, cx),
-            (
-                Keyword::MinLength(_)
-                | Keyword::MaxLength(_)
-                | Keyword::Pattern(_)
-                | Keyword::Format(_)
-                | Keyword::Content(_),
-                InstanceRef::String(s),
-            ) => self.string::<M, _>(keyword, s, at, cx),
-            (Keyword::UserFormat(id), _) => {
-                self.user_format_check::<M, _>(*id, at.instance, at, cx)
+            Keyword::Const(expected) => self.const_check::<M, _>(expected, at, cx),
+            Keyword::Enum(id) => self.enum_check::<M, _>(*id, at, cx),
+            Keyword::Minimum(_)
+            | Keyword::Maximum(_)
+            | Keyword::ExclusiveMinimum(_)
+            | Keyword::ExclusiveMaximum(_)
+            | Keyword::MultipleOf(_) => match instance.view() {
+                InstanceRef::Number(n) => self.numeric::<M, _>(keyword, &n, at, cx),
+                _ => true,
+            },
+            Keyword::MinLength(_)
+            | Keyword::MaxLength(_)
+            | Keyword::Pattern(_)
+            | Keyword::Format(_)
+            | Keyword::Content(_) => match instance.view() {
+                InstanceRef::String(s) => self.string::<M, _>(keyword, s, at, cx),
+                _ => true,
+            },
+            Keyword::UserFormat(id) => self.user_format_check::<M, _>(*id, instance, at, cx),
+            Keyword::Custom(id) => self.custom_check::<M, _>(*id, instance, at, cx),
+            Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems => {
+                match instance.view() {
+                    InstanceRef::Array(items) => {
+                        self.array_assertion::<M, _>(keyword, items, at, cx)
+                    }
+                    _ => true,
+                }
             }
-            (Keyword::Custom(id), _) => self.custom_check::<M, _>(*id, at.instance, at, cx),
-            (
-                Keyword::MinItems(_) | Keyword::MaxItems(_) | Keyword::UniqueItems,
-                InstanceRef::Array(items),
-            ) => self.array_assertion::<M, _>(keyword, items, at, cx),
-            (
-                Keyword::Required(_)
-                | Keyword::MinProperties(_)
-                | Keyword::MaxProperties(_)
-                | Keyword::DependentRequired { .. }
-                | Keyword::NoAdditionalProperties(_),
-                InstanceRef::Object(object),
-            ) => self.object_assertion::<M, _>(keyword, object, at, cx),
-            (
-                Keyword::Ref {
-                    target,
-                    keyword,
-                    ref_str,
-                },
-                _,
-            ) => self.follow::<M, _>(*target, *keyword, ref_str, at, cx, evaluated),
-            (Keyword::DynamicRef(dynamic), _) => {
+            Keyword::Required(_)
+            | Keyword::MinProperties(_)
+            | Keyword::MaxProperties(_)
+            | Keyword::DependentRequired { .. }
+            | Keyword::NoAdditionalProperties(_) => match instance.view() {
+                InstanceRef::Object(object) => {
+                    self.object_assertion::<M, _>(keyword, object, at, cx)
+                }
+                _ => true,
+            },
+            Keyword::Ref {
+                target,
+                keyword,
+                ref_str,
+            } => self.follow::<M, _>(*target, *keyword, ref_str, at, cx, evaluated),
+            Keyword::DynamicRef(dynamic) => {
                 let DynamicRef {
                     fallback,
                     anchor,
@@ -1486,7 +1488,7 @@ impl CompiledSchema {
                 let target: NodeId = self.dynamic_target(*fallback, anchor, cx);
                 self.follow::<M, _>(target, Kw::DynamicRef, ref_str, at, cx, evaluated)
             }
-            (Keyword::RecursiveRef { fallback, ref_str }, _) => {
+            Keyword::RecursiveRef { fallback, ref_str } => {
                 let target: NodeId = cx
                     .dynamic_scope
                     .iter()
@@ -1494,108 +1496,111 @@ impl CompiledSchema {
                     .unwrap_or(*fallback);
                 self.follow::<M, _>(target, Kw::RecursiveRef, ref_str, at, cx, evaluated)
             }
-            (Keyword::Properties(id), InstanceRef::Object(object)) => {
-                self.properties::<M, _>(self.property_table(*id), object, at, cx, evaluated)
-            }
-            (Keyword::ClosedProperties(id), InstanceRef::Object(object)) => {
-                self.closed_properties::<M, _>(self.property_table(*id), object, at, cx, evaluated)
-            }
-            (Keyword::PatternProperties(patterns), InstanceRef::Object(object)) => {
-                self.pattern_properties::<M, _>(patterns, object, at, cx, evaluated)
-            }
-            (Keyword::AdditionalProperties { node, known }, InstanceRef::Object(object)) => {
-                self.additional_properties::<M, _>(*node, known, object, at, cx, evaluated)
-            }
-            (Keyword::PropertyNames(node), InstanceRef::Object(object)) => {
-                self.property_names::<M, _>(*node, object, at, cx)
-            }
-            (
-                Keyword::DependentSchemas {
+            Keyword::Properties(id) => match instance.view() {
+                InstanceRef::Object(object) => {
+                    self.properties::<M, _>(self.property_table(*id), object, at, cx, evaluated)
+                }
+                _ => true,
+            },
+            Keyword::ClosedProperties(id) => match instance.view() {
+                InstanceRef::Object(object) => self.closed_properties::<M, _>(
+                    self.property_table(*id),
+                    object,
+                    at,
+                    cx,
+                    evaluated,
+                ),
+                _ => true,
+            },
+            Keyword::PatternProperties(patterns) => match instance.view() {
+                InstanceRef::Object(object) => {
+                    self.pattern_properties::<M, _>(patterns, object, at, cx, evaluated)
+                }
+                _ => true,
+            },
+            Keyword::AdditionalProperties { node, known } => match instance.view() {
+                InstanceRef::Object(object) => {
+                    self.additional_properties::<M, _>(*node, known, object, at, cx, evaluated)
+                }
+                _ => true,
+            },
+            Keyword::PropertyNames(node) => match instance.view() {
+                InstanceRef::Object(object) => self.property_names::<M, _>(*node, object, at, cx),
+                _ => true,
+            },
+            Keyword::DependentSchemas {
+                dependencies,
+                keyword,
+            } => match instance.view() {
+                InstanceRef::Object(object) => self.dependent_schemas::<M, _>(
                     dependencies,
-                    keyword,
-                },
-                InstanceRef::Object(object),
-            ) => self.dependent_schemas::<M, _>(dependencies, *keyword, object, at, cx, evaluated),
-            (Keyword::UnevaluatedProperties(node), InstanceRef::Object(object)) => {
-                self.unevaluated_properties::<M, _>(*node, object, at, cx, evaluated)
-            }
-            (Keyword::Items { node, keyword }, InstanceRef::Array(items)) => self.items::<M, _>(
-                &[],
-                Some(*node),
-                (*keyword, *keyword),
-                items,
-                at,
-                cx,
-                evaluated,
-            ),
-            (Keyword::PrefixItems(tuple), InstanceRef::Array(items)) => {
-                let PrefixItems {
-                    prefix,
-                    rest,
-                    prefix_keyword,
-                    rest_keyword,
-                } = &**tuple;
-                self.items::<M, _>(
-                    prefix,
-                    *rest,
-                    (*prefix_keyword, *rest_keyword),
+                    *keyword,
+                    object,
+                    at,
+                    cx,
+                    evaluated,
+                ),
+                _ => true,
+            },
+            Keyword::UnevaluatedProperties(node) => match instance.view() {
+                InstanceRef::Object(object) => {
+                    self.unevaluated_properties::<M, _>(*node, object, at, cx, evaluated)
+                }
+                _ => true,
+            },
+            Keyword::Items { node, keyword } => match instance.view() {
+                InstanceRef::Array(items) => self.items::<M, _>(
+                    &[],
+                    Some(*node),
+                    (*keyword, *keyword),
                     items,
                     at,
                     cx,
                     evaluated,
-                )
-            }
-            (Keyword::Contains(contains), InstanceRef::Array(items)) => {
-                self.contains::<M, _>(contains, items, at, cx, evaluated)
-            }
-            (Keyword::UnevaluatedItems(node), InstanceRef::Array(items)) => {
-                self.unevaluated_items::<M, _>(*node, items, at, cx, evaluated)
-            }
-            (Keyword::AllOf(nodes), _) => self.all_of::<M, _>(nodes, at, cx, evaluated),
-            (Keyword::AnyOf(union), _) => self.any_of::<M, _>(union, at, cx, evaluated),
-            (Keyword::OneOf(union), _) => self.one_of::<M, _>(union, at, cx, evaluated),
-            (Keyword::Not(node), _) => self.not::<M, _>(*node, at, cx),
-            (
-                Keyword::IfThenElse {
-                    condition,
-                    then,
-                    otherwise,
-                },
-                _,
-            ) => self.if_then_else::<M, _>(*condition, *then, *otherwise, at, cx, evaluated),
-            // Type-specific keywords ignore instances of other types.
-            (
-                Keyword::Minimum(_)
-                | Keyword::Maximum(_)
-                | Keyword::ExclusiveMinimum(_)
-                | Keyword::ExclusiveMaximum(_)
-                | Keyword::MultipleOf(_)
-                | Keyword::MinLength(_)
-                | Keyword::MaxLength(_)
-                | Keyword::Pattern(_)
-                | Keyword::Format(_)
-                | Keyword::Content(_)
-                | Keyword::MinItems(_)
-                | Keyword::MaxItems(_)
-                | Keyword::UniqueItems
-                | Keyword::Required(_)
-                | Keyword::MinProperties(_)
-                | Keyword::MaxProperties(_)
-                | Keyword::DependentRequired { .. }
-                | Keyword::NoAdditionalProperties(_)
-                | Keyword::Properties(_)
-                | Keyword::ClosedProperties(_)
-                | Keyword::PatternProperties(_)
-                | Keyword::AdditionalProperties { .. }
-                | Keyword::PropertyNames(_)
-                | Keyword::DependentSchemas { .. }
-                | Keyword::UnevaluatedProperties(_)
-                | Keyword::Items { .. }
-                | Keyword::PrefixItems(_)
-                | Keyword::Contains(_)
-                | Keyword::UnevaluatedItems(_),
-                _,
-            ) => true,
+                ),
+                _ => true,
+            },
+            Keyword::PrefixItems(tuple) => match instance.view() {
+                InstanceRef::Array(items) => {
+                    let PrefixItems {
+                        prefix,
+                        rest,
+                        prefix_keyword,
+                        rest_keyword,
+                    } = &**tuple;
+                    self.items::<M, _>(
+                        prefix,
+                        *rest,
+                        (*prefix_keyword, *rest_keyword),
+                        items,
+                        at,
+                        cx,
+                        evaluated,
+                    )
+                }
+                _ => true,
+            },
+            Keyword::Contains(contains) => match instance.view() {
+                InstanceRef::Array(items) => {
+                    self.contains::<M, _>(contains, items, at, cx, evaluated)
+                }
+                _ => true,
+            },
+            Keyword::UnevaluatedItems(node) => match instance.view() {
+                InstanceRef::Array(items) => {
+                    self.unevaluated_items::<M, _>(*node, items, at, cx, evaluated)
+                }
+                _ => true,
+            },
+            Keyword::AllOf(nodes) => self.all_of::<M, _>(nodes, at, cx, evaluated),
+            Keyword::AnyOf(union) => self.any_of::<M, _>(union, at, cx, evaluated),
+            Keyword::OneOf(union) => self.one_of::<M, _>(union, at, cx, evaluated),
+            Keyword::Not(node) => self.not::<M, _>(*node, at, cx),
+            Keyword::IfThenElse {
+                condition,
+                then,
+                otherwise,
+            } => self.if_then_else::<M, _>(*condition, *then, *otherwise, at, cx, evaluated),
         }
     }
 
