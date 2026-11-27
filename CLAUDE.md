@@ -10,7 +10,7 @@ see [design.md](design.md).
 1. **Spec adherence and correctness.** Behaviour matches the JSON Schema specification for
    every draft we support. Correctness is everything: nothing outranks it.
 2. **Performance: speed, then memory.** Fast and lean, measured with `make benchmark`
-   (and against competitors with `make benchmark_full`).
+   (and against competitors with `make benchmark_full`, before a release).
    When speed and memory conflict, choose speed: a much faster design is worth somewhat
    more memory.
    When the valid and invalid paths conflict, the **valid instance** wins: most real input is
@@ -43,41 +43,37 @@ Backwards compatibility is **not** a priority and **never** a justification (req
    principles, and the per-keyword notes). design.md is the single source of truth for
    design and reasoning; keep it updated after implementing.
 
-3. **Run the benchmark and differential harnesses once, at the end, when the PR changes what
-   our consumers run.**
-   - **When:** the PR changes anything that can change a consumer's experience or program:
-     the library, the CLI or the macros (`json_schema_rs/`, `json_schema_rs_macro/`, outside
-     their tests), what they generate, or their dependencies or features. A PR that does not
-     (docs, agent instructions, tests only, CI, Makefile targets that do not change what is
-     built) skips both harnesses to save time, and its PR body says so in one line under each
-     section (`n/a: no library change`). A PR that changes a harness runs that harness (see
-     `make benchmark_full` below for the benchmark).
+3. **Run only the harnesses the PR needs, once, at the end.** Skip every step that is not
+   relevant to the PR: a fast inner loop matters.
    - Correctness comes first. Only after `make lint test` passes and the change is done, run
-     `make benchmark` and `make differential` as the last step before opening (or updating)
-     the PR. Each takes several minutes: never run them mid-work or repeatedly.
-   - The benchmark harness is the **guiding star** for performance (see
-     [json_schema_rs_benchmark/README.md](json_schema_rs_benchmark/README.md)). It has two
-     timed modes, and `make benchmark_smoke` (about 25 s) checks every cell without timing,
-     safe to run mid-work whenever a change could break a cell:
-     - `make benchmark` (**every PR that changes the library**, about 3–13 min): our library
-       and CLI only, built from `main` and from the working tree and measured side by side in
-       the same session, so run-to-run drift cancels out. It prints the PR body's *Performance* section and changes
-       no committed file.
-     - `make benchmark_full` (about 60 min): every tool, ours and the competitors', and it
-       refreshes the committed `json_schema_rs_benchmark/results.{json,md}`. Run it as well as
-       `make benchmark` (which still writes the PR body's report) when the PR changes the benchmark
-       harness, a competitor or a fixture, or the derive or reverse codegen (the quick mode
-       does not measure reverse codegen), and on a quiet machine when the cross-tool tables
-       should be refreshed.
-   - The differential harness measures how much of the official JSON Schema Test Suite we pass
-     next to other implementations (see
-     [json_schema_rs_differential/README.md](json_schema_rs_differential/README.md)). Its
-     committed results (`json_schema_rs_differential/results.{json,md}`) **must be up to date**
-     so PR review sees the real impact of the change in the diff.
-   - **A PR that changes the library is not complete until `make benchmark` and
-     `make differential` have been run, the differential results are committed and current,
-     and the PR body carries the quick benchmark's report** (plus the full run's refreshed
-     results when the PR needs one). This is non-negotiable.
+     the harnesses below as the last step before opening (or updating) the PR. Each takes
+     several minutes: never run them mid-work or repeatedly. A PR that skips one says so in
+     one line under its PR body section, with the reason (`n/a: no library change`).
+   - **`make benchmark`** (about 3–13 min): run it on **every PR that can change performance
+     or generated output**: the library, the CLI or the macros (`json_schema_rs/`,
+     `json_schema_rs_macro/`, outside their tests), what they generate, their dependencies or
+     features, or the benchmark harness. It builds our library and CLI from `main` and from
+     the working tree and measures them side by side in the same session, so run-to-run drift
+     cancels out. It prints the PR body's *Performance* section and changes no committed file.
+     It is the **guiding star** for performance (see
+     [json_schema_rs_benchmark/README.md](json_schema_rs_benchmark/README.md)).
+     `make benchmark_smoke` (about 25 s) checks every cell without timing, safe to run
+     mid-work whenever a change could break a cell.
+   - **`make differential`**: run it when the PR has **even the slightest chance of changing
+     correctness** in what it measures: validator verdicts or errors, schema parsing, drafts
+     and dialects, `$ref` resolution and the registry, regex, formats, numbers, the
+     differential harness itself, or a dependency any of these use. When there is no such
+     chance (codegen-only output, lint attributes, docs, tests, CI), skip it. It measures how
+     much of the official JSON Schema Test Suite we pass next to other implementations (see
+     [json_schema_rs_differential/README.md](json_schema_rs_differential/README.md)); when it
+     runs, commit its refreshed `json_schema_rs_differential/results.{json,md}` so review sees
+     the change in the diff. It needs the Bowtie CLI (`uv tool install bowtie-json-schema`)
+     and Docker.
+   - **`make benchmark_full`** (about 60 min): every tool, ours and the competitors', and it
+     refreshes the committed `json_schema_rs_benchmark/results.{json,md}`. Run it only on the
+     rarest occasions: right before a release (v0.1.0), or when the maintainer asks.
+   - **A PR is not complete until the harnesses it needs have run** and the PR body carries
+     the quick benchmark's report when it ran.
 
 4. **No backwards compatibility before 1.0.** The crate is pre-1.0 (`0.x`): there are no
    users to keep working, so every change makes the API, behaviour and docs what they should
@@ -121,9 +117,8 @@ Every change goes through a pull request that a human reviews and merges.
 
 1. **Work on a feature branch**, never on `main` (e.g. `feat/<topic>`, `fix/<topic>`).
 2. **Review your own changes before opening the PR.** Read the full diff, run `make lint test`,
-   and fix what you find. Once it is correct, run `make benchmark` and `make differential` as
-   the final step when the PR changes the library (requirement 3). Only open a PR that is
-   ready for a human to review.
+   and fix what you find. Once it is correct, run the harnesses the PR needs as the final
+   step (requirement 3). Only open a PR that is ready for a human to review.
 3. **Commit, push, and open the PR** once it is ready. Link the issue it closes (`closes #N`).
    Write the body from the [PR template](.github/PULL_REQUEST_TEMPLATE/pull_request_template.md);
    see *Pull request body* below.
