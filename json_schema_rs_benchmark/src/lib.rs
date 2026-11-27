@@ -1111,22 +1111,35 @@ pub fn parse_tools_tsv(text: &str) -> TsvParse<(String, ToolInfo)> {
     })
 }
 
-/// The subset of a hyperfine `--export-json` document the aggregator reads.
+/// The subset of a hyperfine 2.x `--export-json` document the aggregator reads.
 #[derive(Deserialize)]
 struct HyperfineExport {
     results: Vec<HyperfineResult>,
 }
 
-/// One hyperfine command result.
+/// One hyperfine command result: one entry per timed run.
 #[derive(Deserialize)]
 struct HyperfineResult {
-    times: Vec<f64>,
-    memory_usage_byte: Option<Vec<f64>>,
+    measurements: Vec<HyperfineRun>,
+}
+
+/// One timed run's metrics.
+#[derive(Deserialize)]
+struct HyperfineRun {
+    time_wall_clock: HyperfineValue,
+    memory_peak_resident: Option<HyperfineValue>,
+}
+
+/// A single metric value (`{"value": .., "unit": ..}`).
+#[derive(Deserialize)]
+struct HyperfineValue {
+    value: f64,
 }
 
 /// Parse a hyperfine export (one result) into CLI-tier measurements for a cell: a time
-/// measurement from `results[0].times` (seconds) and, when present and non-empty, a peak-RSS
-/// measurement from `results[0].memory_usage_byte`.
+/// measurement from `results[0].measurements[].time_wall_clock.value` (seconds) and, when
+/// present, a peak-RSS measurement from `results[0].measurements[].memory_peak_resident.value`
+/// (bytes). This is hyperfine 2.x's export format.
 ///
 /// # Errors
 ///
@@ -1180,13 +1193,37 @@ pub fn parse_hyperfine_samples(json: &str) -> Result<HyperfineSamples, String> {
         .into_iter()
         .next()
         .ok_or_else(|| "hyperfine export has no results".to_owned())?;
-    if result.times.is_empty() {
+    if result.measurements.is_empty() {
         return Err("hyperfine result has no timing samples".to_owned());
     }
     Ok(HyperfineSamples {
-        times: result.times,
-        peak_memory_bytes: result.memory_usage_byte.unwrap_or_default(),
+        times: result
+            .measurements
+            .iter()
+            .map(|run: &HyperfineRun| run.time_wall_clock.value)
+            .collect(),
+        peak_memory_bytes: result
+            .measurements
+            .iter()
+            .filter_map(|run: &HyperfineRun| run.memory_peak_resident.as_ref())
+            .map(|memory: &HyperfineValue| memory.value)
+            .collect(),
     })
+}
+
+/// Fail a side whose CLI exports were listed in `cli/index.tsv` (`listed`, for the tool being
+/// compared) but none of which parsed (`parsed`): the CLI tier was requested and lost.
+///
+/// # Errors
+///
+/// Returns a reason when `listed` is non-zero and `parsed` is zero.
+pub fn ensure_cli_exports_parsed(listed: usize, parsed: usize) -> Result<(), String> {
+    if listed > 0 && parsed == 0 {
+        return Err(format!(
+            "all {listed} CLI exports were skipped (none parsed as hyperfine 2.x JSON)"
+        ));
+    }
+    Ok(())
 }
 
 /// The subset of criterion's `benchmark.json` the aggregator reads.
@@ -2000,10 +2037,29 @@ mod tests {
 
     // ---- hyperfine ----------------------------------------------------------------------
 
+    /// A real `hyperfine 2.0.0 -N --warmup 1 --runs 2 --export-json` export of `true`.
+    const HYPERFINE_2_EXPORT: &str = include_str!("../tests/fixtures/hyperfine_2_export.json");
+
+    #[test]
+    fn parse_hyperfine_samples_reads_a_real_hyperfine_2_export() {
+        let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(HYPERFINE_2_EXPORT);
+        let expected_runs: usize = 2;
+        let actual_runs: (usize, usize) = actual
+            .map(|samples: HyperfineSamples| (samples.times.len(), samples.peak_memory_bytes.len()))
+            .expect("hyperfine 2.0 export parses");
+        assert_eq!((expected_runs, expected_runs), actual_runs);
+    }
+
     #[test]
     fn parse_hyperfine_json_yields_time_and_memory() {
-        let json: &str = r#"{"results":[{"command":"x","mean":0.0,"times":[0.003,0.001,0.002],
-            "memory_usage_byte":[2048,1024,3072],"exit_codes":[0,0,0]}]}"#;
+        let json: &str = r#"{"results":[{"command":"x","measurements":[
+            {"time_wall_clock":{"value":0.003,"unit":"second"},
+             "memory_peak_resident":{"value":2048.0,"unit":"byte"},"exit_code":0},
+            {"time_wall_clock":{"value":0.001,"unit":"second"},
+             "memory_peak_resident":{"value":1024.0,"unit":"byte"},"exit_code":0},
+            {"time_wall_clock":{"value":0.002,"unit":"second"},
+             "memory_peak_resident":{"value":3072.0,"unit":"byte"},"exit_code":0}],
+            "summary":{}}]}"#;
         let expected: Result<Vec<Measurement>, String> = Ok(vec![
             measurement(
                 Tier::Cli,
@@ -2035,7 +2091,7 @@ mod tests {
 
     #[test]
     fn parse_hyperfine_json_without_memory_yields_time_only() {
-        let json: &str = r#"{"results":[{"times":[0.5]}]}"#;
+        let json: &str = r#"{"results":[{"measurements":[{"time_wall_clock":{"value":0.5}}]}]}"#;
         let expected: Result<Vec<Measurement>, String> = Ok(vec![measurement(
             Tier::Cli,
             "ours",
@@ -2051,7 +2107,9 @@ mod tests {
 
     #[test]
     fn parse_hyperfine_samples_keeps_every_run() {
-        let json: &str = r#"{"results":[{"times":[0.5,0.25],"memory_usage_byte":[1024,2048]}]}"#;
+        let json: &str = r#"{"results":[{"measurements":[
+            {"time_wall_clock":{"value":0.5},"memory_peak_resident":{"value":1024.0}},
+            {"time_wall_clock":{"value":0.25},"memory_peak_resident":{"value":2048.0}}]}]}"#;
         let expected: Result<HyperfineSamples, String> = Ok(HyperfineSamples {
             times: vec![0.5, 0.25],
             peak_memory_bytes: vec![1024.0, 2048.0],
@@ -2061,13 +2119,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_hyperfine_samples_without_memory_has_no_memory_samples() {
-        let expected: Result<HyperfineSamples, String> = Ok(HyperfineSamples {
-            times: vec![0.5],
-            peak_memory_bytes: Vec::new(),
-        });
-        let actual: Result<HyperfineSamples, String> =
-            parse_hyperfine_samples(r#"{"results":[{"times":[0.5]}]}"#);
+    fn parse_hyperfine_samples_rejects_the_hyperfine_1_shape() {
+        let json: &str = r#"{"results":[{"times":[0.5]}]}"#;
+        let expected: Result<HyperfineSamples, String> = Err(
+            "invalid hyperfine JSON: missing field `measurements` at line 1 column 27".to_owned(),
+        );
+        let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(json);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ensure_cli_exports_parsed_fails_when_every_export_was_skipped() {
+        let expected: Result<(), String> =
+            Err("all 3 CLI exports were skipped (none parsed as hyperfine 2.x JSON)".to_owned());
+        let actual: Result<(), String> = ensure_cli_exports_parsed(3, 0);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ensure_cli_exports_parsed_passes_when_some_export_parsed() {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = ensure_cli_exports_parsed(3, 1);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn ensure_cli_exports_parsed_passes_when_no_cli_exports_were_listed() {
+        let expected: Result<(), String> = Ok(());
+        let actual: Result<(), String> = ensure_cli_exports_parsed(0, 0);
         assert_eq!(expected, actual);
     }
 
@@ -2101,7 +2180,7 @@ mod tests {
         let expected: Result<Vec<Measurement>, String> =
             Err("hyperfine result has no timing samples".to_owned());
         let actual: Result<Vec<Measurement>, String> = parse_hyperfine_json(
-            r#"{"results":[{"times":[]}]}"#,
+            r#"{"results":[{"measurements":[]}]}"#,
             "ours",
             "f",
             Operation::Codegen,

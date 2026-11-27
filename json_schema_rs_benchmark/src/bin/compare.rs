@@ -36,8 +36,8 @@ use json_schema_rs_benchmark::compare::{
 };
 use json_schema_rs_benchmark::{
     CellKey, CriterionId, HyperfineSamples, IndexEntry, Measurement, Metric, Tier, TsvParse,
-    criterion_benchmark_files, parse_criterion_benchmark, parse_criterion_samples, parse_heap_tsv,
-    parse_hyperfine_samples, parse_index_tsv,
+    criterion_benchmark_files, ensure_cli_exports_parsed, parse_criterion_benchmark,
+    parse_criterion_samples, parse_heap_tsv, parse_hyperfine_samples, parse_index_tsv,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -249,11 +249,13 @@ fn read_side(dir: &Path, tool: &str) -> Result<Side, String> {
 
     let index_path: PathBuf = dir.join("cli").join("index.tsv");
     if let Some(text) = read_optional(&index_path)? {
-        let entries: Vec<IndexEntry> = report_skipped(&index_path, parse_index_tsv(&text));
-        for entry in entries
+        let entries: Vec<IndexEntry> = report_skipped(&index_path, parse_index_tsv(&text))
             .into_iter()
             .filter(|entry: &IndexEntry| entry.tool == tool)
-        {
+            .collect();
+        let listed: usize = entries.len();
+        let mut parsed: usize = 0;
+        for entry in entries {
             let export_path: PathBuf = dir.join(&entry.json_path);
             let Some(json) = read_optional(&export_path)? else {
                 eprintln!("compare: warning: {}: missing", export_path.display());
@@ -269,6 +271,7 @@ fn read_side(dir: &Path, tool: &str) -> Result<Side, String> {
                     continue;
                 }
             };
+            parsed += 1;
             let cell = |metric: Metric| -> CellKey {
                 CellKey {
                     tier: Tier::Cli,
@@ -286,6 +289,8 @@ fn read_side(dir: &Path, tool: &str) -> Result<Side, String> {
                 );
             }
         }
+        ensure_cli_exports_parsed(listed, parsed)
+            .map_err(|reason: String| format!("{}: {reason}", index_path.display()))?;
     }
     Ok(Side {
         measured: samples,
