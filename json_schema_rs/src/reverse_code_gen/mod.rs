@@ -809,17 +809,19 @@ impl SchemaGenerator {
         index
     }
 
-    /// Embeds a standalone schema as a subschema: its `$defs` (at any depth) become entries of
-    /// the current resource's `$defs`, its `$ref`s to them are rewritten, and its `$schema` is
-    /// dropped (`$schema` must not appear in a subschema that is not a resource root).
+    /// Embeds a standalone schema as a subschema: the entries of its `$defs` and of its
+    /// draft-04–07 `definitions` (at any depth) become entries of the current resource's
+    /// definitions, its `$ref`s to them are rewritten, and its `$schema` is dropped (`$schema`
+    /// must not appear in a subschema that is not a resource root).
     ///
-    /// A `$ref` is matched to a hoisted entry by its JSON Pointer (`#/$defs/Outer/$defs/Inner`).
-    /// A `#/$defs/Inner` with no top-level `Inner` resolves to the one nested `Inner` when
-    /// exactly one exists. Inlining an equal standalone schema again reuses its entries.
+    /// A `$ref` is matched to a hoisted entry by its JSON Pointer (`#/$defs/Outer/$defs/Inner`,
+    /// `#/definitions/Inner`). A `#/$defs/Inner` with no top-level `Inner` in `$defs` resolves
+    /// to the one nested `Inner` when exactly one exists (a top-level `definitions` entry is not
+    /// nested). Inlining an equal standalone schema again reuses its entries.
     ///
-    /// A schema with `$id` is its own resource and is embedded whole, `$schema` and `$defs`
-    /// included. So is a `$defs` entry with `$id`, and no `$ref` inside a resource is rewritten,
-    /// since it resolves against that resource.
+    /// A schema with `$id` is its own resource and is embedded whole, `$schema`, `$defs` and
+    /// `definitions` included. So is an entry with `$id`, and no `$ref` inside a resource is
+    /// rewritten, since it resolves against that resource.
     pub fn inline_subschema(&mut self, schema: JsonSchema) -> JsonSchema {
         self.current_scope().inline_subschema(schema)
     }
@@ -1020,8 +1022,11 @@ impl Scope {
         if schema.id.is_some() {
             return schema;
         }
-        let has_defs: bool = schema.defs.as_ref().is_some_and(|defs| !defs.is_empty());
-        if !has_defs {
+        let has_definitions: bool = [schema.defs.as_ref(), schema.definitions.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|entries: &BTreeMap<String, Schema>| !entries.is_empty());
+        if !has_definitions {
             schema.schema = None;
             return schema;
         }
@@ -1047,10 +1052,18 @@ impl Scope {
             });
             indices.push(index);
             by_pointer.insert(definition.pointer.clone(), provisional_ref(index));
-            nested_by_key
-                .entry(definition.key.clone())
-                .or_default()
-                .push(definition.pointer.clone());
+            let top_level: bool = ["#/$defs/", "#/definitions/"].iter().any(|prefix: &&str| {
+                definition
+                    .pointer
+                    .strip_prefix(prefix)
+                    .is_some_and(|token| !token.contains('/'))
+            });
+            if !top_level {
+                nested_by_key
+                    .entry(definition.key.clone())
+                    .or_default()
+                    .push(definition.pointer.clone());
+            }
         }
         for (key, pointers) in nested_by_key {
             let top_level: String = format!("#/$defs/{}", escape_pointer_token(&key));
@@ -1875,39 +1888,50 @@ fn for_each_ref(
     }
 }
 
-/// A `$defs` entry taken out of a standalone schema by [`flatten_defs`].
+/// A `$defs` or `definitions` entry taken out of a standalone schema by [`flatten_defs`].
 #[derive(Debug)]
 struct HoistedDefinition {
-    /// JSON Pointer of the entry in the standalone schema (`#/$defs/Outer/$defs/Inner`).
+    /// JSON Pointer of the entry in the standalone schema (`#/$defs/Outer/definitions/Inner`).
     pointer: String,
     key: String,
     body: Schema,
 }
 
-/// Removes the `$defs` of `schema` and, transitively, of every `$defs` entry that is not a
-/// resource (has no `$id`; a resource keeps its own `$defs`). Returns the schema without them
-/// and the entries ordered by pointer.
+/// Removes the `$defs` and `definitions` of `schema` and, transitively, of every entry of
+/// either that is not a resource (has no `$id`; a resource keeps its own containers). Returns
+/// the schema without them and the entries ordered by pointer.
 fn flatten_defs(schema: JsonSchema) -> (JsonSchema, Vec<HoistedDefinition>) {
     let mut root: JsonSchema = schema;
     let mut hoisted: Vec<HoistedDefinition> = Vec::new();
-    let mut stack: Vec<(String, BTreeMap<String, Schema>)> = Vec::new();
-    if let Some(defs) = root.defs.take() {
-        stack.push(("#".to_string(), defs));
-    }
-    while let Some((parent, defs)) = stack.pop() {
-        for (key, mut body) in defs {
-            let pointer: String = format!("{parent}/$defs/{}", escape_pointer_token(&key));
+    let mut stack: Vec<(String, &'static str, BTreeMap<String, Schema>)> = Vec::new();
+    push_definition_containers(&mut stack, "#", &mut root);
+    while let Some((parent, container, entries)) = stack.pop() {
+        for (key, mut body) in entries {
+            let pointer: String = format!("{parent}/{container}/{}", escape_pointer_token(&key));
             if let Some(object) = body.as_object_mut()
                 && object.id.is_none()
-                && let Some(nested) = object.defs.take()
             {
-                stack.push((pointer.clone(), nested));
+                push_definition_containers(&mut stack, &pointer, object);
             }
             hoisted.push(HoistedDefinition { pointer, key, body });
         }
     }
     hoisted.sort_by(|a, b| a.pointer.cmp(&b.pointer));
     (root, hoisted)
+}
+
+/// Takes the `$defs` and `definitions` out of `schema` (at JSON Pointer `pointer`) onto `stack`.
+fn push_definition_containers(
+    stack: &mut Vec<(String, &'static str, BTreeMap<String, Schema>)>,
+    pointer: &str,
+    schema: &mut JsonSchema,
+) {
+    if let Some(defs) = schema.defs.take() {
+        stack.push((pointer.to_string(), "$defs", defs));
+    }
+    if let Some(definitions) = schema.definitions.take() {
+        stack.push((pointer.to_string(), "definitions", definitions));
+    }
 }
 
 /// Merges each hoisted definition into another live definition with the same name and an
@@ -6524,5 +6548,887 @@ mod tests {
             TargetDialect::Draft07,
             "http://json-schema.org/draft-07/schema#"
         );
+    }
+
+    // --- inline_subschema hoists `definitions` entries as well as `$defs` entries, and every
+    // `$ref` of the output resolves, in the model and in the document ---
+
+    /// The fragment `$ref`s in `document` that resolve to nothing. Each one is read as a JSON
+    /// Pointer (tokens decoded as in a URI fragment) against the nearest enclosing schema with
+    /// a string `$id` (or draft-04 `id`), else the document root. Anchors count as dangling;
+    /// refs that are not fragments are not checked.
+    fn dangling_refs(document: &serde_json::Value) -> Vec<String> {
+        let mut dangling: Vec<String> = Vec::new();
+        let mut stack: Vec<(&serde_json::Value, &serde_json::Value)> = vec![(document, document)];
+        while let Some((value, base)) = stack.pop() {
+            match value {
+                serde_json::Value::Object(object) => {
+                    let is_resource: bool = ["$id", "id"].iter().any(|keyword: &&str| {
+                        object
+                            .get(*keyword)
+                            .is_some_and(serde_json::Value::is_string)
+                    });
+                    let base: &serde_json::Value = if is_resource { value } else { base };
+                    if let Some(serde_json::Value::String(reference)) = object.get("$ref")
+                        && let Some(fragment) = reference.strip_prefix('#')
+                        && resolve_fragment(base, fragment).is_none()
+                    {
+                        dangling.push(reference.clone());
+                    }
+                    stack.extend(
+                        object
+                            .values()
+                            .map(|child: &serde_json::Value| (child, base)),
+                    );
+                }
+                serde_json::Value::Array(items) => {
+                    stack.extend(items.iter().map(|child: &serde_json::Value| (child, base)));
+                }
+                _ => {}
+            }
+        }
+        dangling
+    }
+
+    /// The value a URI fragment's JSON Pointer names in `base`.
+    fn resolve_fragment<'a>(
+        base: &'a serde_json::Value,
+        fragment: &str,
+    ) -> Option<&'a serde_json::Value> {
+        if fragment.is_empty() {
+            return Some(base);
+        }
+        let pointer: &str = fragment.strip_prefix('/')?;
+        let mut current: &serde_json::Value = base;
+        for token in pointer.split('/') {
+            let token: String = super::decode_fragment_token(token)?;
+            current = match current {
+                serde_json::Value::Object(object) => object.get(&token)?,
+                serde_json::Value::Array(items) => items.get(token.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(current)
+    }
+
+    #[test]
+    fn dangling_refs_finds_a_ref_that_resolves_to_nothing() {
+        let expected: Vec<String> = vec!["#/definitions/B".to_string()];
+        let actual: Vec<String> = dangling_refs(&serde_json::json!({
+            "$defs": {"A": {"type": "string"}},
+            "properties": {"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/definitions/B"}}
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dangling_refs_resolves_a_ref_against_its_resource() {
+        let expected: Vec<String> = vec!["#/$defs/A".to_string()];
+        let actual: Vec<String> = dangling_refs(&serde_json::json!({
+            "$defs": {"A": {"type": "string"}},
+            "properties": {
+                "r": {"$id": "https://example.com/r", "properties": {"a": {"$ref": "#/$defs/A"}}},
+                "s": {"$ref": "#/properties/r/properties/a"}
+            }
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    /// The root `{"type":"object"}` merged with `root`, whose property `s` is the standalone
+    /// schema `standalone` inlined.
+    fn generated_with_inlined(
+        settings: ReverseCodeGenSettings,
+        standalone: serde_json::Value,
+        root: serde_json::Value,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings);
+        let inlined: JsonSchema =
+            generator.inline_subschema(serde_json::from_value(standalone).expect("a schema"));
+        let mut body: JsonSchema = serde_json::from_value(root).expect("a schema");
+        body.type_ = Some(JsonType::Object.into());
+        body.properties
+            .insert("s".to_string(), Schema::from(inlined));
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    fn inlined_definitions_ref(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/definitions/B"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_defs_ref(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "$defs": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/$defs/B"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_both_containers(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "$defs": {"A": {"type": "integer"}},
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/$defs/A"}, "y": {"$ref": "#/definitions/B"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_same_name_equal_in_both_containers(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "$defs": {"B": {"type": "string"}},
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/$defs/B"}, "y": {"$ref": "#/definitions/B"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_same_name_different_in_both_containers(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "$defs": {"B": {"type": "integer"}},
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/$defs/B"}, "y": {"$ref": "#/definitions/B"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_with_nested_resource(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "properties": {
+                    "x": {"$ref": "#/definitions/B"},
+                    "r": {
+                        "$id": "https://example.com/r.json",
+                        "definitions": {"B": {"type": "integer"}},
+                        "properties": {"y": {"$ref": "#/definitions/B"}}
+                    }
+                }
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_with_resource_entry(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {
+                    "B": {"type": "string"},
+                    "R": {
+                        "$id": "https://example.com/r.json",
+                        "definitions": {"B": {"type": "integer"}},
+                        "properties": {"y": {"$ref": "#/definitions/B"}}
+                    }
+                },
+                "properties": {"x": {"$ref": "#/definitions/B"}, "r": {"$ref": "#/definitions/R"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_ref_into_a_definition(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"B": {"type": "object", "properties": {"y": {"type": "string"}}}},
+                "properties": {"x": {"$ref": "#/definitions/B/properties/y"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_definition_ref_to_another(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"A": {"$ref": "#/definitions/B"}, "B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/definitions/A"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_recursive_definition(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {
+                    "Node": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"},
+                            "next": {"$ref": "#/definitions/Node"}
+                        }
+                    }
+                },
+                "properties": {"x": {"$ref": "#/definitions/Node"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_only_a_ref(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "$ref": "#/definitions/B"
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_nested_containers(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {
+                    "Outer": {
+                        "definitions": {"Inner": {"type": "string"}},
+                        "properties": {"i": {"$ref": "#/definitions/Outer/definitions/Inner"}}
+                    }
+                },
+                "$defs": {
+                    "Mixed": {
+                        "definitions": {"Deep": {"type": "integer"}},
+                        "properties": {"d": {"$ref": "#/$defs/Mixed/definitions/Deep"}}
+                    }
+                },
+                "properties": {"x": {"$ref": "#/definitions/Outer"}, "y": {"$ref": "#/$defs/Mixed"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_with_property_named_definitions(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {
+                    "B": {"type": "object", "properties": {"definitions": {"type": "string"}}}
+                },
+                "properties": {"definitions": {"$ref": "#/definitions/B"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    /// A hand-written root whose `container` holds `B` (`hand_written`, referred to by its
+    /// property `h`) beside an inlined `definitions` entry `B` that is a string.
+    fn inlined_beside_hand_written(
+        settings: ReverseCodeGenSettings,
+        container: &str,
+        hand_written: &serde_json::Value,
+    ) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/definitions/B"}}
+            }),
+            serde_json::json!({
+                container: {"B": hand_written},
+                "properties": {"h": {"$ref": format!("#/{container}/B")}}
+            }),
+        )
+    }
+
+    fn inlined_beside_equal_hand_written_defs(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        inlined_beside_hand_written(settings, "$defs", &serde_json::json!({"type": "string"}))
+    }
+
+    fn inlined_beside_different_hand_written_defs(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        inlined_beside_hand_written(settings, "$defs", &serde_json::json!({"type": "integer"}))
+    }
+
+    fn inlined_beside_equal_hand_written_definitions(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        inlined_beside_hand_written(
+            settings,
+            "definitions",
+            &serde_json::json!({"type": "string"}),
+        )
+    }
+
+    fn inlined_beside_different_hand_written_definitions(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        inlined_beside_hand_written(
+            settings,
+            "definitions",
+            &serde_json::json!({"type": "integer"}),
+        )
+    }
+
+    /// A generated type named `B` (`body`, the root's property `g`) beside an inlined
+    /// `definitions` entry `B` that is a string.
+    fn inlined_beside_generated(
+        settings: ReverseCodeGenSettings,
+        body: fn() -> JsonSchema,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings);
+        let reference: JsonSchema = generator.named_subschema("a::B", "B", |_| body());
+        let inlined: JsonSchema = generator.inline_subschema(
+            serde_json::from_value(serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/definitions/B"}}
+            }))
+            .expect("a schema"),
+        );
+        let root: JsonSchema = object_schema(&[("g", reference), ("s", inlined)]);
+        generator.into_root_schema(root).expect("generated")
+    }
+
+    fn inlined_beside_equal_generated(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        inlined_beside_generated(settings, string_schema)
+    }
+
+    fn inlined_beside_different_generated(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        inlined_beside_generated(settings, integer_schema)
+    }
+
+    #[test]
+    fn inline_subschema_hoists_definitions_entries() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/B"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_definitions_ref(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_hoists_definitions_entries_into_draft_07_definitions() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"B": {"type": "string"}},
+            "properties": {"s": {"properties": {"x": {"$ref": "#/definitions/B"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_definitions_ref(settings_for(TargetDialect::Draft07)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_hoists_definitions_entries_into_draft_07_model_defs() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/B"}}}}
+        });
+        let actual: serde_json::Value = serde_json::to_value(
+            inlined_definitions_ref(settings_for(TargetDialect::Draft07)).schema(),
+        )
+        .expect("json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_suffixes_different_entries_of_one_name_in_both_containers() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B0": {"type": "integer"}, "B1": {"type": "string"}},
+            "properties": {
+                "s": {"properties": {"x": {"$ref": "#/$defs/B0"}, "y": {"$ref": "#/$defs/B1"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_same_name_different_in_both_containers(ReverseCodeGenSettings::default())
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_suffixes_different_entries_of_one_name_in_both_containers_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"B0": {"type": "integer"}, "B1": {"type": "string"}},
+            "properties": {
+                "s": {
+                    "properties": {
+                        "x": {"$ref": "#/definitions/B0"},
+                        "y": {"$ref": "#/definitions/B1"}
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_same_name_different_in_both_containers(settings_for(TargetDialect::Draft07))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_merges_equal_entries_of_one_name_in_both_containers() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {
+                "s": {"properties": {"x": {"$ref": "#/$defs/B"}, "y": {"$ref": "#/$defs/B"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_same_name_equal_in_both_containers(ReverseCodeGenSettings::default())
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_a_nested_resource_definitions_ref_as_written_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"B": {"type": "string"}},
+            "properties": {
+                "s": {
+                    "properties": {
+                        "x": {"$ref": "#/definitions/B"},
+                        "r": {
+                            "$id": "https://example.com/r.json",
+                            "definitions": {"B": {"type": "integer"}},
+                            "properties": {"y": {"$ref": "#/definitions/B"}}
+                        }
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_with_nested_resource(settings_for(TargetDialect::Draft07)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_hoists_a_definitions_resource_entry_with_its_own_definitions() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {
+                "B": {"type": "string"},
+                "R": {
+                    "$id": "https://example.com/r.json",
+                    "definitions": {"B": {"type": "integer"}},
+                    "properties": {"y": {"$ref": "#/definitions/B"}}
+                }
+            },
+            "properties": {
+                "s": {"properties": {"x": {"$ref": "#/$defs/B"}, "r": {"$ref": "#/$defs/R"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_with_resource_entry(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_ref_into_a_definitions_entry() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "object", "properties": {"y": {"type": "string"}}}},
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/B/properties/y"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_ref_into_a_definition(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_refs_between_and_within_definitions_entries() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {
+                "Node": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string"},
+                        "next": {"$ref": "#/definitions/Node"}
+                    }
+                }
+            },
+            "properties": {"s": {"properties": {"x": {"$ref": "#/definitions/Node"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_recursive_definition(settings_for(TargetDialect::Draft07)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_definitions_entry_ref_to_another() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"type": "string"}},
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/A"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_definition_ref_to_another(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_of_only_a_ref_to_a_definitions_entry_is_the_rewritten_ref() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {"s": {"$ref": "#/$defs/B"}}
+        });
+        let actual: serde_json::Value =
+            inlined_only_a_ref(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_hoists_definitions_nested_in_either_container() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {
+                "Deep": {"type": "integer"},
+                "Inner": {"type": "string"},
+                "Mixed": {"properties": {"d": {"$ref": "#/$defs/Deep"}}},
+                "Outer": {"properties": {"i": {"$ref": "#/$defs/Inner"}}}
+            },
+            "properties": {
+                "s": {
+                    "properties": {"x": {"$ref": "#/$defs/Outer"}, "y": {"$ref": "#/$defs/Mixed"}}
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_nested_containers(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_keeps_a_property_named_definitions() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "object", "properties": {"definitions": {"type": "string"}}}},
+            "properties": {"s": {"properties": {"definitions": {"$ref": "#/$defs/B"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_with_property_named_definitions(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_merges_a_definitions_entry_into_an_equal_hand_written_one_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "definitions": {"B": {"type": "string"}},
+            "properties": {
+                "h": {"$ref": "#/definitions/B"},
+                "s": {"properties": {"x": {"$ref": "#/definitions/B"}}}
+            }
+        });
+        let actual: serde_json::Value = serde_json::to_value(
+            inlined_beside_equal_hand_written_definitions(settings_for(TargetDialect::Draft07))
+                .schema(),
+        )
+        .expect("json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_suffixes_a_definitions_entry_beside_a_different_hand_written_one_on_draft_07()
+     {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"B": {"type": "integer"}, "B0": {"type": "string"}},
+            "properties": {
+                "h": {"$ref": "#/definitions/B"},
+                "s": {"properties": {"x": {"$ref": "#/definitions/B0"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_beside_different_hand_written_definitions(settings_for(TargetDialect::Draft07))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_suffixes_a_definitions_entry_beside_a_different_hand_written_defs_entry() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "integer"}, "B0": {"type": "string"}},
+            "properties": {
+                "h": {"$ref": "#/$defs/B"},
+                "s": {"properties": {"x": {"$ref": "#/$defs/B0"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_beside_different_hand_written_defs(ReverseCodeGenSettings::default())
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_merges_a_definitions_entry_into_an_equal_generated_type() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {
+                "g": {"$ref": "#/$defs/B"},
+                "s": {"properties": {"x": {"$ref": "#/$defs/B"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_beside_equal_generated(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_suffixes_a_definitions_entry_and_a_different_generated_type() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"B0": {"type": "integer"}, "B1": {"type": "string"}},
+            "properties": {
+                "g": {"$ref": "#/definitions/B0"},
+                "s": {"properties": {"x": {"$ref": "#/definitions/B1"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_beside_different_generated(settings_for(TargetDialect::Draft07)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_resolves_bare_defs_ref_to_the_unique_nested_definitions_entry() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"Inner": {"type": "string"}, "Outer": {"type": "object"}},
+            "properties": {"s": {"$ref": "#/$defs/Inner"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            ReverseCodeGenSettings::default(),
+            serde_json::json!({
+                "$defs": {
+                    "Outer": {"type": "object", "definitions": {"Inner": {"type": "string"}}}
+                },
+                "$ref": "#/$defs/Inner"
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_never_resolves_bare_defs_ref_to_a_top_level_definitions_entry() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"Inner0": {"type": "string"}, "Inner1": {"type": "integer"}, "Outer": {"type": "object"}},
+            "properties": {"s": {"$ref": "#/$defs/Inner0"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            ReverseCodeGenSettings::default(),
+            serde_json::json!({
+                "$defs": {"Outer": {"type": "object", "$defs": {"Inner": {"type": "string"}}}},
+                "definitions": {"Inner": {"type": "integer"}},
+                "$ref": "#/$defs/Inner"
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_reuses_the_entries_of_an_equal_standalone_schema_with_definitions() {
+        let standalone: serde_json::Value = serde_json::json!({
+            "definitions": {"B": {"type": "string"}},
+            "properties": {"x": {"$ref": "#/definitions/B"}}
+        });
+        let mut generator: SchemaGenerator = SchemaGenerator::default();
+        let first: JsonSchema = generator
+            .inline_subschema(serde_json::from_value(standalone.clone()).expect("a schema"));
+        let second: JsonSchema =
+            generator.inline_subschema(serde_json::from_value(standalone).expect("a schema"));
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {
+                "a": {"properties": {"x": {"$ref": "#/$defs/B"}}},
+                "b": {"properties": {"x": {"$ref": "#/$defs/B"}}}
+            }
+        });
+        let actual: serde_json::Value = generator
+            .into_root_schema(object_schema(&[("a", first), ("b", second)]))
+            .expect("generated")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// Tests that every `$ref` of each scenario, built for the enclosing module's `DIALECT`,
+    /// resolves in the model and in the document.
+    macro_rules! no_dangling_refs {
+        ($($scenario:ident => $model:ident, $document:ident;)*) => {
+            $(
+                #[test]
+                fn $model() {
+                    let expected: Vec<String> = Vec::new();
+                    let model: serde_json::Value =
+                        serde_json::to_value($scenario(settings_for(DIALECT)).schema())
+                            .expect("json");
+                    let actual: Vec<String> = dangling_refs(&model);
+                    assert_eq!(expected, actual);
+                }
+
+                #[test]
+                fn $document() {
+                    let expected: Vec<String> = Vec::new();
+                    let actual: Vec<String> =
+                        dangling_refs(&$scenario(settings_for(DIALECT)).to_value());
+                    assert_eq!(expected, actual);
+                }
+            )*
+        };
+    }
+
+    /// Tests that the model and the document of each scenario, built for the enclosing
+    /// module's `DIALECT`, accept the valid instance and reject the invalid one.
+    macro_rules! model_and_document_agree {
+        ($($scenario:ident => $name:ident, [$valid:tt, $invalid:tt];)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    let instances: [serde_json::Value; 2] =
+                        [serde_json::json!($valid), serde_json::json!($invalid)];
+                    let expected: Vec<Vec<bool>> = vec![vec![true, false]; 2];
+                    let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+                        &$scenario(settings_for(DIALECT)),
+                        &instances,
+                    );
+                    assert_eq!(expected, actual);
+                }
+            )*
+        };
+    }
+
+    /// The inlined-definitions tests of the enclosing module's `DIALECT`.
+    macro_rules! inlined_definitions_tests {
+        () => {
+            no_dangling_refs! {
+                inlined_definitions_ref => definitions_ref_resolves_in_the_model, definitions_ref_resolves_in_the_document;
+                inlined_defs_ref => defs_ref_resolves_in_the_model, defs_ref_resolves_in_the_document;
+                inlined_both_containers => both_containers_resolves_in_the_model, both_containers_resolves_in_the_document;
+                inlined_same_name_equal_in_both_containers => same_name_equal_in_both_containers_resolves_in_the_model, same_name_equal_in_both_containers_resolves_in_the_document;
+                inlined_same_name_different_in_both_containers => same_name_different_in_both_containers_resolves_in_the_model, same_name_different_in_both_containers_resolves_in_the_document;
+                inlined_with_nested_resource => with_nested_resource_resolves_in_the_model, with_nested_resource_resolves_in_the_document;
+                inlined_with_resource_entry => with_resource_entry_resolves_in_the_model, with_resource_entry_resolves_in_the_document;
+                inlined_ref_into_a_definition => ref_into_a_definition_resolves_in_the_model, ref_into_a_definition_resolves_in_the_document;
+                inlined_definition_ref_to_another => definition_ref_to_another_resolves_in_the_model, definition_ref_to_another_resolves_in_the_document;
+                inlined_recursive_definition => recursive_definition_resolves_in_the_model, recursive_definition_resolves_in_the_document;
+                inlined_only_a_ref => only_a_ref_resolves_in_the_model, only_a_ref_resolves_in_the_document;
+                inlined_nested_containers => nested_containers_resolves_in_the_model, nested_containers_resolves_in_the_document;
+                inlined_with_property_named_definitions => with_property_named_definitions_resolves_in_the_model, with_property_named_definitions_resolves_in_the_document;
+                inlined_beside_equal_hand_written_defs => beside_equal_hand_written_defs_resolves_in_the_model, beside_equal_hand_written_defs_resolves_in_the_document;
+                inlined_beside_different_hand_written_defs => beside_different_hand_written_defs_resolves_in_the_model, beside_different_hand_written_defs_resolves_in_the_document;
+                inlined_beside_equal_hand_written_definitions => beside_equal_hand_written_definitions_resolves_in_the_model, beside_equal_hand_written_definitions_resolves_in_the_document;
+                inlined_beside_different_hand_written_definitions => beside_different_hand_written_definitions_resolves_in_the_model, beside_different_hand_written_definitions_resolves_in_the_document;
+                inlined_beside_equal_generated => beside_equal_generated_resolves_in_the_model, beside_equal_generated_resolves_in_the_document;
+                inlined_beside_different_generated => beside_different_generated_resolves_in_the_model, beside_different_generated_resolves_in_the_document;
+            }
+
+            model_and_document_agree! {
+                inlined_definitions_ref => the_model_and_the_document_agree_through_definitions_ref, [{"s": {"x": "a"}}, {"s": {"x": 5}}];
+                inlined_same_name_different_in_both_containers => the_model_and_the_document_agree_through_same_name_different_in_both_containers, [{"s": {"x": 5, "y": "a"}}, {"s": {"x": "a", "y": 5}}];
+                inlined_with_nested_resource => the_model_and_the_document_agree_through_with_nested_resource, [{"s": {"x": "a", "r": {"y": 5}}}, {"s": {"x": "a", "r": {"y": "a"}}}];
+                inlined_with_resource_entry => the_model_and_the_document_agree_through_with_resource_entry, [{"s": {"x": "a", "r": {"y": 5}}}, {"s": {"x": "a", "r": {"y": "a"}}}];
+                inlined_ref_into_a_definition => the_model_and_the_document_agree_through_ref_into_a_definition, [{"s": {"x": "a"}}, {"s": {"x": 5}}];
+                inlined_recursive_definition => the_model_and_the_document_agree_through_recursive_definition, [{"s": {"x": {"next": {"value": "a"}}}}, {"s": {"x": {"next": {"value": 5}}}}];
+                inlined_nested_containers => the_model_and_the_document_agree_through_nested_containers, [{"s": {"x": {"i": "a"}, "y": {"d": 5}}}, {"s": {"x": {"i": 5}, "y": {"d": "a"}}}];
+                inlined_beside_different_hand_written_defs => the_model_and_the_document_agree_through_beside_different_hand_written_defs, [{"h": 5, "s": {"x": "a"}}, {"h": "a", "s": {"x": 5}}];
+                inlined_beside_different_hand_written_definitions => the_model_and_the_document_agree_through_beside_different_hand_written_definitions, [{"h": 5, "s": {"x": "a"}}, {"h": "a", "s": {"x": 5}}];
+                inlined_beside_different_generated => the_model_and_the_document_agree_through_beside_different_generated, [{"g": 5, "s": {"x": "a"}}, {"g": "a", "s": {"x": 5}}];
+            }
+        };
+    }
+
+    mod inlined_definitions_draft_04 {
+        use super::*;
+
+        const DIALECT: TargetDialect = TargetDialect::Draft04;
+
+        inlined_definitions_tests!();
+    }
+
+    mod inlined_definitions_draft_06 {
+        use super::*;
+
+        const DIALECT: TargetDialect = TargetDialect::Draft06;
+
+        inlined_definitions_tests!();
+    }
+
+    mod inlined_definitions_draft_07 {
+        use super::*;
+
+        const DIALECT: TargetDialect = TargetDialect::Draft07;
+
+        inlined_definitions_tests!();
+    }
+
+    mod inlined_definitions_draft_2019_09 {
+        use super::*;
+
+        const DIALECT: TargetDialect = TargetDialect::Draft201909;
+
+        inlined_definitions_tests!();
+    }
+
+    mod inlined_definitions_draft_2020_12 {
+        use super::*;
+
+        const DIALECT: TargetDialect = TargetDialect::Draft202012;
+
+        inlined_definitions_tests!();
     }
 }
