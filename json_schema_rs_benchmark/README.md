@@ -11,7 +11,7 @@ member and is **not published** (`publish = false`).
 
 ```sh
 make benchmark_smoke    # correctness only, no timing: every cell of our library + CLI probed once (~25 s warm, ~1 min cold)
-make benchmark          # quick, every library PR: our library + CLI, main vs the working tree (~3-13 min)
+make benchmark          # quick, every PR that can change performance or output: our library + CLI, main vs the working tree (~3-13 min)
 make benchmark_full     # full: every tool, refreshes results.{json,md} (~60 min)
 ```
 

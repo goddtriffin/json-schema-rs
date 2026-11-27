@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# quick_benchmark.sh — the quick benchmark every PR runs (`make benchmark`): our library and CLI
+# quick_benchmark.sh — the quick benchmark (`make benchmark`) every PR that can change performance or output runs: our library and CLI
 # only, on a base commit (default: where the branch left `main`) and on the working tree, built
 # side by side and measured in the same session. It prints the PR body's *Performance* section and
 # never touches the committed results (`make benchmark_full` refreshes those).
@@ -33,8 +33,8 @@
 #   - CLI time and peak RSS (hyperfine), BENCH_QUICK_ROUNDS rounds, each running every cell
 #     with its two sides back to back (base first in odd rounds), on every fixture: codegen,
 #     validate_valid, validate_invalid, and the startup baseline.
-# Reverse codegen is not measured here: its models take minutes to build per side (#102). A PR
-# that changes the derive or reverse codegen runs `make benchmark_full` instead.
+# Reverse codegen is not measured here: its models take minutes to build per side (#102). Only
+# `make benchmark_full`, run before a release, measures it.
 # A side whose isolated/ has no `generated-types` feature (a base older than it) has no
 # generated-types cells, and compare lists the head's apart.
 #

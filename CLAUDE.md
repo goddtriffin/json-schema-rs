@@ -118,8 +118,7 @@ Every change goes through a pull request that a human reviews and merges.
 1. **Work on a feature branch**, never on `main` (e.g. `feat/<topic>`, `fix/<topic>`).
 2. **Review your own changes before opening the PR.** Read the full diff, run `make lint test`,
    and fix what you find. Once it is correct, run the harnesses the PR needs as the final
-   step (requirement 3). Only open a PR that is
-   ready for a human to review.
+   step (requirement 3). Only open a PR that is ready for a human to review.
 3. **Commit, push, and open the PR** once it is ready. Link the issue it closes (`closes #N`).
    Write the body from the [PR template](.github/PULL_REQUEST_TEMPLATE/pull_request_template.md);
    see *Pull request body* below.
