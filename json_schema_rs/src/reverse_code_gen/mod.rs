@@ -452,14 +452,20 @@ impl SchemaGenerator {
             }));
         }
         let model_path: &str = model_definitions_path(target, &path);
-        let aliases_definitions: bool = model_path != path;
+        let aliases: ModelAliases = if model_path != path {
+            ModelAliases::HandWrittenAndGenerated
+        } else if is_draft_4_to_7(target) {
+            ModelAliases::HandWritten
+        } else {
+            ModelAliases::None
+        };
         let (schema, definitions): (JsonSchema, BTreeMap<String, Schema>) =
             if self.resources.is_empty() {
                 let existing: ExistingDefinitions = existing_definitions(&settings, &path, &body);
                 std::mem::take(&mut self.document).finish(
                     body,
                     model_path,
-                    aliases_definitions,
+                    aliases,
                     &existing,
                     &mut errors,
                 )
@@ -468,7 +474,7 @@ impl SchemaGenerator {
                 self.into_root_schema_with_resources(
                     body,
                     model_path,
-                    aliases_definitions,
+                    aliases,
                     &existing,
                     target,
                     &mut errors,
@@ -494,7 +500,7 @@ impl SchemaGenerator {
         mut self,
         body: JsonSchema,
         path: &str,
-        aliases_definitions: bool,
+        aliases: ModelAliases,
         existing: &ExistingDefinitions,
         target: TargetDialect,
         errors: &mut Vec<ReverseCodeGenError>,
@@ -589,7 +595,7 @@ impl SchemaGenerator {
             }
         };
         document.rewrite_refs(&mut body, &resolve);
-        document.finish(body, path, aliases_definitions, existing, errors)
+        document.finish(body, path, aliases, existing, errors)
     }
 
     /// Merges each resource into an earlier one (the document root first) whose `$id` resolves
@@ -867,8 +873,17 @@ impl Scope {
                 "/definitions",
             );
         }
-        let (mut body, definitions): (JsonSchema, BTreeMap<String, Schema>) =
-            self.finish(body, DEFS_PATH, draft_4_to_7, &existing, errors);
+        let (mut body, definitions): (JsonSchema, BTreeMap<String, Schema>) = self.finish(
+            body,
+            DEFS_PATH,
+            if draft_4_to_7 {
+                ModelAliases::HandWrittenAndGenerated
+            } else {
+                ModelAliases::None
+            },
+            &existing,
+            errors,
+        );
         if !definitions.is_empty() {
             let defs: &mut BTreeMap<String, Schema> = body.defs.get_or_insert_with(BTreeMap::new);
             debug_assert!(
@@ -893,13 +908,13 @@ impl Scope {
     /// recursive definitions merge too. A definition that is not merged and whose `$id` is the
     /// `$id` of a hand-written entry is a [`ReverseCodeGenError::DuplicateResourceId`].
     ///
-    /// With `aliases_definitions` (a draft 4-7 target, whose model keeps the definitions in
-    /// `$defs` while the document moves them to `definitions`), `#/definitions/G` and
-    /// `#/$defs/G` name the same definition `G` for every generated definition `G` that is not
-    /// merged into a hand-written entry: the hand-written `#/definitions/G` refs of the body are
-    /// rewritten to the model's `#/$defs/G`, and the hand-written entries are compared in that
-    /// form. A final name never equals a hand-written entry's name in either container, so a ref
-    /// that names a generated definition never targets a hand-written entry.
+    /// On a draft 4-7 target, whose conversion moves `$defs` into `definitions`, `aliases`
+    /// rewrites the refs that the document resolves in the joined container so that the model
+    /// resolves them too (see [`ModelAliases`]): in the body (outside nested resources) and in
+    /// every emitted generated body (outside resources, so a body that is itself a resource
+    /// keeps its own refs), and both sides of the merge comparison are read in that form. A
+    /// final name never equals a hand-written entry's name in either container, so a ref that
+    /// names a generated definition never targets a hand-written entry.
     ///
     /// A hand-written entry that holds one of the generator's provisional `$ref`s (it was built
     /// from [`SchemaGenerator::inline_subschema`] output) never equals a resolved body, so it
@@ -908,10 +923,11 @@ impl Scope {
         self,
         mut body: JsonSchema,
         path: &str,
-        aliases_definitions: bool,
+        aliases: ModelAliases,
         existing: &ExistingDefinitions,
         errors: &mut Vec<ReverseCodeGenError>,
     ) -> (JsonSchema, BTreeMap<String, Schema>) {
+        let hand_written: HandWrittenContainers = HandWrittenContainers::of(&body, aliases);
         let mut definitions: Vec<Definition> = self.definitions;
         let mut canonical: Vec<usize> = (0..definitions.len()).collect();
         merge_equal_hoisted_definitions(&mut definitions, &mut canonical, &mut body);
@@ -934,7 +950,7 @@ impl Scope {
                 let (index, rest): (usize, &str) = parse_provisional_ref(reference)?;
                 Some(format!("{}{rest}", targets[index].as_deref()?))
             };
-            let alias = alias_resolver(aliases_definitions, &final_names, &merged);
+            let alias = alias_resolver(aliases, &final_names, &merged, &hand_written);
             let dropped: Vec<usize> = merged
                 .iter()
                 .copied()
@@ -947,9 +963,17 @@ impl Scope {
                     };
                     if let Some(object) = resolved.as_object_mut() {
                         rewrite_refs(object, &resolve);
+                        if aliases != ModelAliases::None {
+                            rewrite_refs_outside_resources(object, &alias);
+                        }
                     }
-                    serde_json::to_value(&resolved).ok().as_ref()
-                        != Some(entry.normalized_value(&alias).as_ref())
+                    let entry_value: std::borrow::Cow<'_, serde_json::Value> =
+                        if aliases == ModelAliases::None {
+                            std::borrow::Cow::Borrowed(&entry.value)
+                        } else {
+                            entry.normalized_value(&alias)
+                        };
+                    serde_json::to_value(&resolved).ok().as_ref() != Some(entry_value.as_ref())
                 })
                 .collect();
             if dropped.is_empty() {
@@ -960,14 +984,16 @@ impl Scope {
             }
         }
         report_duplicate_ids(&definitions, &canonical, &merged, existing, errors);
-        let alias = alias_resolver(aliases_definitions, &final_names, &merged);
+        let alias = alias_resolver(aliases, &final_names, &merged, &hand_written);
         let resolve = |reference: &str| -> Option<String> {
             let (index, rest): (usize, &str) = parse_provisional_ref(reference)?;
             Some(format!("{}{rest}", targets[index].as_deref()?))
         };
 
         rewrite_refs(&mut body, &resolve);
-        rewrite_refs_outside_nested_resources(&mut body, &alias);
+        if aliases != ModelAliases::None {
+            rewrite_refs_outside_nested_resources(&mut body, &alias);
+        }
         let mut defs: BTreeMap<String, Schema> = BTreeMap::new();
         for (index, definition) in definitions.into_iter().enumerate() {
             if merged.contains(&index) {
@@ -978,6 +1004,10 @@ impl Scope {
             {
                 if let Some(object) = definition_body.as_object_mut() {
                     rewrite_refs(object, &resolve);
+                    // A body that is itself a resource keeps its refs: they resolve against it.
+                    if aliases != ModelAliases::None {
+                        rewrite_refs_outside_resources(object, &alias);
+                    }
                 }
                 defs.insert(name, definition_body);
             }
@@ -1106,31 +1136,122 @@ impl ExistingEntry {
     }
 }
 
-/// The ref rewrite of a draft 4-7 target's model (see [`Scope::finish`]): with `enabled`,
-/// `#/definitions/G` becomes `#/$defs/G` (a tail after `G` is kept) for every definition `G`
-/// that stays generated (its final name is not that of a hand-written entry, which is merged
-/// into instead); without it, nothing is rewritten.
-fn alias_resolver(
-    enabled: bool,
+/// Which refs a scope's 2020-12 model rewrites so that they resolve where the converted
+/// document resolves them (see [`Scope::finish`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelAliases {
+    /// The target keeps `$defs` (or is the model itself): nothing is rewritten.
+    None,
+    /// A draft 4-7 target, whose conversion moves `$defs` into `definitions` and rewrites
+    /// `#/$defs/..` refs: a ref to a hand-written entry names it in the container where the
+    /// model holds it (`#/definitions/H` to a `$defs`-only `H` is `#/$defs/H`, and
+    /// `#/$defs/D` to a `definitions`-only `D` is `#/definitions/D`).
+    HandWritten,
+    /// Also the generated definitions, which the model keeps in `$defs` while the document
+    /// places them in `definitions`: `#/definitions/G` is `#/$defs/G`.
+    HandWrittenAndGenerated,
+}
+
+/// The hand-written entry names of a scope's root, in the two containers a draft 4-7
+/// conversion joins.
+#[derive(Debug, Default)]
+struct HandWrittenContainers {
+    /// Names under `$defs` that `definitions` does not hold.
+    defs_only: BTreeSet<String>,
+    /// Names under `definitions` that `$defs` does not hold.
+    definitions_only: BTreeSet<String>,
+}
+
+impl HandWrittenContainers {
+    fn of(body: &JsonSchema, aliases: ModelAliases) -> Self {
+        if aliases == ModelAliases::None {
+            return HandWrittenContainers::default();
+        }
+        let keys = |map: Option<&BTreeMap<String, Schema>>| -> BTreeSet<String> {
+            map.into_iter().flatten().map(|(k, _)| k.clone()).collect()
+        };
+        let defs: BTreeSet<String> = keys(body.defs.as_ref());
+        let definitions: BTreeSet<String> = keys(body.definitions.as_ref());
+        HandWrittenContainers {
+            defs_only: defs.difference(&definitions).cloned().collect(),
+            definitions_only: definitions.difference(&defs).cloned().collect(),
+        }
+    }
+}
+
+/// The ref rewrite of a draft 4-7 target's model (see [`Scope::finish`] and [`ModelAliases`]):
+/// `#/definitions/N` becomes `#/$defs/N` for every definition `N` that stays generated (its
+/// final name is not that of a hand-written entry, which is merged into instead) and every
+/// hand-written `$defs`-only entry, and `#/$defs/N` becomes `#/definitions/N` for every
+/// hand-written `definitions`-only entry. The token is matched decoded (URI percent-encoding,
+/// then JSON Pointer `~1` / `~0`) and kept as written, with any tail after it.
+fn alias_resolver<'a>(
+    aliases: ModelAliases,
     final_names: &[Option<String>],
     merged: &BTreeSet<usize>,
-) -> impl Fn(&str) -> Option<String> + use<> {
-    let generated: BTreeSet<String> = if enabled {
+    hand_written: &'a HandWrittenContainers,
+) -> impl Fn(&str) -> Option<String> + use<'a> {
+    let generated: BTreeSet<String> = if aliases == ModelAliases::HandWrittenAndGenerated {
         final_names
             .iter()
             .enumerate()
             .filter(|(index, _)| !merged.contains(index))
-            .filter_map(|(_, name)| Some(escape_pointer_token(name.as_deref()?)))
+            .filter_map(|(_, name)| name.clone())
             .collect()
     } else {
         BTreeSet::new()
     };
     move |reference: &str| -> Option<String> {
-        let rest: &str = reference.strip_prefix("#/definitions/")?;
+        if parse_provisional_ref(reference).is_some() {
+            return None;
+        }
+        let (to_defs, rest): (bool, &str) = match reference.strip_prefix("#/definitions/") {
+            Some(rest) => (true, rest),
+            None => (false, reference.strip_prefix("#/$defs/")?),
+        };
         let (token, tail): (&str, &str) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
-        generated
-            .contains(token)
-            .then(|| format!("#{DEFS_PATH}/{token}{tail}"))
+        let name: String = decode_fragment_token(token)?;
+        let container: &str = if to_defs {
+            (generated.contains(&name) || hand_written.defs_only.contains(&name))
+                .then_some(DEFS_PATH)?
+        } else {
+            hand_written
+                .definitions_only
+                .contains(&name)
+                .then_some("/definitions")?
+        };
+        Some(format!("#{container}/{token}{tail}"))
+    }
+}
+
+/// Decodes one JSON Pointer reference token of a URI fragment: URI percent-encoding first
+/// (RFC 6901 §6), then `~1` and `~0`. `None` when an escape is malformed or the bytes are not
+/// UTF-8.
+fn decode_fragment_token(token: &str) -> Option<String> {
+    let unescaped: std::borrow::Cow<'_, str> = if token.contains('%') {
+        let bytes: &[u8] = token.as_bytes();
+        let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut at: usize = 0;
+        while at < bytes.len() {
+            if bytes[at] == b'%' {
+                let hex: &str = token
+                    .get(at + 1..at + 3)
+                    .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
+                decoded.push(u8::from_str_radix(hex, 16).ok()?);
+                at += 3;
+            } else {
+                decoded.push(bytes[at]);
+                at += 1;
+            }
+        }
+        std::borrow::Cow::Owned(String::from_utf8(decoded).ok()?)
+    } else {
+        std::borrow::Cow::Borrowed(token)
+    };
+    if unescaped.contains('~') {
+        crate::json_pointer::decode_token(&unescaped).ok()
+    } else {
+        Some(unescaped.into_owned())
     }
 }
 
@@ -2312,9 +2433,9 @@ impl ToJsonSchema for std::net::Ipv6Addr {
 #[cfg(test)]
 mod tests {
     use super::{
-        GeneratedSchema, GeneratedSchemaResult, MetaSchema, NumberFormats, ReverseCodeGenError,
-        ReverseCodeGenResult, ReverseCodeGenSettings, SchemaGenerator, TargetDialect, ToJsonSchema,
-        root_schema_for,
+        GeneratedSchema, GeneratedSchemaResult, HandWrittenContainers, MetaSchema, ModelAliases,
+        NumberFormats, ReverseCodeGenError, ReverseCodeGenResult, ReverseCodeGenSettings,
+        SchemaGenerator, TargetDialect, ToJsonSchema, alias_resolver, root_schema_for,
     };
     use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
     use std::collections::{BTreeMap, BTreeSet};
@@ -6021,5 +6142,387 @@ mod tests {
 
     mod nested_resource_ref_draft_07 {
         resource_alias_tests!(TargetDialect::Draft07);
+    }
+
+    // --- Every ref the model of a draft 4-7 target holds resolves where the converted document
+    // resolves it: refs in generated bodies, percent-encoded names, and hand-written entries
+    // of the container conversion joins ---
+
+    /// The refs `alias_resolver` gives for a root with a hand-written `$defs`-only `H`, a
+    /// `definitions`-only `D`, an `S` in both, and the generated definitions `G`, `A B` and
+    /// `a/b`.
+    #[test]
+    fn the_model_alias_rewrites_each_ref_to_the_container_the_model_holds_it_in() {
+        let body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"H": {}, "S": {}},
+            "definitions": {"D": {}, "S": {}}
+        }))
+        .expect("a schema");
+        let hand_written: HandWrittenContainers =
+            HandWrittenContainers::of(&body, ModelAliases::HandWrittenAndGenerated);
+        let final_names: Vec<Option<String>> = vec![
+            Some("G".to_string()),
+            Some("A B".to_string()),
+            Some("a/b".to_string()),
+        ];
+        let alias = alias_resolver(
+            ModelAliases::HandWrittenAndGenerated,
+            &final_names,
+            &BTreeSet::new(),
+            &hand_written,
+        );
+        let references: [&str; 13] = [
+            "#/definitions/G",
+            "#/definitions/G/properties/x",
+            "#/definitions/A%20B",
+            "#/definitions/a~1b",
+            "#/definitions/a%7E1b",
+            "#/definitions/H",
+            "#/definitions/S",
+            "#/definitions/D",
+            "#/$defs/D",
+            "#/$defs/H",
+            "#/$defs/G",
+            "#/definitions/A%2",
+            "#/definitions/Missing",
+        ];
+        let expected: Vec<Option<String>> = vec![
+            Some("#/$defs/G".to_string()),
+            Some("#/$defs/G/properties/x".to_string()),
+            Some("#/$defs/A%20B".to_string()),
+            Some("#/$defs/a~1b".to_string()),
+            Some("#/$defs/a%7E1b".to_string()),
+            Some("#/$defs/H".to_string()),
+            None,
+            None,
+            Some("#/definitions/D".to_string()),
+            None,
+            None,
+            None,
+            None,
+        ];
+        let actual: Vec<Option<String>> = references
+            .iter()
+            .map(|reference: &&str| alias(reference))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn the_hand_written_model_alias_leaves_generated_definitions_alone() {
+        let body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"H": {}}
+        }))
+        .expect("a schema");
+        let hand_written: HandWrittenContainers =
+            HandWrittenContainers::of(&body, ModelAliases::HandWritten);
+        let final_names: Vec<Option<String>> = vec![Some("G".to_string())];
+        let alias = alias_resolver(
+            ModelAliases::HandWritten,
+            &final_names,
+            &BTreeSet::new(),
+            &hand_written,
+        );
+        let expected: Vec<Option<String>> = vec![None, Some("#/$defs/H".to_string())];
+        let actual: Vec<Option<String>> = vec![alias("#/definitions/G"), alias("#/definitions/H")];
+        assert_eq!(expected, actual);
+    }
+
+    /// A generated `A` whose body refs the generated `B` as `#/definitions/B`, beside a root
+    /// property `b` of `B`, and (with `twin`) a hand-written `definitions` entry `A` equal to it.
+    fn generated_with_definitions_ref_in_a_generated_body(
+        dialect: TargetDialect,
+        twin: bool,
+    ) -> GeneratedSchema {
+        let a_body: serde_json::Value = serde_json::json!({
+            "type": "object",
+            "properties": {"x": {"$ref": "#/definitions/B"}}
+        });
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let a_schema: JsonSchema = serde_json::from_value(a_body.clone()).expect("a schema");
+        let a: JsonSchema = generator.named_subschema("x::A", "A", |_| a_schema);
+        let b: JsonSchema = generator.named_subschema("x::B", "B", |_| string_schema());
+        let mut body: JsonSchema = object_schema(&[("a", a), ("b", b)]);
+        if twin {
+            body.definitions = Some(BTreeMap::from([(
+                "A".to_string(),
+                serde_json::from_value(a_body).expect("a schema"),
+            )]));
+        }
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    /// A generated `A B` that only the hand-written root property `p` refs, as
+    /// `#/definitions/A%20B`.
+    fn generated_with_percent_encoded_definitions_ref(dialect: TargetDialect) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        // Registers the definition; the generator's own ref to it is not used.
+        let _: JsonSchema = generator.named_subschema("x::AB", "A B", |_| string_schema());
+        let p: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$ref": "#/definitions/A%20B"
+        }))
+        .expect("a schema");
+        let body: JsonSchema = object_schema(&[("p", p)]);
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    /// A hand-written root with the `$defs`-only string `H` and the `definitions`-only integer
+    /// `D`, which its properties `h` and `d` ref through the other container's form.
+    fn generated_with_cross_container_refs(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        let body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "$defs": {"H": {"type": "string"}},
+            "definitions": {"D": {"type": "integer"}},
+            "properties": {
+                "h": {"$ref": "#/definitions/H"},
+                "d": {"$ref": "#/$defs/D"}
+            }
+        }))
+        .expect("a schema");
+        SchemaGenerator::new(settings)
+            .into_root_schema(body)
+            .expect("generated")
+    }
+
+    /// A generated string `G` (root property `g`) beside a generated resource `R` (root
+    /// property `r`) whose own hand-written `definitions` entry `G` is an integer that its
+    /// property `a` refs as `#/definitions/G`.
+    fn generated_with_generated_resource_defining_its_own_definition(
+        dialect: TargetDialect,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let g: JsonSchema = generator.named_subschema("x::G", "G", |_| string_schema());
+        let r: JsonSchema = generator.resource_subschema("x::R", "R", "http://x.test/r", |_| {
+            serde_json::from_value(serde_json::json!({
+                "$id": "http://x.test/r",
+                "definitions": {"G": {"type": "integer"}},
+                "properties": {"a": {"$ref": "#/definitions/G"}}
+            }))
+            .expect("a schema")
+        });
+        generator
+            .into_root_schema(object_schema(&[("g", g), ("r", r)]))
+            .expect("generated")
+    }
+
+    /// Whether each of `instances` is valid against the model and against the document of
+    /// `generated`, in that order.
+    fn model_and_document_verdicts(
+        generated: &GeneratedSchema,
+        instances: &[serde_json::Value],
+    ) -> Vec<Vec<bool>> {
+        let model: serde_json::Value = serde_json::to_value(generated.schema()).expect("json");
+        let document: serde_json::Value = generated.to_value();
+        [&model, &document]
+            .iter()
+            .map(|schema: &&serde_json::Value| {
+                instances
+                    .iter()
+                    .map(|instance: &serde_json::Value| instance_is_valid(schema, instance))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The tests of one draft 4-7 target.
+    macro_rules! model_alias_tests {
+        ($dialect:expr, $schema_uri:literal) => {
+            use super::*;
+
+            #[test]
+            fn a_definitions_ref_in_a_generated_body_resolves_in_the_model() {
+                let expected: serde_json::Value = serde_json::json!({
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "$defs": {
+                        "A": {"type": "object", "properties": {"x": {"$ref": "#/$defs/B"}}},
+                        "B": {"type": "string"}
+                    },
+                    "properties": {"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/B"}}
+                });
+                let actual: serde_json::Value = serde_json::to_value(
+                    generated_with_definitions_ref_in_a_generated_body($dialect, false).schema(),
+                )
+                .expect("json");
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn the_model_and_the_document_agree_through_a_definitions_ref_in_a_generated_body() {
+                let instances: [serde_json::Value; 2] = [
+                    serde_json::json!({"a": {"x": "s"}}),
+                    serde_json::json!({"a": {"x": 5}}),
+                ];
+                let expected: Vec<Vec<bool>> = vec![vec![true, false]; 2];
+                let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+                    &generated_with_definitions_ref_in_a_generated_body($dialect, false),
+                    &instances,
+                );
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn a_generated_body_with_a_definitions_ref_merges_into_its_equal_hand_written_twin_in_the_model(
+            ) {
+                let expected: serde_json::Value = serde_json::json!({
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "definitions": {
+                        "A": {"type": "object", "properties": {"x": {"$ref": "#/$defs/B"}}}
+                    },
+                    "$defs": {"B": {"type": "string"}},
+                    "properties": {
+                        "a": {"$ref": "#/definitions/A"},
+                        "b": {"$ref": "#/$defs/B"}
+                    }
+                });
+                let actual: serde_json::Value = serde_json::to_value(
+                    generated_with_definitions_ref_in_a_generated_body($dialect, true).schema(),
+                )
+                .expect("json");
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn a_generated_body_with_a_definitions_ref_merges_into_its_equal_hand_written_twin_in_the_document(
+            ) {
+                let expected: serde_json::Value = serde_json::json!({
+                    "$schema": $schema_uri,
+                    "type": "object",
+                    "definitions": {
+                        "A": {"type": "object", "properties": {"x": {"$ref": "#/definitions/B"}}},
+                        "B": {"type": "string"}
+                    },
+                    "properties": {
+                        "a": {"$ref": "#/definitions/A"},
+                        "b": {"$ref": "#/definitions/B"}
+                    }
+                });
+                let actual: serde_json::Value =
+                    generated_with_definitions_ref_in_a_generated_body($dialect, true).to_value();
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn a_percent_encoded_definitions_ref_to_a_generated_definition_resolves_in_the_model() {
+                let expected: serde_json::Value = serde_json::json!({
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "$defs": {"A B": {"type": "string"}},
+                    "properties": {"p": {"$ref": "#/$defs/A%20B"}}
+                });
+                let actual: serde_json::Value = serde_json::to_value(
+                    generated_with_percent_encoded_definitions_ref($dialect).schema(),
+                )
+                .expect("json");
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn the_model_and_the_document_agree_through_a_percent_encoded_definitions_ref() {
+                let instances: [serde_json::Value; 2] =
+                    [serde_json::json!({"p": "s"}), serde_json::json!({"p": 5})];
+                let expected: Vec<Vec<bool>> = vec![vec![true, false]; 2];
+                let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+                    &generated_with_percent_encoded_definitions_ref($dialect),
+                    &instances,
+                );
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn a_ref_to_a_hand_written_entry_through_the_other_container_resolves_in_the_model() {
+                let expected: serde_json::Value = serde_json::json!({
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "$defs": {"H": {"type": "string"}},
+                    "definitions": {"D": {"type": "integer"}},
+                    "properties": {
+                        "h": {"$ref": "#/$defs/H"},
+                        "d": {"$ref": "#/definitions/D"}
+                    }
+                });
+                let actual: serde_json::Value = serde_json::to_value(
+                    generated_with_cross_container_refs(settings_for($dialect)).schema(),
+                )
+                .expect("json");
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn the_model_and_the_document_agree_through_a_ref_to_the_other_container() {
+                let instances: [serde_json::Value; 4] = [
+                    serde_json::json!({"h": "s"}),
+                    serde_json::json!({"h": 5}),
+                    serde_json::json!({"d": 5}),
+                    serde_json::json!({"d": "s"}),
+                ];
+                let expected: Vec<Vec<bool>> = vec![vec![true, false, true, false]; 2];
+                let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+                    &generated_with_cross_container_refs(settings_for($dialect)),
+                    &instances,
+                );
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn the_model_and_the_document_agree_through_a_generated_resource_ref_to_its_own_entry(
+            ) {
+                let instances: [serde_json::Value; 4] = [
+                    serde_json::json!({"r": {"a": 5}}),
+                    serde_json::json!({"r": {"a": "s"}}),
+                    serde_json::json!({"g": "s"}),
+                    serde_json::json!({"g": 5}),
+                ];
+                let expected: Vec<Vec<bool>> = vec![vec![true, false, true, false]; 2];
+                let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+                    &generated_with_generated_resource_defining_its_own_definition($dialect),
+                    &instances,
+                );
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn the_model_and_the_document_agree_through_a_ref_to_the_other_container_under_a_custom_path(
+            ) {
+                let settings: ReverseCodeGenSettings = ReverseCodeGenSettings {
+                    definitions_path: Some("/custom".to_string()),
+                    ..settings_for($dialect)
+                };
+                let instances: [serde_json::Value; 4] = [
+                    serde_json::json!({"h": "s"}),
+                    serde_json::json!({"h": 5}),
+                    serde_json::json!({"d": 5}),
+                    serde_json::json!({"d": "s"}),
+                ];
+                let expected: Vec<Vec<bool>> = vec![vec![true, false, true, false]; 2];
+                let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+                    &generated_with_cross_container_refs(settings),
+                    &instances,
+                );
+                assert_eq!(expected, actual);
+            }
+        };
+    }
+
+    mod model_alias_draft_04 {
+        model_alias_tests!(
+            TargetDialect::Draft04,
+            "http://json-schema.org/draft-04/schema#"
+        );
+    }
+
+    mod model_alias_draft_06 {
+        model_alias_tests!(
+            TargetDialect::Draft06,
+            "http://json-schema.org/draft-06/schema#"
+        );
+    }
+
+    mod model_alias_draft_07 {
+        model_alias_tests!(
+            TargetDialect::Draft07,
+            "http://json-schema.org/draft-07/schema#"
+        );
     }
 }
