@@ -1134,6 +1134,22 @@ struct HyperfineRun {
 #[derive(Deserialize)]
 struct HyperfineValue {
     value: f64,
+    unit: String,
+}
+
+impl HyperfineValue {
+    /// The value, or a reason when its unit is not `expected` (a different unit would silently
+    /// skew every statistic).
+    fn in_unit(&self, name: &str, expected: &str) -> Result<f64, String> {
+        if self.unit == expected {
+            Ok(self.value)
+        } else {
+            Err(format!(
+                "hyperfine {name} has unit `{}`, expected `{expected}`",
+                self.unit
+            ))
+        }
+    }
 }
 
 /// Parse a hyperfine export (one result) into CLI-tier measurements for a cell: a time
@@ -1196,34 +1212,55 @@ pub fn parse_hyperfine_samples(json: &str) -> Result<HyperfineSamples, String> {
     if result.measurements.is_empty() {
         return Err("hyperfine result has no timing samples".to_owned());
     }
+    let times: Vec<f64> = result
+        .measurements
+        .iter()
+        .map(|run: &HyperfineRun| run.time_wall_clock.in_unit("time_wall_clock", "second"))
+        .collect::<Result<_, String>>()?;
+    let peak_memory_bytes: Vec<f64> = result
+        .measurements
+        .iter()
+        .filter_map(|run: &HyperfineRun| run.memory_peak_resident.as_ref())
+        .map(|memory: &HyperfineValue| memory.in_unit("memory_peak_resident", "byte"))
+        .collect::<Result<_, String>>()?;
     Ok(HyperfineSamples {
-        times: result
-            .measurements
-            .iter()
-            .map(|run: &HyperfineRun| run.time_wall_clock.value)
-            .collect(),
-        peak_memory_bytes: result
-            .measurements
-            .iter()
-            .filter_map(|run: &HyperfineRun| run.memory_peak_resident.as_ref())
-            .map(|memory: &HyperfineValue| memory.value)
-            .collect(),
+        times,
+        peak_memory_bytes,
     })
 }
 
-/// Fail a side whose CLI exports were listed in `cli/index.tsv` (`listed`, for the tool being
-/// compared) but none of which parsed (`parsed`): the CLI tier was requested and lost.
+/// Read the entries of `cli/index.tsv` for the CLI tier that was requested, optionally only
+/// those of `tool`.
+///
+/// The scripts create `cli/index.tsv` (empty) up front when the CLI tier runs and append a line
+/// only after hyperfine succeeded, so a malformed line, or no entry at all, means the harness
+/// lost the tier: an error, never a skip.
 ///
 /// # Errors
 ///
-/// Returns a reason when `listed` is non-zero and `parsed` is zero.
-pub fn ensure_cli_exports_parsed(listed: usize, parsed: usize) -> Result<(), String> {
-    if listed > 0 && parsed == 0 {
+/// Returns a reason naming the first malformed line, or when no entry matches.
+pub fn cli_index_entries(text: &str, tool: Option<&str>) -> Result<Vec<IndexEntry>, String> {
+    let parsed: TsvParse<IndexEntry> = parse_index_tsv(text);
+    if let Some(skipped) = parsed.skipped.first() {
         return Err(format!(
-            "all {listed} CLI exports were skipped (none parsed as hyperfine 2.x JSON)"
+            "line {}: malformed index entry: {}",
+            skipped.line, skipped.reason
         ));
     }
-    Ok(())
+    let entries: Vec<IndexEntry> = parsed
+        .rows
+        .into_iter()
+        .filter(|entry: &IndexEntry| tool.is_none_or(|wanted: &str| entry.tool == wanted))
+        .collect();
+    if entries.is_empty() {
+        return Err(tool.map_or_else(
+            || "the CLI tier was requested but measured nothing (no entries)".to_owned(),
+            |tool: &str| {
+                format!("the CLI tier was requested but measured nothing for `{tool}` (no entries)")
+            },
+        ));
+    }
+    Ok(entries)
 }
 
 /// The subset of criterion's `benchmark.json` the aggregator reads.
@@ -2042,12 +2079,12 @@ mod tests {
 
     #[test]
     fn parse_hyperfine_samples_reads_a_real_hyperfine_2_export() {
+        let expected: Result<HyperfineSamples, String> = Ok(HyperfineSamples {
+            times: vec![0.001_362_41, 0.001_314_069_000_000_000_2],
+            peak_memory_bytes: vec![3_473_408.0, 3_473_408.0],
+        });
         let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(HYPERFINE_2_EXPORT);
-        let expected_runs: usize = 2;
-        let actual_runs: (usize, usize) = actual
-            .map(|samples: HyperfineSamples| (samples.times.len(), samples.peak_memory_bytes.len()))
-            .expect("hyperfine 2.0 export parses");
-        assert_eq!((expected_runs, expected_runs), actual_runs);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -2091,7 +2128,8 @@ mod tests {
 
     #[test]
     fn parse_hyperfine_json_without_memory_yields_time_only() {
-        let json: &str = r#"{"results":[{"measurements":[{"time_wall_clock":{"value":0.5}}]}]}"#;
+        let json: &str =
+            r#"{"results":[{"measurements":[{"time_wall_clock":{"value":0.5,"unit":"second"}}]}]}"#;
         let expected: Result<Vec<Measurement>, String> = Ok(vec![measurement(
             Tier::Cli,
             "ours",
@@ -2108,8 +2146,8 @@ mod tests {
     #[test]
     fn parse_hyperfine_samples_keeps_every_run() {
         let json: &str = r#"{"results":[{"measurements":[
-            {"time_wall_clock":{"value":0.5},"memory_peak_resident":{"value":1024.0}},
-            {"time_wall_clock":{"value":0.25},"memory_peak_resident":{"value":2048.0}}]}]}"#;
+            {"time_wall_clock":{"value":0.5,"unit":"second"},"memory_peak_resident":{"value":1024.0,"unit":"byte"}},
+            {"time_wall_clock":{"value":0.25,"unit":"second"},"memory_peak_resident":{"value":2048.0,"unit":"byte"}}]}]}"#;
         let expected: Result<HyperfineSamples, String> = Ok(HyperfineSamples {
             times: vec![0.5, 0.25],
             peak_memory_bytes: vec![1024.0, 2048.0],
@@ -2121,32 +2159,81 @@ mod tests {
     #[test]
     fn parse_hyperfine_samples_rejects_the_hyperfine_1_shape() {
         let json: &str = r#"{"results":[{"times":[0.5]}]}"#;
-        let expected: Result<HyperfineSamples, String> = Err(
-            "invalid hyperfine JSON: missing field `measurements` at line 1 column 27".to_owned(),
+        let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(json);
+        let reason: String = actual.expect_err("a hyperfine 1.x export is rejected");
+        assert!(
+            reason.starts_with("invalid hyperfine JSON: missing field `measurements`"),
+            "{reason}"
         );
+    }
+
+    #[test]
+    fn parse_hyperfine_samples_rejects_a_non_second_time_unit() {
+        let json: &str = r#"{"results":[{"measurements":[{"time_wall_clock":{"value":5.0,"unit":"millisecond"}}]}]}"#;
+        let expected: Result<HyperfineSamples, String> =
+            Err("hyperfine time_wall_clock has unit `millisecond`, expected `second`".to_owned());
         let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(json);
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn ensure_cli_exports_parsed_fails_when_every_export_was_skipped() {
-        let expected: Result<(), String> =
-            Err("all 3 CLI exports were skipped (none parsed as hyperfine 2.x JSON)".to_owned());
-        let actual: Result<(), String> = ensure_cli_exports_parsed(3, 0);
+    fn parse_hyperfine_samples_rejects_a_non_byte_memory_unit() {
+        let json: &str = r#"{"results":[{"measurements":[{"time_wall_clock":{"value":1.0,"unit":"second"},
+            "memory_peak_resident":{"value":3.0,"unit":"kilobyte"}}]}]}"#;
+        let expected: Result<HyperfineSamples, String> =
+            Err("hyperfine memory_peak_resident has unit `kilobyte`, expected `byte`".to_owned());
+        let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(json);
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn ensure_cli_exports_parsed_passes_when_some_export_parsed() {
-        let expected: Result<(), String> = Ok(());
-        let actual: Result<(), String> = ensure_cli_exports_parsed(3, 1);
+    fn parse_hyperfine_samples_rejects_a_missing_unit() {
+        let json: &str = r#"{"results":[{"measurements":[{"time_wall_clock":{"value":1.0}}]}]}"#;
+        let actual: Result<HyperfineSamples, String> = parse_hyperfine_samples(json);
+        assert!(actual.is_err());
+    }
+
+    fn index_line(tool: &str) -> String {
+        format!("{tool}\tsmall/config\tcodegen\tcli/runs/{tool}.json\n")
+    }
+
+    #[test]
+    fn cli_index_entries_keeps_the_requested_tool() {
+        let text: String = format!("{}{}", index_line("ours"), index_line("other"));
+        let actual: Result<Vec<IndexEntry>, String> = cli_index_entries(&text, Some("ours"));
+        let expected: Result<Vec<IndexEntry>, String> = Ok(vec![IndexEntry {
+            tool: "ours".to_owned(),
+            fixture: "small/config".to_owned(),
+            operation: Operation::Codegen,
+            json_path: "cli/runs/ours.json".to_owned(),
+        }]);
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn ensure_cli_exports_parsed_passes_when_no_cli_exports_were_listed() {
-        let expected: Result<(), String> = Ok(());
-        let actual: Result<(), String> = ensure_cli_exports_parsed(0, 0);
+    fn cli_index_entries_rejects_a_malformed_line() {
+        let text: String = format!("{}ours\tsmall/config\tnope\tx.json\n", index_line("ours"));
+        let expected: Result<Vec<IndexEntry>, String> =
+            Err("line 2: malformed index entry: unknown operation `nope`".to_owned());
+        let actual: Result<Vec<IndexEntry>, String> = cli_index_entries(&text, Some("ours"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn cli_index_entries_rejects_an_empty_index() {
+        let expected: Result<Vec<IndexEntry>, String> =
+            Err("the CLI tier was requested but measured nothing (no entries)".to_owned());
+        let actual: Result<Vec<IndexEntry>, String> = cli_index_entries("", None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn cli_index_entries_rejects_an_index_with_no_entry_for_the_tool() {
+        let expected: Result<Vec<IndexEntry>, String> = Err(
+            "the CLI tier was requested but measured nothing for `ours` (no entries)".to_owned(),
+        );
+        let actual: Result<Vec<IndexEntry>, String> =
+            cli_index_entries(&index_line("other"), Some("ours"));
         assert_eq!(expected, actual);
     }
 

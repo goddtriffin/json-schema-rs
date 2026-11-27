@@ -11,7 +11,9 @@
 //! - `RAW_DIR/tools.tsv`: version and language/runtime of each tool.
 //! - `RAW_DIR/code_size.tsv`: our codegen's generated code size per fixture (`code_size`).
 //!
-//! Malformed lines and unreadable per-cell files are skipped with a warning on stderr naming
+//! The CLI tier is strict: `cli/index.tsv` (created empty when the tier runs; absent means not
+//! requested) must have entries and well-formed lines, and every export it lists must exist and
+//! parse, or the run fails. Other malformed lines and unreadable per-cell files are skipped with a warning on stderr naming
 //! the file (and line); they never fail the run silently. All parsing and rendering logic is
 //! in the library; this binary only does file I/O.
 //!
@@ -22,8 +24,8 @@ use clap::{Arg, Command};
 use json_schema_rs_benchmark::code_size::parse_code_size_tsv;
 use json_schema_rs_benchmark::{
     BenchmarkResults, CriterionId, IndexEntry, Measurement, Stats, Tier, TsvParse,
-    criterion_benchmark_files, parse_compat_tsv, parse_criterion_benchmark, parse_criterion_stats,
-    parse_heap_tsv, parse_hyperfine_json, parse_index_tsv, parse_tools_tsv,
+    cli_index_entries, criterion_benchmark_files, parse_compat_tsv, parse_criterion_benchmark,
+    parse_criterion_stats, parse_heap_tsv, parse_hyperfine_json, parse_tools_tsv,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -104,7 +106,8 @@ fn run(input: &Path, criterion: Option<&Path>, output: &Path) -> Result<(), Stri
 
     let index_path: PathBuf = input.join("cli").join("index.tsv");
     if let Some(text) = read_optional(&index_path)? {
-        let entries: Vec<IndexEntry> = report_skipped(&index_path, parse_index_tsv(&text));
+        let entries: Vec<IndexEntry> = cli_index_entries(&text, None)
+            .map_err(|reason: String| format!("{}: {reason}", index_path.display()))?;
         results
             .measurements
             .extend(hyperfine_measurements(input, &entries)?);
@@ -167,8 +170,9 @@ fn read_optional(path: &Path) -> Result<Option<String>, String> {
     }
 }
 
-/// Load the hyperfine export of every CLI index entry. An unreadable or malformed export is
-/// skipped with a warning naming the file.
+/// Load the hyperfine export of every CLI index entry. A listed export that is missing or
+/// malformed is an error naming the file: the scripts list an export only after hyperfine
+/// succeeded.
 fn hyperfine_measurements(
     input: &Path,
     entries: &[IndexEntry],
@@ -176,19 +180,16 @@ fn hyperfine_measurements(
     let mut out: Vec<Measurement> = Vec::new();
     for entry in entries {
         let path: PathBuf = input.join(&entry.json_path);
-        let Some(text) = read_optional(&path)? else {
-            eprintln!(
-                "aggregate: warning: {}: hyperfine export listed in cli/index.tsv is missing",
+        let text: String = read_optional(&path)?.ok_or_else(|| {
+            format!(
+                "{}: hyperfine export listed in cli/index.tsv is missing",
                 path.display()
-            );
-            continue;
-        };
-        match parse_hyperfine_json(&text, &entry.tool, &entry.fixture, entry.operation) {
-            Ok(measurements) => out.extend(measurements),
-            Err(reason) => {
-                eprintln!("aggregate: warning: {}: skipped: {reason}", path.display());
-            }
-        }
+            )
+        })?;
+        out.extend(
+            parse_hyperfine_json(&text, &entry.tool, &entry.fixture, entry.operation)
+                .map_err(|reason: String| format!("{}: {reason}", path.display()))?,
+        );
     }
     Ok(out)
 }
