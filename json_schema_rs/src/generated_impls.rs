@@ -276,6 +276,9 @@ macro_rules! string_enum {
 #[macro_export]
 macro_rules! schema_default {
     ($name:ident, $json:literal) => {
+        // The type may be `#[deprecated]` (a schema's `deprecated`); the impl is generated code,
+        // so naming it is not the consumer's use of it.
+        #[allow(deprecated)]
         impl ::core::default::Default for $name {
             /// The schema's `default`.
             fn default() -> Self {

@@ -232,11 +232,15 @@ macro_rules! builder {
     };
     (@impl [$($validated:ident)?] $name:ident { $($kind:ident $field:ident : $ty:ty),* }) => {
         #[doc = concat!("The builder of [`", stringify!($name), "`](super::", stringify!($name), ").")]
+        // A field's type may be a `#[deprecated]` struct (a schema's `deprecated`); the builder is
+        // generated code, so naming that type is not the consumer's use of it.
+        #[allow(deprecated)]
         #[derive(Debug, Clone, Default)]
         pub struct $name {
             $($field: $crate::BuilderField<$ty>,)*
         }
 
+        #[allow(deprecated)]
         impl $name {
             $(
                 #[doc = concat!("Sets `", stringify!($field), "` to `value`, converted into its type.")]
@@ -252,6 +256,7 @@ macro_rules! builder {
             )*
         }
 
+        #[allow(deprecated)]
         impl super::$name {
             /// A builder of this struct, every field unset.
             #[must_use]
@@ -275,6 +280,7 @@ macro_rules! builder {
         $crate::builder!(@try_from [$($validated)?] $name { $($kind $field : $ty),* });
     };
     (@try_from [$($validated:ident)?] $name:ident {}) => {
+        #[allow(deprecated)]
         impl ::core::convert::TryFrom<$name> for super::$name {
             type Error = $crate::BuilderError;
 
