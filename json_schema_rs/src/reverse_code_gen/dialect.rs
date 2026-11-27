@@ -466,11 +466,22 @@ impl<'a> Converter<'a> {
         let nullable: bool = types.iter().any(|ty| ty == "null");
         let others: Vec<&String> = types.iter().filter(|ty| *ty != "null").collect();
         match others.as_slice() {
-            [] if nullable && !map.contains_key("enum") => {
-                // The `OpenAPI` 3.0.3 idiom: `null` is the only member of the `enum`.
+            [] if nullable && matches!(map.get("enum"), None | Some(Value::Array(_))) => {
+                // The `OpenAPI` 3.0.3 idiom: `null` is the only member of the `enum`. Only
+                // `null` satisfies `type: null`, so an `enum` keeps just its null members; with
+                // none, nothing satisfies the schema, which is `{"not": {}}`.
                 map.remove("type");
-                map.insert("nullable".to_string(), Value::Bool(true));
-                map.insert("enum".to_string(), Value::Array(vec![Value::Null]));
+                let has_null: bool = match map.get("enum") {
+                    Some(Value::Array(members)) => members.iter().any(Value::is_null),
+                    _ => true,
+                };
+                if has_null {
+                    map.insert("nullable".to_string(), Value::Bool(true));
+                    map.insert("enum".to_string(), Value::Array(vec![Value::Null]));
+                } else {
+                    map.remove("enum");
+                    map.insert("not".to_string(), Value::Object(Map::new()));
+                }
                 false
             }
             [] => {
@@ -1138,12 +1149,44 @@ mod tests {
     }
 
     #[test]
-    fn a_type_of_only_null_beside_an_enum_is_unrepresentable_in_openapi_30() {
+    fn a_type_of_only_null_beside_a_null_enum_is_a_nullable_null_enum_in_openapi_30() {
         let expected: Result<Value, Vec<ReverseCodeGenError>> =
-            Err(vec![unrepresentable(TargetDialect::OpenApi30, "type", "")]);
+            Ok(json!({"nullable": true, "enum": [null]}));
         let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
             TargetDialect::OpenApi30,
             json!({"type": "null", "enum": [null]}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_type_of_only_null_beside_a_null_const_is_a_nullable_null_enum_in_openapi_30() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> =
+            Ok(json!({"nullable": true, "enum": [null]}));
+        let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
+            TargetDialect::OpenApi30,
+            json!({"type": "null", "const": null}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_type_of_only_null_beside_a_mixed_enum_keeps_only_the_null_member_in_openapi_30() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> =
+            Ok(json!({"nullable": true, "enum": [null]}));
+        let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
+            TargetDialect::OpenApi30,
+            json!({"type": "null", "enum": [1, null, "a"]}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_type_of_only_null_beside_an_enum_without_null_matches_nothing_in_openapi_30() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({"not": {}}));
+        let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
+            TargetDialect::OpenApi30,
+            json!({"type": "null", "enum": [1, "a"]}),
         );
         assert_eq!(expected, actual);
     }
