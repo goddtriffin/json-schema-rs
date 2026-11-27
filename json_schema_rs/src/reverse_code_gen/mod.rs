@@ -452,10 +452,17 @@ impl SchemaGenerator {
             }));
         }
         let model_path: &str = model_definitions_path(target, &path);
+        let aliases_definitions: bool = model_path != path;
         let (schema, definitions): (JsonSchema, BTreeMap<String, Schema>) =
             if self.resources.is_empty() {
                 let existing: ExistingDefinitions = existing_definitions(&settings, &path, &body);
-                std::mem::take(&mut self.document).finish(body, model_path, &existing, &mut errors)
+                std::mem::take(&mut self.document).finish(
+                    body,
+                    model_path,
+                    aliases_definitions,
+                    &existing,
+                    &mut errors,
+                )
             } else {
                 let existing: ExistingDefinitions = existing_definitions(&settings, &path, &body);
                 self.into_root_schema_with_resources(
@@ -463,6 +470,7 @@ impl SchemaGenerator {
                     model_path,
                     &existing,
                     target.needs_conversion(),
+                    is_draft_4_to_7(target),
                     &mut errors,
                 )
             };
@@ -488,6 +496,7 @@ impl SchemaGenerator {
         path: &str,
         existing: &ExistingDefinitions,
         converts: bool,
+        draft_4_to_7: bool,
         errors: &mut Vec<ReverseCodeGenError>,
     ) -> (JsonSchema, BTreeMap<String, Schema>) {
         let mut body: JsonSchema = body;
@@ -558,7 +567,8 @@ impl SchemaGenerator {
                     self.push_resource_definition(&mut scope, child, finished_child);
                 }
             }
-            finished[node_index] = Some(scope.into_root_schema(node_body, converts, errors));
+            finished[node_index] =
+                Some(scope.into_root_schema(node_body, converts, draft_4_to_7, errors));
         }
 
         let mut root_definitions: BTreeMap<usize, usize> = BTreeMap::new();
@@ -577,7 +587,13 @@ impl SchemaGenerator {
             }
         };
         document.rewrite_refs(&mut body, &resolve);
-        document.finish(body, path, existing, errors)
+        document.finish(
+            body,
+            path,
+            draft_4_to_7 && path == DEFS_PATH,
+            existing,
+            errors,
+        )
     }
 
     /// Merges each resource into an earlier one (the document root first) whose `$id` resolves
@@ -842,6 +858,7 @@ impl Scope {
         self,
         body: JsonSchema,
         converts: bool,
+        draft_4_to_7: bool,
         errors: &mut Vec<ReverseCodeGenError>,
     ) -> JsonSchema {
         let mut existing: ExistingDefinitions = BTreeMap::new();
@@ -855,7 +872,7 @@ impl Scope {
             );
         }
         let (mut body, definitions): (JsonSchema, BTreeMap<String, Schema>) =
-            self.finish(body, DEFS_PATH, &existing, errors);
+            self.finish(body, DEFS_PATH, draft_4_to_7, &existing, errors);
         if !definitions.is_empty() {
             let defs: &mut BTreeMap<String, Schema> = body.defs.get_or_insert_with(BTreeMap::new);
             debug_assert!(
@@ -880,6 +897,14 @@ impl Scope {
     /// recursive definitions merge too. A definition that is not merged and whose `$id` is the
     /// `$id` of a hand-written entry is a [`ReverseCodeGenError::DuplicateResourceId`].
     ///
+    /// With `aliases_definitions` (a draft 4-7 target, whose model keeps the definitions in
+    /// `$defs` while the document moves them to `definitions`), `#/definitions/G` and
+    /// `#/$defs/G` name the same definition `G` for every generated definition `G` that is not
+    /// merged into a hand-written entry: the hand-written `#/definitions/G` refs of the body are
+    /// rewritten to the model's `#/$defs/G`, and the hand-written entries are compared in that
+    /// form. A final name never equals a hand-written entry's name in either container, so a ref
+    /// that names a generated definition never targets a hand-written entry.
+    ///
     /// A hand-written entry that holds one of the generator's provisional `$ref`s (it was built
     /// from [`SchemaGenerator::inline_subschema`] output) never equals a resolved body, so it
     /// never merges: the definition is suffixed.
@@ -887,6 +912,7 @@ impl Scope {
         self,
         mut body: JsonSchema,
         path: &str,
+        aliases_definitions: bool,
         existing: &ExistingDefinitions,
         errors: &mut Vec<ReverseCodeGenError>,
     ) -> (JsonSchema, BTreeMap<String, Schema>) {
@@ -912,6 +938,7 @@ impl Scope {
                 let (index, rest): (usize, &str) = parse_provisional_ref(reference)?;
                 Some(format!("{}{rest}", targets[index].as_deref()?))
             };
+            let alias = alias_resolver(aliases_definitions, &final_names, &merged);
             let dropped: Vec<usize> = merged
                 .iter()
                 .copied()
@@ -925,7 +952,8 @@ impl Scope {
                     if let Some(object) = resolved.as_object_mut() {
                         rewrite_refs(object, &resolve);
                     }
-                    serde_json::to_value(&resolved).ok().as_ref() != Some(&entry.value)
+                    serde_json::to_value(&resolved).ok().as_ref()
+                        != Some(entry.normalized_value(&alias).as_ref())
                 })
                 .collect();
             if dropped.is_empty() {
@@ -936,12 +964,15 @@ impl Scope {
             }
         }
         report_duplicate_ids(&definitions, &canonical, &merged, existing, errors);
+        let alias = alias_resolver(aliases_definitions, &final_names, &merged);
         let resolve = |reference: &str| -> Option<String> {
             let (index, rest): (usize, &str) = parse_provisional_ref(reference)?;
             Some(format!("{}{rest}", targets[index].as_deref()?))
         };
+        let resolve_in_body =
+            |reference: &str| -> Option<String> { resolve(reference).or_else(|| alias(reference)) };
 
-        rewrite_refs(&mut body, &resolve);
+        rewrite_refs(&mut body, &resolve_in_body);
         let mut defs: BTreeMap<String, Schema> = BTreeMap::new();
         for (index, definition) in definitions.into_iter().enumerate() {
             if merged.contains(&index) {
@@ -1058,6 +1089,62 @@ struct ExistingEntry {
     /// The JSON Pointer of the container the entry lives in, which refs that merge into it use
     /// (`/$defs` for an entry that conversion later moves into `definitions`).
     path: String,
+    /// The entry as the model holds it, when it is a typed field (not a root extension).
+    schema: Option<Schema>,
+}
+
+impl ExistingEntry {
+    /// The entry's JSON with its `#/definitions/G` refs rewritten by `alias`.
+    fn normalized_value(
+        &self,
+        alias: &impl Fn(&str) -> Option<String>,
+    ) -> std::borrow::Cow<'_, serde_json::Value> {
+        let Some(Schema::Object(object)) = &self.schema else {
+            return std::borrow::Cow::Borrowed(&self.value);
+        };
+        let mut rewritten: JsonSchema = (**object).clone();
+        rewrite_refs(&mut rewritten, alias);
+        serde_json::to_value(&rewritten).map_or(
+            std::borrow::Cow::Borrowed(&self.value),
+            std::borrow::Cow::Owned,
+        )
+    }
+}
+
+/// The ref rewrite of a draft 4-7 target's model (see [`Scope::finish`]): with `enabled`,
+/// `#/definitions/G` becomes `#/$defs/G` (a tail after `G` is kept) for every definition `G`
+/// that stays generated (its final name is not that of a hand-written entry, which is merged
+/// into instead); without it, nothing is rewritten.
+fn alias_resolver(
+    enabled: bool,
+    final_names: &[Option<String>],
+    merged: &BTreeSet<usize>,
+) -> impl Fn(&str) -> Option<String> + use<> {
+    let generated: BTreeSet<String> = if enabled {
+        final_names
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !merged.contains(index))
+            .filter_map(|(_, name)| Some(escape_pointer_token(name.as_deref()?)))
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    move |reference: &str| -> Option<String> {
+        let rest: &str = reference.strip_prefix("#/definitions/")?;
+        let (token, tail): (&str, &str) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
+        generated
+            .contains(token)
+            .then(|| format!("#{DEFS_PATH}/{token}{tail}"))
+    }
+}
+
+/// Whether `target` is draft 4, 6 or 7: the targets whose definitions go to `definitions`.
+fn is_draft_4_to_7(target: TargetDialect) -> bool {
+    matches!(
+        target,
+        TargetDialect::Draft04 | TargetDialect::Draft06 | TargetDialect::Draft07
+    )
 }
 
 /// The entries a hand-written root body already holds where the definitions of the target go,
@@ -1078,11 +1165,13 @@ fn collect_existing(
                     value,
                     mergeable,
                     path: container.to_string(),
+                    schema: Some(schema.clone()),
                 },
                 Err(_) => ExistingEntry {
                     value: serde_json::Value::Null,
                     mergeable: false,
                     path: container.to_string(),
+                    schema: None,
                 },
             });
     }
@@ -1146,6 +1235,7 @@ fn existing_definitions(
                         // Conversion walks the model's fields, not a root extension.
                         mergeable: !converts,
                         path: path.to_string(),
+                        schema: None,
                     },
                 );
             }
@@ -1247,12 +1337,7 @@ const DEFS_PATH: &str = "/$defs";
 /// the hand-written `#/$defs/..` refs the root may hold to the same definitions. Any other path
 /// is the same in the model and the target document.
 fn model_definitions_path(target: TargetDialect, path: &str) -> &str {
-    if path == "/definitions"
-        && matches!(
-            target,
-            TargetDialect::Draft04 | TargetDialect::Draft06 | TargetDialect::Draft07
-        )
-    {
+    if path == "/definitions" && is_draft_4_to_7(target) {
         DEFS_PATH
     } else {
         path
@@ -5567,5 +5652,238 @@ mod tests {
             .expect("generated")
             .to_value();
         assert_eq!(expected, actual);
+    }
+
+    // --- Hand-written refs to generated definitions on a draft 4-7 target: `#/$defs/G` and
+    // `#/definitions/G` both resolve, in the model and in the document ---
+
+    /// The 2020-12 model of a root whose hand-written `container` holds `hand_written` and
+    /// whose generated definitions are `generated` (kept in `$defs`).
+    fn expected_model(
+        container: &str,
+        hand_written: serde_json::Value,
+        generated: serde_json::Value,
+        properties: serde_json::Value,
+    ) -> serde_json::Value {
+        let (serde_json::Value::Object(hand_written), serde_json::Value::Object(generated)) =
+            (hand_written, generated)
+        else {
+            unreachable!("definition maps are objects");
+        };
+        let mut model: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object"
+        });
+        model["properties"] = properties;
+        let mut defs: serde_json::Map<String, serde_json::Value> = generated;
+        if container == "$defs" {
+            defs.extend(hand_written);
+        } else {
+            model["definitions"] = serde_json::Value::Object(hand_written);
+        }
+        model["$defs"] = serde_json::Value::Object(defs);
+        model
+    }
+
+    /// A root whose hand-written `container` entry `C` and property `p` ref the hoisted
+    /// definition `B` in the `#/<form>/B` form.
+    fn generated_with_hand_written_ref_to_hoisted(
+        dialect: TargetDialect,
+        container: &str,
+        form: &str,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let standalone: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"B": {"type": "string"}},
+            "$ref": "#/$defs/B"
+        }))
+        .expect("a schema");
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let reference: String = format!("#/{form}/B");
+        let mut body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            container: {"C": {"$ref": reference}},
+            "properties": {"p": {"$ref": reference}}
+        }))
+        .expect("a schema");
+        body.properties
+            .insert("b".to_string(), Schema::from(inlined));
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    /// A generated type `A` whose `x` is the hoisted definition `B`, beside a hand-written
+    /// `container` entry `A` equal to it that refs `B` in the `#/<form>/B` form.
+    fn generated_with_equal_hand_written_entry(
+        dialect: TargetDialect,
+        container: &str,
+        form: &str,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let standalone: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"B": {"type": "string"}},
+            "$ref": "#/$defs/B"
+        }))
+        .expect("a schema");
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let reference: JsonSchema = generator.named_subschema("a::A", "A", |_| JsonSchema {
+            properties: BTreeMap::from([("x".to_string(), Schema::from(inlined.clone()))]),
+            ..object_schema(&[])
+        });
+        let mut body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            container: {"A": {"type": "object", "properties": {"x": {"$ref": format!("#/{form}/B")}}}}
+        }))
+        .expect("a schema");
+        body.properties
+            .insert("a".to_string(), Schema::from(reference));
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    /// The tests of one draft, one hand-written container and one ref form.
+    macro_rules! hand_written_ref_tests {
+        ($dialect:expr, $schema_uri:literal, $container:literal, $form:literal) => {
+            use super::*;
+
+            #[test]
+            fn a_ref_to_a_hoisted_definition_resolves_in_the_model() {
+                let expected: serde_json::Value = expected_model(
+                    $container,
+                    serde_json::json!({"C": {"$ref": "#/$defs/B"}}),
+                    serde_json::json!({"B": {"type": "string"}}),
+                    serde_json::json!({"b": {"$ref": "#/$defs/B"}, "p": {"$ref": "#/$defs/B"}}),
+                );
+                let actual: serde_json::Value = serde_json::to_value(
+                    generated_with_hand_written_ref_to_hoisted($dialect, $container, $form)
+                        .schema(),
+                )
+                .expect("json");
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn a_ref_to_a_hoisted_definition_resolves_in_the_document() {
+                let expected: serde_json::Value = serde_json::json!({
+                    "$schema": $schema_uri,
+                    "type": "object",
+                    "definitions": {
+                        "B": {"type": "string"},
+                        "C": {"$ref": "#/definitions/B"}
+                    },
+                    "properties": {
+                        "b": {"$ref": "#/definitions/B"},
+                        "p": {"$ref": "#/definitions/B"}
+                    }
+                });
+                let actual: serde_json::Value =
+                    generated_with_hand_written_ref_to_hoisted($dialect, $container, $form)
+                        .to_value();
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn the_model_and_the_document_agree_on_instances_through_the_ref() {
+                let generated: GeneratedSchema =
+                    generated_with_hand_written_ref_to_hoisted($dialect, $container, $form);
+                let model: serde_json::Value =
+                    serde_json::to_value(generated.schema()).expect("json");
+                let document: serde_json::Value = generated.to_value();
+                let instances: Vec<serde_json::Value> =
+                    vec![serde_json::json!({"p": "x"}), serde_json::json!({"p": 5})];
+                let expected: Vec<Vec<bool>> = vec![vec![true, false], vec![true, false]];
+                let actual: Vec<Vec<bool>> = [&model, &document]
+                    .iter()
+                    .map(|schema: &&serde_json::Value| {
+                        instances
+                            .iter()
+                            .map(|instance: &serde_json::Value| instance_is_valid(schema, instance))
+                            .collect()
+                    })
+                    .collect();
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn a_generated_definition_merges_into_an_equal_hand_written_entry_in_the_document() {
+                let expected: serde_json::Value = serde_json::json!({
+                    "$schema": $schema_uri,
+                    "type": "object",
+                    "definitions": {
+                        "A": {"type": "object", "properties": {"x": {"$ref": "#/definitions/B"}}},
+                        "B": {"type": "string"}
+                    },
+                    "properties": {"a": {"$ref": "#/definitions/A"}}
+                });
+                let actual: serde_json::Value =
+                    generated_with_equal_hand_written_entry($dialect, $container, $form)
+                        .to_value();
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn a_generated_definition_merges_into_an_equal_hand_written_entry_in_the_model() {
+                let expected: serde_json::Value = expected_model(
+                    $container,
+                    serde_json::json!({
+                        "A": {"type": "object", "properties": {"x": {"$ref": "#/$defs/B"}}}
+                    }),
+                    serde_json::json!({"B": {"type": "string"}}),
+                    serde_json::json!({"a": {"$ref": concat!("#/", $container, "/A")}}),
+                );
+                let actual: serde_json::Value = serde_json::to_value(
+                    generated_with_equal_hand_written_entry($dialect, $container, $form).schema(),
+                )
+                .expect("json");
+                assert_eq!(expected, actual);
+            }
+        };
+    }
+
+    macro_rules! hand_written_ref_tests_per_draft {
+        ($container:literal, $form:literal) => {
+            mod draft_04 {
+                hand_written_ref_tests!(
+                    TargetDialect::Draft04,
+                    "http://json-schema.org/draft-04/schema#",
+                    $container,
+                    $form
+                );
+            }
+            mod draft_06 {
+                hand_written_ref_tests!(
+                    TargetDialect::Draft06,
+                    "http://json-schema.org/draft-06/schema#",
+                    $container,
+                    $form
+                );
+            }
+            mod draft_07 {
+                hand_written_ref_tests!(
+                    TargetDialect::Draft07,
+                    "http://json-schema.org/draft-07/schema#",
+                    $container,
+                    $form
+                );
+            }
+        };
+    }
+
+    mod defs_entries_with_defs_refs {
+        use super::*;
+        hand_written_ref_tests_per_draft!("$defs", "$defs");
+    }
+
+    mod defs_entries_with_definitions_refs {
+        use super::*;
+        hand_written_ref_tests_per_draft!("$defs", "definitions");
+    }
+
+    mod definitions_entries_with_defs_refs {
+        use super::*;
+        hand_written_ref_tests_per_draft!("definitions", "$defs");
+    }
+
+    mod definitions_entries_with_definitions_refs {
+        use super::*;
+        hand_written_ref_tests_per_draft!("definitions", "definitions");
     }
 }
