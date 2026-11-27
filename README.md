@@ -615,6 +615,42 @@ tuple structs. On a field, `#[json_schema(with = "Type")]` takes another type's
 schema and `#[json_schema(schema_with = "path")]` a function's. Details:
 [design.md](design.md).
 
+**Target dialect and layout.** `root_schema_for::<T>()` and `T::json_schema()` write
+the spec-exact default: JSON Schema 2020-12 with the definitions in `$defs`. To write
+another dialect or document layout, build a `SchemaGenerator` with
+`ReverseCodeGenSettings`:
+
+```rust
+use json_schema_rs::{ReverseCodeGenSettings, SchemaGenerator, TargetDialect};
+
+let schema = SchemaGenerator::new(ReverseCodeGenSettings {
+    dialect: Some(TargetDialect::Draft07),
+    ..Default::default()
+})
+.into_root_schema_for::<Config>()?;
+```
+
+| Setting | Values | Default |
+|---|---|---|
+| `dialect` | `Draft04`, `Draft06`, `Draft07`, `Draft201909`, `Draft202012`, `OpenApi30`, `OpenApi31` | 2020-12 |
+| `definitions_path` | a JSON Pointer, e.g. `/components/schemas` (one leading `#` and one trailing `/` are ignored) | the dialect's own (`/$defs`, `/definitions`, `/components/schemas`) |
+| `inline_subschemas` | write each named type where it is used; a type that refers to itself keeps its `$ref` and definition | `false` |
+| `meta_schema` | `FollowDialect`, `Uri(..)`, `Omit` | `FollowDialect` (none for OpenAPI) |
+| `number_formats` | `OpenApi` (`int32`, `int64`, `float`, `double`), `Schemars` (`int8` ... `uint64`) | none |
+
+The generator builds 2020-12 and converts exactly: `$ref` siblings, `prefixItems`,
+`const`, exclusive bounds, boolean schemas, `dependentRequired` / `dependentSchemas` and
+`null` types are rewritten for the target. What a target cannot express is never
+approximated: it is a `ReverseCodeGenError::UnrepresentableKeyword` naming the
+keyword and its JSON Pointer (for example `unevaluatedProperties` before 2019-09, or
+an `Option` of a named type in OpenAPI 3.0). It is a library setting only: the CLI has no
+schema-generation command, and a derive attribute would make the dialect per type.
+
+Coming from schemars, `SchemaSettings::draft07().into_generator().into_root_schema_for::<T>()`
+is the example above; `definitions_path`, `inline_subschemas` and `meta_schema = None`
+(`MetaSchema::Omit`) map one-to-one, and `option_nullable` is `dialect: OpenApi30`. From
+specta, `schema_version` is `dialect`; from pydantic, `ref_template` is `definitions_path`.
+
 Validate a JSON instance against a schema (returns all errors, no fail-fast):
 
 ```rust

@@ -1,5 +1,6 @@
 //! Errors from building a JSON Schema from Rust types.
 
+use super::settings::TargetDialect;
 use std::fmt;
 
 /// Result of [`super::ToJsonSchema::json_schema`]: the schema, or every problem found while
@@ -38,6 +39,46 @@ pub enum ReverseCodeGenError {
         /// Why it is not a schema object.
         reason: String,
     },
+    /// The target dialect cannot express a keyword of the schema exactly, and no equivalent
+    /// schema exists, so the generator refuses instead of approximating.
+    UnrepresentableKeyword {
+        /// The dialect being written.
+        dialect: TargetDialect,
+        /// The keyword (or, for a `null` type no keyword spells, `type`).
+        keyword: String,
+        /// JSON Pointer of the schema object holding it, in the generated document.
+        pointer: String,
+    },
+    /// [`ReverseCodeGenSettings::definitions_path`](super::ReverseCodeGenSettings::definitions_path)
+    /// is not a usable JSON Pointer for the target dialect.
+    InvalidDefinitionsPath {
+        /// The path as written.
+        path: String,
+        /// Why it cannot hold definitions.
+        reason: String,
+    },
+    /// Something already sits where the definitions go, so writing them there would overwrite or
+    /// merge into it.
+    DefinitionsPathOccupied {
+        /// The normalized path.
+        path: String,
+    },
+    /// A type with `$id` is a schema resource that must sit in its dialect's own definitions
+    /// container to be found, and a custom
+    /// [`definitions_path`](super::ReverseCodeGenSettings::definitions_path) puts it elsewhere.
+    ResourceOutsideDefinitions {
+        /// The normalized path.
+        path: String,
+        /// [`super::ToJsonSchema::schema_id`] of a type with `$id`.
+        schema_id: String,
+    },
+    /// [`MetaSchema::Uri`](super::MetaSchema::Uri) is not an absolute URI.
+    InvalidMetaSchemaUri {
+        /// The URI as written.
+        uri: String,
+        /// Why it is not an absolute URI.
+        reason: String,
+    },
 }
 
 impl fmt::Display for ReverseCodeGenError {
@@ -63,6 +104,27 @@ impl fmt::Display for ReverseCodeGenError {
             ),
             ReverseCodeGenError::InvalidSchema { json, reason } => {
                 write!(f, "{json} is not a JSON Schema object: {reason}")
+            }
+            ReverseCodeGenError::UnrepresentableKeyword {
+                dialect,
+                keyword,
+                pointer,
+            } => write!(
+                f,
+                "`{keyword}` at {pointer:?} cannot be written exactly in {dialect}"
+            ),
+            ReverseCodeGenError::InvalidDefinitionsPath { path, reason } => {
+                write!(f, "definitions path {path:?} is not usable: {reason}")
+            }
+            ReverseCodeGenError::DefinitionsPathOccupied { path } => {
+                write!(f, "definitions path {path:?} already holds a value")
+            }
+            ReverseCodeGenError::ResourceOutsideDefinitions { path, schema_id } => write!(
+                f,
+                "`{schema_id}` has an $id, so it cannot be placed under definitions path {path:?}"
+            ),
+            ReverseCodeGenError::InvalidMetaSchemaUri { uri, reason } => {
+                write!(f, "meta schema {uri:?} is not an absolute URI: {reason}")
             }
         }
     }
@@ -108,6 +170,65 @@ mod tests {
         let actual: String = ReverseCodeGenError::InvalidSchema {
             json: "[1]".to_string(),
             reason: "bad".to_string(),
+        }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unrepresentable_keyword_display_names_keyword_pointer_and_dialect() {
+        let expected: String =
+            "`unevaluatedProperties` at \"/allOf/0\" cannot be written exactly in draft-07"
+                .to_string();
+        let actual: String = ReverseCodeGenError::UnrepresentableKeyword {
+            dialect: TargetDialect::Draft07,
+            keyword: "unevaluatedProperties".to_string(),
+            pointer: "/allOf/0".to_string(),
+        }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn invalid_definitions_path_display_names_the_path_and_reason() {
+        let expected: String = "definitions path \"\" is not usable: it is empty".to_string();
+        let actual: String = ReverseCodeGenError::InvalidDefinitionsPath {
+            path: String::new(),
+            reason: "it is empty".to_string(),
+        }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn definitions_path_occupied_display_names_the_path() {
+        let expected: String = "definitions path \"/title\" already holds a value".to_string();
+        let actual: String = ReverseCodeGenError::DefinitionsPathOccupied {
+            path: "/title".to_string(),
+        }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_outside_definitions_display_names_the_type_and_path() {
+        let expected: String =
+            "`a::Node` has an $id, so it cannot be placed under definitions path \"/x\""
+                .to_string();
+        let actual: String = ReverseCodeGenError::ResourceOutsideDefinitions {
+            path: "/x".to_string(),
+            schema_id: "a::Node".to_string(),
+        }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn invalid_meta_schema_uri_display_names_the_uri_and_reason() {
+        let expected: String = "meta schema \"x\" is not an absolute URI: no scheme".to_string();
+        let actual: String = ReverseCodeGenError::InvalidMetaSchemaUri {
+            uri: "x".to_string(),
+            reason: "no scheme".to_string(),
         }
         .to_string();
         assert_eq!(expected, actual);
