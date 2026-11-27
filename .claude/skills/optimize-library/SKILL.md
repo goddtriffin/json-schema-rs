@@ -28,7 +28,7 @@ Follow the `contribution-guide` skill and CLAUDE.md as for any change. This skil
 4. **Verify**, in this order:
    - `make lint test`;
    - `make benchmark_smoke`, if a benchmark cell could break;
-   - `make benchmark` and `make differential`, once, last.
+   - `make benchmark`, once, last; `make differential` too unless the change cannot affect correctness (CLAUDE.md, requirement 3).
 5. **Open the PR** with the *Performance* section from `target/benchmark-quick/report.md` (CLAUDE.md, *Pull request body*), then stop until it is merged.
 
 **When an idea does not pan out, try hard before abandoning it.** Find out why it failed (measure where the cost actually went), then try alternatives: the same idea in another layer, another data layout, the lenses below. Often the first attempt targets the wrong layer or carries one fixable mistake. Abandon the effort only when no alternative moves the needles; then close its issue with the measurements and record in design.md why the idea was rejected.
@@ -51,7 +51,7 @@ Where what you learn goes (CLAUDE.md, *Where knowledge goes*):
 - **Measure where the cost is before choosing the fix.** An issue's premise is a hypothesis: the time or memory is often somewhere else, or in another layer.
 - **Check worst-case schema shapes, not just the target.** A pass that is free on the fixture you aimed at can be quadratic on another (a union of hundreds of `$ref` branches, a very wide object, deep nesting). Bail out early, and collect candidates while compiling instead of rescanning.
 - **One-time costs count:** schema compile and codegen are benchmark cells too.
-- **A pattern the fixtures lack is invisible to `make benchmark`.** Show the win with a probe, then add a real-world fixture for it. A fixture change normally needs `make benchmark_full`; ask the maintainer whether to run it.
+- **A pattern the fixtures lack is invisible to `make benchmark`.** Show the win with a probe, then add a real-world fixture for it; `make benchmark` measures it against `main`. `make benchmark_full` runs only before a release or when the maintainer asks.
 - **Noise rule:** a cell counts only when it moved by more than 3% and more than the two sides' spreads, **and** sits on a code path the PR changed.
 - **Heap artifacts:** peak heap can move from `String` / `Vec` capacity doubling alone. Before reporting a memory change, compare both sides with a pre-sized buffer.
 - **Build time of generated code** is driven by generic instantiations (one copy per distinct type), not by source size.

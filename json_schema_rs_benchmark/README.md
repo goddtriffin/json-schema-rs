@@ -5,7 +5,7 @@ libraries on the same fixtures and marks a per-category winner. This crate is a 
 member and is **not published** (`publish = false`).
 
 > Running `make benchmark` and putting its report in the PR body is a **hard requirement** for
-> every PR that changes the library, CLI or macros. See the repository [CLAUDE.md](../CLAUDE.md).
+> every PR that can change performance or generated output. See the repository [CLAUDE.md](../CLAUDE.md).
 
 ## Run it
 
@@ -163,8 +163,7 @@ the two benches of an A/A run had different symbols and 2.86 MB of their code la
 differently, and three generated-types cells moved 3.5–5.8% (#129). Through the links the A/A
 benches are byte-identical.
 Reverse codegen is not measured in quick mode: its models take minutes to build per side.
-A PR that changes the derive or reverse codegen, the harness, a competitor or a fixture runs
-`make benchmark_full` too.
+`make benchmark_full` runs only right before a release or when the maintainer asks.
 
 The first quick run builds the base side's dependencies from scratch into
 `target/benchmark-quick/base-target`; later runs only rebuild what changed. When the base moves
