@@ -108,7 +108,7 @@ pub(crate) fn push_uri_fragment<'s>(segments: impl Iterator<Item = &'s str>, out
 }
 
 /// Decode one reference token: first `~1` → `/`, then `~0` → `~`.
-fn decode_token(token: &str) -> Result<String, JsonPointerError> {
+pub(crate) fn decode_token(token: &str) -> Result<String, JsonPointerError> {
     let mut out = String::with_capacity(token.len());
     let mut chars = token.chars().peekable();
     while let Some(c) = chars.next() {
