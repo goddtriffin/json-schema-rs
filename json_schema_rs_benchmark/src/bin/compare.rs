@@ -21,7 +21,10 @@
 //! confirmation rounds (three) and skips the rest when it is settled.
 //!
 //! Rows of other tools are ignored, so a side whose harness measured every tool still compares.
-//! Malformed lines and unreadable files are skipped with a warning on stderr; a head side with no
+//! Malformed lines and unreadable files are skipped with a warning on stderr, except the CLI tier:
+//! `cli/index.tsv` (created empty when the tier runs, so a missing one means the tier was not
+//! requested) must have a well-formed entry for the tool, and every export it lists must exist and
+//! parse, or the compare fails. A head side with no
 //! samples at all is an error, because the run measured nothing.
 //!
 //! Uses clap's builder API (not derive) because the workspace forbids `allow_attributes`
@@ -36,8 +39,8 @@ use json_schema_rs_benchmark::compare::{
 };
 use json_schema_rs_benchmark::{
     CellKey, CriterionId, HyperfineSamples, IndexEntry, Measurement, Metric, Tier, TsvParse,
-    criterion_benchmark_files, ensure_cli_exports_parsed, parse_criterion_benchmark,
-    parse_criterion_samples, parse_heap_tsv, parse_hyperfine_samples, parse_index_tsv,
+    cli_index_entries, criterion_benchmark_files, parse_criterion_benchmark,
+    parse_criterion_samples, parse_heap_tsv, parse_hyperfine_samples,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -249,29 +252,18 @@ fn read_side(dir: &Path, tool: &str) -> Result<Side, String> {
 
     let index_path: PathBuf = dir.join("cli").join("index.tsv");
     if let Some(text) = read_optional(&index_path)? {
-        let entries: Vec<IndexEntry> = report_skipped(&index_path, parse_index_tsv(&text))
-            .into_iter()
-            .filter(|entry: &IndexEntry| entry.tool == tool)
-            .collect();
-        let listed: usize = entries.len();
-        let mut parsed: usize = 0;
+        let entries: Vec<IndexEntry> = cli_index_entries(&text, Some(tool))
+            .map_err(|reason: String| format!("{}: {reason}", index_path.display()))?;
         for entry in entries {
             let export_path: PathBuf = dir.join(&entry.json_path);
-            let Some(json) = read_optional(&export_path)? else {
-                eprintln!("compare: warning: {}: missing", export_path.display());
-                continue;
-            };
-            let exported: HyperfineSamples = match parse_hyperfine_samples(&json) {
-                Ok(exported) => exported,
-                Err(reason) => {
-                    eprintln!(
-                        "compare: warning: {}: skipped: {reason}",
-                        export_path.display()
-                    );
-                    continue;
-                }
-            };
-            parsed += 1;
+            let json: String = read_optional(&export_path)?.ok_or_else(|| {
+                format!(
+                    "{}: hyperfine export listed in cli/index.tsv is missing",
+                    export_path.display()
+                )
+            })?;
+            let exported: HyperfineSamples = parse_hyperfine_samples(&json)
+                .map_err(|reason: String| format!("{}: {reason}", export_path.display()))?;
             let cell = |metric: Metric| -> CellKey {
                 CellKey {
                     tier: Tier::Cli,
@@ -289,8 +281,6 @@ fn read_side(dir: &Path, tool: &str) -> Result<Side, String> {
                 );
             }
         }
-        ensure_cli_exports_parsed(listed, parsed)
-            .map_err(|reason: String| format!("{}: {reason}", index_path.display()))?;
     }
     Ok(Side {
         measured: samples,
