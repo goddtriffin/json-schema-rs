@@ -468,9 +468,9 @@ impl SchemaGenerator {
                 self.into_root_schema_with_resources(
                     body,
                     model_path,
+                    aliases_definitions,
                     &existing,
-                    target.needs_conversion(),
-                    is_draft_4_to_7(target),
+                    target,
                     &mut errors,
                 )
             };
@@ -494,11 +494,13 @@ impl SchemaGenerator {
         mut self,
         body: JsonSchema,
         path: &str,
+        aliases_definitions: bool,
         existing: &ExistingDefinitions,
-        converts: bool,
-        draft_4_to_7: bool,
+        target: TargetDialect,
         errors: &mut Vec<ReverseCodeGenError>,
     ) -> (JsonSchema, BTreeMap<String, Schema>) {
+        let converts: bool = target.needs_conversion();
+        let draft_4_to_7: bool = is_draft_4_to_7(target);
         let mut body: JsonSchema = body;
         let mut built: Vec<Option<(JsonSchema, Scope)>> = self
             .resources
@@ -587,13 +589,7 @@ impl SchemaGenerator {
             }
         };
         document.rewrite_refs(&mut body, &resolve);
-        document.finish(
-            body,
-            path,
-            draft_4_to_7 && path == DEFS_PATH,
-            existing,
-            errors,
-        )
+        document.finish(body, path, aliases_definitions, existing, errors)
     }
 
     /// Merges each resource into an earlier one (the document root first) whose `$id` resolves
@@ -969,10 +965,9 @@ impl Scope {
             let (index, rest): (usize, &str) = parse_provisional_ref(reference)?;
             Some(format!("{}{rest}", targets[index].as_deref()?))
         };
-        let resolve_in_body =
-            |reference: &str| -> Option<String> { resolve(reference).or_else(|| alias(reference)) };
 
-        rewrite_refs(&mut body, &resolve_in_body);
+        rewrite_refs(&mut body, &resolve);
+        rewrite_refs_outside_nested_resources(&mut body, &alias);
         let mut defs: BTreeMap<String, Schema> = BTreeMap::new();
         for (index, definition) in definitions.into_iter().enumerate() {
             if merged.contains(&index) {
@@ -1103,7 +1098,7 @@ impl ExistingEntry {
             return std::borrow::Cow::Borrowed(&self.value);
         };
         let mut rewritten: JsonSchema = (**object).clone();
-        rewrite_refs(&mut rewritten, alias);
+        rewrite_refs_outside_resources(&mut rewritten, alias);
         serde_json::to_value(&rewritten).map_or(
             std::borrow::Cow::Borrowed(&self.value),
             std::borrow::Cow::Owned,
@@ -1666,6 +1661,17 @@ fn rewrite_refs_outside_resources(
             *reference = resolved;
         }
     });
+}
+
+/// Like [`rewrite_refs_outside_resources`] for a schema that is itself the root of its resource:
+/// its own `$id` does not hide it, only the `$id` of a subschema does.
+fn rewrite_refs_outside_nested_resources(
+    schema: &mut JsonSchema,
+    resolve: &impl Fn(&str) -> Option<String>,
+) {
+    let id: Option<String> = schema.id.take();
+    rewrite_refs_outside_resources(schema, resolve);
+    schema.id = id;
 }
 
 /// Pushes the subschemas a raw `keyword: value` holds, per `dialect`'s keyword table.
@@ -5885,5 +5891,135 @@ mod tests {
     mod definitions_entries_with_definitions_refs {
         use super::*;
         hand_written_ref_tests_per_draft!("definitions", "definitions");
+    }
+
+    // --- A nested `$id` resource's own `#/definitions/G` refs resolve against the resource, so
+    // the alias to the generated `G` leaves them alone ---
+
+    /// A root that hoists a generated string `G` and holds a property `r`, an embedded resource
+    /// with its own integer `G` that its property `a` refs as `#/definitions/G`.
+    fn generated_with_resource_defining_its_own_definition(
+        dialect: TargetDialect,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let standalone: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"G": {"type": "string"}},
+            "$ref": "#/$defs/G"
+        }))
+        .expect("a schema");
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let resource: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$id": "http://x.test/r",
+            "definitions": {"G": {"type": "integer"}},
+            "properties": {"a": {"$ref": "#/definitions/G"}}
+        }))
+        .expect("a schema");
+        let mut body: JsonSchema = object_schema(&[]);
+        body.properties
+            .insert("g".to_string(), Schema::from(inlined));
+        body.properties
+            .insert("r".to_string(), Schema::from(resource));
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    /// A generated type `A` holding the resource of
+    /// [`generated_with_resource_defining_its_own_definition`], beside a hand-written `$defs`
+    /// entry `A` equal to it, with a hoisted `G` that the resource's ref must not alias.
+    fn generated_with_equal_hand_written_entry_holding_a_resource(
+        dialect: TargetDialect,
+    ) -> GeneratedSchema {
+        let resource: serde_json::Value = serde_json::json!({
+            "$id": "http://x.test/r",
+            "definitions": {"G": {"type": "integer"}},
+            "properties": {"a": {"$ref": "#/definitions/G"}}
+        });
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let standalone: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"G": {"type": "string"}},
+            "$ref": "#/$defs/G"
+        }))
+        .expect("a schema");
+        let inlined: JsonSchema = generator.inline_subschema(standalone);
+        let held: JsonSchema = serde_json::from_value(resource.clone()).expect("a schema");
+        let reference: JsonSchema = generator.named_subschema("a::A", "A", |_| JsonSchema {
+            properties: BTreeMap::from([("r".to_string(), Schema::from(held))]),
+            ..object_schema(&[])
+        });
+        let mut body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "$defs": {"A": {"type": "object", "properties": {"r": resource}}}
+        }))
+        .expect("a schema");
+        body.properties
+            .insert("g".to_string(), Schema::from(inlined));
+        body.properties
+            .insert("a".to_string(), Schema::from(reference));
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    #[test]
+    fn a_generated_definition_holding_a_nested_resource_merges_into_its_equal_hand_written_entry() {
+        let expected: serde_json::Value = serde_json::json!({"g": "#/$defs/G", "a": "#/$defs/A"});
+        let model: serde_json::Value = serde_json::to_value(
+            generated_with_equal_hand_written_entry_holding_a_resource(TargetDialect::Draft07)
+                .schema(),
+        )
+        .expect("json");
+        let actual: serde_json::Value = serde_json::json!({
+            "g": model["properties"]["g"]["$ref"],
+            "a": model["properties"]["a"]["$ref"]
+        });
+        assert_eq!(expected, actual);
+    }
+
+    macro_rules! resource_alias_tests {
+        ($dialect:expr) => {
+            use super::*;
+
+            #[test]
+            fn a_ref_inside_a_nested_resource_keeps_resolving_against_the_resource_in_the_model() {
+                let expected: serde_json::Value = serde_json::json!({"a": {"$ref": "#/definitions/G"}});
+                let model: serde_json::Value = serde_json::to_value(
+                    generated_with_resource_defining_its_own_definition($dialect).schema(),
+                )
+                .expect("json");
+                let actual: serde_json::Value = model["properties"]["r"]["properties"].clone();
+                assert_eq!(expected, actual);
+            }
+
+            #[test]
+            fn the_model_and_the_document_agree_on_instances_through_a_nested_resource_ref() {
+                let generated: GeneratedSchema =
+                    generated_with_resource_defining_its_own_definition($dialect);
+                let model: serde_json::Value =
+                    serde_json::to_value(generated.schema()).expect("json");
+                let document: serde_json::Value = generated.to_value();
+                let instances: Vec<serde_json::Value> = vec![
+                    serde_json::json!({"r": {"a": 5}}),
+                    serde_json::json!({"r": {"a": "x"}}),
+                    serde_json::json!({"g": "x"}),
+                    serde_json::json!({"g": 5}),
+                ];
+                let expected: Vec<Vec<bool>> = vec![vec![true, false, true, false]; 2];
+                let actual: Vec<Vec<bool>> = [&model, &document]
+                    .iter()
+                    .map(|schema: &&serde_json::Value| {
+                        instances
+                            .iter()
+                            .map(|instance: &serde_json::Value| instance_is_valid(schema, instance))
+                            .collect()
+                    })
+                    .collect();
+                assert_eq!(expected, actual);
+            }
+        };
+    }
+
+    mod nested_resource_ref_draft_04 {
+        resource_alias_tests!(TargetDialect::Draft04);
+    }
+
+    mod nested_resource_ref_draft_07 {
+        resource_alias_tests!(TargetDialect::Draft07);
     }
 }
