@@ -1423,9 +1423,8 @@ impl CompiledSchema {
         cx: &mut Context,
         evaluated: Option<&mut Evaluated>,
     ) -> bool {
-        // Each arm views the instance only for the type it needs, so the view folds into one
-        // test of the instance's own tag; viewing it once ahead of the match built the whole
-        // view (a second dispatch on the type) for every keyword, including those that ignore it.
+        // Each arm views the instance only for the type it needs (design.md, "Instances other
+        // than `serde_json::Value`").
         let instance: &I = at.instance;
         match keyword {
             Keyword::False => self.false_schema::<M, _>(at, cx),
