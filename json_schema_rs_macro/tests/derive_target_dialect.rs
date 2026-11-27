@@ -3,8 +3,8 @@
 //! definitions path, inlined subschemas, the meta schema and the number formats.
 
 use json_schema_rs::{
-    MetaSchema, NumberFormats, ReverseCodeGenError, ReverseCodeGenSettings, SchemaGenerator,
-    TargetDialect, ToJsonSchema, meta,
+    GeneratedSchema, MetaSchema, NumberFormats, ReverseCodeGenError, ReverseCodeGenSettings,
+    Schema, SchemaGenerator, TargetDialect, ToJsonSchema, meta,
 };
 use json_schema_rs_macro::ToJsonSchema;
 use serde::Deserialize;
@@ -402,70 +402,268 @@ fn a_dialect_with_resources_conforms_to_its_metaschema() {
     assert_eq!(expected, actual);
 }
 
-/// Whether `Everything` written as `dialect`, read back from its JSON text under the draft its
-/// `$schema` names, accepts `instance`.
-fn accepts(dialect: TargetDialect, instance: &Value) -> bool {
-    let text: String = serde_json::to_string(&written_in::<Everything>(dialect).expect("schema"))
-        .expect("serialize");
-    let schema: json_schema_rs::Schema = json_schema_rs::Schema::try_from(text).expect("parse");
+const EVERY_DIALECT: [TargetDialect; 6] = [
+    TargetDialect::Draft04,
+    TargetDialect::Draft06,
+    TargetDialect::Draft07,
+    TargetDialect::Draft201909,
+    TargetDialect::Draft202012,
+    TargetDialect::OpenApi31,
+];
+
+/// The document `T` generates as `dialect`.
+fn generated<T: ToJsonSchema>(dialect: TargetDialect) -> GeneratedSchema {
+    SchemaGenerator::new(settings_for(dialect))
+        .into_root_schema_for::<T>()
+        .expect("schema")
+}
+
+/// Whether the in-memory 2020-12 model of `T` generated for `dialect` accepts `instance`.
+fn model_accepts<T: ToJsonSchema>(dialect: TargetDialect, instance: &Value) -> bool {
+    let schema: Schema = Schema::from(generated::<T>(dialect).into_schema());
     json_schema_rs::validate(&schema, instance).is_ok()
 }
 
-#[test]
-fn every_dialect_accepts_the_instances_the_derived_schema_accepts() {
-    let instance: Value = json!({
+/// Whether the serialized target-dialect JSON of `T` generated for `dialect`, read back under the
+/// draft its `$schema` names, accepts `instance`.
+fn target_accepts<T: ToJsonSchema>(dialect: TargetDialect, instance: &Value) -> bool {
+    let text: String = serde_json::to_string(&generated::<T>(dialect)).expect("serialize");
+    let schema: Schema = Schema::try_from(text).expect("parse");
+    json_schema_rs::validate(&schema, instance).is_ok()
+}
+
+/// The verdict of `accepts` on `instance` for every dialect.
+fn verdicts(accepts: fn(TargetDialect, &Value) -> bool, instance: &Value) -> Vec<bool> {
+    EVERY_DIALECT
+        .into_iter()
+        .map(|dialect: TargetDialect| accepts(dialect, instance))
+        .collect()
+}
+
+/// An instance of `Everything` that every bound accepts.
+fn valid_everything() -> Value {
+    json!({
         "id": 1, "ratio": 5, "mixed": 2, "nicknames": [null, "a"],
         "buyer": {"city": "X"}, "backup": {"city": "Y"}, "mode": "Fast", "only": "Single",
         "shape": {"Circle": 1.5}, "tags": ["a"], "triple": [1], "limit": 5
-    });
+    })
+}
+
+/// `valid_everything` with `field` set to `value`.
+fn everything_with(field: &str, value: Value) -> Value {
+    let mut instance: Value = valid_everything();
+    instance[field] = value;
+    instance
+}
+
+#[test]
+fn every_dialect_model_accepts_the_instances_the_derived_schema_accepts() {
     let expected: Vec<bool> = vec![true; 6];
-    let actual: Vec<bool> = [
-        TargetDialect::Draft04,
-        TargetDialect::Draft06,
-        TargetDialect::Draft07,
-        TargetDialect::Draft201909,
-        TargetDialect::Draft202012,
-        TargetDialect::OpenApi31,
-    ]
-    .into_iter()
-    .map(|dialect: TargetDialect| accepts(dialect, &instance))
-    .collect();
+    let actual: Vec<bool> = verdicts(model_accepts::<Everything>, &valid_everything());
     assert_eq!(expected, actual);
 }
 
 #[test]
-fn every_dialect_rejects_the_instances_the_derived_schema_rejects() {
-    // `ratio` at its exclusive bound and `mixed` at its exclusive bound.
-    let instance: Value = json!({
-        "id": 1, "ratio": 10, "mixed": 9, "nicknames": [], "buyer": {"city": "X"},
-        "backup": {"city": "Y"}, "mode": "Fast", "only": "Single", "shape": {"Circle": 1.5},
-        "tags": [], "triple": [1], "limit": 5
-    });
+fn every_dialect_target_json_accepts_the_instances_the_derived_schema_accepts() {
+    let expected: Vec<bool> = vec![true; 6];
+    let actual: Vec<bool> = verdicts(target_accepts::<Everything>, &valid_everything());
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_model_rejects_a_number_at_its_exclusive_minimum() {
     let expected: Vec<bool> = vec![false; 6];
-    let actual: Vec<bool> = [
-        TargetDialect::Draft04,
-        TargetDialect::Draft06,
-        TargetDialect::Draft07,
-        TargetDialect::Draft201909,
-        TargetDialect::Draft202012,
-        TargetDialect::OpenApi31,
-    ]
-    .into_iter()
-    .map(|dialect: TargetDialect| accepts(dialect, &instance))
-    .collect();
+    let actual: Vec<bool> = verdicts(
+        model_accepts::<Everything>,
+        &everything_with("ratio", json!(0)),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_target_json_rejects_a_number_at_its_exclusive_minimum() {
+    let expected: Vec<bool> = vec![false; 6];
+    let actual: Vec<bool> = verdicts(
+        target_accepts::<Everything>,
+        &everything_with("ratio", json!(0)),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_model_rejects_a_number_at_its_exclusive_maximum() {
+    let expected: Vec<bool> = vec![false; 6];
+    let actual: Vec<bool> = verdicts(
+        model_accepts::<Everything>,
+        &everything_with("ratio", json!(10)),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_target_json_rejects_a_number_at_its_exclusive_maximum() {
+    let expected: Vec<bool> = vec![false; 6];
+    let actual: Vec<bool> = verdicts(
+        target_accepts::<Everything>,
+        &everything_with("ratio", json!(10)),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_model_rejects_a_number_below_a_tighter_inclusive_minimum() {
+    let expected: Vec<bool> = vec![false; 6];
+    let actual: Vec<bool> = verdicts(
+        model_accepts::<Everything>,
+        &everything_with("mixed", json!(0.5)),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_target_json_rejects_a_number_below_a_tighter_inclusive_minimum() {
+    let expected: Vec<bool> = vec![false; 6];
+    let actual: Vec<bool> = verdicts(
+        target_accepts::<Everything>,
+        &everything_with("mixed", json!(0.5)),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_model_rejects_a_number_at_an_exclusive_maximum_beside_a_minimum() {
+    let expected: Vec<bool> = vec![false; 6];
+    let actual: Vec<bool> = verdicts(
+        model_accepts::<Everything>,
+        &everything_with("mixed", json!(9)),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn every_dialect_target_json_rejects_a_number_at_an_exclusive_maximum_beside_a_minimum() {
+    let expected: Vec<bool> = vec![false; 6];
+    let actual: Vec<bool> = verdicts(
+        target_accepts::<Everything>,
+        &everything_with("mixed", json!(9)),
+    );
+    assert_eq!(expected, actual);
+}
+
+// --- the in-memory model is 2020-12, whatever the target ---
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct Bounded {
+    #[json_schema(exclusive_minimum = 5)]
+    n: f64,
+}
+
+#[test]
+fn the_draft_04_model_rejects_a_number_at_its_exclusive_minimum_in_memory() {
+    let expected: bool = false;
+    let actual: bool = model_accepts::<Bounded>(TargetDialect::Draft04, &json!({"n": 5}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn the_draft_04_target_json_rejects_a_number_at_its_exclusive_minimum() {
+    let expected: bool = false;
+    let actual: bool = target_accepts::<Bounded>(TargetDialect::Draft04, &json!({"n": 5}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn the_draft_04_model_accepts_a_number_above_its_exclusive_minimum_in_memory() {
+    let expected: bool = true;
+    let actual: bool = model_accepts::<Bounded>(TargetDialect::Draft04, &json!({"n": 5.5}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn the_draft_04_model_schema_uri_is_2020_12() {
+    let expected: Option<String> = Some("https://json-schema.org/draft/2020-12/schema".to_string());
+    let actual: Option<String> = generated::<Bounded>(TargetDialect::Draft04)
+        .into_schema()
+        .schema;
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn the_draft_04_target_json_has_the_draft_04_schema_uri() {
+    let expected: Value = json!("http://json-schema.org/draft-04/schema#");
+    let actual: Value = generated::<Bounded>(TargetDialect::Draft04).to_value()["$schema"].clone();
+    assert_eq!(expected, actual);
+}
+
+// --- a root `$ref` before 2019-09 ---
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct Wrapper(Address);
+
+#[test]
+fn a_root_ref_is_wrapped_in_all_of_beside_the_schema_uri_and_definitions_in_draft_07() {
+    let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "allOf": [{"$ref": "#/definitions/Address"}],
+        "definitions": {"Address": address_schema()}
+    }));
+    let actual: Result<Value, Vec<ReverseCodeGenError>> =
+        written_in::<Wrapper>(TargetDialect::Draft07);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn a_wrapped_root_ref_conforms_to_the_draft_07_metaschema() {
+    let schema: Value = written_in::<Wrapper>(TargetDialect::Draft07).expect("schema");
+    let expected: bool = true;
+    let actual: bool = meta::is_valid(&schema);
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn a_wrapped_root_ref_model_rejects_what_the_type_rejects() {
+    let expected: bool = false;
+    let actual: bool = model_accepts::<Wrapper>(TargetDialect::Draft07, &json!({"city": 1}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn a_wrapped_root_ref_target_json_accepts_what_the_type_accepts() {
+    let expected: bool = true;
+    let actual: bool = target_accepts::<Wrapper>(TargetDialect::Draft07, &json!({"city": "X"}));
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn a_wrapped_root_ref_target_json_rejects_what_the_type_rejects() {
+    let expected: bool = false;
+    let actual: bool = target_accepts::<Wrapper>(TargetDialect::Draft07, &json!({"city": 1}));
     assert_eq!(expected, actual);
 }
 
 // --- what a target cannot express is an error ---
 
 #[test]
-fn a_nullable_ref_is_unrepresentable_in_openapi_30() {
-    let expected: Result<Value, Vec<ReverseCodeGenError>> =
-        Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
-            dialect: TargetDialect::OpenApi30,
-            keyword: "type".to_string(),
-            pointer: "/properties/pickers/items/anyOf/1".to_string(),
-        }]);
+fn a_nullable_ref_is_a_nullable_null_enum_branch_in_openapi_30() {
+    let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+        "type": "object",
+        "properties": {
+            "pickers": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {"$ref": "#/components/schemas/Address"},
+                        {"nullable": true, "enum": [null]}
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["pickers"],
+        "components": {"schemas": {"Address": address_schema()}}
+    }));
     let actual: Result<Value, Vec<ReverseCodeGenError>> =
         written_in::<Orchard>(TargetDialect::OpenApi30);
     assert_eq!(expected, actual);
@@ -753,7 +951,7 @@ fn schemars_number_formats_are_written_on_number_fields() {
 #[test]
 fn the_readme_migration_example_writes_a_draft_07_schema() {
     // README, "Reverse codegen": the schemars `SchemaSettings::draft07()` generator.
-    let schema: json_schema_rs::ReverseCodeGenResult =
+    let schema: json_schema_rs::GeneratedSchemaResult =
         SchemaGenerator::new(ReverseCodeGenSettings {
             dialect: Some(TargetDialect::Draft07),
             ..Default::default()

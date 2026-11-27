@@ -4,20 +4,23 @@
 //! document (an explicit stack, so depth cannot overflow) and rewrites each schema object in
 //! place. Every rewrite is exact: a construct the target cannot express is reported as a
 //! [`ReverseCodeGenError::UnrepresentableKeyword`] and left as it was, never approximated.
-//! Subschemas are found through the 2020-12 keyword table, so hand-written schemas that reach
-//! the generator are converted too.
+//! Subschemas are found through the 2020-12 keyword table and the target's own (draft 4 to 2019-09
+//! keep `additionalItems`, `dependencies` and `definitions` there), so hand-written schemas that
+//! reach the generator are converted too. The result is JSON: the typed model holds the
+//! 2020-12 form, and the converted document is kept beside it (see `GeneratedSchema`).
 
 use super::error::ReverseCodeGenError;
 use super::settings::TargetDialect;
-use super::{RefNode, push_raw_subschemas};
-use crate::json_schema::{Dialect, JsonSchema, Schema, SpecVersion, SubschemaPosition};
+use crate::json_schema::{Dialect, SpecVersion, SubschemaPosition};
 use crate::number::{cmp_num, json_equal};
+use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The keywords of an `OpenAPI` 3.0 Schema Object that this converter writes or keeps: draft-04's
-/// subset plus `nullable`, `readOnly`, `writeOnly`, `example` and `deprecated`.
+/// subset plus `nullable`, `readOnly`, `writeOnly`, `example`, `deprecated`, `discriminator`,
+/// `xml` and `externalDocs`. `OpenAPI` 3.0 forbids any other key but `x-` extensions.
 const OPENAPI_30_KEYWORDS: &[&str] = &[
     "$ref",
     "additionalProperties",
@@ -26,8 +29,11 @@ const OPENAPI_30_KEYWORDS: &[&str] = &[
     "default",
     "deprecated",
     "description",
+    "discriminator",
     "enum",
+    "example",
     "exclusiveMaximum",
+    "externalDocs",
     "exclusiveMinimum",
     "format",
     "items",
@@ -51,6 +57,7 @@ const OPENAPI_30_KEYWORDS: &[&str] = &[
     "type",
     "uniqueItems",
     "writeOnly",
+    "xml",
 ];
 
 /// Keywords that only annotate: a draft that does not define them ignores them without losing
@@ -75,12 +82,6 @@ pub(super) fn defines(target: TargetDialect, keyword: &str) -> bool {
         None => OPENAPI_30_KEYWORDS.contains(&keyword),
     }
 }
-
-/// Prefix of the key under which a draft-4 `exclusiveMinimum` / `exclusiveMaximum` boolean waits
-/// while the converted document is read back into the typed model, whose fields for those
-/// keywords hold numbers. [`restore_boolean_bounds`] puts the real key back, in the keywords the
-/// model keeps verbatim.
-const BOOLEAN_BOUND_MARKER: &str = "\u{1}boolean ";
 
 /// A schema the walk still has to convert.
 struct Work<'a> {
@@ -108,6 +109,13 @@ pub(super) struct Converter<'a> {
     /// built only when an error names it, so the walk costs no string per level of nesting.
     pointers: Vec<(usize, String)>,
     errors: &'a mut Vec<ReverseCodeGenError>,
+    /// The target's own keyword table, for the keywords 2020-12 lacks (`additionalItems`,
+    /// `dependencies`, `definitions`); none for `OpenAPI` 3.0, whose Schema Object has none of
+    /// them.
+    target_table: Option<Dialect>,
+    /// Whether the document root gets keywords beside it after the conversion (`$schema`,
+    /// definitions), which a root `$ref` must not sit next to before 2019-09.
+    root_siblings: bool,
 }
 
 impl<'a> Converter<'a> {
@@ -121,34 +129,28 @@ impl<'a> Converter<'a> {
             document_prefix: format!("#{definitions_path}/"),
             pointers: Vec::new(),
             errors,
+            target_table: target.spec_version().map(Dialect::for_spec_version),
+            root_siblings: false,
         }
     }
 
-    /// Converts one schema, located at `pointer` in the generated document. `root` marks the
-    /// document root.
-    pub(super) fn convert(&mut self, schema: Schema, pointer: &str, root: bool) -> Schema {
-        let Ok(mut value) = serde_json::to_value(&schema) else {
+    /// Marks that the document root gets keywords beside it after the conversion.
+    pub(super) fn with_root_siblings(mut self, root_siblings: bool) -> Self {
+        self.root_siblings = root_siblings;
+        self
+    }
+
+    /// Converts one schema, located at `pointer` in the generated document, to JSON in the
+    /// target dialect. `root` marks the document root.
+    pub(super) fn convert(&mut self, schema: &impl Serialize, pointer: &str, root: bool) -> Value {
+        let Ok(mut value) = serde_json::to_value(schema) else {
             unreachable!("a schema serializes to JSON");
         };
         self.convert_value(&mut value, pointer, root);
-        match serde_json::from_value::<Schema>(value) {
-            Ok(mut converted) => {
-                if let Schema::Object(object) = &mut converted {
-                    restore_boolean_bounds(object);
-                }
-                converted
-            }
-            Err(error) => {
-                self.errors.push(ReverseCodeGenError::InvalidSchema {
-                    json: pointer.to_string(),
-                    reason: error.to_string(),
-                });
-                schema
-            }
-        }
+        value
     }
 
-    /// [`Converter::convert`] on JSON.
+    /// [`Converter::convert`] in place.
     fn convert_value(&mut self, value: &mut Value, pointer: &str, root: bool) {
         self.pointers.clear();
         self.pointers.push((0, pointer.to_string()));
@@ -199,7 +201,7 @@ impl<'a> Converter<'a> {
                     }
                 }
             } else {
-                push_subschemas(map, at, &mut self.pointers, &mut stack);
+                push_subschemas(map, at, self.target_table, &mut self.pointers, &mut stack);
             }
         }
     }
@@ -314,7 +316,7 @@ impl<'a> Converter<'a> {
 
         // `$ref` siblings are ignored before 2019-09: the reference goes into an `allOf`.
         if ignores_ref_siblings
-            && map.len() > 1
+            && (map.len() > 1 || (root && self.root_siblings))
             && let Some(reference) = map.remove("$ref")
         {
             let mut wrapped: Map<String, Value> = Map::new();
@@ -382,7 +384,7 @@ impl<'a> Converter<'a> {
         }
 
         if is_draft_4_to_7 {
-            convert_dependent(map);
+            self.convert_dependent(map, at, &mut reported);
         }
 
         if is_openapi_30 && let Some(Value::Array(examples)) = map.get("examples") {
@@ -397,14 +399,23 @@ impl<'a> Converter<'a> {
             reported.insert("examples".to_string());
         }
 
-        // Every other keyword 2020-12 defines must exist in the target, or only annotate.
+        // Every other keyword 2020-12 defines must exist in the target, or only annotate (and
+        // `OpenAPI` 3.0 has no unknown keywords at all).
         let source: Dialect = Dialect::default();
         let missing: Vec<String> = map
             .keys()
             .filter(|key| {
                 let annotation: bool = is_draft_4_to_7 && ANNOTATIONS.contains(&key.as_str());
+                // `OpenAPI` 3.0 forbids every key but its own and `x-` extensions; the drafts
+                // ignore a keyword they do not define, so only the ones 2020-12 defines can
+                // change a verdict.
+                let known: bool = if is_openapi_30 {
+                    !key.starts_with("x-")
+                } else {
+                    source.keyword(key).is_some()
+                };
                 !reported.contains(key.as_str())
-                    && source.keyword(key).is_some()
+                    && known
                     && !self.target_defines(key)
                     && !annotation
             })
@@ -421,22 +432,23 @@ impl<'a> Converter<'a> {
     }
 
     /// `const` is a one-value `enum` in a dialect without it. With an `enum` too, the value
-    /// must be one of its members and the `enum` shrinks to it.
+    /// must be one of its members and the `enum` shrinks to it; when it is not, nothing
+    /// satisfies the schema, which is `{"not": {}}` (an empty `enum` is invalid in draft 4).
     fn convert_const(map: &mut Map<String, Value>) {
         let Some(value) = map.remove("const") else {
             return;
         };
-        let members: Vec<Value> = match map.get("enum") {
-            Some(Value::Array(members)) => {
-                if members.iter().any(|member| json_equal(member, &value)) {
-                    vec![value]
-                } else {
-                    Vec::new()
-                }
+        match map.get("enum") {
+            Some(Value::Array(members))
+                if !members.iter().any(|member| json_equal(member, &value)) =>
+            {
+                map.remove("enum");
+                map.insert("not".to_string(), Value::Object(Map::new()));
             }
-            _ => vec![value],
-        };
-        map.insert("enum".to_string(), Value::Array(members));
+            _ => {
+                map.insert("enum".to_string(), Value::Array(vec![value]));
+            }
+        }
     }
 
     /// `OpenAPI` 3.0 has no `null` type: `null` among the types becomes `nullable: true`, and
@@ -454,6 +466,13 @@ impl<'a> Converter<'a> {
         let nullable: bool = types.iter().any(|ty| ty == "null");
         let others: Vec<&String> = types.iter().filter(|ty| *ty != "null").collect();
         match others.as_slice() {
+            [] if nullable && !map.contains_key("enum") => {
+                // The `OpenAPI` 3.0.3 idiom: `null` is the only member of the `enum`.
+                map.remove("type");
+                map.insert("nullable".to_string(), Value::Bool(true));
+                map.insert("enum".to_string(), Value::Array(vec![Value::Null]));
+                false
+            }
             [] => {
                 self.report("type", at);
                 false
@@ -505,97 +524,64 @@ fn convert_bound(
         return;
     }
     map.insert(inclusive.to_string(), Value::Number(bound));
-    map.insert(
-        format!("{BOOLEAN_BOUND_MARKER}{exclusive}"),
-        Value::Bool(true),
-    );
+    map.insert(exclusive.to_string(), Value::Bool(true));
 }
 
-/// Puts the keyword back under every [`BOOLEAN_BOUND_MARKER`] key, in `schema` and in every
-/// subschema the model keeps as raw JSON. Iterative, so depth cannot overflow the stack.
-fn restore_boolean_bounds(schema: &mut JsonSchema) {
-    let source: Dialect = Dialect::default();
-    let mut stack: Vec<RefNode<'_>> = vec![RefNode::Typed(schema)];
-    while let Some(node) = stack.pop() {
-        match node {
-            RefNode::Typed(current) => {
-                let marked: Vec<String> = current
-                    .extensions
-                    .keys()
-                    .filter(|key| key.starts_with(BOOLEAN_BOUND_MARKER))
-                    .cloned()
-                    .collect();
-                for key in marked {
-                    if let Some(value) = current.extensions.remove(&key) {
-                        current
-                            .extensions
-                            .insert(key[BOOLEAN_BOUND_MARKER.len()..].to_string(), value);
-                    }
-                }
-                let (subschemas, extensions) = current.subschemas_mut();
-                for (keyword, value) in extensions {
-                    push_raw_subschemas(source, keyword, value, &mut stack);
-                }
-                stack.extend(subschemas.into_iter().map(RefNode::Typed));
-            }
-            RefNode::Raw(value) => {
-                let Value::Object(object) = value else {
-                    continue;
-                };
-                let marked: Vec<String> = object
-                    .keys()
-                    .filter(|key| key.starts_with(BOOLEAN_BOUND_MARKER))
-                    .cloned()
-                    .collect();
-                for key in marked {
-                    if let Some(value) = object.remove(&key) {
-                        object.insert(key[BOOLEAN_BOUND_MARKER.len()..].to_string(), value);
-                    }
-                }
-                for (keyword, value) in object.iter_mut() {
-                    push_raw_subschemas(source, keyword, value, &mut stack);
-                }
+impl Converter<'_> {
+    /// `dependentRequired` and `dependentSchemas` are `dependencies` before 2019-09. A property
+    /// that both name (or that `dependencies` already names) needs both: its entries become one
+    /// `allOf` of schemas. A keyword that is not an object has no entries to move: it is
+    /// reported and the schema is left as it was.
+    fn convert_dependent(
+        &mut self,
+        map: &mut Map<String, Value>,
+        at: usize,
+        reported: &mut BTreeSet<String>,
+    ) {
+        if !map.contains_key("dependentRequired") && !map.contains_key("dependentSchemas") {
+            return;
+        }
+        let mut malformed: bool = false;
+        for keyword in ["dependentRequired", "dependentSchemas", "dependencies"] {
+            if matches!(map.get(keyword), Some(value) if !value.is_object()) {
+                self.report(keyword, at);
+                reported.insert(keyword.to_string());
+                malformed = true;
             }
         }
-    }
-}
-
-/// `dependentRequired` and `dependentSchemas` are `dependencies` before 2019-09. A property that
-/// both name (or that `dependencies` already names) needs both: its entries become one
-/// `allOf` of schemas.
-fn convert_dependent(map: &mut Map<String, Value>) {
-    let required: Option<Value> = map.remove("dependentRequired");
-    let schemas: Option<Value> = map.remove("dependentSchemas");
-    if required.is_none() && schemas.is_none() {
-        return;
-    }
-    let mut dependencies: Map<String, Value> = match map.remove("dependencies") {
-        Some(Value::Object(existing)) => existing,
-        _ => Map::new(),
-    };
-    let mut parts: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for entries in [required, schemas].into_iter().flatten() {
-        if let Value::Object(entries) = entries {
-            for (property, entry) in entries {
-                parts.entry(property).or_default().push(entry);
-            }
+        if malformed {
+            return;
         }
-    }
-    for (property, mut entries) in parts {
-        if let Some(existing) = dependencies.remove(&property) {
-            entries.insert(0, existing);
-        }
-        let merged: Value = if entries.len() == 1 {
-            entries.remove(0)
-        } else {
-            let all_of: Vec<Value> = entries.into_iter().map(as_schema).collect();
-            let mut merged: Map<String, Value> = Map::new();
-            merged.insert("allOf".to_string(), Value::Array(all_of));
-            Value::Object(merged)
+        let required: Option<Value> = map.remove("dependentRequired");
+        let schemas: Option<Value> = map.remove("dependentSchemas");
+        let mut dependencies: Map<String, Value> = match map.remove("dependencies") {
+            Some(Value::Object(existing)) => existing,
+            _ => Map::new(),
         };
-        dependencies.insert(property, merged);
+        let mut parts: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        for entries in [required, schemas].into_iter().flatten() {
+            if let Value::Object(entries) = entries {
+                for (property, entry) in entries {
+                    parts.entry(property).or_default().push(entry);
+                }
+            }
+        }
+        for (property, mut entries) in parts {
+            if let Some(existing) = dependencies.remove(&property) {
+                entries.insert(0, existing);
+            }
+            let merged: Value = if entries.len() == 1 {
+                entries.remove(0)
+            } else {
+                let all_of: Vec<Value> = entries.into_iter().map(as_schema).collect();
+                let mut merged: Map<String, Value> = Map::new();
+                merged.insert("allOf".to_string(), Value::Array(all_of));
+                Value::Object(merged)
+            };
+            dependencies.insert(property, merged);
+        }
+        map.insert("dependencies".to_string(), Value::Object(dependencies));
     }
-    map.insert("dependencies".to_string(), Value::Object(dependencies));
 }
 
 /// A `dependencies` entry as a schema: a list of property names is `{"required": [...]}`.
@@ -609,11 +595,13 @@ fn as_schema(entry: Value) -> Value {
     }
 }
 
-/// Pushes the schemas `map`'s keywords hold, per the 2020-12 keyword table. `at` is `map`'s own
-/// entry in `pointers`; each pushed schema gets an entry of its own.
+/// Pushes the schemas `map`'s keywords hold, per the 2020-12 keyword table, then the target's
+/// (`additionalItems`, `dependencies` and `definitions` are not 2020-12 keywords). `at` is
+/// `map`'s own entry in `pointers`; each pushed schema gets an entry of its own.
 fn push_subschemas<'a>(
     map: &'a mut Map<String, Value>,
     at: usize,
+    target_table: Option<Dialect>,
     pointers: &mut Vec<(usize, String)>,
     stack: &mut Vec<Work<'a>>,
 ) {
@@ -623,7 +611,15 @@ fn push_subschemas<'a>(
         pointers.len() - 1
     };
     for (key, value) in map.iter_mut() {
-        let Some(position) = source.keyword(key).and_then(|keyword| keyword.subschemas) else {
+        let Some(position) = source
+            .keyword(key)
+            .and_then(|keyword| keyword.subschemas)
+            .or_else(|| {
+                target_table?
+                    .keyword(key)
+                    .and_then(|keyword| keyword.subschemas)
+            })
+        else {
             continue;
         };
         let boolean_ok: bool = key == "additionalProperties" || key == "additionalItems";
@@ -693,30 +689,10 @@ mod tests {
         let mut value: Value = input;
         Converter::new(target, target.default_definitions_path(), &mut errors)
             .convert_value(&mut value, "", false);
-        let value: Value = unmarked(value);
         if errors.is_empty() {
             Ok(value)
         } else {
             Err(errors)
-        }
-    }
-
-    /// `value` with every [`BOOLEAN_BOUND_MARKER`] key (at any depth) renamed to its keyword.
-    fn unmarked(value: Value) -> Value {
-        match value {
-            Value::Object(map) => Value::Object(
-                map.into_iter()
-                    .map(|(key, value)| {
-                        (
-                            key.strip_prefix(BOOLEAN_BOUND_MARKER)
-                                .map_or(key.clone(), str::to_string),
-                            unmarked(value),
-                        )
-                    })
-                    .collect(),
-            ),
-            Value::Array(items) => Value::Array(items.into_iter().map(unmarked).collect()),
-            other => other,
         }
     }
 
@@ -873,6 +849,38 @@ mod tests {
     }
 
     #[test]
+    fn additional_items_subschemas_are_converted_in_draft_04() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+            "items": [{"type": "string"}],
+            "additionalItems": {"allOf": [{"$ref": "#/definitions/A"}], "enum": [1]}
+        }));
+        let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
+            TargetDialect::Draft04,
+            json!({
+                "prefixItems": [{"type": "string"}],
+                "items": {"$ref": "#/$defs/A", "const": 1}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn additional_items_subschemas_are_converted_in_2019_09() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+            "items": [{"type": "string"}],
+            "additionalItems": {"$ref": "#/$defs/A", "items": [{"type": "integer"}]}
+        }));
+        let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
+            TargetDialect::Draft201909,
+            json!({
+                "prefixItems": [{"type": "string"}],
+                "items": {"$ref": "#/$defs/A", "prefixItems": [{"type": "integer"}]}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn prefix_items_alone_become_items_in_2019_09() {
         let expected: Result<Value, Vec<ReverseCodeGenError>> =
             Ok(json!({"items": [{"type": "string"}]}));
@@ -965,11 +973,24 @@ mod tests {
 
     #[test]
     fn const_outside_the_enum_leaves_no_value_in_draft_04() {
-        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({"enum": []}));
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({"not": {}}));
         let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
             TargetDialect::Draft04,
             json!({"const": 4, "enum": [1, 2, 3]}),
         );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn const_outside_the_enum_conforms_to_the_draft_04_metaschema() {
+        let mut schema: Value = converted(
+            TargetDialect::Draft04,
+            json!({"const": 4, "enum": [1, 2, 3]}),
+        )
+        .unwrap_or_default();
+        schema["$schema"] = json!("http://json-schema.org/draft-04/schema#");
+        let expected: bool = true;
+        let actual: bool = crate::meta::is_valid(&schema);
         assert_eq!(expected, actual);
     }
 
@@ -1102,15 +1123,27 @@ mod tests {
     }
 
     #[test]
-    fn a_type_of_only_null_is_unrepresentable_in_openapi_30() {
-        let expected: Result<Value, Vec<ReverseCodeGenError>> = Err(vec![unrepresentable(
-            TargetDialect::OpenApi30,
-            "type",
-            "/anyOf/1",
-        )]);
+    fn a_type_of_only_null_is_a_nullable_null_enum_in_openapi_30() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+            "anyOf": [
+                {"$ref": "#/components/schemas/A"},
+                {"nullable": true, "enum": [null]}
+            ]
+        }));
         let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
             TargetDialect::OpenApi30,
             json!({"anyOf": [{"$ref": "#/components/schemas/A"}, {"type": "null"}]}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_type_of_only_null_beside_an_enum_is_unrepresentable_in_openapi_30() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> =
+            Err(vec![unrepresentable(TargetDialect::OpenApi30, "type", "")]);
+        let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
+            TargetDialect::OpenApi30,
+            json!({"type": "null", "enum": [null]}),
         );
         assert_eq!(expected, actual);
     }
@@ -1151,6 +1184,35 @@ mod tests {
                 "dependentSchemas": {"a": {"minProperties": 2}}
             }),
         );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_dependent_keyword_that_is_not_an_object_is_unrepresentable_in_draft_07() {
+        let expected: Vec<Result<Value, Vec<ReverseCodeGenError>>> = vec![
+            Err(vec![unrepresentable(
+                TargetDialect::Draft07,
+                "dependentRequired",
+                "",
+            )]),
+            Err(vec![unrepresentable(
+                TargetDialect::Draft07,
+                "dependentSchemas",
+                "",
+            )]),
+            Err(vec![
+                unrepresentable(TargetDialect::Draft07, "dependencies", ""),
+                unrepresentable(TargetDialect::Draft07, "dependentRequired", ""),
+            ]),
+        ];
+        let actual: Vec<Result<Value, Vec<ReverseCodeGenError>>> = vec![
+            converted(TargetDialect::Draft07, json!({"dependentRequired": 5})),
+            converted(TargetDialect::Draft07, json!({"dependentSchemas": []})),
+            converted(
+                TargetDialect::Draft07,
+                json!({"dependentRequired": {"a": ["b"]}, "dependencies": "x"}),
+            ),
+        ];
         assert_eq!(expected, actual);
     }
 
@@ -1255,13 +1317,33 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keywords_pass_through_every_dialect() {
+    fn extensions_and_openapi_keywords_pass_through_openapi_30() {
         let expected: Result<Value, Vec<ReverseCodeGenError>> =
             Ok(json!({"x-note": 1, "discriminator": {"propertyName": "t"}}));
         let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
             TargetDialect::OpenApi30,
             json!({"x-note": 1, "discriminator": {"propertyName": "t"}}),
         );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_unknown_keyword_is_unrepresentable_in_openapi_30() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Err(vec![unrepresentable(
+            TargetDialect::OpenApi30,
+            "custom",
+            "",
+        )]);
+        let actual: Result<Value, Vec<ReverseCodeGenError>> =
+            converted(TargetDialect::OpenApi30, json!({"custom": 1}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_unknown_keyword_passes_through_draft_07() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({"custom": 1}));
+        let actual: Result<Value, Vec<ReverseCodeGenError>> =
+            converted(TargetDialect::Draft07, json!({"custom": 1}));
         assert_eq!(expected, actual);
     }
 

@@ -7,10 +7,12 @@
 pub mod derive_support;
 mod dialect;
 mod error;
+mod generated;
 mod resource_uri;
 mod settings;
 
 pub use error::{ReverseCodeGenError, ReverseCodeGenResult};
+pub use generated::{GeneratedSchema, GeneratedSchemaResult};
 pub use settings::{
     MetaSchema, NumberFormats, ReverseCodeGenSettings, ReverseCodeGenSettingsBuilder, TargetDialect,
 };
@@ -72,7 +74,7 @@ pub trait ToJsonSchema {
     ///
     /// See [`SchemaGenerator::into_root_schema`].
     #[doc(hidden)]
-    fn json_schema_root(mut generator: SchemaGenerator) -> ReverseCodeGenResult {
+    fn json_schema_root(mut generator: SchemaGenerator) -> GeneratedSchemaResult {
         let body: JsonSchema = Self::json_schema_with(&mut generator);
         generator.into_root_schema(body)
     }
@@ -239,7 +241,7 @@ impl SchemaGenerator {
     /// # Errors
     ///
     /// See [`SchemaGenerator::into_root_schema`].
-    pub fn into_root_schema_for<T: ToJsonSchema + ?Sized>(self) -> ReverseCodeGenResult {
+    pub fn into_root_schema_for<T: ToJsonSchema + ?Sized>(self) -> GeneratedSchemaResult {
         T::json_schema_root(self)
     }
 
@@ -363,7 +365,7 @@ impl SchemaGenerator {
         schema_id: &str,
         name: &str,
         build: impl FnOnce(&mut Self) -> JsonSchema,
-    ) -> ReverseCodeGenResult {
+    ) -> GeneratedSchemaResult {
         let index: usize = match self.document.type_definitions.get(schema_id) {
             Some(&index) => index,
             None => self.document.push_type_definition(schema_id, name),
@@ -392,7 +394,7 @@ impl SchemaGenerator {
         name: &str,
         id: &str,
         build: impl FnOnce(&mut Self) -> JsonSchema,
-    ) -> ReverseCodeGenResult {
+    ) -> GeneratedSchemaResult {
         self.document.resource = Some(schema_id.to_string());
         self.root_resource = Some(self.push_resource(schema_id, name, id));
         let body: JsonSchema = build(&mut self);
@@ -407,7 +409,9 @@ impl SchemaGenerator {
     }
 
     /// Assigns the final `$defs` keys, rewrites every provisional `$ref` in `body` and the
-    /// definitions, attaches the `$defs` (if any) to `body` and returns it as the root schema.
+    /// definitions, attaches the `$defs` (if any) to `body` and returns it as the root schema:
+    /// the 2020-12 model, plus its form in the target dialect when that differs (see
+    /// [`GeneratedSchema`]).
     ///
     /// Each name used by one entry stays bare. When several entries share a name, every one
     /// of them gets a numeric suffix (`Name0`, `Name1`, ...) in identity order, skipping
@@ -428,9 +432,9 @@ impl SchemaGenerator {
     /// [`SchemaGenerator::report_errors`], a [`ReverseCodeGenError::InvalidResourceId`] per type
     /// whose `$id` is not a URI reference, and a [`ReverseCodeGenError::DuplicateResourceId`]
     /// per type whose `$id` resolves to the URI of an earlier one with a different schema.
-    pub fn into_root_schema(mut self, body: JsonSchema) -> ReverseCodeGenResult {
+    pub fn into_root_schema(mut self, body: JsonSchema) -> GeneratedSchemaResult {
         let mut errors: Vec<ReverseCodeGenError> = std::mem::take(&mut self.errors);
-        let settings: ReverseCodeGenSettings = self.settings.clone();
+        let settings: ReverseCodeGenSettings = std::mem::take(&mut self.settings);
         let target: TargetDialect = settings.target();
         let path: String = match definitions_path(&settings) {
             Ok(path) => path,
@@ -453,10 +457,10 @@ impl SchemaGenerator {
             } else {
                 self.into_root_schema_with_resources(body, &path, &mut errors)
             };
-        let schema: JsonSchema =
+        let generated: GeneratedSchema =
             finish_document(&settings, &path, schema, definitions, &mut errors);
         if errors.is_empty() {
-            Ok(schema)
+            Ok(generated)
         } else {
             Err(errors)
         }
@@ -937,7 +941,7 @@ impl Scope {
 /// # Errors
 ///
 /// See [`SchemaGenerator::into_root_schema`].
-pub fn root_schema_for<T: ToJsonSchema + ?Sized>() -> ReverseCodeGenResult {
+pub fn root_schema_for<T: ToJsonSchema + ?Sized>() -> GeneratedSchemaResult {
     SchemaGenerator::default().into_root_schema_for::<T>()
 }
 
@@ -1000,32 +1004,19 @@ fn definitions_path(settings: &ReverseCodeGenSettings) -> Result<String, Reverse
     Ok(path.to_string())
 }
 
-/// Converts the finished document to the target dialect, sets its `$schema` and places the
-/// definitions under `path`.
+/// Sets the finished document's `$schema` and places the definitions under `path`. For a target
+/// that is not 2020-12 the document is also converted to it, once, here: the 2020-12 model
+/// stays exact (its `$schema` is 2020-12's, so it validates as the types define) and the
+/// converted JSON is kept beside it.
 fn finish_document(
     settings: &ReverseCodeGenSettings,
     path: &str,
     mut body: JsonSchema,
-    mut definitions: BTreeMap<String, Schema>,
+    definitions: BTreeMap<String, Schema>,
     errors: &mut Vec<ReverseCodeGenError>,
-) -> JsonSchema {
+) -> GeneratedSchema {
     let target: TargetDialect = settings.target();
-    if target.needs_conversion() {
-        let mut converter: dialect::Converter<'_> = dialect::Converter::new(target, path, errors);
-        let Schema::Object(root) = converter.convert(Schema::Object(Box::new(body)), "", true)
-        else {
-            unreachable!("converting a schema object gives a schema object");
-        };
-        body = *root;
-        definitions = definitions
-            .into_iter()
-            .map(|(name, schema)| {
-                let pointer: String = format!("{path}/{}", escape_pointer_token(&name));
-                (name, converter.convert(schema, &pointer, false))
-            })
-            .collect();
-    }
-    body.schema = match &settings.meta_schema {
+    let schema_uri: Option<String> = match &settings.meta_schema {
         MetaSchema::FollowDialect => target.schema_uri().map(str::to_string),
         MetaSchema::Omit => None,
         MetaSchema::Uri(uri) => match parse_uri(uri) {
@@ -1039,7 +1030,35 @@ fn finish_document(
             }
         },
     };
-    place_definitions(body, path, definitions, errors)
+    if !target.needs_conversion() {
+        body.schema = schema_uri;
+        return GeneratedSchema::native(place_definitions(body, path, definitions, errors));
+    }
+    let root_siblings: bool = schema_uri.is_some() || !definitions.is_empty();
+    let mut pass: dialect::Converter<'_> =
+        dialect::Converter::new(target, path, errors).with_root_siblings(root_siblings);
+    let mut target_json: serde_json::Value = pass.convert(&body, "", true);
+    let target_definitions: serde_json::Map<String, serde_json::Value> = definitions
+        .iter()
+        .map(|(name, schema)| {
+            let pointer: String = format!("{path}/{}", escape_pointer_token(name));
+            (name.clone(), pass.convert(schema, &pointer, false))
+        })
+        .collect();
+    if let (serde_json::Value::Object(root), Some(uri)) = (&mut target_json, schema_uri) {
+        root.insert("$schema".to_string(), serde_json::Value::String(uri));
+    }
+    if let serde_json::Value::Object(root) = &mut target_json {
+        place_in_value(root, path, target_definitions, errors);
+    }
+    body.schema = match settings.meta_schema {
+        MetaSchema::Omit => None,
+        _ => Some(SpecVersion::Draft202012.schema_uri().to_string()),
+    };
+    GeneratedSchema::converted(
+        place_definitions(body, path, definitions, errors),
+        target_json,
+    )
 }
 
 /// Writes `definitions` into `body` under the JSON Pointer `path`.
@@ -1064,52 +1083,75 @@ fn place_definitions(
             .extend(definitions);
         return body;
     }
-    let Ok(entries) = serde_json::to_value(&definitions) else {
-        unreachable!("a schema serializes to JSON");
+    let Ok(serde_json::Value::Object(entries)) = serde_json::to_value(&definitions) else {
+        unreachable!("a schema map serializes to a JSON object");
+    };
+    // The first token is no keyword the model holds as a field (`definitions_path` checks), so
+    // it is an extension; the rest of the path is JSON.
+    let mut extensions: serde_json::Map<String, serde_json::Value> =
+        std::mem::take(&mut body.extensions).into_iter().collect();
+    place_in_value(&mut extensions, path, entries, errors);
+    body.extensions = extensions.into_iter().collect();
+    body
+}
+
+/// Writes `entries` into `root` under the JSON Pointer `path`, creating the objects on the way.
+/// Anything already at `path` is occupied ([`ReverseCodeGenError::DefinitionsPathOccupied`],
+/// once per path), except that `$defs` and `definitions` take the entries beside the ones they
+/// hold, each name that is taken being occupied.
+fn place_in_value(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+    path: &str,
+    entries: serde_json::Map<String, serde_json::Value>,
+    errors: &mut Vec<ReverseCodeGenError>,
+) {
+    if entries.is_empty() {
+        return;
+    }
+    let mut occupied = || {
+        let error = ReverseCodeGenError::DefinitionsPathOccupied {
+            path: path.to_string(),
+        };
+        if !errors.contains(&error) {
+            errors.push(error);
+        }
     };
     let tokens: Vec<String> = path
         .split('/')
         .skip(1)
         .map(|token| token.replace("~1", "/").replace("~0", "~"))
         .collect();
-    // The first token is no keyword the model holds as a field (`definitions_path` checks), so
-    // it is an extension; the rest of the path is JSON.
-    let occupied = || ReverseCodeGenError::DefinitionsPathOccupied {
-        path: path.to_string(),
-    };
-    let Some((first, rest)) = tokens.split_first() else {
+    let Some((last, parents)) = tokens.split_last() else {
         unreachable!("a definitions path has a token");
     };
-    if rest.is_empty() {
-        if body.extensions.contains_key(first) {
-            errors.push(occupied());
-        } else {
-            body.extensions.insert(first.clone(), entries);
-        }
-        return body;
-    }
-    let mut current: &mut serde_json::Value = body
-        .extensions
-        .entry(first.clone())
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-    for (index, token) in rest.iter().enumerate() {
-        let serde_json::Value::Object(map) = current else {
-            errors.push(occupied());
-            return body;
-        };
-        if index + 1 == rest.len() {
-            if map.contains_key(token) {
-                errors.push(occupied());
-            } else {
-                map.insert(token.clone(), entries);
-            }
-            return body;
-        }
-        current = map
+    let mut current: &mut serde_json::Map<String, serde_json::Value> = root;
+    for token in parents {
+        let next: &mut serde_json::Value = current
             .entry(token.clone())
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        let serde_json::Value::Object(map) = next else {
+            occupied();
+            return;
+        };
+        current = map;
     }
-    body
+    match current.get_mut(last) {
+        None => {
+            current.insert(last.clone(), serde_json::Value::Object(entries));
+        }
+        Some(serde_json::Value::Object(existing))
+            if path == DEFS_PATH || path == "/definitions" =>
+        {
+            for (name, entry) in entries {
+                if existing.contains_key(&name) {
+                    occupied();
+                } else {
+                    existing.insert(name, entry);
+                }
+            }
+        }
+        Some(_) => occupied(),
+    }
 }
 
 fn resource_ref(index: usize) -> String {
@@ -1581,7 +1623,7 @@ fn nullable(schema: JsonSchema) -> JsonSchema {
 /// uses [`Nullable`](crate::Nullable) for optional nullable fields instead.
 impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1592,7 +1634,7 @@ impl<T: ToJsonSchema> ToJsonSchema for Option<T> {
 impl<T: ToJsonSchema> ToJsonSchema for crate::Nullable<T> {
     /// `T`'s schema with `null` allowed, as for `Option<T>`; a `Nullable` field is optional.
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1602,7 +1644,7 @@ impl<T: ToJsonSchema> ToJsonSchema for crate::Nullable<T> {
 
 impl<T: ToJsonSchema> ToJsonSchema for Vec<T> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1626,7 +1668,7 @@ fn set_schema<T: ToJsonSchema>(generator: &mut SchemaGenerator) -> JsonSchema {
 
 impl<T: ToJsonSchema, S> ToJsonSchema for std::collections::HashSet<T, S> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1636,7 +1678,7 @@ impl<T: ToJsonSchema, S> ToJsonSchema for std::collections::HashSet<T, S> {
 
 impl<T: ToJsonSchema> ToJsonSchema for BTreeSet<T> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1647,7 +1689,7 @@ impl<T: ToJsonSchema> ToJsonSchema for BTreeSet<T> {
 #[cfg(feature = "indexmap")]
 impl<T: ToJsonSchema, S> ToJsonSchema for indexmap::IndexSet<T, S> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1666,7 +1708,7 @@ fn map_schema<V: ToJsonSchema>(generator: &mut SchemaGenerator) -> JsonSchema {
 
 impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1676,7 +1718,7 @@ impl<V: ToJsonSchema> ToJsonSchema for BTreeMap<String, V> {
 
 impl<V: ToJsonSchema, S> ToJsonSchema for std::collections::HashMap<String, V, S> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1687,7 +1729,7 @@ impl<V: ToJsonSchema, S> ToJsonSchema for std::collections::HashMap<String, V, S
 #[cfg(feature = "indexmap")]
 impl<V: ToJsonSchema, S> ToJsonSchema for indexmap::IndexMap<String, V, S> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1697,7 +1739,7 @@ impl<V: ToJsonSchema, S> ToJsonSchema for indexmap::IndexMap<String, V, S> {
 
 impl<T: ToJsonSchema> ToJsonSchema for Box<T> {
     fn json_schema() -> ReverseCodeGenResult {
-        root_schema_for::<Self>()
+        root_schema_for::<Self>().map(GeneratedSchema::into_schema)
     }
 
     fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -1812,8 +1854,9 @@ impl ToJsonSchema for std::net::Ipv6Addr {
 #[cfg(test)]
 mod tests {
     use super::{
-        MetaSchema, NumberFormats, ReverseCodeGenError, ReverseCodeGenResult,
-        ReverseCodeGenSettings, SchemaGenerator, TargetDialect, ToJsonSchema, root_schema_for,
+        GeneratedSchema, GeneratedSchemaResult, MetaSchema, NumberFormats, ReverseCodeGenError,
+        ReverseCodeGenResult, ReverseCodeGenSettings, SchemaGenerator, TargetDialect, ToJsonSchema,
+        root_schema_for,
     };
     use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
     use std::collections::{BTreeMap, BTreeSet};
@@ -1822,8 +1865,10 @@ mod tests {
     const SCHEMA_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 
     /// `result` with the schema serialized to JSON text.
-    fn serialized(result: ReverseCodeGenResult) -> Result<String, Vec<ReverseCodeGenError>> {
-        result.map(|schema: JsonSchema| serde_json::to_string(&schema).expect("serialize"))
+    fn serialized<S: serde::Serialize>(
+        result: Result<S, Vec<ReverseCodeGenError>>,
+    ) -> Result<String, Vec<ReverseCodeGenError>> {
+        result.map(|schema: S| serde_json::to_string(&schema).expect("serialize"))
     }
 
     #[test]
@@ -2291,7 +2336,9 @@ mod tests {
             defs: Some(defs(&[("Name", string_schema())])),
             ..ref_to("Name")
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2356,7 +2403,9 @@ mod tests {
             )])),
             ..ref_to("Node")
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2374,7 +2423,9 @@ mod tests {
             ])),
             ..object_schema(&[("first", ref_to("Name0")), ("second", ref_to("Name1"))])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(body);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(body)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2408,7 +2459,9 @@ mod tests {
                 ("second", ref_to("Name2")),
             ])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(body);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(body)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2418,9 +2471,9 @@ mod tests {
             schema: Some(SCHEMA_2020_12.to_string()),
             ..string_schema()
         });
-        let actual: ReverseCodeGenResult =
-            SchemaGenerator::default()
-                .into_named_root_schema("a::Name", "Name", |_| string_schema());
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_named_root_schema("a::Name", "Name", |_| string_schema())
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2435,20 +2488,20 @@ mod tests {
             defs: Some(defs(&[("Node", body.clone())])),
             ..body
         });
-        let actual: ReverseCodeGenResult = SchemaGenerator::default().into_named_root_schema(
-            "a::Node",
-            "Node",
-            |generator: &mut SchemaGenerator| JsonSchema {
-                items: Some(
-                    generator
-                        .named_subschema("a::Node", "Node", |_| {
-                            panic!("a pending schema id must not be rebuilt")
-                        })
-                        .into(),
-                ),
-                ..Default::default()
-            },
-        );
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_named_root_schema("a::Node", "Node", |generator: &mut SchemaGenerator| {
+                JsonSchema {
+                    items: Some(
+                        generator
+                            .named_subschema("a::Node", "Node", |_| {
+                                panic!("a pending schema id must not be rebuilt")
+                            })
+                            .into(),
+                    ),
+                    ..Default::default()
+                }
+            })
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2459,16 +2512,14 @@ mod tests {
             defs: Some(defs(&[("Name", integer_schema())])),
             ..object_schema(&[("nested", ref_to("Name"))])
         });
-        let actual: ReverseCodeGenResult = SchemaGenerator::default().into_named_root_schema(
-            "a::Name",
-            "Name",
-            |generator: &mut SchemaGenerator| {
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_named_root_schema("a::Name", "Name", |generator: &mut SchemaGenerator| {
                 object_schema(&[(
                     "nested",
                     generator.named_subschema("b::Name", "Name", |_| integer_schema()),
                 )])
-            },
-        );
+            })
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2485,18 +2536,16 @@ mod tests {
             ])),
             ..object_schema(&[("nested", ref_to("Name1")), ("this", ref_to("Name0"))])
         });
-        let actual: ReverseCodeGenResult = SchemaGenerator::default().into_named_root_schema(
-            "a::Name",
-            "Name",
-            |generator: &mut SchemaGenerator| {
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_named_root_schema("a::Name", "Name", |generator: &mut SchemaGenerator| {
                 let nested: JsonSchema =
                     generator.named_subschema("b::Name", "Name", |_| integer_schema());
                 let this: JsonSchema = generator.named_subschema("a::Name", "Name", |_| {
                     panic!("a pending schema id must not be rebuilt")
                 });
                 object_schema(&[("nested", nested), ("this", this)])
-            },
-        );
+            })
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2512,7 +2561,9 @@ mod tests {
             schema: Some(SCHEMA_2020_12.to_string()),
             ..standalone_with_def("Inner", string_schema())
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(inlined);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(inlined)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2554,7 +2605,9 @@ mod tests {
         let expected: ReverseCodeGenResult = Ok(standalone.clone());
         let mut generator: SchemaGenerator = SchemaGenerator::default();
         let inlined: JsonSchema = generator.inline_subschema(standalone);
-        let actual: ReverseCodeGenResult = generator.into_root_schema(inlined);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(inlined)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2584,8 +2637,9 @@ mod tests {
         let mut generator: SchemaGenerator = SchemaGenerator::default();
         let named: JsonSchema = generator.named_subschema("a::S", "S", |_| string_schema());
         let inlined: JsonSchema = generator.inline_subschema(standalone);
-        let actual: ReverseCodeGenResult =
-            generator.into_root_schema(object_schema(&[("named", named), ("inlined", inlined)]));
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(object_schema(&[("named", named), ("inlined", inlined)]))
+            .map(GeneratedSchema::into_schema);
         let expected: ReverseCodeGenResult = Ok(JsonSchema {
             schema: Some(SCHEMA_2020_12.to_string()),
             defs: Some(defs(&[
@@ -2643,7 +2697,9 @@ mod tests {
             defs: Some(defs(&[("Node", array_of(resource_ref("#")))])),
             ..ref_to("Node")
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2669,7 +2725,9 @@ mod tests {
             )])),
             ..ref_to("Resource")
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2696,7 +2754,9 @@ mod tests {
             ])),
             ..ref_to("A")
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2731,7 +2791,9 @@ mod tests {
             ])),
             ..ref_to("A")
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2763,32 +2825,35 @@ mod tests {
             ])),
             ..object_schema(&[("via", ref_to("A")), ("direct", ref_to("B"))])
         });
-        let actual: ReverseCodeGenResult =
-            generator.into_root_schema(object_schema(&[("via", via), ("direct", direct)]));
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(object_schema(&[("via", via), ("direct", direct)]))
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn into_resource_root_schema_refers_to_itself_as_hash_and_stays_out_of_defs() {
-        let actual: ReverseCodeGenResult = SchemaGenerator::default().into_resource_root_schema(
-            "a::Root",
-            "Root",
-            "https://example.com/root",
-            |generator: &mut SchemaGenerator| {
-                array_of(generator.named_subschema(
-                    "a::Child",
-                    "Child",
-                    |generator: &mut SchemaGenerator| {
-                        array_of(generator.resource_subschema(
-                            "a::Root",
-                            "Root",
-                            "https://example.com/root",
-                            |_| panic!("the pending root must not be rebuilt"),
-                        ))
-                    },
-                ))
-            },
-        );
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_resource_root_schema(
+                "a::Root",
+                "Root",
+                "https://example.com/root",
+                |generator: &mut SchemaGenerator| {
+                    array_of(generator.named_subschema(
+                        "a::Child",
+                        "Child",
+                        |generator: &mut SchemaGenerator| {
+                            array_of(generator.resource_subschema(
+                                "a::Root",
+                                "Root",
+                                "https://example.com/root",
+                                |_| panic!("the pending root must not be rebuilt"),
+                            ))
+                        },
+                    ))
+                },
+            )
+            .map(GeneratedSchema::into_schema);
         let expected: ReverseCodeGenResult = Ok(JsonSchema {
             schema: Some(SCHEMA_2020_12.to_string()),
             defs: Some(defs(&[("Child", array_of(resource_ref("#")))])),
@@ -2817,7 +2882,9 @@ mod tests {
             ])),
             ..object_schema(&[("a", ref_to("Outer"))])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(inlined);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(inlined)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2848,7 +2915,9 @@ mod tests {
             ])),
             ..object_schema(&[("a", ref_to("Outer")), ("c", ref_to("Inner0"))])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(inlined);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(inlined)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2871,7 +2940,9 @@ mod tests {
             ref_: Some("#/$defs/Inner1/properties/x".to_string()),
             ..Default::default()
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(inlined);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(inlined)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2890,7 +2961,9 @@ mod tests {
             ref_: Some("#/$defs/a~1b~0c".to_string()),
             ..Default::default()
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(inlined);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(inlined)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2910,7 +2983,9 @@ mod tests {
             ])),
             ..object_schema(&[("first", ref_to("Inner0")), ("second", ref_to("Inner1"))])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(body);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(body)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2941,7 +3016,9 @@ mod tests {
                 ),
             ])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(body);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(body)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2957,7 +3034,9 @@ mod tests {
             defs: Some(defs(&[("Inner", string_schema())])),
             ..object_schema(&[("hoisted", ref_to("Inner")), ("named", ref_to("Inner"))])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(body);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(body)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -2992,7 +3071,9 @@ mod tests {
                 ),
             ])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(body);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(body)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3012,7 +3093,9 @@ mod tests {
             )])),
             ..object_schema(&[("first", ref_to("List")), ("second", ref_to("List"))])
         });
-        let actual: ReverseCodeGenResult = generator.into_root_schema(body);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(body)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3022,8 +3105,9 @@ mod tests {
             schema: Some(SCHEMA_2020_12.to_string()),
             ..string_schema()
         });
-        let actual: ReverseCodeGenResult =
-            SchemaGenerator::default().into_root_schema(string_schema());
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_root_schema(string_schema())
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3039,7 +3123,7 @@ mod tests {
         struct Named;
         impl ToJsonSchema for Named {
             fn json_schema() -> ReverseCodeGenResult {
-                root_schema_for::<Self>()
+                root_schema_for::<Self>().map(GeneratedSchema::into_schema)
             }
 
             fn json_schema_with(generator: &mut SchemaGenerator) -> JsonSchema {
@@ -3099,7 +3183,9 @@ mod tests {
     fn cycle_document(property: &str, members: &[CycleMember<'_>]) -> ReverseCodeGenResult {
         let mut generator: SchemaGenerator = SchemaGenerator::default();
         let first: JsonSchema = cycle_member(&mut generator, members, 0);
-        generator.into_root_schema(object_schema(&[(property, first)]))
+        generator
+            .into_root_schema(object_schema(&[(property, first)]))
+            .map(GeneratedSchema::into_schema)
     }
 
     /// Why `id` is not a URI reference, as the generator reports it.
@@ -3187,8 +3273,9 @@ mod tests {
                 with_id("a/ping.json", object_schema(&[("pong", pong)]))
             },
         );
-        let actual: ReverseCodeGenResult =
-            generator.into_root_schema(object_schema(&[("ping", ping)]));
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(object_schema(&[("ping", ping)]))
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3307,8 +3394,9 @@ mod tests {
         let mut generator: SchemaGenerator = SchemaGenerator::default();
         let first: JsonSchema = cycle_member(&mut generator, &members, 0);
         let second: JsonSchema = cycle_member(&mut generator, &members, 1);
-        let actual: ReverseCodeGenResult =
-            generator.into_root_schema(object_schema(&[("ping", first), ("pong", second)]));
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(object_schema(&[("ping", first), ("pong", second)]))
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3343,48 +3431,50 @@ mod tests {
                 object_schema(&[("ping", ref_to("Ping"))]),
             )
         });
-        let actual: ReverseCodeGenResult = SchemaGenerator::default().into_resource_root_schema(
-            "a::Root",
-            "Root",
-            "https://example.com/schemas/root.json",
-            |generator: &mut SchemaGenerator| {
-                let ping: JsonSchema = generator.resource_subschema(
-                    "a::Ping",
-                    "Ping",
-                    "a/ping.json",
-                    |generator: &mut SchemaGenerator| {
-                        let pong: JsonSchema = generator.resource_subschema(
-                            "a::Pong",
-                            "Pong",
-                            "pong.json",
-                            |generator: &mut SchemaGenerator| {
-                                let ping: JsonSchema = generator.resource_subschema(
-                                    "a::Ping",
-                                    "Ping",
-                                    "a/ping.json",
-                                    |_| panic!("a pending resource must not be rebuilt"),
-                                );
-                                let root: JsonSchema = generator.resource_subschema(
-                                    "a::Root",
-                                    "Root",
-                                    "https://example.com/schemas/root.json",
-                                    |_| panic!("the pending root must not be rebuilt"),
-                                );
-                                with_id(
-                                    "pong.json",
-                                    object_schema(&[("ping", ping), ("root", root)]),
-                                )
-                            },
-                        );
-                        with_id("a/ping.json", object_schema(&[("pong", pong)]))
-                    },
-                );
-                with_id(
-                    "https://example.com/schemas/root.json",
-                    object_schema(&[("ping", ping)]),
-                )
-            },
-        );
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_resource_root_schema(
+                "a::Root",
+                "Root",
+                "https://example.com/schemas/root.json",
+                |generator: &mut SchemaGenerator| {
+                    let ping: JsonSchema = generator.resource_subschema(
+                        "a::Ping",
+                        "Ping",
+                        "a/ping.json",
+                        |generator: &mut SchemaGenerator| {
+                            let pong: JsonSchema = generator.resource_subschema(
+                                "a::Pong",
+                                "Pong",
+                                "pong.json",
+                                |generator: &mut SchemaGenerator| {
+                                    let ping: JsonSchema = generator.resource_subschema(
+                                        "a::Ping",
+                                        "Ping",
+                                        "a/ping.json",
+                                        |_| panic!("a pending resource must not be rebuilt"),
+                                    );
+                                    let root: JsonSchema = generator.resource_subschema(
+                                        "a::Root",
+                                        "Root",
+                                        "https://example.com/schemas/root.json",
+                                        |_| panic!("the pending root must not be rebuilt"),
+                                    );
+                                    with_id(
+                                        "pong.json",
+                                        object_schema(&[("ping", ping), ("root", root)]),
+                                    )
+                                },
+                            );
+                            with_id("a/ping.json", object_schema(&[("pong", pong)]))
+                        },
+                    );
+                    with_id(
+                        "https://example.com/schemas/root.json",
+                        object_schema(&[("ping", ping)]),
+                    )
+                },
+            )
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3400,7 +3490,9 @@ mod tests {
                 (*schema_id, reference)
             })
             .collect();
-        generator.into_root_schema(object_schema(&properties))
+        generator
+            .into_root_schema(object_schema(&properties))
+            .map(GeneratedSchema::into_schema)
     }
 
     #[test]
@@ -3482,12 +3574,11 @@ mod tests {
             id: "not a uri".to_string(),
             reason: invalid_id_reason("not a uri"),
         }]);
-        let actual: ReverseCodeGenResult = SchemaGenerator::default().into_resource_root_schema(
-            "a::Root",
-            "Root",
-            "not a uri",
-            |_| with_id("not a uri", string_schema()),
-        );
+        let actual: ReverseCodeGenResult = SchemaGenerator::default()
+            .into_resource_root_schema("a::Root", "Root", "not a uri", |_| {
+                with_id("not a uri", string_schema())
+            })
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3504,7 +3595,9 @@ mod tests {
         let mut generator: SchemaGenerator = SchemaGenerator::default();
         generator.report_errors(vec![reported_error()]);
         let expected: ReverseCodeGenResult = Err(vec![reported_error()]);
-        let actual: ReverseCodeGenResult = generator.into_root_schema(string_schema());
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(string_schema())
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3524,7 +3617,9 @@ mod tests {
                 reason: invalid_id_reason("not a uri"),
             },
         ]);
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3582,7 +3677,7 @@ mod tests {
 
     #[test]
     fn draft_07_writes_definitions_and_its_schema_uri() {
-        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","definitions":{"A":{"type":"string"}},"properties":{"a":{"$ref":"#/definitions/A"}}}"##.to_string());
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","definitions":{"A":{"type":"string"}},"properties":{"a":{"$ref":"#/definitions/A"}},"type":"object"}"##.to_string());
         let actual: Result<String, Vec<ReverseCodeGenError>> =
             written(settings_for(TargetDialect::Draft07), BTreeMap::new());
         assert_eq!(expected, actual);
@@ -3817,7 +3912,9 @@ mod tests {
                 path: "/x".to_string(),
                 schema_id: "a::A".to_string(),
             }]);
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 
@@ -3833,8 +3930,8 @@ mod tests {
         };
         let expected: Vec<Result<String, Vec<ReverseCodeGenError>>> = vec![
             Ok(r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/A","$defs":{"A":{"$id":"https://example.com/a","type":"string"}}}"##.to_string()),
-            Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/A","definitions":{"A":{"$id":"https://example.com/a","type":"string"}}}"##.to_string()),
-            Ok(r##"{"$schema":"http://json-schema.org/draft-04/schema#","$ref":"#/definitions/A","definitions":{"A":{"type":"string","id":"https://example.com/a"}}}"##.to_string()),
+            Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","allOf":[{"$ref":"#/definitions/A"}],"definitions":{"A":{"$id":"https://example.com/a","type":"string"}}}"##.to_string()),
+            Ok(r##"{"$schema":"http://json-schema.org/draft-04/schema#","allOf":[{"$ref":"#/definitions/A"}],"definitions":{"A":{"id":"https://example.com/a","type":"string"}}}"##.to_string()),
         ];
         let actual: Vec<Result<String, Vec<ReverseCodeGenError>>> = vec![
             resource(TargetDialect::Draft202012),
@@ -3903,8 +4000,11 @@ mod tests {
             number_formats: formats,
             ..ReverseCodeGenSettings::default()
         };
-        let format = |result: ReverseCodeGenResult| -> Option<String> {
-            result.expect("a number type has a schema").format
+        let format = |result: GeneratedSchemaResult| -> Option<String> {
+            result
+                .expect("a number type has a schema")
+                .into_schema()
+                .format
         };
         let generate = |generator: SchemaGenerator| generator;
         vec![
@@ -4098,11 +4198,149 @@ mod tests {
 
     #[test]
     fn a_hand_written_root_is_converted_to_the_target() {
-        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"integer","minimum":0,"exclusiveMinimum":true}"#.to_string());
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r#"{"$schema":"http://json-schema.org/draft-04/schema#","exclusiveMinimum":true,"minimum":0,"type":"integer"}"#.to_string());
         let actual: Result<String, Vec<ReverseCodeGenError>> = converted_document(
             TargetDialect::Draft04,
             serde_json::json!({"type": "integer", "exclusiveMinimum": 0}),
         );
+        assert_eq!(expected, actual);
+    }
+
+    /// The 2020-12 model of `body` (written as 2020-12) generated for `dialect`.
+    fn model_document(dialect: TargetDialect, body: serde_json::Value) -> JsonSchema {
+        let body: JsonSchema = serde_json::from_value(body).expect("a schema object");
+        SchemaGenerator::new(settings_for(dialect))
+            .into_root_schema(body)
+            .expect("a representable schema")
+            .into_schema()
+    }
+
+    #[test]
+    fn the_model_of_a_converted_document_stays_2020_12() {
+        let expected: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "integer",
+            "exclusiveMinimum": 0
+        }))
+        .expect("a schema object");
+        let actual: JsonSchema = model_document(
+            TargetDialect::Draft04,
+            serde_json::json!({"type": "integer", "exclusiveMinimum": 0}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn the_model_of_a_converted_document_keeps_its_definitions_under_the_target_path() {
+        let expected: Option<BTreeMap<String, Schema>> = Some(BTreeMap::from([(
+            "A".to_string(),
+            Schema::from(string_schema()),
+        )]));
+        let mut generator: SchemaGenerator =
+            SchemaGenerator::new(settings_for(TargetDialect::Draft07));
+        let reference: JsonSchema = generator.named_subschema("a::A", "A", |_| string_schema());
+        let actual: Option<BTreeMap<String, Schema>> = generator
+            .into_root_schema(object_schema(&[("a", reference)]))
+            .expect("a representable schema")
+            .into_schema()
+            .definitions;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn the_model_of_a_document_without_a_meta_schema_has_none() {
+        let expected: Option<String> = None;
+        let body: JsonSchema = string_schema();
+        let actual: Option<String> = SchemaGenerator::new(ReverseCodeGenSettings {
+            dialect: Some(TargetDialect::Draft04),
+            meta_schema: MetaSchema::Omit,
+            ..ReverseCodeGenSettings::default()
+        })
+        .into_root_schema(body)
+        .expect("a representable schema")
+        .into_schema()
+        .schema;
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_native_document_is_its_own_target_form() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "string"
+        });
+        let actual: serde_json::Value = SchemaGenerator::default()
+            .into_root_schema(string_schema())
+            .expect("a schema")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_converted_document_writes_the_target_form_as_a_value() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "exclusiveMinimum": true,
+            "minimum": 0,
+            "type": "integer"
+        });
+        let body: JsonSchema =
+            serde_json::from_value(serde_json::json!({"type": "integer", "exclusiveMinimum": 0}))
+                .expect("a schema object");
+        let actual: serde_json::Value = SchemaGenerator::new(settings_for(TargetDialect::Draft04))
+            .into_root_schema(body)
+            .expect("a representable schema")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_root_ref_is_wrapped_in_all_of_when_definitions_come_beside_it() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","allOf":[{"$ref":"#/definitions/A"}],"definitions":{"A":{"type":"string"}}}"##.to_string());
+        let mut generator: SchemaGenerator =
+            SchemaGenerator::new(settings_for(TargetDialect::Draft07));
+        let reference: JsonSchema = generator.named_subschema("a::A", "A", |_| string_schema());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(generator.into_root_schema(reference));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_root_ref_is_wrapped_in_all_of_when_only_the_meta_schema_comes_beside_it() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","allOf":[{"$ref":"#/definitions/Missing"}]}"##.to_string());
+        let actual: Result<String, Vec<ReverseCodeGenError>> = converted_document(
+            TargetDialect::Draft07,
+            serde_json::json!({"$ref": "#/$defs/Missing"}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_lone_root_ref_stays_without_siblings_when_nothing_comes_beside_it() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> =
+            Ok(r##"{"$ref":"#/definitions/Missing"}"##.to_string());
+        let body: JsonSchema =
+            serde_json::from_value(serde_json::json!({"$ref": "#/$defs/Missing"}))
+                .expect("a schema object");
+        let actual: Result<String, Vec<ReverseCodeGenError>> = serialized(
+            SchemaGenerator::new(ReverseCodeGenSettings {
+                dialect: Some(TargetDialect::Draft07),
+                meta_schema: MetaSchema::Omit,
+                ..ReverseCodeGenSettings::default()
+            })
+            .into_root_schema(body),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_definitions_path_cannot_start_with_an_openapi_30_keyword() {
+        let expected: Vec<ReverseCodeGenError> = invalid_path_error(
+            "/discriminator/x",
+            "`discriminator` is a keyword of OpenAPI 3.0, not a place for definitions",
+        );
+        let actual: Vec<ReverseCodeGenError> =
+            invalid_path(Some(TargetDialect::OpenApi30), "/discriminator/x");
         assert_eq!(expected, actual);
     }
 
@@ -4139,7 +4377,7 @@ mod tests {
             extensions: BTreeMap::from([("if".to_string(), serde_json::json!(true))]),
             ..Default::default()
         });
-        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/A","definitions":{"A":{"uniqueItems":true,"if":true}}}"##.to_string());
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","allOf":[{"$ref":"#/definitions/A"}],"definitions":{"A":{"if":true,"uniqueItems":true}}}"##.to_string());
         let actual: Result<String, Vec<ReverseCodeGenError>> =
             serialized(generator.into_root_schema(reference));
         assert_eq!(expected, actual);
@@ -4159,7 +4397,9 @@ mod tests {
                 keyword: "if".to_string(),
                 pointer: "/definitions/A".to_string(),
             }]);
-        let actual: ReverseCodeGenResult = generator.into_root_schema(reference);
+        let actual: ReverseCodeGenResult = generator
+            .into_root_schema(reference)
+            .map(GeneratedSchema::into_schema);
         assert_eq!(expected, actual);
     }
 }

@@ -939,7 +939,7 @@ fn forwarding_impl(name: &Ident, ty: &Type) -> TokenStream2 {
 
             fn json_schema_root(
                 generator: __json_schema_rs::SchemaGenerator,
-            ) -> __json_schema_rs::ReverseCodeGenResult {
+            ) -> __json_schema_rs::GeneratedSchemaResult {
                 <#ty as __json_schema_rs::ToJsonSchema>::json_schema_root(generator)
             }
 
@@ -1302,11 +1302,12 @@ fn named_type_impl(
                 <Self as __json_schema_rs::ToJsonSchema>::json_schema_root(
                     __json_schema_rs::SchemaGenerator::default(),
                 )
+                .map(__json_schema_rs::GeneratedSchema::into_schema)
             }
 
             fn json_schema_root(
                 generator: __json_schema_rs::SchemaGenerator,
-            ) -> __json_schema_rs::ReverseCodeGenResult {
+            ) -> __json_schema_rs::GeneratedSchemaResult {
                 generator #root_call
             }
 

@@ -116,14 +116,14 @@ pub enum NumberFormats {
 ///
 /// ```
 /// use json_schema_rs::reverse_code_gen::{ReverseCodeGenSettings, TargetDialect};
-/// use json_schema_rs::{ReverseCodeGenResult, SchemaGenerator};
+/// use json_schema_rs::{GeneratedSchemaResult, SchemaGenerator};
 ///
 /// let settings: ReverseCodeGenSettings = ReverseCodeGenSettings {
 ///     dialect: Some(TargetDialect::Draft07),
 ///     ..Default::default()
 /// };
-/// let schema: ReverseCodeGenResult = SchemaGenerator::new(settings).into_root_schema_for::<Vec<String>>();
-/// let expected: String = r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"array","items":{"type":"string"}}"#.to_string();
+/// let schema: GeneratedSchemaResult = SchemaGenerator::new(settings).into_root_schema_for::<Vec<String>>();
+/// let expected: String = r#"{"$schema":"http://json-schema.org/draft-07/schema#","items":{"type":"string"},"type":"array"}"#.to_string();
 /// let actual: String = serde_json::to_string(&schema.unwrap()).unwrap();
 /// assert_eq!(expected, actual);
 /// ```

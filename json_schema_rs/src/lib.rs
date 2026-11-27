@@ -48,8 +48,8 @@ pub use json_schema::{
 pub use nullable::Nullable;
 pub use number::json_equal;
 pub use reverse_code_gen::{
-    MetaSchema, NumberFormats, ReverseCodeGenError, ReverseCodeGenResult, ReverseCodeGenSettings,
-    SchemaGenerator, TargetDialect, ToJsonSchema,
+    GeneratedSchema, GeneratedSchemaResult, MetaSchema, NumberFormats, ReverseCodeGenError,
+    ReverseCodeGenResult, ReverseCodeGenSettings, SchemaGenerator, TargetDialect, ToJsonSchema,
 };
 pub use validated::Validated;
 #[cfg(feature = "linear-regex")]
