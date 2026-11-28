@@ -254,6 +254,41 @@ pub(super) fn ids_to_anchors(
     }
 }
 
+/// The errors [`ids_to_anchors`] reports, found in `body` and `definitions` (whose entries sit
+/// under the JSON Pointer `path`) as converted to `target`, so each pointer names the schema's
+/// position in the document the target gets (`items/0` and `dependencies/d` on draft 4-7, not
+/// the model's `prefixItems/0` and `dependentSchemas/d`). Subschemas are found by the target's
+/// own keyword table. [`ids_to_anchors`] has already rewritten the model the document was
+/// converted from, so nothing is left to rewrite here.
+pub(super) fn report_converted_anchors(
+    target: TargetDialect,
+    body: &mut Value,
+    definitions: &mut serde_json::Map<String, Value>,
+    path: &str,
+    errors: &mut Vec<ReverseCodeGenError>,
+) {
+    let Some(version) = target
+        .spec_version()
+        .filter(|version| has_anchor(*version) || fragment_ids_are_anchors(*version))
+    else {
+        return;
+    };
+    let tables: Tables = Tables::for_resource(version);
+    let mut declared: Declared = HashMap::new();
+    let mut resources: usize = 1;
+    let mut context = Context {
+        target,
+        declared: &mut declared,
+        resources: &mut resources,
+        errors,
+    };
+    context.walk(version, tables, Node::Raw(body), "", true);
+    for (name, definition) in definitions.iter_mut() {
+        let root: String = format!("{path}/{}", escape_pointer_token(name));
+        context.walk(version, tables, Node::Raw(definition), &root, false);
+    }
+}
+
 /// What [`ids_to_anchors`] carries from one tree to the next.
 struct Context<'c> {
     target: TargetDialect,
