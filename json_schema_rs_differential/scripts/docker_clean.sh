@@ -24,7 +24,7 @@ lines() {
   local line
   while IFS= read -r line; do
     line="${line%$'\r'}"
-    [[ -n "${line}" ]] && printf '%s\n' "${line}"
+    if [[ -n "${line}" ]]; then printf '%s\n' "${line}"; fi
   done < <("$@")
 }
 
@@ -39,7 +39,7 @@ containers="$(
   {
     lines docker ps -aq --filter "label=${LABEL}"
     while read -r id _; do
-      [[ -n "${id}" ]] && lines docker ps -aq --filter "ancestor=${id}"
+      if [[ -n "${id}" ]]; then lines docker ps -aq --filter "ancestor=${id}"; fi
     done <<<"${images}"
   } | sort -u
 )"

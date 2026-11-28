@@ -492,7 +492,7 @@ fn idn_hostname_rejects_left_to_right_label_with_right_to_left_letter() {
 
 // --- #331: uri-template rejects an apostrophe in a literal ---
 
-/// RFC 6570 section 2.1: `'` is a sub-delim, allowed in a literal.
+/// RFC 6570 section 2.1 as corrected by Verified Errata 6937: `'` is allowed in a literal.
 #[test]
 fn uri_template_accepts_apostrophe_in_literal() {
     known_failure(331, || {
