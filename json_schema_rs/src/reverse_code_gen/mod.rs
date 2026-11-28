@@ -17,6 +17,7 @@ pub use settings::{
     MetaSchema, NumberFormats, ReverseCodeGenSettings, ReverseCodeGenSettingsBuilder, TargetDialect,
 };
 
+use crate::json_pointer::{fragment_to_pointer, pointer_to_fragment};
 use crate::json_schema::registry::parse_uri;
 use crate::json_schema::{Dialect, JsonSchema, JsonType, Schema, SpecVersion, SubschemaPosition};
 use resource_uri::Placed;
@@ -1415,58 +1416,6 @@ pub(super) fn split_definitions_ref(reference: &str) -> Option<(bool, std::borro
             std::borrow::Cow::Owned(pointer_to_fragment(rest).into_owned()),
         ))
     })
-}
-
-/// Writes a JSON Pointer (its RFC 6901 string, tokens escaped with `~0` / `~1`) as a URI
-/// fragment (RFC 6901 §6): every character a fragment may not hold as written (RFC 3986 §3.5),
-/// `%` and non-ASCII characters included, is percent-encoded as its UTF-8 bytes. A `$ref` is a
-/// URI reference in every draft's metaschema, so the generator writes no IRI-only character.
-pub(super) fn pointer_to_fragment(pointer: &str) -> std::borrow::Cow<'_, str> {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    if pointer
-        .chars()
-        .all(crate::json_pointer::is_uri_fragment_char)
-    {
-        return std::borrow::Cow::Borrowed(pointer);
-    }
-    let mut fragment: String = String::with_capacity(pointer.len() + 8);
-    let mut utf8: [u8; 4] = [0; 4];
-    for c in pointer.chars() {
-        if crate::json_pointer::is_uri_fragment_char(c) {
-            fragment.push(c);
-            continue;
-        }
-        for byte in c.encode_utf8(&mut utf8).bytes() {
-            fragment.push('%');
-            fragment.push(char::from(HEX[usize::from(byte >> 4)]));
-            fragment.push(char::from(HEX[usize::from(byte & 0xF)]));
-        }
-    }
-    std::borrow::Cow::Owned(fragment)
-}
-
-/// Reads a URI fragment as the JSON Pointer string it holds (RFC 6901 §6): percent-decoded,
-/// its `~0` / `~1` escapes kept. `None` when an escape is malformed or the bytes are not UTF-8.
-pub(super) fn fragment_to_pointer(fragment: &str) -> Option<std::borrow::Cow<'_, str>> {
-    if !fragment.contains('%') {
-        return Some(std::borrow::Cow::Borrowed(fragment));
-    }
-    let bytes: &[u8] = fragment.as_bytes();
-    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut at: usize = 0;
-    while at < bytes.len() {
-        if bytes[at] == b'%' {
-            let hex: &str = fragment
-                .get(at + 1..at + 3)
-                .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            at += 3;
-        } else {
-            decoded.push(bytes[at]);
-            at += 1;
-        }
-    }
-    String::from_utf8(decoded).ok().map(std::borrow::Cow::Owned)
 }
 
 /// The `$ref` to the definition `name` under the JSON Pointer `container`, written as a URI
