@@ -1,9 +1,196 @@
 {
+  "draft2019-09": {
+    "format-idn-hostname.json": {
+      "validation of internationalized host names": [
+        "A-label that decodes to a Bidi rule violation is invalid",
+        "Bidi domain name with a digit-first label is invalid",
+        "a label of 63 fullwidth characters is valid after mapping",
+        "a label of only Arabic-Indic digits is invalid",
+        "a zero width space is ignored by the mapping",
+        "an ACE prefix produced by the mapping step is decoded as an A-label",
+        "fullwidth digits are mapped to ASCII digits",
+        "label starting with a digit before a right-to-left letter is invalid",
+        "left-to-right label containing a right-to-left letter is invalid",
+        "non-canonical Punycode that does not re-encode to itself is invalid",
+        "right-to-left label mixing both digit types is invalid"
+      ]
+    },
+    "format-uri-template.json": {
+      "validation of URI-Templates": [
+        "an apostrophe in a literal is valid"
+      ]
+    },
+    "optional/bignum.json": {
+      "const comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "enum comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "float comparison with high precision": [
+        "below the exclusive maximum is valid"
+      ],
+      "float comparison with high precision on negative numbers": [
+        "above the exclusive minimum is valid"
+      ],
+      "minimum integer comparison": [
+        "just below the minimum is invalid"
+      ],
+      "uniqueItems comparison with high precision": [
+        "arrays containing distinct decimals are unique",
+        "distinct high-precision decimals are unique",
+        "objects containing distinct decimals are unique"
+      ]
+    }
+  },
+  "draft2020-12": {
+    "format-idn-hostname.json": {
+      "validation of internationalized host names": [
+        "A-label that decodes to a Bidi rule violation is invalid",
+        "Bidi domain name with a digit-first label is invalid",
+        "a label of 63 fullwidth characters is valid after mapping",
+        "a label of only Arabic-Indic digits is invalid",
+        "a zero width space is ignored by the mapping",
+        "an ACE prefix produced by the mapping step is decoded as an A-label",
+        "fullwidth digits are mapped to ASCII digits",
+        "label starting with a digit before a right-to-left letter is invalid",
+        "left-to-right label containing a right-to-left letter is invalid",
+        "non-canonical Punycode that does not re-encode to itself is invalid",
+        "right-to-left label mixing both digit types is invalid"
+      ]
+    },
+    "format-uri-template.json": {
+      "validation of URI-Templates": [
+        "an apostrophe in a literal is valid"
+      ]
+    },
+    "optional/bignum.json": {
+      "const comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "enum comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "float comparison with high precision": [
+        "below the exclusive maximum is valid"
+      ],
+      "float comparison with high precision on negative numbers": [
+        "above the exclusive minimum is valid"
+      ],
+      "minimum integer comparison": [
+        "just below the minimum is invalid"
+      ],
+      "uniqueItems comparison with high precision": [
+        "arrays containing distinct decimals are unique",
+        "distinct high-precision decimals are unique",
+        "objects containing distinct decimals are unique"
+      ]
+    }
+  },
   "draft4": {
     "optional/bignum.json": {
+      "enum comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "float comparison with high precision (boolean)": [
+        "below the exclusive maximum is valid"
+      ],
+      "float comparison with high precision on negative numbers (boolean)": [
+        "above the exclusive minimum is valid"
+      ],
       "integer": [
         "a bignum is an integer",
         "a negative bignum is an integer"
+      ],
+      "minimum integer comparison": [
+        "just below the minimum is invalid"
+      ],
+      "uniqueItems comparison with high precision": [
+        "arrays containing distinct decimals are unique",
+        "distinct high-precision decimals are unique",
+        "objects containing distinct decimals are unique"
+      ]
+    }
+  },
+  "draft6": {
+    "format-uri-template.json": {
+      "validation of URI-Templates": [
+        "an apostrophe in a literal is valid"
+      ]
+    },
+    "optional/bignum.json": {
+      "const comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "enum comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "float comparison with high precision": [
+        "below the exclusive maximum is valid"
+      ],
+      "float comparison with high precision on negative numbers": [
+        "above the exclusive minimum is valid"
+      ],
+      "minimum integer comparison": [
+        "just below the minimum is invalid"
+      ],
+      "uniqueItems comparison with high precision": [
+        "arrays containing distinct decimals are unique",
+        "distinct high-precision decimals are unique",
+        "objects containing distinct decimals are unique"
+      ]
+    }
+  },
+  "draft7": {
+    "format-idn-hostname.json": {
+      "validation of internationalized host names": [
+        "A-label that decodes to a Bidi rule violation is invalid",
+        "Bidi domain name with a digit-first label is invalid",
+        "a label of 63 fullwidth characters is valid after mapping",
+        "a label of only Arabic-Indic digits is invalid",
+        "a zero width space is ignored by the mapping",
+        "an ACE prefix produced by the mapping step is decoded as an A-label",
+        "fullwidth digits are mapped to ASCII digits",
+        "label starting with a digit before a right-to-left letter is invalid",
+        "left-to-right label containing a right-to-left letter is invalid",
+        "non-canonical Punycode that does not re-encode to itself is invalid",
+        "right-to-left label mixing both digit types is invalid"
+      ]
+    },
+    "format-uri-template.json": {
+      "validation of URI-Templates": [
+        "an apostrophe in a literal is valid"
+      ]
+    },
+    "optional/bignum.json": {
+      "const comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "enum comparison with high precision": [
+        "a slightly larger decimal is invalid",
+        "a slightly smaller decimal is invalid"
+      ],
+      "float comparison with high precision": [
+        "below the exclusive maximum is valid"
+      ],
+      "float comparison with high precision on negative numbers": [
+        "above the exclusive minimum is valid"
+      ],
+      "minimum integer comparison": [
+        "just below the minimum is invalid"
+      ],
+      "uniqueItems comparison with high precision": [
+        "arrays containing distinct decimals are unique",
+        "distinct high-precision decimals are unique",
+        "objects containing distinct decimals are unique"
       ]
     }
   }

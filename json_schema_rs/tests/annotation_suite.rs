@@ -7,13 +7,15 @@
 //! `<draft>/<file> :: <case> :: <instance>`; it passes when every assertion holds: the
 //! annotations the instance collects at the assertion's `location` for its `keyword`, keyed by
 //! the schema location that contributed each one, equal `expected` (an empty `expected` means
-//! none). A schema location is the subschema's location: the keyword's absolute location when a
+//! none). A schema location is the subschema's location as a JSON Pointer from the root of the
+//! case's schema: the keyword's absolute location (mapped from its resource to the root) when a
 //! reference led to it, otherwise its location as evaluated, without the keyword itself. The
 //! suite lists them in an order the specification does not define, so they compare as maps.
 //!
 //! The suite must be cloned at `research/json-schema-test-suite/` (`make vendor_test_suite`);
 //! the run hard-fails when it is missing.
 
+use fluent_uri::{Iri, IriRef};
 use json_schema_rs::{
     Annotation, CompiledSchema, JsonSchemaSettings, Registry, Schema, SpecVersion,
 };
@@ -22,6 +24,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+
+mod suite_compatibility;
+use suite_compatibility::compatible;
 
 /// The drafts we run, with the release number the suite's `compatibility` uses for each.
 const DRAFTS: [(&str, u32, SpecVersion); 5] = [
@@ -73,29 +78,6 @@ fn suite_dir() -> PathBuf {
         .join("tests")
 }
 
-/// Whether `compatibility` (comma-separated `N`, `<=N` or `=N`) admits release `release`.
-fn compatible(compatibility: Option<&str>, release: u32) -> Result<bool, String> {
-    let Some(compatibility) = compatibility else {
-        return Ok(true);
-    };
-    let mut admits: bool = true;
-    for constraint in compatibility.split(',').map(str::trim) {
-        let (number, test): (&str, fn(u32, u32) -> bool) =
-            if let Some(number) = constraint.strip_prefix("<=") {
-                (number, |release, bound| release <= bound)
-            } else if let Some(number) = constraint.strip_prefix('=') {
-                (number, |release, bound| release == bound)
-            } else {
-                (constraint, |release, bound| release >= bound)
-            };
-        let bound: u32 = number
-            .parse()
-            .map_err(|e| format!("bad compatibility {compatibility:?}: {e}"))?;
-        admits &= test(release, bound);
-    }
-    Ok(admits)
-}
-
 /// `text` with every `%XX` escape decoded.
 fn percent_decode(text: &str) -> String {
     let bytes: &[u8] = text.as_bytes();
@@ -117,10 +99,68 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The schema location that contributed `annotation`, as a decoded JSON Pointer.
-fn schema_location(annotation: &Annotation) -> String {
+/// Where each schema resource of `schema` sits in it: its base URI (resolved from the
+/// retrieval URI through every enclosing `$id`, or `id` for draft-04, without a fragment) and
+/// its JSON Pointer from the root. The suite keys an annotation by the root document's pointer,
+/// while an absolute keyword location is relative to the subschema's own resource.
+fn resource_pointers(schema: &Value, spec_version: SpecVersion) -> HashMap<String, String> {
+    let id_keyword: &str = if spec_version == SpecVersion::Draft04 {
+        "id"
+    } else {
+        "$id"
+    };
+    let root: Iri<String> = Iri::parse(BASE_URI.to_string()).expect("BASE_URI is a URI");
+    let mut pointers: HashMap<String, String> = HashMap::new();
+    let mut stack: Vec<(&Value, Iri<String>, String)> = vec![(schema, root, String::new())];
+    while let Some((value, base, pointer)) = stack.pop() {
+        let base: Iri<String> = match value {
+            Value::Object(object) => match object.get(id_keyword).and_then(Value::as_str) {
+                Some(id) if !id.starts_with('#') => IriRef::parse(id)
+                    .ok()
+                    .and_then(|reference| reference.resolve_against(&base).ok())
+                    .map_or(base, |resolved| resolved.strip_fragment().normalize()),
+                _ => base,
+            },
+            _ => base,
+        };
+        if matches!(value, Value::Object(_)) {
+            pointers
+                .entry(base.to_string())
+                .or_insert_with(|| pointer.clone());
+        }
+        let children: Vec<(String, &Value)> = match value {
+            // Instance data, not subschemas: an `$id` inside it names no resource.
+            Value::Object(object) => object
+                .iter()
+                .filter(|(key, _)| {
+                    !matches!(key.as_str(), "const" | "enum" | "examples" | "default")
+                })
+                .map(|(key, child)| (key.replace('~', "~0").replace('/', "~1"), child))
+                .collect(),
+            Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i.to_string(), c))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (token, child) in children {
+            stack.push((child, base.clone(), format!("{pointer}/{token}")));
+        }
+    }
+    pointers
+}
+
+/// The schema location that contributed `annotation`, as a decoded JSON Pointer from the root
+/// of the case's schema (`resources`: [`resource_pointers`]).
+fn schema_location(annotation: &Annotation, resources: &HashMap<String, String>) -> String {
     let keyword_location: String = match &annotation.absolute_keyword_location {
-        Some(absolute) => percent_decode(absolute.split_once('#').map_or("", |(_, f)| f)),
+        Some(absolute) => {
+            let (resource, fragment): (&str, &str) =
+                absolute.split_once('#').unwrap_or((absolute, ""));
+            let prefix: &str = resources.get(resource).map_or("", String::as_str);
+            format!("{prefix}{}", percent_decode(fragment))
+        }
         None => annotation.keyword_location.to_string(),
     };
     let suffix: String = format!(
@@ -161,6 +201,7 @@ fn run_test(case: &TestCase, spec_version: SpecVersion, test: &SuiteTest) -> Res
                 .join("; ")
         )
     })?;
+    let resources: HashMap<String, String> = resource_pointers(&case.schema, spec_version);
     let mut failures: Vec<String> = Vec::new();
     for assertion in &test.assertions {
         let expected: BTreeMap<String, Value> = assertion
@@ -177,7 +218,7 @@ fn run_test(case: &TestCase, spec_version: SpecVersion, test: &SuiteTest) -> Res
                 a.keyword == assertion.keyword
                     && a.instance_location.to_string() == assertion.location
             })
-            .map(|a| (schema_location(a), a.value.clone()))
+            .map(|a| (schema_location(a, &resources), a.value.clone()))
             .collect();
         if expected != actual {
             failures.push(format!(

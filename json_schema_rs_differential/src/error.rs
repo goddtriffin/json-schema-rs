@@ -41,6 +41,14 @@ pub enum DifferentialError {
         /// The implementation ids the report does contain.
         available: Vec<String>,
     },
+    /// A suite file says something the loader cannot follow (a malformed `compatibility`), or
+    /// the suite was asked for a draft it does not number.
+    Suite {
+        /// The suite file or directory involved.
+        path: PathBuf,
+        /// What is wrong.
+        message: String,
+    },
     /// The benchmark fixture manifest is inconsistent with a Bowtie fixture report.
     Fixture {
         /// The fixture id.
@@ -77,6 +85,9 @@ impl fmt::Display for DifferentialError {
                 path.display(),
                 available.join(", ")
             ),
+            DifferentialError::Suite { path, message } => {
+                write!(f, "unusable suite input {}: {message}", path.display())
+            }
             DifferentialError::Fixture { id, message } => {
                 write!(f, "fixture \"{id}\": {message}")
             }
@@ -92,6 +103,7 @@ impl std::error::Error for DifferentialError {
             DifferentialError::Report { source, .. } => Some(source),
             DifferentialError::MissingReport { .. }
             | DifferentialError::MissingImplementation { .. }
+            | DifferentialError::Suite { .. }
             | DifferentialError::Fixture { .. } => None,
         }
     }

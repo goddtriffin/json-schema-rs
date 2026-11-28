@@ -2,12 +2,42 @@
 //!
 //! Bowtie reports carry no file paths, so every reported case is matched back to the suite
 //! file it came from by its description and schema. This is what lets the report flag
-//! optional-suite tests (files under `tests/<draft>/optional/`) and name the file of every
+//! optional-suite tests (files under `validation/tests/optional/`) and name the file of every
 //! disagreement.
 
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+
+/// The suite's `compatibility` matching, shared with the library's suite gates.
+#[path = "../../json_schema_rs/tests/suite_compatibility/mod.rs"]
+mod compatibility;
+pub use compatibility::compatible;
+
+/// The release number the suite's `compatibility` property uses for one of [`crate::DRAFTS`].
+#[must_use]
+pub fn release(draft: &str) -> Option<u32> {
+    match draft {
+        "draft4" => Some(4),
+        "draft6" => Some(6),
+        "draft7" => Some(7),
+        "draft2019-09" => Some(2019),
+        "draft2020-12" => Some(2020),
+        _ => None,
+    }
+}
+
+/// Whether `bowtie suite` runs a case with these `tags` for `draft`: only when every tag is one
+/// it expects for that dialect (`format-annotation` for 2019-09 and 2020-12, none before).
+#[must_use]
+pub fn bowtie_runs_tags(draft: &str, tags: &[String]) -> bool {
+    let expected: &[&str] = match draft {
+        "draft2019-09" | "draft2020-12" => &["format-annotation"],
+        _ => &[],
+    };
+    tags.iter()
+        .all(|tag: &String| expected.contains(&tag.as_str()))
+}
 
 /// One test of a suite file case (the suite's own on-disk shape).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -31,16 +61,17 @@ pub struct SuiteFileCase {
     pub tests: Vec<SuiteFileTest>,
 }
 
-/// One suite file: its path relative to `tests/<draft>/` (with `/` separators) and its cases.
+/// One suite file: its path relative to `validation/tests/` (with `/` separators) and the cases
+/// of it that Bowtie runs for one draft.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SuiteFile {
-    /// Path relative to the draft directory, e.g. `minimum.json` or `optional/bignum.json`.
+    /// Path relative to `validation/tests/`, e.g. `minimum.json` or `optional/bignum.json`.
     pub path: String,
     /// The cases of the file, in file order.
     pub cases: Vec<SuiteFileCase>,
 }
 
-/// Whether a draft-relative suite path belongs to the optional suite.
+/// Whether a suite path (relative to `validation/tests/`) belongs to the optional suite.
 #[must_use]
 pub fn is_optional_path(path: &str) -> bool {
     path.starts_with("optional/")
@@ -102,7 +133,10 @@ impl SuiteIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::{SuiteFile, SuiteFileCase, SuiteFileTest, SuiteIndex, is_optional_path};
+    use super::{
+        SuiteFile, SuiteFileCase, SuiteFileTest, SuiteIndex, bowtie_runs_tags, compatible,
+        is_optional_path, release,
+    };
     use serde_json::{Value, json};
 
     fn file(path: &str, description: &str, schema: Value) -> SuiteFile {
@@ -212,6 +246,128 @@ mod tests {
         .iter()
         .map(|p: &&str| is_optional_path(p))
         .collect();
+        assert_eq!(expected, actual);
+    }
+
+    const RELEASES: [u32; 5] = [4, 6, 7, 2019, 2020];
+
+    // --- compatibility ---
+
+    fn admitted(compatibility: Option<&str>) -> Vec<u32> {
+        RELEASES
+            .into_iter()
+            .filter(|&release| compatible(compatibility, release).expect("valid compatibility"))
+            .collect()
+    }
+
+    #[test]
+    fn absent_admits_every_release() {
+        let expected: Vec<u32> = vec![4, 6, 7, 2019, 2020];
+        let actual: Vec<u32> = admitted(None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn bare_number_admits_it_and_later() {
+        let expected: Vec<u32> = vec![7, 2019, 2020];
+        let actual: Vec<u32> = admitted(Some("7"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn at_most_admits_it_and_earlier() {
+        let expected: Vec<u32> = vec![4, 6, 7, 2019];
+        let actual: Vec<u32> = admitted(Some("<=2019"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn equals_admits_only_it() {
+        let expected: Vec<u32> = vec![2020];
+        let actual: Vec<u32> = admitted(Some("=2020"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn range_admits_between_bounds() {
+        let expected: Vec<u32> = vec![6, 7];
+        let actual: Vec<u32> = admitted(Some("6,<=7"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn range_from_an_older_release_admits_up_to_its_end() {
+        let expected: Vec<u32> = vec![4];
+        let actual: Vec<u32> = admitted(Some("3,<=4"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn disjoint_ranges_admit_either() {
+        let expected: Vec<u32> = vec![7, 2019, 2020];
+        let actual: Vec<u32> = admitted(Some("<=3,7"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn single_release_plus_open_range_admits_both() {
+        let expected: Vec<u32> = vec![4, 6, 2020];
+        let actual: Vec<u32> = admitted(Some("4,<=6,2020"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn unreleased_placeholder_admits_none() {
+        let expected: Vec<u32> = vec![];
+        let actual: Vec<u32> = admitted(Some("9999"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_numeric_bound_is_an_error() {
+        let expected: bool = true;
+        let actual: bool = compatible(Some("<=next"), 2020).is_err();
+        assert_eq!(expected, actual);
+    }
+
+    // --- drafts and tags ---
+
+    #[test]
+    fn every_draft_has_a_release() {
+        let expected: Vec<Option<u32>> = vec![Some(4), Some(6), Some(7), Some(2019), Some(2020)];
+        let actual: Vec<Option<u32>> = crate::DRAFTS.iter().map(|d: &&str| release(d)).collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn bowtie_runs_format_annotation_only_from_2019_09() {
+        let tags: Vec<String> = vec!["format-annotation".to_string()];
+        let expected: Vec<bool> = vec![false, false, false, true, true];
+        let actual: Vec<bool> = crate::DRAFTS
+            .iter()
+            .map(|d: &&str| bowtie_runs_tags(d, &tags))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn bowtie_never_runs_format_assertion() {
+        let tags: Vec<String> = vec!["format-assertion".to_string()];
+        let expected: Vec<bool> = vec![false, false, false, false, false];
+        let actual: Vec<bool> = crate::DRAFTS
+            .iter()
+            .map(|d: &&str| bowtie_runs_tags(d, &tags))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn bowtie_runs_untagged_everywhere() {
+        let expected: Vec<bool> = vec![true, true, true, true, true];
+        let actual: Vec<bool> = crate::DRAFTS
+            .iter()
+            .map(|d: &&str| bowtie_runs_tags(d, &[]))
+            .collect();
         assert_eq!(expected, actual);
     }
 }

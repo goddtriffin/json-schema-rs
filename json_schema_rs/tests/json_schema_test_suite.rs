@@ -1,7 +1,9 @@
 //! Gating test: run the library validator against the official JSON Schema Test Suite.
 //!
-//! Every suite test in drafts 4, 6, 7, 2019-09 and 2020-12 (including `optional/`) is one
-//! reported test case, named `<draft>/<file> :: <group> :: <test>`. Known failures are listed
+//! The suite keeps every draft's cases together in `validation/tests/`; a case's
+//! `compatibility` says which drafts it applies to. Every suite test (including `optional/`,
+//! leaving out the unaccepted `proposals/`) is one reported test case per draft 4, 6, 7, 2019-09
+//! and 2020-12 it applies to, named `<draft>/<file> :: <group> :: <test>`. Known failures are listed
 //! in `tests/suite_xfail.json` (draft → file → group → tests); a build with the
 //! `arbitrary-precision` feature, whose numbers are exact beyond 64 bits, reads
 //! `tests/suite_xfail_arbitrary_precision.json` instead. The run fails on:
@@ -11,10 +13,12 @@
 //! - an **unexpected pass**: a test in the manifest now passes, so its entry must be removed;
 //! - a **stale entry**: the manifest names a test that does not exist in the suite.
 //!
-//! Each group's schema gets a [`Registry`] whose retriever serves the suite's `remotes/` folder
-//! under `http://localhost:1234/`, as the suite specifies. Each directory's draft is the default
+//! Each group's schema gets a [`Registry`] whose retriever serves the group's own
+//! `externalSchemas` under their URIs, as the suite specifies. The draft being run is the default
 //! draft: a schema without `$schema` uses it, one with `$schema` follows that (so a custom
-//! metaschema is found through the registry). The group's schema is compiled once and every
+//! metaschema is found through the registry). A group tagged `format-assertion` or
+//! `format-annotation` runs with that `format` behaviour ([`FormatMode`]); any other tag fails
+//! the run, so a new tag is handled deliberately. The group's schema is compiled once and every
 //! test runs in both modes, [`CompiledSchema::validate`] and [`CompiledSchema::is_valid`]; a
 //! case whose two verdicts differ fails, whatever the manifest says. The group's schema is also
 //! dereferenced ([`Registry::dereference`]) and the result compiled: a case whose verdict on the
@@ -37,25 +41,43 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-/// Suite draft directories we run, with the spec version each one targets.
-const DRAFTS: [(&str, SpecVersion); 5] = [
-    ("draft4", SpecVersion::Draft04),
-    ("draft6", SpecVersion::Draft06),
-    ("draft7", SpecVersion::Draft07),
-    ("draft2019-09", SpecVersion::Draft201909),
-    ("draft2020-12", SpecVersion::Draft202012),
+mod suite_compatibility;
+use suite_compatibility::compatible;
+
+/// The drafts we run: the name in test names and the manifest, the release number the suite's
+/// `compatibility` uses for it, and its spec version.
+const DRAFTS: [(&str, u32, SpecVersion); 5] = [
+    ("draft4", 4, SpecVersion::Draft04),
+    ("draft6", 6, SpecVersion::Draft06),
+    ("draft7", 7, SpecVersion::Draft07),
+    ("draft2019-09", 2019, SpecVersion::Draft201909),
+    ("draft2020-12", 2020, SpecVersion::Draft202012),
 ];
+
+/// The suite directory of draft proposals not (yet) in any draft; left out.
+const PROPOSALS_DIR: &str = "proposals";
 
 /// Environment variable that switches the run to rewriting the manifest.
 const UPDATE_ENV: &str = "JSON_SCHEMA_RS_SUITE_XFAIL_UPDATE";
 
-/// Known failures: draft → file (relative to the draft directory) → group → test descriptions.
+/// Known failures: draft → file (relative to `validation/tests/`) → group → test descriptions.
 type XfailManifest = BTreeMap<String, BTreeMap<String, BTreeMap<String, BTreeSet<String>>>>;
 
 #[derive(Debug, Deserialize)]
+struct SuiteFile {
+    tests: Vec<SuiteGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SuiteGroup {
     description: String,
+    compatibility: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
     schema: serde_json::Value,
+    #[serde(default)]
+    external_schemas: HashMap<String, serde_json::Value>,
     tests: Vec<SuiteTest>,
 }
 
@@ -124,7 +146,8 @@ fn xfail_path() -> PathBuf {
     manifest_dir().join("tests").join(XFAIL_FILE)
 }
 
-/// Collects all `.json` files under `dir` (iteratively), sorted by path.
+/// Collects all `.json` files under `dir` (iteratively, leaving out [`PROPOSALS_DIR`]), sorted
+/// by path.
 fn collect_json_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
@@ -132,7 +155,9 @@ fn collect_json_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
         for entry in std::fs::read_dir(&current)? {
             let path: PathBuf = entry?.path();
             if path.is_dir() {
-                stack.push(path);
+                if path.file_name().is_none_or(|name| name != PROPOSALS_DIR) {
+                    stack.push(path);
+                }
             } else if path.extension().is_some_and(|e| e == "json") {
                 files.push(path);
             }
@@ -142,9 +167,9 @@ fn collect_json_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Relative path of `file` under `draft_dir`, with `/` separators on every platform.
-fn relative_file_name(draft_dir: &Path, file: &Path) -> String {
-    let relative: &Path = file.strip_prefix(draft_dir).unwrap_or(file);
+/// Relative path of `file` under `dir`, with `/` separators on every platform.
+fn relative_file_name(dir: &Path, file: &Path) -> String {
+    let relative: &Path = file.strip_prefix(dir).unwrap_or(file);
     let parts: Vec<String> = relative
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -155,26 +180,6 @@ fn relative_file_name(draft_dir: &Path, file: &Path) -> String {
 fn describe_errors(errors: &[ValidationError]) -> String {
     let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
     messages.join("; ")
-}
-
-/// The base URI the suite serves its `remotes/` folder under.
-const REMOTES_BASE: &str = "http://localhost:1234/";
-
-/// Every document under `remotes/`, keyed by its URI under [`REMOTES_BASE`].
-fn load_remotes(root: &Path) -> Result<HashMap<String, serde_json::Value>, String> {
-    let remotes_dir: PathBuf = root.join("remotes");
-    let files: Vec<PathBuf> = collect_json_files(&remotes_dir)
-        .map_err(|e| format!("failed to walk {}: {e}", remotes_dir.display()))?;
-    let mut remotes: HashMap<String, serde_json::Value> = HashMap::new();
-    for file in files {
-        let contents: String = std::fs::read_to_string(&file)
-            .map_err(|e| format!("failed to read {}: {e}", file.display()))?;
-        let value: serde_json::Value = serde_json::from_str(&contents)
-            .map_err(|e| format!("failed to parse {}: {e}", file.display()))?;
-        let uri: String = format!("{REMOTES_BASE}{}", relative_file_name(&remotes_dir, &file));
-        remotes.insert(uri, value);
-    }
-    Ok(remotes)
 }
 
 /// Runs one suite test; a panic in our library is a failure, not a crash of the run. A schema
@@ -304,47 +309,66 @@ fn transformed_verdicts(
     }
 }
 
+/// The `format` behaviour a group's `tags` ask for: `None` for the draft's default.
+///
+/// # Errors
+///
+/// A tag this runner does not know, so a new one is handled deliberately.
+fn tagged_format_mode(tags: &[String]) -> Result<Option<FormatMode>, String> {
+    let mut mode: Option<FormatMode> = None;
+    for tag in tags {
+        mode = Some(match tag.as_str() {
+            "format-assertion" => FormatMode::Assertion,
+            "format-annotation" => FormatMode::Annotation,
+            other => return Err(format!("unknown suite tag {other:?}")),
+        });
+    }
+    Ok(mode)
+}
+
 /// Evaluates every test in every draft. Errors are reasons the suite itself is unusable.
 fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
-    let tests_dir: PathBuf = root.join("tests");
+    let tests_dir: PathBuf = root.join("validation").join("tests");
     if !tests_dir.is_dir() {
         return Err(format!(
             "JSON Schema Test Suite not found at {}. Run `make vendor_test_suite` to clone it.",
             tests_dir.display()
         ));
     }
-    let remotes: HashMap<String, serde_json::Value> = load_remotes(root)?;
+    let files: Vec<PathBuf> = collect_json_files(&tests_dir)
+        .map_err(|e| format!("failed to walk {}: {e}", tests_dir.display()))?;
+    if files.is_empty() {
+        return Err(format!("no suite files under {}", tests_dir.display()));
+    }
+    let mut suite: Vec<(String, Vec<SuiteGroup>)> = Vec::with_capacity(files.len());
+    for file_path in &files {
+        let contents: String = std::fs::read_to_string(file_path)
+            .map_err(|e| format!("failed to read {}: {e}", file_path.display()))?;
+        let file: SuiteFile = serde_json::from_str(&contents)
+            .map_err(|e| format!("failed to parse {}: {e}", file_path.display()))?;
+        suite.push((relative_file_name(&tests_dir, file_path), file.tests));
+    }
     let mut cases: Vec<Case> = Vec::new();
-    for (draft, spec_version) in DRAFTS {
-        let draft_dir: PathBuf = tests_dir.join(draft);
-        let files: Vec<PathBuf> = collect_json_files(&draft_dir)
-            .map_err(|e| format!("failed to walk {}: {e}", draft_dir.display()))?;
-        if files.is_empty() {
-            return Err(format!("no suite files under {}", draft_dir.display()));
-        }
+    for (draft, release, spec_version) in DRAFTS {
         // Default settings, as consumers run: the suite uses keys a draft does not define
         // (`$comment` in draft 4) to check that they are ignored, which strict parsing rejects.
-        let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
+        let draft_settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .default_spec_version(spec_version)
             .build();
-        // The suite's `optional/format/` tests are written for implementations that assert
-        // `format`, which 2019-09 and 2020-12 do not by default.
-        let format_settings: JsonSchemaSettings = JsonSchemaSettings {
-            format_mode: Some(FormatMode::Assertion),
-            ..settings.clone()
-        };
-        for file_path in &files {
-            let file: String = relative_file_name(&draft_dir, file_path);
-            let settings: &JsonSchemaSettings = if file.starts_with("optional/format/") {
-                &format_settings
-            } else {
-                &settings
-            };
-            let contents: String = std::fs::read_to_string(file_path)
-                .map_err(|e| format!("failed to read {}: {e}", file_path.display()))?;
-            let groups: Vec<SuiteGroup> = serde_json::from_str(&contents)
-                .map_err(|e| format!("failed to parse {}: {e}", file_path.display()))?;
+        for (file, groups) in &suite {
             for group in groups {
+                if !compatible(group.compatibility.as_deref(), release)
+                    .map_err(|e| format!("{file}: {}: {e}", group.description))?
+                {
+                    continue;
+                }
+                let settings: &JsonSchemaSettings = &JsonSchemaSettings {
+                    format_mode: tagged_format_mode(&group.tags)
+                        .map_err(|e| format!("{file}: {}: {e}", group.description))?
+                        .or(draft_settings.format_mode),
+                    ..draft_settings.clone()
+                };
+                let remotes: &HashMap<String, serde_json::Value> = &group.external_schemas;
                 let parsed = catch_unwind(AssertUnwindSafe(|| {
                     Schema::new_from_serde_value(&group.schema, settings)
                 }));
@@ -360,25 +384,25 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
                 )> = schema.as_ref().ok().and_then(|schema| {
                     catch_unwind(AssertUnwindSafe(|| {
                         let registry: Registry<'_> = Registry::builder()
-                            .retriever(&remotes)
+                            .retriever(remotes)
                             .settings(settings.clone())
                             .build(schema)
                             .ok()?;
                         let compiled: CompiledSchema = CompiledSchema::new(&registry).ok()?;
                         Some((
                             compiled,
-                            dereference(&registry, &remotes, settings),
-                            canonicalize(&registry, &remotes, settings),
+                            dereference(&registry, remotes, settings),
+                            canonicalize(&registry, remotes, settings),
                         ))
                     }))
                     .ok()
                     .flatten()
                 });
-                for test in group.tests {
+                for test in &group.tests {
                     let outcome: Outcome = match (&schema, &compiled) {
-                        (Ok(schema), None) => run_test(schema, None, &test),
+                        (Ok(schema), None) => run_test(schema, None, test),
                         (Ok(schema), Some((compiled, dereferenced, canonical))) => {
-                            match run_test(schema, Some(compiled), &test) {
+                            match run_test(schema, Some(compiled), test) {
                                 Outcome::Mismatch(reason) => Outcome::Mismatch(reason),
                                 outcome => transformed_verdicts(
                                     compiled,
@@ -396,7 +420,7 @@ fn evaluate_suite(root: &Path) -> Result<Vec<Case>, String> {
                             draft: draft.to_string(),
                             file: file.clone(),
                             group: group.description.clone(),
-                            test: test.description,
+                            test: test.description.clone(),
                         },
                         outcome,
                     });

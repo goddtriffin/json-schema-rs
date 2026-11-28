@@ -229,75 +229,124 @@ fn check_merges(
     }
 }
 
-/// The official test suite's root, its `remotes/` documents by URI, and its draft directories.
-fn suite() -> (
-    PathBuf,
-    BTreeMap<String, Value>,
-    [(&'static str, SpecVersion); 5],
-) {
-    let suite: PathBuf = repository_root()
+/// The suite's `compatibility` matching, shared with the suite gates.
+#[path = "../../tests/suite_compatibility/mod.rs"]
+mod suite_compatibility;
+
+/// The drafts the suite is run in: name, the release number its `compatibility` uses, and the
+/// spec version.
+const SUITE_DRAFTS: [(&str, u32, SpecVersion); 5] = [
+    ("draft4", 4, SpecVersion::Draft04),
+    ("draft6", 6, SpecVersion::Draft06),
+    ("draft7", 7, SpecVersion::Draft07),
+    ("draft2019-09", 2019, SpecVersion::Draft201909),
+    ("draft2020-12", 2020, SpecVersion::Draft202012),
+];
+
+/// Suite files: each one's path (relative to `validation/tests/`) and its cases.
+type SuiteFiles = Vec<(String, Vec<Value>)>;
+
+/// The official test suite's files (`validation/tests/`, without the unaccepted `proposals/`).
+fn suite() -> SuiteFiles {
+    let tests: PathBuf = repository_root()
         .join("research")
-        .join("json-schema-test-suite");
+        .join("json-schema-test-suite")
+        .join("validation")
+        .join("tests");
     assert!(
-        suite.join("tests").is_dir(),
+        tests.is_dir(),
         "JSON Schema Test Suite not found at {}. Run `make vendor_test_suite` to clone it.",
-        suite.display()
+        tests.display()
     );
-    let remotes_dir: PathBuf = suite.join("remotes");
-    let remotes: BTreeMap<String, Value> = json_files(&remotes_dir)
+    json_files(&tests)
         .into_iter()
+        .filter(|path| !path.starts_with(tests.join("proposals")))
         .map(|path| {
-            let relative: String = path
-                .strip_prefix(&remotes_dir)
-                .expect("under remotes")
+            let name: String = path
+                .strip_prefix(&tests)
+                .expect("under the suite")
                 .to_string_lossy()
                 .replace('\\', "/");
-            (
-                format!("http://localhost:1234/{relative}"),
-                read_json(&path),
-            )
+            let cases: Vec<Value> = read_json(&path)["tests"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            (name, cases)
         })
-        .collect();
-    let drafts: [(&str, SpecVersion); 5] = [
-        ("draft4", SpecVersion::Draft04),
-        ("draft6", SpecVersion::Draft06),
-        ("draft7", SpecVersion::Draft07),
-        ("draft2019-09", SpecVersion::Draft201909),
-        ("draft2020-12", SpecVersion::Draft202012),
-    ];
-    (suite, remotes, drafts)
+        .collect()
 }
 
-/// Every schema of one suite draft (parsed with `format` asserted in `optional/format/`) and
-/// every instance of the draft, with the values nested in them.
+/// One draft's share of the suite: per file, the cases that apply to `release`, and every
+/// case's `externalSchemas` together as one retriever. A case whose external schemas disagree
+/// with an earlier case's under the same URI is left out, so one retriever serves them all.
+fn suite_draft_cases(
+    suite: &[(String, Vec<Value>)],
+    release: u32,
+) -> (SuiteFiles, BTreeMap<String, Value>) {
+    let mut remotes: BTreeMap<String, Value> = BTreeMap::new();
+    let mut files: SuiteFiles = Vec::new();
+    for (name, cases) in suite {
+        let mut kept: Vec<Value> = Vec::new();
+        for case in cases {
+            let compatible: bool =
+                suite_compatibility::compatible(case["compatibility"].as_str(), release)
+                    .expect("suite compatibility is well formed");
+            let external: Option<&serde_json::Map<String, Value>> =
+                case["externalSchemas"].as_object();
+            let consistent: bool = external
+                .into_iter()
+                .flatten()
+                .all(|(uri, schema)| remotes.get(uri).is_none_or(|known| known == schema));
+            if compatible && consistent {
+                for (uri, schema) in external.into_iter().flatten() {
+                    remotes.insert(uri.clone(), schema.clone());
+                }
+                kept.push(case.clone());
+            }
+        }
+        files.push((name.clone(), kept));
+    }
+    (files, remotes)
+}
+
+/// The settings a suite case is parsed with: the draft's, with `format` asserted or annotated
+/// when the case is tagged so.
+fn case_settings(case: &Value, settings: &JsonSchemaSettings) -> JsonSchemaSettings {
+    let tags: Vec<&str> = case["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let format_mode: Option<FormatMode> = if tags.contains(&"format-assertion") {
+        Some(FormatMode::Assertion)
+    } else if tags.contains(&"format-annotation") {
+        Some(FormatMode::Annotation)
+    } else {
+        settings.format_mode
+    };
+    JsonSchemaSettings {
+        format_mode,
+        ..settings.clone()
+    }
+}
+
+/// Every schema of one draft's suite cases (parsed with [`case_settings`]) and every instance
+/// of them, with the values nested in them.
 fn suite_draft(
-    suite: &Path,
-    draft: &str,
+    files: &[(String, Vec<Value>)],
     settings: &JsonSchemaSettings,
 ) -> (Vec<(String, Schema)>, Vec<Value>) {
-    let format_settings: JsonSchemaSettings = JsonSchemaSettings {
-        format_mode: Some(FormatMode::Assertion),
-        ..settings.clone()
-    };
     let mut schemas: Vec<(String, Schema)> = Vec::new();
     let mut data: Vec<Value> = Vec::new();
-    for file in json_files(&suite.join("tests").join(draft)) {
-        let name: String = file
-            .strip_prefix(suite)
-            .map_or_else(|_| file.display().to_string(), |p| p.display().to_string());
-        let parse_settings: &JsonSchemaSettings = if name.contains("optional/format/") {
-            &format_settings
-        } else {
-            settings
-        };
-        let Value::Array(groups) = read_json(&file) else {
-            continue;
-        };
-        for group in &groups {
-            for test in group["tests"].as_array().into_iter().flatten() {
+    for (name, cases) in files {
+        for case in cases {
+            for test in case["tests"].as_array().into_iter().flatten() {
                 data.push(test["data"].clone());
             }
-            if let Ok(schema) = Schema::new_from_serde_value(&group["schema"], parse_settings) {
+            if let Ok(schema) =
+                Schema::new_from_serde_value(&case["schema"], &case_settings(case, settings))
+            {
                 schemas.push((name.clone(), schema));
             }
         }
@@ -311,14 +360,15 @@ fn suite_draft(
 /// instance of the draft exactly like the class's first node.
 #[test]
 fn nodes_of_one_validation_class_validate_alike_on_the_test_suite() {
-    let (suite, remotes, drafts) = suite();
+    let suite: SuiteFiles = suite();
     let mut mismatches: Vec<String> = Vec::new();
     let mut compared: usize = 0;
-    for (draft, spec_version) in drafts {
+    for (draft, release, spec_version) in SUITE_DRAFTS {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .default_spec_version(spec_version)
             .build();
-        let (schemas, instances) = suite_draft(&suite, draft, &settings);
+        let (files, remotes) = suite_draft_cases(&suite, release);
+        let (schemas, instances) = suite_draft(&files, &settings);
         let compiled: Vec<(&str, CompiledSchema)> = schemas
             .iter()
             .filter_map(|(name, schema)| {
@@ -374,44 +424,30 @@ fn nodes_of_one_validation_class_validate_alike_on_the_test_suite() {
 
 #[test]
 fn merged_types_validate_like_their_own_schemas_on_the_test_suite() {
-    let (suite, remotes, drafts) = suite();
+    let suite: SuiteFiles = suite();
     let mut report: Report = Report::default();
-    for (draft, spec_version) in drafts {
-        let dir: PathBuf = suite.join("tests").join(draft);
+    for (draft, release, spec_version) in SUITE_DRAFTS {
         let settings: JsonSchemaSettings = JsonSchemaSettings::builder()
             .default_spec_version(spec_version)
             .build();
-        let format_settings: JsonSchemaSettings = JsonSchemaSettings {
-            format_mode: Some(FormatMode::Assertion),
-            ..settings.clone()
-        };
+        let (draft_files, remotes) = suite_draft_cases(&suite, release);
         // Per file: its schemas that generate on their own, and its instances.
         let mut files: Vec<(String, Vec<Schema>, Vec<Value>)> = Vec::new();
-        for file in json_files(&dir) {
-            let name: String = file
-                .strip_prefix(&suite)
-                .map_or_else(|_| file.display().to_string(), |p| p.display().to_string());
-            let parse_settings: &JsonSchemaSettings = if name.contains("optional/format/") {
-                &format_settings
-            } else {
-                &settings
-            };
-            let Value::Array(groups) = read_json(&file) else {
-                continue;
-            };
+        for (name, cases) in draft_files {
             let mut schemas: Vec<Schema> = Vec::new();
             let mut data: Vec<Value> = Vec::new();
-            for group in &groups {
-                for test in group["tests"].as_array().into_iter().flatten() {
+            for case in &cases {
+                for test in case["tests"].as_array().into_iter().flatten() {
                     data.push(test["data"].clone());
                 }
-                if let Ok(schema) = Schema::new_from_serde_value(&group["schema"], parse_settings)
+                if let Ok(schema) =
+                    Schema::new_from_serde_value(&case["schema"], &case_settings(case, &settings))
                     && generates(std::slice::from_ref(&schema), &remotes, &settings)
                 {
                     schemas.push(schema);
                 }
             }
-            files.push((name, schemas, data));
+            files.push((format!("{draft}/{name}"), schemas, data));
         }
         // The whole draft together, so types of different files merge too, checked against
         // every instance of the draft; each file alone when that fails.
