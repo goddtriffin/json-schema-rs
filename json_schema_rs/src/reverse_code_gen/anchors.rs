@@ -109,20 +109,40 @@ fn has_anchor(version: SpecVersion) -> bool {
 
 /// The keyword tables that say where a schema's subschemas are.
 #[derive(Clone, Copy)]
-struct Tables {
+pub(super) struct Tables {
     /// The table the schema is written in: 2020-12 for the generator's model, or the draft of an
     /// embedded resource's own `$schema`.
-    own: Dialect,
+    pub(super) own: Dialect,
     /// The target's table, for the keywords `own` lacks that the converter still walks
     /// (`additionalItems` and the array form of `items` before 2020-12). None inside a resource
     /// with its own `$schema`, and for a 2020-12 target.
-    target: Option<Dialect>,
+    pub(super) target: Option<Dialect>,
 }
 
 impl Tables {
+    /// The tables of the generator's 2020-12 model on a target of `version` (none for `OpenAPI`
+    /// 3.0): the model's own, plus the target's when it is not 2020-12.
+    pub(super) fn for_model(version: Option<SpecVersion>) -> Tables {
+        Tables {
+            own: Dialect::default(),
+            target: version
+                .filter(|version| *version != SpecVersion::Draft202012)
+                .map(Dialect::for_spec_version),
+        }
+    }
+
+    /// The tables of an embedded resource whose own `$schema` names `version`: that draft's
+    /// alone.
+    pub(super) fn for_resource(version: SpecVersion) -> Tables {
+        Tables {
+            own: Dialect::for_spec_version(version),
+            target: None,
+        }
+    }
+
     /// Where the value of `keyword` holds subschemas, the way the converter reads it: by `own`,
     /// else by `target`; an `items` that `target` lets hold an array may hold one.
-    fn position(self, keyword: &str) -> Option<SubschemaPosition> {
+    pub(super) fn position(self, keyword: &str) -> Option<SubschemaPosition> {
         let own: Option<SubschemaPosition> = self.own.keyword(keyword).and_then(|k| k.subschemas);
         let target: Option<SubschemaPosition> = self
             .target
@@ -182,10 +202,7 @@ pub(super) fn ids_to_anchors(
     let Some(version) = target.spec_version().filter(|version| has_anchor(*version)) else {
         return;
     };
-    let tables: Tables = Tables {
-        own: Dialect::default(),
-        target: (version != SpecVersion::Draft202012).then(|| Dialect::for_spec_version(version)),
-    };
+    let tables: Tables = Tables::for_model(Some(version));
     let mut declared: Declared = HashMap::new();
     let mut resources: usize = 1;
     let mut context = Context {
@@ -245,13 +262,7 @@ impl Context<'_> {
             let (version, tables): (SpecVersion, Tables) = match own_schema {
                 Some(uri) if !(document_root && at == 0) => {
                     match SpecVersion::from_schema_uri(uri).filter(|version| has_anchor(*version)) {
-                        Some(version) => (
-                            version,
-                            Tables {
-                                own: Dialect::for_spec_version(version),
-                                target: None,
-                            },
-                        ),
+                        Some(version) => (version, Tables::for_resource(version)),
                         None => continue,
                     }
                 }
