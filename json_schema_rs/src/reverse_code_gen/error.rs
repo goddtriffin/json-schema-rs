@@ -23,6 +23,19 @@ pub enum ReverseCodeGenError {
         /// Its `$id` as written.
         second_id: String,
     },
+    /// A definition and a hand-written entry in one schema resource declare the same
+    /// plain-name anchor with a fragment-only `$id` (`#a`, draft 4-7). A resource may not hold
+    /// one anchor at two locations (the registry's `DuplicateAnchor`); equal entries of one
+    /// name are merged instead.
+    DuplicateAnchor {
+        /// JSON Pointer of the hand-written entry that declares it.
+        first: String,
+        /// [`super::ToJsonSchema::schema_id`] of the type (or the hoisted definition) that
+        /// declares it again.
+        second: String,
+        /// The anchor name, without `#`.
+        anchor: String,
+    },
     /// A type's `#[json_schema(id = "...")]` is not a URI reference (RFC 3986 / RFC 3987).
     InvalidResourceId {
         /// [`super::ToJsonSchema::schema_id`] of the type.
@@ -94,6 +107,15 @@ impl fmt::Display for ReverseCodeGenError {
                 "`{second}` ($id {second_id:?}) resolves to the same URI as `{first}` ($id \
                  {first_id:?}) but has a different schema"
             ),
+            ReverseCodeGenError::DuplicateAnchor {
+                first,
+                second,
+                anchor,
+            } => write!(
+                f,
+                "`{second}` declares the anchor {anchor:?}, which `{first}` already declares in \
+                 the same schema resource"
+            ),
             ReverseCodeGenError::InvalidResourceId {
                 schema_id,
                 id,
@@ -146,6 +168,20 @@ mod tests {
             first_id: "node.json".to_string(),
             second: "b::Node".to_string(),
             second_id: "./node.json".to_string(),
+        }
+        .to_string();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn duplicate_anchor_display_names_both_declarations_and_the_anchor() {
+        let expected: String = "`a::A` declares the anchor \"a\", which `#/definitions/H` already \
+                                declares in the same schema resource"
+            .to_string();
+        let actual: String = ReverseCodeGenError::DuplicateAnchor {
+            first: "#/definitions/H".to_string(),
+            second: "a::A".to_string(),
+            anchor: "a".to_string(),
         }
         .to_string();
         assert_eq!(expected, actual);

@@ -40,7 +40,7 @@ pub(super) fn placeholder_depth<'a>(ids: impl Iterator<Item = &'a str>, nesting:
 /// own. It is unless the part of `id` before `#` is empty, as the registry decides it: a
 /// fragment-only `$id` (`#a`, `#`) does not change the base URI, so `$ref`s inside it resolve
 /// against the enclosing resource. In draft 4-7 `#a` is a plain-name fragment, a
-/// location-independent identifier (draft-04 core §7.1, draft-07 core §8.2.3), not a new
+/// location-independent identifier (draft-04 core §7.2, draft-07 core §8.2.3), not a new
 /// resource. From 2019-09 that is `$anchor`'s job, and `$id` may carry only an empty fragment
 /// (`https://x/y#`), which still names a resource (2019-09 core §8.2.2, 2020-12 core §8.2.1).
 pub(super) fn starts_resource(id: &str) -> bool {
@@ -52,6 +52,14 @@ pub(super) fn starts_resource(id: &str) -> bool {
 /// Whether `schema` is the root of a schema resource of its own (see [`starts_resource`]).
 pub(super) fn is_resource(schema: &JsonSchema) -> bool {
     schema.id.as_deref().is_some_and(starts_resource)
+}
+
+/// The plain-name anchor a fragment-only `$id` declares in the enclosing resource in draft 4-7
+/// (`a` for `#a`), as the registry reads it: an empty fragment (`#`) and a JSON Pointer one
+/// (`#/a`) declare none.
+pub(super) fn fragment_only_anchor(id: &str) -> Option<&str> {
+    id.strip_prefix('#')
+        .filter(|name: &&str| !name.is_empty() && !name.starts_with('/'))
 }
 
 /// Resolves `id` against each of `bases`, without its fragment, or says why `id` is not a URI
