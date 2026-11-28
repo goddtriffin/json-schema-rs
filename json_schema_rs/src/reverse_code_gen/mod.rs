@@ -3,6 +3,7 @@
 //! Types implement [`ToJsonSchema`] to produce a [`JsonSchema`] value that can be
 //! serialized via [`TryFrom`] to String or `Vec<u8>`.
 
+mod anchors;
 #[doc(hidden)]
 pub mod derive_support;
 mod dialect;
@@ -1734,7 +1735,7 @@ fn finish_document(
     path: &str,
     model_path: &str,
     mut body: JsonSchema,
-    definitions: BTreeMap<String, Schema>,
+    mut definitions: BTreeMap<String, Schema>,
     errors: &mut Vec<ReverseCodeGenError>,
 ) -> GeneratedSchema {
     let target: TargetDialect = settings.target();
@@ -1752,6 +1753,7 @@ fn finish_document(
             }
         },
     };
+    anchors::ids_to_anchors(target, &mut body, &mut definitions, path, errors);
     if !target.needs_conversion() {
         body.schema = schema_uri;
         return GeneratedSchema::native(place_definitions(body, model_path, definitions, errors));
@@ -7786,7 +7788,7 @@ mod tests {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "$defs": {
-                "A": {"$id": "#a", "properties": {"y": {"$ref": "#/$defs/B"}}},
+                "A": {"$anchor": "a", "properties": {"y": {"$ref": "#/$defs/B"}}},
                 "B": {"type": "string"}
             },
             "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/A"}}}}
@@ -7932,7 +7934,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_subschema_leaves_a_fragment_id_inside_a_resource_untouched() {
+    fn inline_subschema_leaves_refs_below_a_fragment_id_inside_a_resource_untouched() {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
@@ -7946,7 +7948,7 @@ mod tests {
                             "definitions": {"B": {"type": "integer"}},
                             "properties": {
                                 "f": {
-                                    "$id": "#f",
+                                    "$anchor": "f",
                                     "properties": {"y": {"$ref": "#/definitions/B"}}
                                 }
                             }
@@ -8137,21 +8139,14 @@ mod tests {
     }
 
     #[test]
-    fn a_fragment_id_is_no_anchor_on_2020_12_so_the_same_one_twice_is_kept() {
-        let expected: serde_json::Value = serde_json::json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "definitions": {"H": {"$id": "#a", "type": "integer"}},
-            "$defs": {"A": {"$id": "#a", "type": "string"}},
-            "properties": {
-                "h": {"$ref": "#/definitions/H"},
-                "s": {"properties": {"x": {"$ref": "#/$defs/A"}}}
-            }
-        });
-        let actual: serde_json::Value =
-            inlined_id_beside_hand_written_id(ReverseCodeGenSettings::default(), "#a", "#a")
-                .expect("generated")
-                .to_value();
+    fn an_inlined_definition_with_a_hand_written_entrys_anchor_is_a_duplicate_anchor_on_2020_12() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/definitions/H".to_string(),
+            second: "#/$defs/A".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult =
+            inlined_id_beside_hand_written_id(ReverseCodeGenSettings::default(), "#a", "#a");
         assert_eq!(expected, actual);
     }
 
@@ -8181,7 +8176,7 @@ mod tests {
             "properties": {
                 "s": {
                     "prefixItems": [
-                        {"$id": "#a", "properties": {"y": {"$ref": "#/$defs/B"}}}
+                        {"$anchor": "a", "properties": {"y": {"$ref": "#/$defs/B"}}}
                     ]
                 }
             }
@@ -8207,6 +8202,453 @@ mod tests {
         });
         let actual: serde_json::Value =
             inlined_fragment_id_prefix_item(settings_for(TargetDialect::Draft07)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    // --- a fragment-only `$id` is written as `$anchor` on a target with `$anchor` ---
+
+    /// The standalone schema whose definition `A` is `definition`, referred to by its pointer
+    /// (`x`) and, when its `$id` is a plain-name fragment, by that anchor (`y`), inlined.
+    fn inlined_definition_with_id(
+        settings: ReverseCodeGenSettings,
+        definition: &serde_json::Value,
+    ) -> GeneratedSchemaResult {
+        let mut properties: serde_json::Value =
+            serde_json::json!({"x": {"$ref": "#/definitions/A"}});
+        if let Some(anchor) = definition
+            .get("$id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(super::resource_uri::fragment_only_anchor)
+        {
+            properties["y"] = serde_json::json!({"$ref": format!("#{anchor}")});
+        }
+        generated_result_with_inlined(
+            settings,
+            serde_json::json!({"definitions": {"A": definition}, "properties": properties}),
+            serde_json::json!({}),
+        )
+    }
+
+    /// [`inlined_definition_with_id`] with `A` = `{"$id": id, "type": "string"}`.
+    fn inlined_fragment_id(settings: ReverseCodeGenSettings, id: &str) -> GeneratedSchemaResult {
+        inlined_definition_with_id(settings, &serde_json::json!({"$id": id, "type": "string"}))
+    }
+
+    /// The document of a successful [`inlined_fragment_id`] with `#a`.
+    fn inlined_anchor_a_document(settings: ReverseCodeGenSettings) -> serde_json::Value {
+        inlined_fragment_id(settings, "#a")
+            .expect("generated")
+            .to_value()
+    }
+
+    /// The document of [`inlined_definition_with_id`] with `A` = `definition` in `container`
+    /// (`$defs`, `definitions` or `components`, for `components/schemas`), with `y` the `#a` ref.
+    fn anchor_document(
+        schema_uri: Option<&str>,
+        container: &str,
+        definition: &serde_json::Value,
+    ) -> serde_json::Value {
+        let (key, definitions, pointer): (&str, serde_json::Value, &str) = match container {
+            "components" => (
+                "components",
+                serde_json::json!({"schemas": {"A": definition}}),
+                "#/components/schemas/A",
+            ),
+            "definitions" => (
+                "definitions",
+                serde_json::json!({"A": definition}),
+                "#/definitions/A",
+            ),
+            _ => ("$defs", serde_json::json!({"A": definition}), "#/$defs/A"),
+        };
+        let mut document: serde_json::Value = serde_json::json!({
+            "type": "object",
+            key: definitions,
+            "properties": {
+                "s": {
+                    "properties": {
+                        "x": {"$ref": pointer},
+                        "y": {"$ref": "#a"}
+                    }
+                }
+            }
+        });
+        if let Some(uri) = schema_uri {
+            document["$schema"] = serde_json::json!(uri);
+        }
+        document
+    }
+
+    #[test]
+    fn a_fragment_id_is_written_as_an_anchor_on_2020_12() {
+        let expected: serde_json::Value = anchor_document(
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "$defs",
+            &serde_json::json!({"$anchor": "a", "type": "string"}),
+        );
+        let actual: serde_json::Value =
+            inlined_anchor_a_document(ReverseCodeGenSettings::default());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_is_written_as_an_anchor_in_the_2020_12_model_of_2019_09() {
+        let expected: serde_json::Value = anchor_document(
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "$defs",
+            &serde_json::json!({"$anchor": "a", "type": "string"}),
+        );
+        let actual: serde_json::Value = serde_json::to_value(
+            inlined_fragment_id(settings_for(TargetDialect::Draft201909), "#a")
+                .expect("generated")
+                .schema(),
+        )
+        .expect("json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_is_written_as_an_anchor_on_2019_09() {
+        let expected: serde_json::Value = anchor_document(
+            Some("https://json-schema.org/draft/2019-09/schema"),
+            "$defs",
+            &serde_json::json!({"$anchor": "a", "type": "string"}),
+        );
+        let actual: serde_json::Value =
+            inlined_anchor_a_document(settings_for(TargetDialect::Draft201909));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_is_written_as_an_anchor_on_openapi_3_1() {
+        let expected: serde_json::Value = anchor_document(
+            None,
+            "components",
+            &serde_json::json!({"$anchor": "a", "type": "string"}),
+        );
+        let actual: serde_json::Value =
+            inlined_anchor_a_document(settings_for(TargetDialect::OpenApi31));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_stays_an_id_on_draft_07() {
+        let expected: serde_json::Value = anchor_document(
+            Some("http://json-schema.org/draft-07/schema#"),
+            "definitions",
+            &serde_json::json!({"$id": "#a", "type": "string"}),
+        );
+        let actual: serde_json::Value =
+            inlined_anchor_a_document(settings_for(TargetDialect::Draft07));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_stays_an_id_on_draft_06() {
+        let expected: serde_json::Value = anchor_document(
+            Some("http://json-schema.org/draft-06/schema#"),
+            "definitions",
+            &serde_json::json!({"$id": "#a", "type": "string"}),
+        );
+        let actual: serde_json::Value =
+            inlined_anchor_a_document(settings_for(TargetDialect::Draft06));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_stays_an_id_on_draft_04() {
+        let expected: serde_json::Value = anchor_document(
+            Some("http://json-schema.org/draft-04/schema#"),
+            "definitions",
+            &serde_json::json!({"id": "#a", "type": "string"}),
+        );
+        let actual: serde_json::Value =
+            inlined_anchor_a_document(settings_for(TargetDialect::Draft04));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_is_unrepresentable_on_openapi_3_0() {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
+                dialect: TargetDialect::OpenApi30,
+                keyword: "$id".to_string(),
+                pointer: "/components/schemas/A".to_string(),
+            }]);
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            inlined_fragment_id(settings_for(TargetDialect::OpenApi30), "#a")
+                .map(|generated: GeneratedSchema| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_written_as_an_anchor_conforms_to_the_2020_12_metaschema() {
+        let expected: bool = true;
+        let actual: bool =
+            crate::meta::is_valid(&inlined_anchor_a_document(ReverseCodeGenSettings::default()));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_written_as_an_anchor_conforms_to_the_2019_09_metaschema() {
+        let expected: bool = true;
+        let actual: bool = crate::meta::is_valid(&inlined_anchor_a_document(settings_for(
+            TargetDialect::Draft201909,
+        )));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_anchor_ref_resolves_in_the_model_and_the_document_on_2020_12() {
+        let instances: [serde_json::Value; 2] = [
+            serde_json::json!({"s": {"y": "s"}}),
+            serde_json::json!({"s": {"y": 5}}),
+        ];
+        let expected: Vec<Vec<bool>> = vec![vec![true, false]; 2];
+        let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+            &inlined_fragment_id(ReverseCodeGenSettings::default(), "#a").expect("generated"),
+            &instances,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_anchor_ref_resolves_in_the_model_and_the_document_on_2019_09() {
+        let instances: [serde_json::Value; 2] = [
+            serde_json::json!({"s": {"y": "s"}}),
+            serde_json::json!({"s": {"y": 5}}),
+        ];
+        let expected: Vec<Vec<bool>> = vec![vec![true, false]; 2];
+        let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+            &inlined_fragment_id(settings_for(TargetDialect::Draft201909), "#a")
+                .expect("generated"),
+            &instances,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_beside_an_anchor_of_its_name_leaves_only_the_anchor() {
+        let expected: serde_json::Value = anchor_document(
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "$defs",
+            &serde_json::json!({"$anchor": "a", "type": "string"}),
+        );
+        let actual: serde_json::Value = inlined_definition_with_id(
+            ReverseCodeGenSettings::default(),
+            &serde_json::json!({"$id": "#a", "$anchor": "a", "type": "string"}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// The single error that `A`'s `$id` is unrepresentable on `dialect`.
+    fn unrepresentable_id_at_a(dialect: TargetDialect) -> GeneratedSchemaResult {
+        Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
+            dialect,
+            keyword: "$id".to_string(),
+            pointer: "/$defs/A".to_string(),
+        }])
+    }
+
+    #[test]
+    fn a_fragment_id_beside_an_anchor_of_another_name_is_unrepresentable() {
+        let expected: GeneratedSchemaResult = unrepresentable_id_at_a(TargetDialect::Draft202012);
+        let actual: GeneratedSchemaResult = inlined_definition_with_id(
+            ReverseCodeGenSettings::default(),
+            &serde_json::json!({"$id": "#a", "$anchor": "b", "type": "string"}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_empty_fragment_id_is_kept_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"A": {"$id": "#", "type": "string"}},
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/A"}}}}
+        });
+        let actual: serde_json::Value = inlined_fragment_id(ReverseCodeGenSettings::default(), "#")
+            .expect("generated")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_json_pointer_fragment_id_is_unrepresentable_on_2020_12() {
+        let expected: GeneratedSchemaResult = unrepresentable_id_at_a(TargetDialect::Draft202012);
+        let actual: GeneratedSchemaResult =
+            inlined_fragment_id(ReverseCodeGenSettings::default(), "#/a");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_starting_with_a_digit_is_unrepresentable_on_2020_12() {
+        let expected: GeneratedSchemaResult = unrepresentable_id_at_a(TargetDialect::Draft202012);
+        let actual: GeneratedSchemaResult =
+            inlined_fragment_id(ReverseCodeGenSettings::default(), "#1a");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_with_a_colon_is_unrepresentable_on_2020_12() {
+        let expected: GeneratedSchemaResult = unrepresentable_id_at_a(TargetDialect::Draft202012);
+        let actual: GeneratedSchemaResult =
+            inlined_fragment_id(ReverseCodeGenSettings::default(), "#a:b");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_with_a_colon_is_an_anchor_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({"$anchor": "a:b", "type": "string"});
+        let actual: serde_json::Value =
+            inlined_fragment_id(settings_for(TargetDialect::Draft201909), "#a:b")
+                .expect("generated")
+                .to_value()["$defs"]["A"]
+                .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_starting_with_an_underscore_is_an_anchor_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({"$anchor": "_a", "type": "string"});
+        let actual: serde_json::Value =
+            inlined_fragment_id(ReverseCodeGenSettings::default(), "#_a")
+                .expect("generated")
+                .to_value()["$defs"]["A"]
+                .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_starting_with_an_underscore_is_unrepresentable_on_2019_09() {
+        let expected: GeneratedSchemaResult = unrepresentable_id_at_a(TargetDialect::Draft201909);
+        let actual: GeneratedSchemaResult =
+            inlined_fragment_id(settings_for(TargetDialect::Draft201909), "#_a");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_resource_id_with_a_fragment_is_split_into_id_and_anchor_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {
+                "A": {"$id": "https://example.com/a.json", "$anchor": "a", "type": "string"}
+            },
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/A"}}}}
+        });
+        let actual: serde_json::Value = inlined_fragment_id(
+            ReverseCodeGenSettings::default(),
+            "https://example.com/a.json#a",
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_inside_an_embedded_draft_07_resource_stays_an_id_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {
+                "A": {
+                    "$id": "https://example.com/a.json",
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "definitions": {"C": {"$id": "#c", "type": "string"}},
+                    "properties": {"c": {"$ref": "#/definitions/C"}}
+                }
+            },
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/A"}}}}
+        });
+        let actual: serde_json::Value = inlined_definition_with_id(
+            ReverseCodeGenSettings::default(),
+            &serde_json::json!({
+                "$id": "https://example.com/a.json",
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "definitions": {"C": {"$id": "#c", "type": "string"}},
+                "properties": {"c": {"$ref": "#/definitions/C"}}
+            }),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_inlined_definition_with_a_hand_written_entrys_anchor_is_a_duplicate_anchor_on_2019_09() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/definitions/H".to_string(),
+            second: "#/$defs/A".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult =
+            inlined_id_beside_hand_written_id(settings_for(TargetDialect::Draft201909), "#a", "#a");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_inlined_fragment_id_with_a_hand_written_anchors_name_is_a_duplicate_anchor_on_2020_12() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/$defs/H".to_string(),
+            second: "#/$defs/A".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_result_with_inlined(
+            ReverseCodeGenSettings::default(),
+            serde_json::json!({
+                "definitions": {"A": {"$id": "#a", "type": "string"}},
+                "properties": {"x": {"$ref": "#/definitions/A"}}
+            }),
+            serde_json::json!({
+                "$defs": {"H": {"$anchor": "a", "type": "integer"}},
+                "properties": {"h": {"$ref": "#/$defs/H"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn different_anchors_beside_each_other_are_kept_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "definitions": {"H": {"$anchor": "a", "type": "integer"}},
+            "$defs": {"A": {"$anchor": "b", "type": "string"}},
+            "properties": {
+                "h": {"$ref": "#/definitions/H"},
+                "s": {"properties": {"x": {"$ref": "#/$defs/A"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_different_anchor_beside_hand_written(ReverseCodeGenSettings::default())
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_anchor_in_a_nested_resource_does_not_clash_with_a_root_anchor_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "definitions": {"H": {"$anchor": "a", "type": "integer"}},
+            "$defs": {
+                "A": {
+                    "$id": "https://example.com/a.json",
+                    "definitions": {"C": {"$anchor": "a", "type": "string"}},
+                    "properties": {"c": {"$ref": "#/definitions/C"}}
+                }
+            },
+            "properties": {
+                "h": {"$ref": "#/definitions/H"},
+                "s": {"properties": {"x": {"$ref": "#/$defs/A"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_same_anchor_in_a_nested_resource(ReverseCodeGenSettings::default()).to_value();
         assert_eq!(expected, actual);
     }
 
@@ -8289,7 +8731,11 @@ mod tests {
             "type": "object",
             "$defs": {
                 "B": {"type": "string"},
-                "E": {"$id": "#a", "type": "object", "properties": {"b": {"$ref": "#/$defs/B"}}}
+                "E": {
+                    "$anchor": "a",
+                    "type": "object",
+                    "properties": {"b": {"$ref": "#/$defs/B"}}
+                }
             },
             "properties": {"e": {"$ref": "#/$defs/E"}}
         });

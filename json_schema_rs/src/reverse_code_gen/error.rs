@@ -23,15 +23,17 @@ pub enum ReverseCodeGenError {
         /// Its `$id` as written.
         second_id: String,
     },
-    /// A definition and a hand-written entry in one schema resource declare the same
-    /// plain-name anchor with a fragment-only `$id` (`#a`, draft 4-7). A resource may not hold
-    /// one anchor at two locations (the registry's `DuplicateAnchor`); equal entries of one
-    /// name are merged instead.
+    /// Two schemas in one schema resource declare the same plain-name anchor: with a
+    /// fragment-only `$id` (`#a`) in draft 4-7, with `$anchor` (which such an `$id` is written
+    /// as) from 2019-09. A resource may not hold one anchor at two locations (the registry's
+    /// `DuplicateAnchor`); equal entries of one name are merged instead.
     DuplicateAnchor {
-        /// JSON Pointer of the hand-written entry that declares it.
+        /// JSON Pointer (as a `#` fragment) of the schema that declares it first: in draft 4-7
+        /// always a hand-written entry.
         first: String,
-        /// [`super::ToJsonSchema::schema_id`] of the type (or the hoisted definition) that
-        /// declares it again.
+        /// Where it is declared again: in draft 4-7 the
+        /// [`super::ToJsonSchema::schema_id`] of the type (or the hoisted definition), from
+        /// 2019-09 a JSON Pointer like `first`.
         second: String,
         /// The anchor name, without `#`.
         anchor: String,
