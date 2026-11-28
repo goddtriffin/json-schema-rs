@@ -988,3 +988,36 @@ fn the_readme_schemars_options_map_one_to_one() {
     let actual: Result<Value, Vec<ReverseCodeGenError>> = written::<Address>(settings);
     assert_eq!(expected, actual);
 }
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/wrapped.json")]
+#[expect(dead_code)]
+struct WrappedAddress(Address);
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsWrappedAddress {
+    w: WrappedAddress,
+}
+
+/// A newtype with an `id` is a `$ref` beside an `$id` the generator wrote: on a draft 4-7
+/// target it is still a resource, its `$ref` goes into an `allOf` and the definition it refers
+/// to is written inside it.
+#[test]
+fn a_newtype_with_an_id_stays_a_resource_on_draft_07() {
+    let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {"w": {"$ref": "#/definitions/WrappedAddress"}},
+        "additionalProperties": false,
+        "required": ["w"],
+        "definitions": {"WrappedAddress": {
+            "$id": "https://example.com/wrapped.json",
+            "allOf": [{"$ref": "#/definitions/Address"}],
+            "definitions": {"Address": address_schema()}
+        }}
+    }));
+    let actual: Result<Value, Vec<ReverseCodeGenError>> =
+        written_in::<HoldsWrappedAddress>(TargetDialect::Draft07);
+    assert_eq!(expected, actual);
+}
