@@ -52,36 +52,39 @@ fn encode_segment(segment: &str, out: &mut String) {
     }
 }
 
+/// Whether `c` may stand as written in a URI fragment (RFC 3986 §3.5): an unreserved
+/// character, a sub-delimiter, `:`, `@`, `/` or `?`.
+pub(crate) fn is_uri_fragment_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '-' | '.'
+                | '_'
+                | '~'
+                | '!'
+                | '$'
+                | '&'
+                | '\''
+                | '('
+                | ')'
+                | '*'
+                | '+'
+                | ','
+                | ';'
+                | '='
+                | ':'
+                | '@'
+                | '/'
+                | '?'
+        )
+}
+
 /// Appends `segments` as a JSON Pointer in a URI fragment (RFC 6901 §6): each segment escaped
 /// for the pointer (`~0`, `~1`), then every byte a fragment may not hold as written
 /// percent-encoded (RFC 3986 §3.5: unreserved characters, sub-delimiters, `:`, `@`, `/` and `?`
 /// stay; non-ASCII characters are kept, as an IRI allows).
 pub(crate) fn push_uri_fragment<'s>(segments: impl Iterator<Item = &'s str>, out: &mut String) {
-    let keep = |c: char| -> bool {
-        !c.is_ascii()
-            || c.is_ascii_alphanumeric()
-            || matches!(
-                c,
-                '-' | '.'
-                    | '_'
-                    | '~'
-                    | '!'
-                    | '$'
-                    | '&'
-                    | '\''
-                    | '('
-                    | ')'
-                    | '*'
-                    | '+'
-                    | ','
-                    | ';'
-                    | '='
-                    | ':'
-                    | '@'
-                    | '/'
-                    | '?'
-            )
-    };
+    let keep = |c: char| -> bool { !c.is_ascii() || is_uri_fragment_char(c) };
     let mut escaped: String = String::new();
     for segment in segments {
         out.push('/');
