@@ -90,8 +90,12 @@ benchmark_full: ## full benchmark (~60 min): every tool and competitor; refreshe
 	@./json_schema_rs_benchmark/scripts/run_benchmark.sh
 
 .PHONY: differential
-differential: ## run the Bowtie differential-testing harness (our validator vs competitors on the official suite) and refresh committed results; needs bowtie + Docker + make vendor_test_suite
+differential: ## run the Bowtie differential-testing harness (our validator vs competitors on the official suite) and refresh committed results; needs uv + Docker + make vendor_test_suite
 	@./json_schema_rs_differential/scripts/run_differential.sh
+
+.PHONY: docker-clean
+docker-clean: ## remove this repo's Docker containers, images and volumes (label repo=json-schema-rs) and the Bowtie competitor images make differential pulled
+	@./json_schema_rs_differential/scripts/docker_clean.sh
 
 .PHONY: research_harvest_tests
 research_harvest_tests: ## (stub) harvest test schemas from competitor repos; not yet implemented

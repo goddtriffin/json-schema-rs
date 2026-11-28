@@ -26,7 +26,7 @@ pub struct TestRecord {
     pub group: String,
     /// Bowtie's case seq, unique within the report the test came from.
     pub case_seq: String,
-    /// The suite file (relative to `tests/<draft>/`) or fixture schema the case came from.
+    /// The suite file (relative to `validation/tests/`) or fixture schema the case came from.
     pub file: Option<String>,
     /// Whether the test belongs to the optional suite.
     pub optional: bool,

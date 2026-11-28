@@ -67,8 +67,11 @@ Backwards compatibility is **not** a priority and **never** a justification (req
      much of the official JSON Schema Test Suite we pass next to other implementations (see
      [json_schema_rs_differential/README.md](json_schema_rs_differential/README.md)); when it
      runs, commit its refreshed `json_schema_rs_differential/results.{json,md}` so review sees
-     the change in the diff. It needs the Bowtie CLI (`uv tool install bowtie-json-schema`)
-     and Docker.
+     the change in the diff. It needs [uv](https://docs.astral.sh/uv/) (it runs the latest
+     Bowtie through `uvx`) and Docker; `make docker-clean` removes its images afterwards. The
+     repository tracks the latest Bowtie and test suite: when either changes how it works,
+     adapt our readers and bump the suite (design.md, *Official JSON Schema Test Suite*),
+     never pin an old release.
    - **`make benchmark_full`** (about 60 min): every tool, ours and the competitors', and it
      refreshes the committed `json_schema_rs_benchmark/results.{json,md}`. Run it only on the
      rarest occasions: right before a release (v0.1.0), or when the maintainer asks.

@@ -9,7 +9,7 @@
     "dotnet-jsonschema-net": {
       "name": "JsonSchema.Net",
       "language": "dotnet",
-      "version": "9.2.2"
+      "version": "9.7.0"
     },
     "go-jsonschema": {
       "name": "jsonschema",
@@ -58,26 +58,26 @@
         "draft": "draft4",
         "ours": {
           "tally": {
-            "total": 615,
-            "passed": 615,
+            "total": 666,
+            "passed": 666,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 615,
-            "denominator": 615,
+            "numerator": 666,
+            "denominator": 666,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 615,
-            "denominator": 615,
+            "numerator": 666,
+            "denominator": 666,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 615,
-            "denominator": 615,
+            "numerator": 666,
+            "denominator": 666,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -88,26 +88,26 @@
         "draft": "draft6",
         "ours": {
           "tally": {
-            "total": 834,
-            "passed": 834,
+            "total": 869,
+            "passed": 869,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 834,
-            "denominator": 834,
+            "numerator": 869,
+            "denominator": 869,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 834,
-            "denominator": 834,
+            "numerator": 869,
+            "denominator": 869,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 834,
-            "denominator": 834,
+            "numerator": 869,
+            "denominator": 869,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -118,26 +118,26 @@
         "draft": "draft7",
         "ours": {
           "tally": {
-            "total": 922,
-            "passed": 922,
+            "total": 955,
+            "passed": 955,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 922,
-            "denominator": 922,
+            "numerator": 955,
+            "denominator": 955,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 922,
-            "denominator": 922,
+            "numerator": 955,
+            "denominator": 955,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 922,
-            "denominator": 922,
+            "numerator": 955,
+            "denominator": 955,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -148,26 +148,26 @@
         "draft": "draft2019-09",
         "ours": {
           "tally": {
-            "total": 1242,
-            "passed": 1242,
+            "total": 1292,
+            "passed": 1292,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 1242,
-            "denominator": 1242,
+            "numerator": 1292,
+            "denominator": 1292,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 1242,
-            "denominator": 1242,
+            "numerator": 1292,
+            "denominator": 1292,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 1242,
-            "denominator": 1242,
+            "numerator": 1292,
+            "denominator": 1292,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -178,26 +178,26 @@
         "draft": "draft2020-12",
         "ours": {
           "tally": {
-            "total": 1277,
-            "passed": 1277,
+            "total": 1319,
+            "passed": 1319,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 1277,
-            "denominator": 1277,
+            "numerator": 1319,
+            "denominator": 1319,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 1277,
-            "denominator": 1277,
+            "numerator": 1319,
+            "denominator": 1319,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 1277,
-            "denominator": 1277,
+            "numerator": 1319,
+            "denominator": 1319,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -208,151 +208,151 @@
     "suite": {
       "cpp-blaze": {
         "tally": {
-          "total": 4890,
-          "passed": 4890,
+          "total": 5101,
+          "passed": 5101,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4890,
-          "denominator": 4890,
+          "numerator": 5101,
+          "denominator": 5101,
           "percent": "100.00%"
         }
       },
       "dotnet-jsonschema-net": {
         "tally": {
-          "total": 4275,
-          "passed": 4275,
+          "total": 4435,
+          "passed": 4435,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4275,
-          "denominator": 4275,
+          "numerator": 4435,
+          "denominator": 4435,
           "percent": "100.00%"
         }
       },
       "go-jsonschema": {
         "tally": {
-          "total": 4890,
-          "passed": 4890,
+          "total": 5101,
+          "passed": 5101,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4890,
-          "denominator": 4890,
+          "numerator": 5101,
+          "denominator": 5101,
           "percent": "100.00%"
         }
       },
       "java-networknt-json-schema-validator": {
         "tally": {
-          "total": 4890,
-          "passed": 4890,
+          "total": 5101,
+          "passed": 4182,
           "failed": 0,
           "skipped": 0,
-          "errored": 0,
+          "errored": 919,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4890,
-          "denominator": 4890,
-          "percent": "100.00%"
+          "numerator": 4182,
+          "denominator": 5101,
+          "percent": "81.98%"
         }
       },
       "js-ajv": {
         "tally": {
-          "total": 4890,
-          "passed": 4164,
-          "failed": 63,
+          "total": 5101,
+          "passed": 3855,
+          "failed": 56,
           "skipped": 0,
-          "errored": 663,
+          "errored": 1190,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4164,
-          "denominator": 4890,
-          "percent": "85.15%"
+          "numerator": 3855,
+          "denominator": 5101,
+          "percent": "75.57%"
         }
       },
       "js-hyperjump": {
         "tally": {
-          "total": 4890,
-          "passed": 4850,
-          "failed": 0,
-          "skipped": 40,
+          "total": 5101,
+          "passed": 5064,
+          "failed": 5,
+          "skipped": 32,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4850,
-          "denominator": 4890,
-          "percent": "99.18%"
+          "numerator": 5064,
+          "denominator": 5101,
+          "percent": "99.27%"
         }
       },
       "localhost/json-schema-rs": {
         "tally": {
-          "total": 4890,
-          "passed": 4890,
+          "total": 5101,
+          "passed": 5101,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4890,
-          "denominator": 4890,
+          "numerator": 5101,
+          "denominator": 5101,
           "percent": "100.00%"
         }
       },
       "python-jsonschema": {
         "tally": {
-          "total": 4890,
-          "passed": 4887,
+          "total": 5101,
+          "passed": 5089,
           "failed": 3,
           "skipped": 0,
-          "errored": 0,
+          "errored": 9,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4887,
-          "denominator": 4890,
-          "percent": "99.94%"
+          "numerator": 5089,
+          "denominator": 5101,
+          "percent": "99.76%"
         }
       },
       "rust-boon": {
         "tally": {
-          "total": 4890,
-          "passed": 4890,
+          "total": 5101,
+          "passed": 5101,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4890,
-          "denominator": 4890,
+          "numerator": 5101,
+          "denominator": 5101,
           "percent": "100.00%"
         }
       },
       "rust-jsonschema": {
         "tally": {
-          "total": 4890,
-          "passed": 4890,
+          "total": 5101,
+          "passed": 5101,
           "failed": 0,
           "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 4890,
-          "denominator": 4890,
+          "numerator": 5101,
+          "denominator": 5101,
           "percent": "100.00%"
         }
       }
@@ -360,137 +360,137 @@
     "optional_suite": {
       "dotnet-jsonschema-net": {
         "tally": {
-          "total": 2394,
-          "passed": 1439,
-          "failed": 917,
+          "total": 579,
+          "passed": 456,
+          "failed": 112,
           "skipped": 0,
-          "errored": 38,
+          "errored": 11,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1439,
-          "denominator": 2394,
-          "percent": "60.11%"
+          "numerator": 456,
+          "denominator": 579,
+          "percent": "78.76%"
         }
       },
       "go-jsonschema": {
         "tally": {
-          "total": 2666,
-          "passed": 1975,
-          "failed": 661,
+          "total": 686,
+          "passed": 562,
+          "failed": 99,
           "skipped": 0,
-          "errored": 30,
+          "errored": 25,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1975,
-          "denominator": 2666,
-          "percent": "74.08%"
+          "numerator": 562,
+          "denominator": 686,
+          "percent": "81.92%"
         }
       },
       "java-networknt-json-schema-validator": {
         "tally": {
-          "total": 2666,
-          "passed": 2072,
-          "failed": 584,
+          "total": 686,
+          "passed": 593,
+          "failed": 88,
           "skipped": 0,
-          "errored": 10,
+          "errored": 5,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 2072,
-          "denominator": 2666,
-          "percent": "77.72%"
+          "numerator": 593,
+          "denominator": 686,
+          "percent": "86.44%"
         }
       },
       "js-ajv": {
         "tally": {
-          "total": 2666,
-          "passed": 587,
-          "failed": 11,
+          "total": 686,
+          "passed": 563,
+          "failed": 69,
           "skipped": 0,
-          "errored": 2068,
+          "errored": 54,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 587,
-          "denominator": 2666,
-          "percent": "22.02%"
+          "numerator": 563,
+          "denominator": 686,
+          "percent": "82.07%"
         }
       },
       "js-hyperjump": {
         "tally": {
-          "total": 2666,
-          "passed": 1674,
-          "failed": 982,
+          "total": 686,
+          "passed": 549,
+          "failed": 119,
           "skipped": 0,
-          "errored": 10,
+          "errored": 18,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1674,
-          "denominator": 2666,
-          "percent": "62.79%"
+          "numerator": 549,
+          "denominator": 686,
+          "percent": "80.03%"
         }
       },
       "localhost/json-schema-rs": {
         "tally": {
-          "total": 2666,
-          "passed": 2149,
-          "failed": 511,
-          "skipped": 6,
+          "total": 686,
+          "passed": 636,
+          "failed": 50,
+          "skipped": 0,
           "errored": 0,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 2149,
-          "denominator": 2666,
-          "percent": "80.61%"
+          "numerator": 636,
+          "denominator": 686,
+          "percent": "92.71%"
         }
       },
       "python-jsonschema": {
         "tally": {
-          "total": 2666,
-          "passed": 1541,
-          "failed": 1029,
+          "total": 686,
+          "passed": 500,
+          "failed": 147,
           "skipped": 0,
-          "errored": 96,
+          "errored": 39,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 1541,
-          "denominator": 2666,
-          "percent": "57.80%"
+          "numerator": 500,
+          "denominator": 686,
+          "percent": "72.89%"
         }
       },
       "rust-boon": {
         "tally": {
-          "total": 2666,
-          "passed": 2113,
-          "failed": 543,
+          "total": 686,
+          "passed": 612,
+          "failed": 69,
           "skipped": 0,
-          "errored": 10,
+          "errored": 5,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 2113,
-          "denominator": 2666,
-          "percent": "79.26%"
+          "numerator": 612,
+          "denominator": 686,
+          "percent": "89.21%"
         }
       },
       "rust-jsonschema": {
         "tally": {
-          "total": 2666,
-          "passed": 2149,
-          "failed": 511,
+          "total": 686,
+          "passed": 629,
+          "failed": 52,
           "skipped": 0,
-          "errored": 6,
+          "errored": 5,
           "unexpected": 0
         },
         "compliance": {
-          "numerator": 2149,
-          "denominator": 2666,
-          "percent": "80.61%"
+          "numerator": 629,
+          "denominator": 686,
+          "percent": "91.69%"
         }
       }
     },
@@ -639,166 +639,166 @@
       "did_fail_fast": false,
       "unmapped_cases": 0,
       "required": {
-        "tests": 615,
+        "tests": 666,
         "implementations": {
           "cpp-blaze": {
             "tally": {
-              "total": 615,
-              "passed": 615,
+              "total": 666,
+              "passed": 666,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 615,
-              "denominator": 615,
+              "numerator": 666,
+              "denominator": 666,
               "percent": "100.00%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 615,
-              "passed": 615,
+              "total": 666,
+              "passed": 666,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 615,
-              "denominator": 615,
+              "numerator": 666,
+              "denominator": 666,
               "percent": "100.00%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 615,
-              "passed": 615,
+              "total": 666,
+              "passed": 666,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 615,
-              "denominator": 615,
+              "numerator": 666,
+              "denominator": 666,
               "percent": "100.00%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 615,
-              "passed": 559,
+              "total": 666,
+              "passed": 601,
               "failed": 8,
               "skipped": 0,
-              "errored": 48,
+              "errored": 57,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 559,
-              "denominator": 615,
-              "percent": "90.89%"
+              "numerator": 601,
+              "denominator": 666,
+              "percent": "90.24%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 615,
-              "passed": 605,
-              "failed": 0,
-              "skipped": 10,
+              "total": 666,
+              "passed": 657,
+              "failed": 1,
+              "skipped": 8,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 605,
-              "denominator": 615,
-              "percent": "98.37%"
+              "numerator": 657,
+              "denominator": 666,
+              "percent": "98.65%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 615,
-              "passed": 615,
+              "total": 666,
+              "passed": 666,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 615,
-              "denominator": 615,
+              "numerator": 666,
+              "denominator": 666,
               "percent": "100.00%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 615,
-              "passed": 615,
+              "total": 666,
+              "passed": 666,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 615,
-              "denominator": 615,
+              "numerator": 666,
+              "denominator": 666,
               "percent": "100.00%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 615,
-              "passed": 615,
+              "total": 666,
+              "passed": 666,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 615,
-              "denominator": 615,
+              "numerator": 666,
+              "denominator": 666,
               "percent": "100.00%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 615,
-              "passed": 615,
+              "total": 666,
+              "passed": 666,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 615,
-              "denominator": 615,
+              "numerator": 666,
+              "denominator": 666,
               "percent": "100.00%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 615,
-            "passed": 615,
+            "total": 666,
+            "passed": 666,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 615,
-            "denominator": 615,
+            "numerator": 666,
+            "denominator": 666,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 615,
-            "denominator": 615,
+            "numerator": 666,
+            "denominator": 666,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 615,
-            "denominator": 615,
+            "numerator": 666,
+            "denominator": 666,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -806,155 +806,155 @@
         }
       },
       "optional": {
-        "tests": 272,
+        "tests": 107,
         "implementations": {
           "go-jsonschema": {
             "tally": {
-              "total": 272,
-              "passed": 247,
-              "failed": 21,
+              "total": 107,
+              "passed": 84,
+              "failed": 18,
               "skipped": 0,
-              "errored": 4,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 247,
-              "denominator": 272,
-              "percent": "90.81%"
+              "numerator": 84,
+              "denominator": 107,
+              "percent": "78.50%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 272,
-              "passed": 263,
-              "failed": 9,
+              "total": 107,
+              "passed": 90,
+              "failed": 16,
               "skipped": 0,
-              "errored": 0,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 263,
-              "denominator": 272,
-              "percent": "96.69%"
+              "numerator": 90,
+              "denominator": 107,
+              "percent": "84.11%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 272,
-              "passed": 98,
-              "failed": 2,
+              "total": 107,
+              "passed": 94,
+              "failed": 12,
               "skipped": 0,
-              "errored": 172,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 98,
-              "denominator": 272,
-              "percent": "36.03%"
+              "numerator": 94,
+              "denominator": 107,
+              "percent": "87.85%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 272,
-              "passed": 185,
-              "failed": 87,
+              "total": 107,
+              "passed": 91,
+              "failed": 15,
               "skipped": 0,
-              "errored": 0,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 185,
-              "denominator": 272,
-              "percent": "68.01%"
+              "numerator": 91,
+              "denominator": 107,
+              "percent": "85.05%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 272,
-              "passed": 270,
-              "failed": 2,
+              "total": 107,
+              "passed": 97,
+              "failed": 10,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 270,
-              "denominator": 272,
-              "percent": "99.26%"
+              "numerator": 97,
+              "denominator": 107,
+              "percent": "90.65%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 272,
-              "passed": 156,
-              "failed": 98,
+              "total": 107,
+              "passed": 81,
+              "failed": 21,
               "skipped": 0,
-              "errored": 18,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 156,
-              "denominator": 272,
-              "percent": "57.35%"
+              "numerator": 81,
+              "denominator": 107,
+              "percent": "75.70%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 272,
-              "passed": 269,
-              "failed": 3,
+              "total": 107,
+              "passed": 94,
+              "failed": 12,
               "skipped": 0,
-              "errored": 0,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 269,
-              "denominator": 272,
-              "percent": "98.90%"
+              "numerator": 94,
+              "denominator": 107,
+              "percent": "87.85%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 272,
-              "passed": 270,
-              "failed": 2,
+              "total": 107,
+              "passed": 96,
+              "failed": 10,
               "skipped": 0,
-              "errored": 0,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 270,
-              "denominator": 272,
-              "percent": "99.26%"
+              "numerator": 96,
+              "denominator": 107,
+              "percent": "89.72%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 272,
-            "passed": 270,
-            "failed": 2,
+            "total": 107,
+            "passed": 97,
+            "failed": 10,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 270,
-            "denominator": 272,
-            "percent": "99.26%"
+            "numerator": 97,
+            "denominator": 107,
+            "percent": "90.65%"
           },
           "coverage": {
-            "numerator": 272,
-            "denominator": 272,
+            "numerator": 107,
+            "denominator": 107,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 270,
-            "denominator": 272,
-            "percent": "99.26%"
+            "numerator": 97,
+            "denominator": 107,
+            "percent": "90.65%"
           },
-          "disagreements_with_majority": 4,
-          "wrong_vs_expected": 2
+          "disagreements_with_majority": 3,
+          "wrong_vs_expected": 10
         }
       },
       "findings": {
@@ -986,24 +986,7 @@
           },
           {
             "group": "draft4",
-            "file": "optional/format/hostname.json",
-            "optional": true,
-            "case_description": "validation of host names",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "trailing dot",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 6
-              }
-            ]
-          },
-          {
-            "group": "draft4",
-            "file": "optional/zeroTerminatedFloats.json",
+            "file": "optional/zero-terminated-floats.json",
             "optional": true,
             "case_description": "some languages do not distinguish between different types of numeric value",
             "triage": "competitors_differ_from_expected",
@@ -1020,7 +1003,18 @@
           }
         ],
         "wrong_without_consensus": [],
-        "wrong_with_majority": [],
+        "wrong_with_majority": [
+          {
+            "group": "draft4",
+            "file": "optional/bignum.json",
+            "optional": true,
+            "tests": 8,
+            "majority": {
+              "4/7": 1,
+              "7/7": 7
+            }
+          }
+        ],
         "errored": []
       }
     },
@@ -1030,181 +1024,181 @@
       "did_fail_fast": false,
       "unmapped_cases": 0,
       "required": {
-        "tests": 834,
+        "tests": 869,
         "implementations": {
           "cpp-blaze": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           },
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 834,
-              "passed": 758,
+              "total": 869,
+              "passed": 786,
               "failed": 8,
               "skipped": 0,
-              "errored": 68,
+              "errored": 75,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 758,
-              "denominator": 834,
-              "percent": "90.89%"
+              "numerator": 786,
+              "denominator": 869,
+              "percent": "90.45%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 834,
-              "passed": 823,
-              "failed": 0,
-              "skipped": 11,
+              "total": 869,
+              "passed": 860,
+              "failed": 1,
+              "skipped": 8,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 823,
-              "denominator": 834,
-              "percent": "98.68%"
+              "numerator": 860,
+              "denominator": 869,
+              "percent": "98.96%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 834,
-              "passed": 834,
+              "total": 869,
+              "passed": 869,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 834,
-              "denominator": 834,
+              "numerator": 869,
+              "denominator": 869,
               "percent": "100.00%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 834,
-            "passed": 834,
+            "total": 869,
+            "passed": 869,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 834,
-            "denominator": 834,
+            "numerator": 869,
+            "denominator": 869,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 834,
-            "denominator": 834,
+            "numerator": 869,
+            "denominator": 869,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 834,
-            "denominator": 834,
+            "numerator": 869,
+            "denominator": 869,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -1212,292 +1206,204 @@
         }
       },
       "optional": {
-        "tests": 341,
+        "tests": 112,
         "implementations": {
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 341,
-              "passed": 222,
-              "failed": 112,
+              "total": 112,
+              "passed": 91,
+              "failed": 20,
               "skipped": 0,
-              "errored": 7,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 222,
-              "denominator": 341,
-              "percent": "65.10%"
+              "numerator": 91,
+              "denominator": 112,
+              "percent": "81.25%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 341,
-              "passed": 316,
-              "failed": 21,
+              "total": 112,
+              "passed": 88,
+              "failed": 19,
+              "skipped": 0,
+              "errored": 5,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 88,
+              "denominator": 112,
+              "percent": "78.57%"
+            }
+          },
+          "java-networknt-json-schema-validator": {
+            "tally": {
+              "total": 112,
+              "passed": 93,
+              "failed": 18,
+              "skipped": 0,
+              "errored": 1,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 93,
+              "denominator": 112,
+              "percent": "83.04%"
+            }
+          },
+          "js-ajv": {
+            "tally": {
+              "total": 112,
+              "passed": 95,
+              "failed": 13,
               "skipped": 0,
               "errored": 4,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 316,
-              "denominator": 341,
-              "percent": "92.67%"
-            }
-          },
-          "java-networknt-json-schema-validator": {
-            "tally": {
-              "total": 341,
-              "passed": 332,
-              "failed": 9,
-              "skipped": 0,
-              "errored": 0,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 332,
-              "denominator": 341,
-              "percent": "97.36%"
-            }
-          },
-          "js-ajv": {
-            "tally": {
-              "total": 341,
-              "passed": 102,
-              "failed": 1,
-              "skipped": 0,
-              "errored": 238,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 102,
-              "denominator": 341,
-              "percent": "29.91%"
+              "numerator": 95,
+              "denominator": 112,
+              "percent": "84.82%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 341,
-              "passed": 236,
-              "failed": 105,
+              "total": 112,
+              "passed": 93,
+              "failed": 18,
               "skipped": 0,
-              "errored": 0,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 236,
-              "denominator": 341,
-              "percent": "69.21%"
+              "numerator": 93,
+              "denominator": 112,
+              "percent": "83.04%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 341,
-              "passed": 341,
-              "failed": 0,
+              "total": 112,
+              "passed": 102,
+              "failed": 10,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 341,
-              "denominator": 341,
-              "percent": "100.00%"
+              "numerator": 102,
+              "denominator": 112,
+              "percent": "91.07%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 341,
-              "passed": 208,
-              "failed": 115,
+              "total": 112,
+              "passed": 84,
+              "failed": 23,
               "skipped": 0,
-              "errored": 18,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 208,
-              "denominator": 341,
-              "percent": "61.00%"
+              "numerator": 84,
+              "denominator": 112,
+              "percent": "75.00%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 341,
-              "passed": 339,
-              "failed": 2,
+              "total": 112,
+              "passed": 98,
+              "failed": 13,
               "skipped": 0,
-              "errored": 0,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 339,
-              "denominator": 341,
-              "percent": "99.41%"
+              "numerator": 98,
+              "denominator": 112,
+              "percent": "87.50%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 341,
-              "passed": 341,
-              "failed": 0,
+              "total": 112,
+              "passed": 101,
+              "failed": 10,
               "skipped": 0,
-              "errored": 0,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 341,
-              "denominator": 341,
-              "percent": "100.00%"
+              "numerator": 101,
+              "denominator": 112,
+              "percent": "90.18%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 341,
-            "passed": 341,
-            "failed": 0,
+            "total": 112,
+            "passed": 102,
+            "failed": 10,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 341,
-            "denominator": 341,
-            "percent": "100.00%"
+            "numerator": 102,
+            "denominator": 112,
+            "percent": "91.07%"
           },
           "coverage": {
-            "numerator": 341,
-            "denominator": 341,
+            "numerator": 112,
+            "denominator": 112,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 341,
-            "denominator": 341,
-            "percent": "100.00%"
+            "numerator": 102,
+            "denominator": 112,
+            "percent": "91.07%"
           },
-          "disagreements_with_majority": 11,
-          "wrong_vs_expected": 0
+          "disagreements_with_majority": 0,
+          "wrong_vs_expected": 10
         }
       },
       "findings": {
-        "disagreements_with_majority": [
+        "disagreements_with_majority": [],
+        "wrong_without_consensus": [
           {
             "group": "draft6",
-            "file": "optional/format/hostname.json",
+            "file": "optional/bignum.json",
             "optional": true,
-            "case_description": "validation of host names",
-            "triage": "competitors_differ_from_expected",
+            "case_description": "minimum integer comparison",
+            "triage": "no_consensus",
             "tests": [
               {
-                "test_description": "trailing dot",
+                "test_description": "just below the minimum is invalid",
                 "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "optional/format/uri-reference.json",
-            "optional": true,
-            "case_description": "validation of URI References",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "unescaped non US-ASCII characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
+                "ours": true,
+                "majority": null,
                 "agreeing": 4,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft6",
-            "file": "optional/format/uri.json",
-            "optional": true,
-            "case_description": "validation of URIs",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "unescaped non US-ASCII characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid backslash character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid \" character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid <> characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid {} characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid ^ character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid ` character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid SPACE character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid | character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
+                "voters": 8
               }
             ]
           }
         ],
-        "wrong_without_consensus": [],
-        "wrong_with_majority": [],
+        "wrong_with_majority": [
+          {
+            "group": "draft6",
+            "file": "optional/bignum.json",
+            "optional": true,
+            "tests": 9,
+            "majority": {
+              "8/8": 9
+            }
+          }
+        ],
         "errored": []
       }
     },
@@ -1507,181 +1413,181 @@
       "did_fail_fast": false,
       "unmapped_cases": 0,
       "required": {
-        "tests": 922,
+        "tests": 955,
         "implementations": {
           "cpp-blaze": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           },
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 922,
-              "passed": 784,
+              "total": 955,
+              "passed": 810,
               "failed": 8,
               "skipped": 0,
-              "errored": 130,
+              "errored": 137,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 784,
-              "denominator": 922,
-              "percent": "85.03%"
+              "numerator": 810,
+              "denominator": 955,
+              "percent": "84.82%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 922,
-              "passed": 911,
-              "failed": 0,
-              "skipped": 11,
+              "total": 955,
+              "passed": 946,
+              "failed": 1,
+              "skipped": 8,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 911,
-              "denominator": 922,
-              "percent": "98.81%"
+              "numerator": 946,
+              "denominator": 955,
+              "percent": "99.06%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 922,
-              "passed": 922,
+              "total": 955,
+              "passed": 955,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 922,
-              "denominator": 922,
+              "numerator": 955,
+              "denominator": 955,
               "percent": "100.00%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 922,
-            "passed": 922,
+            "total": 955,
+            "passed": 955,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 922,
-            "denominator": 922,
+            "numerator": 955,
+            "denominator": 955,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 922,
-            "denominator": 922,
+            "numerator": 955,
+            "denominator": 955,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 922,
-            "denominator": 922,
+            "numerator": 955,
+            "denominator": 955,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -1689,170 +1595,170 @@
         }
       },
       "optional": {
-        "tests": 621,
+        "tests": 126,
         "implementations": {
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 621,
-              "passed": 364,
-              "failed": 248,
+              "total": 126,
+              "passed": 101,
+              "failed": 24,
               "skipped": 0,
-              "errored": 9,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 364,
-              "denominator": 621,
-              "percent": "58.62%"
+              "numerator": 101,
+              "denominator": 126,
+              "percent": "80.16%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 621,
-              "passed": 523,
-              "failed": 92,
+              "total": 126,
+              "passed": 98,
+              "failed": 23,
               "skipped": 0,
-              "errored": 6,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 523,
-              "denominator": 621,
-              "percent": "84.22%"
+              "numerator": 98,
+              "denominator": 126,
+              "percent": "77.78%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 621,
-              "passed": 578,
-              "failed": 41,
+              "total": 126,
+              "passed": 107,
+              "failed": 18,
               "skipped": 0,
-              "errored": 2,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 578,
-              "denominator": 621,
-              "percent": "93.08%"
+              "numerator": 107,
+              "denominator": 126,
+              "percent": "84.92%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 621,
-              "passed": 108,
-              "failed": 5,
+              "total": 126,
+              "passed": 101,
+              "failed": 17,
               "skipped": 0,
-              "errored": 508,
+              "errored": 8,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 108,
-              "denominator": 621,
-              "percent": "17.39%"
+              "numerator": 101,
+              "denominator": 126,
+              "percent": "80.16%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 621,
-              "passed": 378,
-              "failed": 241,
+              "total": 126,
+              "passed": 99,
+              "failed": 22,
               "skipped": 0,
-              "errored": 2,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 378,
-              "denominator": 621,
-              "percent": "60.87%"
+              "numerator": 99,
+              "denominator": 126,
+              "percent": "78.57%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 621,
-              "passed": 619,
-              "failed": 0,
-              "skipped": 2,
+              "total": 126,
+              "passed": 116,
+              "failed": 10,
+              "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 619,
-              "denominator": 621,
-              "percent": "99.68%"
+              "numerator": 116,
+              "denominator": 126,
+              "percent": "92.06%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 621,
-              "passed": 350,
-              "failed": 251,
+              "total": 126,
+              "passed": 94,
+              "failed": 27,
               "skipped": 0,
-              "errored": 20,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 350,
-              "denominator": 621,
-              "percent": "56.36%"
+              "numerator": 94,
+              "denominator": 126,
+              "percent": "74.60%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 621,
-              "passed": 590,
-              "failed": 29,
+              "total": 126,
+              "passed": 108,
+              "failed": 17,
               "skipped": 0,
-              "errored": 2,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 590,
-              "denominator": 621,
-              "percent": "95.01%"
+              "numerator": 108,
+              "denominator": 126,
+              "percent": "85.71%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 621,
-              "passed": 619,
-              "failed": 0,
+              "total": 126,
+              "passed": 115,
+              "failed": 10,
               "skipped": 0,
-              "errored": 2,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 619,
-              "denominator": 621,
-              "percent": "99.68%"
+              "numerator": 115,
+              "denominator": 126,
+              "percent": "91.27%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 621,
-            "passed": 619,
-            "failed": 0,
-            "skipped": 2,
+            "total": 126,
+            "passed": 116,
+            "failed": 10,
+            "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 619,
-            "denominator": 621,
-            "percent": "99.68%"
+            "numerator": 116,
+            "denominator": 126,
+            "percent": "92.06%"
           },
           "coverage": {
-            "numerator": 619,
-            "denominator": 621,
-            "percent": "99.68%"
-          },
-          "correctness": {
-            "numerator": 619,
-            "denominator": 619,
+            "numerator": 126,
+            "denominator": 126,
             "percent": "100.00%"
           },
-          "disagreements_with_majority": 83,
-          "wrong_vs_expected": 0
+          "correctness": {
+            "numerator": 116,
+            "denominator": 126,
+            "percent": "92.06%"
+          },
+          "disagreements_with_majority": 4,
+          "wrong_vs_expected": 10
         }
       },
       "findings": {
@@ -1915,705 +1821,38 @@
                 "voters": 8
               }
             ]
-          },
+          }
+        ],
+        "wrong_without_consensus": [
           {
             "group": "draft7",
-            "file": "optional/format/hostname.json",
+            "file": "optional/bignum.json",
             "optional": true,
-            "case_description": "validation of host names",
-            "triage": "competitors_differ_from_expected",
+            "case_description": "minimum integer comparison",
+            "triage": "no_consensus",
             "tests": [
               {
-                "test_description": "trailing dot",
+                "test_description": "just below the minimum is invalid",
                 "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "contains \"--\" in the 3rd and 4th position",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "exceeds maximum overall length (256)",
-                "expected": false,
-                "ours": false,
-                "majority": true,
+                "ours": true,
+                "majority": null,
                 "agreeing": 4,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/format/hostname.json",
-            "optional": true,
-            "case_description": "validation of A-label (punycode) host names",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "invalid Punycode",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "contains illegal char U+302E Hangul single dot tone mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Begins with a Spacing Combining Mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Begins with a Nonspacing Mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Begins with an Enclosing Mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Exceptions that are DISALLOWED, right-to-left chars",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Exceptions that are DISALLOWED, left-to-right chars",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with no preceding 'l'",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with nothing preceding",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with no following 'l'",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with nothing following",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Greek KERAIA not followed by Greek",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Greek KERAIA not followed by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERESH not preceded by Hebrew",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERESH not preceded by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERSHAYIM not preceded by Hebrew",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERSHAYIM not preceded by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "KATAKANA MIDDLE DOT with no Hiragana, Katakana, or Han",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "KATAKANA MIDDLE DOT with no other characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "Arabic-Indic digits mixed with Extended Arabic-Indic digits",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "ZERO WIDTH JOINER not preceded by Virama",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              },
-              {
-                "test_description": "ZERO WIDTH JOINER not preceded by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 6,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/format/idn-email.json",
-            "optional": true,
-            "case_description": "validation of an internationalized e-mail addresses",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "an invalid idn e-mail address",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "an invalid e-mail address",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/format/idn-hostname.json",
-            "optional": true,
-            "case_description": "validation of internationalized host names",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "illegal first char U+302E Hangul single dot tone mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "contains illegal char U+302E Hangul single dot tone mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "a host name with a component too long",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid label, correct Punycode",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid Punycode",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "U-label contains \"--\" in the 3rd and 4th position",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "U-label starts with a dash",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "U-label ends with a dash",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "U-label starts and ends with a dash",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Begins with a Spacing Combining Mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Begins with a Nonspacing Mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Begins with an Enclosing Mark",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Exceptions that are DISALLOWED, right-to-left chars",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Exceptions that are DISALLOWED, left-to-right chars",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with no preceding 'l'",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with nothing preceding",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with no following 'l'",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "MIDDLE DOT with nothing following",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Greek KERAIA not followed by Greek",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Greek KERAIA not followed by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERESH not preceded by Hebrew",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERESH not preceded by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERSHAYIM not preceded by Hebrew",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Hebrew GERSHAYIM not preceded by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "KATAKANA MIDDLE DOT with no Hiragana, Katakana, or Han",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "KATAKANA MIDDLE DOT with no other characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "Arabic-Indic digits mixed with Extended Arabic-Indic digits",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "ZERO WIDTH JOINER not preceded by Virama",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "ZERO WIDTH JOINER not preceded by anything",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "empty string",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/format/idn-hostname.json",
-            "optional": true,
-            "case_description": "validation of separators in internationalized host names",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "single dot",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "single ideographic full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "single fullwidth full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "single halfwidth ideographic full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "leading dot",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "leading ideographic full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "leading fullwidth full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "leading halfwidth ideographic full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "trailing dot",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "trailing ideographic full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "trailing fullwidth full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              },
-              {
-                "test_description": "trailing halfwidth ideographic full stop",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 5,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/format/uri-reference.json",
-            "optional": true,
-            "case_description": "validation of URI References",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "unescaped non US-ASCII characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              }
-            ]
-          },
-          {
-            "group": "draft7",
-            "file": "optional/format/uri.json",
-            "optional": true,
-            "case_description": "validation of URIs",
-            "triage": "competitors_differ_from_expected",
-            "tests": [
-              {
-                "test_description": "unescaped non US-ASCII characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid backslash character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid \" character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid <> characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid {} characters",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid ^ character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid ` character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid SPACE character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
-              },
-              {
-                "test_description": "invalid | character",
-                "expected": false,
-                "ours": false,
-                "majority": true,
-                "agreeing": 4,
-                "voters": 7
+                "voters": 8
               }
             ]
           }
         ],
-        "wrong_without_consensus": [],
-        "wrong_with_majority": [],
+        "wrong_with_majority": [
+          {
+            "group": "draft7",
+            "file": "optional/bignum.json",
+            "optional": true,
+            "tests": 9,
+            "majority": {
+              "8/8": 9
+            }
+          }
+        ],
         "errored": []
       }
     },
@@ -2623,181 +1862,181 @@
       "did_fail_fast": false,
       "unmapped_cases": 0,
       "required": {
-        "tests": 1242,
+        "tests": 1292,
         "implementations": {
           "cpp-blaze": {
             "tally": {
-              "total": 1242,
-              "passed": 1242,
+              "total": 1292,
+              "passed": 1292,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1242,
-              "denominator": 1242,
+              "numerator": 1292,
+              "denominator": 1292,
               "percent": "100.00%"
             }
           },
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 1242,
-              "passed": 1242,
+              "total": 1292,
+              "passed": 1292,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1242,
-              "denominator": 1242,
+              "numerator": 1292,
+              "denominator": 1292,
               "percent": "100.00%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 1242,
-              "passed": 1242,
+              "total": 1292,
+              "passed": 1292,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1242,
-              "denominator": 1242,
+              "numerator": 1292,
+              "denominator": 1292,
               "percent": "100.00%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 1242,
-              "passed": 1242,
+              "total": 1292,
+              "passed": 1292,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1242,
-              "denominator": 1242,
+              "numerator": 1292,
+              "denominator": 1292,
               "percent": "100.00%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 1242,
-              "passed": 1034,
+              "total": 1292,
+              "passed": 967,
               "failed": 12,
               "skipped": 0,
-              "errored": 196,
+              "errored": 313,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1034,
-              "denominator": 1242,
-              "percent": "83.25%"
+              "numerator": 967,
+              "denominator": 1292,
+              "percent": "74.85%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 1242,
-              "passed": 1238,
-              "failed": 0,
+              "total": 1292,
+              "passed": 1287,
+              "failed": 1,
               "skipped": 4,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1238,
-              "denominator": 1242,
-              "percent": "99.68%"
+              "numerator": 1287,
+              "denominator": 1292,
+              "percent": "99.61%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 1242,
-              "passed": 1242,
+              "total": 1292,
+              "passed": 1292,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1242,
-              "denominator": 1242,
+              "numerator": 1292,
+              "denominator": 1292,
               "percent": "100.00%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 1242,
-              "passed": 1240,
+              "total": 1292,
+              "passed": 1290,
               "failed": 2,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1240,
-              "denominator": 1242,
-              "percent": "99.84%"
+              "numerator": 1290,
+              "denominator": 1292,
+              "percent": "99.85%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 1242,
-              "passed": 1242,
+              "total": 1292,
+              "passed": 1292,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1242,
-              "denominator": 1242,
+              "numerator": 1292,
+              "denominator": 1292,
               "percent": "100.00%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 1242,
-              "passed": 1242,
+              "total": 1292,
+              "passed": 1292,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1242,
-              "denominator": 1242,
+              "numerator": 1292,
+              "denominator": 1292,
               "percent": "100.00%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 1242,
-            "passed": 1242,
+            "total": 1292,
+            "passed": 1292,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 1242,
-            "denominator": 1242,
+            "numerator": 1292,
+            "denominator": 1292,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 1242,
-            "denominator": 1242,
+            "numerator": 1292,
+            "denominator": 1292,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 1242,
-            "denominator": 1242,
+            "numerator": 1292,
+            "denominator": 1292,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -2805,345 +2044,201 @@
         }
       },
       "optional": {
-        "tests": 710,
+        "tests": 161,
         "implementations": {
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 710,
-              "passed": 423,
-              "failed": 277,
+              "total": 161,
+              "passed": 126,
+              "failed": 34,
               "skipped": 0,
-              "errored": 10,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 423,
-              "denominator": 710,
-              "percent": "59.58%"
+              "numerator": 126,
+              "denominator": 161,
+              "percent": "78.26%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 710,
-              "passed": 441,
-              "failed": 262,
+              "total": 161,
+              "passed": 137,
+              "failed": 19,
               "skipped": 0,
-              "errored": 7,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 441,
-              "denominator": 710,
-              "percent": "62.11%"
+              "numerator": 137,
+              "denominator": 161,
+              "percent": "85.09%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 710,
-              "passed": 446,
-              "failed": 261,
+              "total": 161,
+              "passed": 142,
+              "failed": 18,
               "skipped": 0,
-              "errored": 3,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 446,
-              "denominator": 710,
-              "percent": "62.82%"
+              "numerator": 142,
+              "denominator": 161,
+              "percent": "88.20%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 710,
-              "passed": 139,
-              "failed": 1,
+              "total": 161,
+              "passed": 129,
+              "failed": 13,
               "skipped": 0,
-              "errored": 570,
+              "errored": 19,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 139,
-              "denominator": 710,
-              "percent": "19.58%"
+              "numerator": 129,
+              "denominator": 161,
+              "percent": "80.12%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 710,
-              "passed": 434,
-              "failed": 273,
+              "total": 161,
+              "passed": 125,
+              "failed": 32,
               "skipped": 0,
-              "errored": 3,
+              "errored": 4,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 434,
-              "denominator": 710,
-              "percent": "61.13%"
+              "numerator": 125,
+              "denominator": 161,
+              "percent": "77.64%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 710,
-              "passed": 455,
-              "failed": 252,
-              "skipped": 3,
+              "total": 161,
+              "passed": 151,
+              "failed": 10,
+              "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 455,
-              "denominator": 710,
-              "percent": "64.08%"
+              "numerator": 151,
+              "denominator": 161,
+              "percent": "93.79%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 710,
-              "passed": 409,
-              "failed": 280,
+              "total": 161,
+              "passed": 119,
+              "failed": 37,
               "skipped": 0,
-              "errored": 21,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 409,
-              "denominator": 710,
-              "percent": "57.61%"
+              "numerator": 119,
+              "denominator": 161,
+              "percent": "73.91%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 710,
-              "passed": 454,
-              "failed": 253,
+              "total": 161,
+              "passed": 147,
+              "failed": 13,
               "skipped": 0,
-              "errored": 3,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 454,
-              "denominator": 710,
-              "percent": "63.94%"
+              "numerator": 147,
+              "denominator": 161,
+              "percent": "91.30%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 710,
-              "passed": 455,
-              "failed": 252,
+              "total": 161,
+              "passed": 150,
+              "failed": 10,
               "skipped": 0,
-              "errored": 3,
+              "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 455,
-              "denominator": 710,
-              "percent": "64.08%"
+              "numerator": 150,
+              "denominator": 161,
+              "percent": "93.17%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 710,
-            "passed": 455,
-            "failed": 252,
-            "skipped": 3,
+            "total": 161,
+            "passed": 151,
+            "failed": 10,
+            "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 455,
-            "denominator": 710,
-            "percent": "64.08%"
+            "numerator": 151,
+            "denominator": 161,
+            "percent": "93.79%"
           },
           "coverage": {
-            "numerator": 707,
-            "denominator": 710,
-            "percent": "99.58%"
+            "numerator": 161,
+            "denominator": 161,
+            "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 455,
-            "denominator": 707,
-            "percent": "64.36%"
+            "numerator": 151,
+            "denominator": 161,
+            "percent": "93.79%"
           },
           "disagreements_with_majority": 0,
-          "wrong_vs_expected": 252
+          "wrong_vs_expected": 10
         }
       },
       "findings": {
         "disagreements_with_majority": [],
-        "wrong_without_consensus": [],
+        "wrong_without_consensus": [
+          {
+            "group": "draft2019-09",
+            "file": "optional/bignum.json",
+            "optional": true,
+            "case_description": "minimum integer comparison",
+            "triage": "no_consensus",
+            "tests": [
+              {
+                "test_description": "just below the minimum is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": null,
+                "agreeing": 4,
+                "voters": 8
+              }
+            ]
+          }
+        ],
         "wrong_with_majority": [
           {
             "group": "draft2019-09",
-            "file": "format.json",
+            "file": "optional/bignum.json",
             "optional": true,
-            "tests": 8,
+            "tests": 9,
             "majority": {
-              "7/7": 8
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/date-time.json",
-            "optional": true,
-            "tests": 16,
-            "majority": {
-              "7/7": 16
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/date.json",
-            "optional": true,
-            "tests": 27,
-            "majority": {
-              "7/7": 27
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/duration.json",
-            "optional": true,
-            "tests": 11,
-            "majority": {
-              "7/7": 11
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/email.json",
-            "optional": true,
-            "tests": 6,
-            "majority": {
-              "7/7": 6
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/hostname.json",
-            "optional": true,
-            "tests": 33,
-            "majority": {
-              "7/7": 33
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/idn-email.json",
-            "optional": true,
-            "tests": 2,
-            "majority": {
-              "7/7": 2
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/idn-hostname.json",
-            "optional": true,
-            "tests": 42,
-            "majority": {
-              "7/7": 42
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/ipv4.json",
-            "optional": true,
-            "tests": 8,
-            "majority": {
-              "7/7": 8
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/ipv6.json",
-            "optional": true,
-            "tests": 23,
-            "majority": {
-              "7/7": 23
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/iri-reference.json",
-            "optional": true,
-            "tests": 2,
-            "majority": {
-              "7/7": 2
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/iri.json",
-            "optional": true,
-            "tests": 4,
-            "majority": {
-              "7/7": 4
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/json-pointer.json",
-            "optional": true,
-            "tests": 12,
-            "majority": {
-              "7/7": 12
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/regex.json",
-            "optional": true,
-            "tests": 1,
-            "majority": {
-              "7/7": 1
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/relative-json-pointer.json",
-            "optional": true,
-            "tests": 7,
-            "majority": {
-              "7/7": 7
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/time.json",
-            "optional": true,
-            "tests": 28,
-            "majority": {
-              "7/7": 28
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/uri-reference.json",
-            "optional": true,
-            "tests": 4,
-            "majority": {
-              "7/7": 4
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/uri-template.json",
-            "optional": true,
-            "tests": 1,
-            "majority": {
-              "7/7": 1
-            }
-          },
-          {
-            "group": "draft2019-09",
-            "file": "optional/format/uri.json",
-            "optional": true,
-            "tests": 17,
-            "majority": {
-              "7/7": 17
+              "8/8": 9
             }
           }
         ],
@@ -3156,181 +2251,181 @@
       "did_fail_fast": false,
       "unmapped_cases": 0,
       "required": {
-        "tests": 1277,
+        "tests": 1319,
         "implementations": {
           "cpp-blaze": {
             "tally": {
-              "total": 1277,
-              "passed": 1277,
+              "total": 1319,
+              "passed": 1319,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1277,
-              "denominator": 1277,
+              "numerator": 1319,
+              "denominator": 1319,
               "percent": "100.00%"
             }
           },
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 1277,
-              "passed": 1277,
+              "total": 1319,
+              "passed": 1319,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1277,
-              "denominator": 1277,
+              "numerator": 1319,
+              "denominator": 1319,
               "percent": "100.00%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 1277,
-              "passed": 1277,
+              "total": 1319,
+              "passed": 1319,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1277,
-              "denominator": 1277,
+              "numerator": 1319,
+              "denominator": 1319,
               "percent": "100.00%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 1277,
-              "passed": 1277,
+              "total": 1319,
+              "passed": 400,
               "failed": 0,
               "skipped": 0,
-              "errored": 0,
+              "errored": 919,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1277,
-              "denominator": 1277,
-              "percent": "100.00%"
+              "numerator": 400,
+              "denominator": 1319,
+              "percent": "30.33%"
             }
           },
           "js-ajv": {
             "tally": {
-              "total": 1277,
-              "passed": 1029,
-              "failed": 27,
+              "total": 1319,
+              "passed": 691,
+              "failed": 20,
               "skipped": 0,
-              "errored": 221,
+              "errored": 608,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1029,
-              "denominator": 1277,
-              "percent": "80.58%"
+              "numerator": 691,
+              "denominator": 1319,
+              "percent": "52.39%"
             }
           },
           "js-hyperjump": {
             "tally": {
-              "total": 1277,
-              "passed": 1273,
-              "failed": 0,
+              "total": 1319,
+              "passed": 1314,
+              "failed": 1,
               "skipped": 4,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1273,
-              "denominator": 1277,
-              "percent": "99.69%"
+              "numerator": 1314,
+              "denominator": 1319,
+              "percent": "99.62%"
             }
           },
           "localhost/json-schema-rs": {
             "tally": {
-              "total": 1277,
-              "passed": 1277,
+              "total": 1319,
+              "passed": 1319,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1277,
-              "denominator": 1277,
+              "numerator": 1319,
+              "denominator": 1319,
               "percent": "100.00%"
             }
           },
           "python-jsonschema": {
             "tally": {
-              "total": 1277,
-              "passed": 1276,
+              "total": 1319,
+              "passed": 1309,
               "failed": 1,
               "skipped": 0,
-              "errored": 0,
+              "errored": 9,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1276,
-              "denominator": 1277,
-              "percent": "99.92%"
+              "numerator": 1309,
+              "denominator": 1319,
+              "percent": "99.24%"
             }
           },
           "rust-boon": {
             "tally": {
-              "total": 1277,
-              "passed": 1277,
+              "total": 1319,
+              "passed": 1319,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1277,
-              "denominator": 1277,
+              "numerator": 1319,
+              "denominator": 1319,
               "percent": "100.00%"
             }
           },
           "rust-jsonschema": {
             "tally": {
-              "total": 1277,
-              "passed": 1277,
+              "total": 1319,
+              "passed": 1319,
               "failed": 0,
               "skipped": 0,
               "errored": 0,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 1277,
-              "denominator": 1277,
+              "numerator": 1319,
+              "denominator": 1319,
               "percent": "100.00%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 1277,
-            "passed": 1277,
+            "total": 1319,
+            "passed": 1319,
             "failed": 0,
             "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 1277,
-            "denominator": 1277,
+            "numerator": 1319,
+            "denominator": 1319,
             "percent": "100.00%"
           },
           "coverage": {
-            "numerator": 1277,
-            "denominator": 1277,
+            "numerator": 1319,
+            "denominator": 1319,
             "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 1277,
-            "denominator": 1277,
+            "numerator": 1319,
+            "denominator": 1319,
             "percent": "100.00%"
           },
           "disagreements_with_majority": 0,
@@ -3338,363 +2433,219 @@
         }
       },
       "optional": {
-        "tests": 722,
+        "tests": 180,
         "implementations": {
           "dotnet-jsonschema-net": {
             "tally": {
-              "total": 722,
-              "passed": 430,
-              "failed": 280,
+              "total": 180,
+              "passed": 138,
+              "failed": 34,
               "skipped": 0,
-              "errored": 12,
+              "errored": 8,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 430,
-              "denominator": 722,
-              "percent": "59.56%"
+              "numerator": 138,
+              "denominator": 180,
+              "percent": "76.67%"
             }
           },
           "go-jsonschema": {
             "tally": {
-              "total": 722,
-              "passed": 448,
-              "failed": 265,
+              "total": 180,
+              "passed": 155,
+              "failed": 20,
               "skipped": 0,
-              "errored": 9,
+              "errored": 5,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 448,
-              "denominator": 722,
-              "percent": "62.05%"
+              "numerator": 155,
+              "denominator": 180,
+              "percent": "86.11%"
             }
           },
           "java-networknt-json-schema-validator": {
             "tally": {
-              "total": 722,
-              "passed": 453,
-              "failed": 264,
-              "skipped": 0,
-              "errored": 5,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 453,
-              "denominator": 722,
-              "percent": "62.74%"
-            }
-          },
-          "js-ajv": {
-            "tally": {
-              "total": 722,
-              "passed": 140,
-              "failed": 2,
-              "skipped": 0,
-              "errored": 580,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 140,
-              "denominator": 722,
-              "percent": "19.39%"
-            }
-          },
-          "js-hyperjump": {
-            "tally": {
-              "total": 722,
-              "passed": 441,
-              "failed": 276,
-              "skipped": 0,
-              "errored": 5,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 441,
-              "denominator": 722,
-              "percent": "61.08%"
-            }
-          },
-          "localhost/json-schema-rs": {
-            "tally": {
-              "total": 722,
-              "passed": 464,
-              "failed": 257,
-              "skipped": 1,
-              "errored": 0,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 464,
-              "denominator": 722,
-              "percent": "64.27%"
-            }
-          },
-          "python-jsonschema": {
-            "tally": {
-              "total": 722,
-              "passed": 418,
-              "failed": 285,
-              "skipped": 0,
-              "errored": 19,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 418,
-              "denominator": 722,
-              "percent": "57.89%"
-            }
-          },
-          "rust-boon": {
-            "tally": {
-              "total": 722,
-              "passed": 461,
-              "failed": 256,
-              "skipped": 0,
-              "errored": 5,
-              "unexpected": 0
-            },
-            "compliance": {
-              "numerator": 461,
-              "denominator": 722,
-              "percent": "63.85%"
-            }
-          },
-          "rust-jsonschema": {
-            "tally": {
-              "total": 722,
-              "passed": 464,
-              "failed": 257,
+              "total": 180,
+              "passed": 161,
+              "failed": 18,
               "skipped": 0,
               "errored": 1,
               "unexpected": 0
             },
             "compliance": {
-              "numerator": 464,
-              "denominator": 722,
-              "percent": "64.27%"
+              "numerator": 161,
+              "denominator": 180,
+              "percent": "89.44%"
+            }
+          },
+          "js-ajv": {
+            "tally": {
+              "total": 180,
+              "passed": 144,
+              "failed": 14,
+              "skipped": 0,
+              "errored": 22,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 144,
+              "denominator": 180,
+              "percent": "80.00%"
+            }
+          },
+          "js-hyperjump": {
+            "tally": {
+              "total": 180,
+              "passed": 141,
+              "failed": 32,
+              "skipped": 0,
+              "errored": 7,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 141,
+              "denominator": 180,
+              "percent": "78.33%"
+            }
+          },
+          "localhost/json-schema-rs": {
+            "tally": {
+              "total": 180,
+              "passed": 170,
+              "failed": 10,
+              "skipped": 0,
+              "errored": 0,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 170,
+              "denominator": 180,
+              "percent": "94.44%"
+            }
+          },
+          "python-jsonschema": {
+            "tally": {
+              "total": 180,
+              "passed": 122,
+              "failed": 39,
+              "skipped": 0,
+              "errored": 19,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 122,
+              "denominator": 180,
+              "percent": "67.78%"
+            }
+          },
+          "rust-boon": {
+            "tally": {
+              "total": 180,
+              "passed": 165,
+              "failed": 14,
+              "skipped": 0,
+              "errored": 1,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 165,
+              "denominator": 180,
+              "percent": "91.67%"
+            }
+          },
+          "rust-jsonschema": {
+            "tally": {
+              "total": 180,
+              "passed": 167,
+              "failed": 12,
+              "skipped": 0,
+              "errored": 1,
+              "unexpected": 0
+            },
+            "compliance": {
+              "numerator": 167,
+              "denominator": 180,
+              "percent": "92.78%"
             }
           }
         },
         "ours": {
           "tally": {
-            "total": 722,
-            "passed": 464,
-            "failed": 257,
-            "skipped": 1,
+            "total": 180,
+            "passed": 170,
+            "failed": 10,
+            "skipped": 0,
             "errored": 0,
             "unexpected": 0
           },
           "compliance": {
-            "numerator": 464,
-            "denominator": 722,
-            "percent": "64.27%"
+            "numerator": 170,
+            "denominator": 180,
+            "percent": "94.44%"
           },
           "coverage": {
-            "numerator": 721,
-            "denominator": 722,
-            "percent": "99.86%"
+            "numerator": 180,
+            "denominator": 180,
+            "percent": "100.00%"
           },
           "correctness": {
-            "numerator": 464,
-            "denominator": 721,
-            "percent": "64.36%"
+            "numerator": 170,
+            "denominator": 180,
+            "percent": "94.44%"
           },
-          "disagreements_with_majority": 0,
-          "wrong_vs_expected": 257
+          "disagreements_with_majority": 1,
+          "wrong_vs_expected": 10
         }
       },
       "findings": {
-        "disagreements_with_majority": [],
-        "wrong_without_consensus": [],
-        "wrong_with_majority": [
-          {
-            "group": "draft2020-12",
-            "file": "format.json",
-            "optional": true,
-            "tests": 8,
-            "majority": {
-              "7/7": 8
-            }
-          },
+        "disagreements_with_majority": [
           {
             "group": "draft2020-12",
             "file": "optional/format-assertion.json",
             "optional": true,
-            "tests": 2,
-            "majority": {
-              "2/2": 2
-            }
-          },
+            "case_description": "schema that uses custom metaschema with format-assertion: false",
+            "triage": "competitors_differ_from_expected",
+            "tests": [
+              {
+                "test_description": "format-assertion: false: invalid string",
+                "expected": false,
+                "ours": false,
+                "majority": true,
+                "agreeing": 4,
+                "voters": 6
+              }
+            ]
+          }
+        ],
+        "wrong_without_consensus": [
           {
             "group": "draft2020-12",
-            "file": "optional/format/date-time.json",
+            "file": "optional/bignum.json",
             "optional": true,
-            "tests": 16,
-            "majority": {
-              "7/7": 16
-            }
-          },
+            "case_description": "minimum integer comparison",
+            "triage": "no_consensus",
+            "tests": [
+              {
+                "test_description": "just below the minimum is invalid",
+                "expected": false,
+                "ours": true,
+                "majority": null,
+                "agreeing": 4,
+                "voters": 8
+              }
+            ]
+          }
+        ],
+        "wrong_with_majority": [
           {
             "group": "draft2020-12",
-            "file": "optional/format/date.json",
+            "file": "optional/bignum.json",
             "optional": true,
-            "tests": 27,
+            "tests": 9,
             "majority": {
-              "7/7": 27
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/duration.json",
-            "optional": true,
-            "tests": 11,
-            "majority": {
-              "7/7": 11
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/ecmascript-regex.json",
-            "optional": true,
-            "tests": 1,
-            "majority": {
-              "7/7": 1
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/email.json",
-            "optional": true,
-            "tests": 8,
-            "majority": {
-              "7/7": 8
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/hostname.json",
-            "optional": true,
-            "tests": 33,
-            "majority": {
-              "7/7": 33
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/idn-email.json",
-            "optional": true,
-            "tests": 2,
-            "majority": {
-              "7/7": 2
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/idn-hostname.json",
-            "optional": true,
-            "tests": 42,
-            "majority": {
-              "7/7": 42
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/ipv4.json",
-            "optional": true,
-            "tests": 8,
-            "majority": {
-              "7/7": 8
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/ipv6.json",
-            "optional": true,
-            "tests": 23,
-            "majority": {
-              "7/7": 23
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/iri-reference.json",
-            "optional": true,
-            "tests": 2,
-            "majority": {
-              "7/7": 2
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/iri.json",
-            "optional": true,
-            "tests": 4,
-            "majority": {
-              "7/7": 4
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/json-pointer.json",
-            "optional": true,
-            "tests": 12,
-            "majority": {
-              "7/7": 12
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/regex.json",
-            "optional": true,
-            "tests": 1,
-            "majority": {
-              "7/7": 1
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/relative-json-pointer.json",
-            "optional": true,
-            "tests": 7,
-            "majority": {
-              "7/7": 7
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/time.json",
-            "optional": true,
-            "tests": 28,
-            "majority": {
-              "7/7": 28
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/uri-reference.json",
-            "optional": true,
-            "tests": 4,
-            "majority": {
-              "7/7": 4
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/uri-template.json",
-            "optional": true,
-            "tests": 1,
-            "majority": {
-              "7/7": 1
-            }
-          },
-          {
-            "group": "draft2020-12",
-            "file": "optional/format/uri.json",
-            "optional": true,
-            "tests": 17,
-            "majority": {
-              "7/7": 17
+              "8/8": 9
             }
           }
         ],
@@ -3702,40 +2653,7 @@
       }
     }
   ],
-  "unsupported": [
-    {
-      "reason": "$ref: $ref \"http://localhost:1234/draft2019-09/dependentRequired.json\" at /allOf/1 (\"http://localhost:1234/draft2019-09/dependentRequired.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2019-09/dependentRequired.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2019-09/dependentRequired.json\"",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft7": 2
-      }
-    },
-    {
-      "reason": "$ref: $ref \"http://localhost:1234/draft2020-12/prefixItems.json\" at root (\"http://localhost:1234/draft2020-12/prefixItems.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2020-12/prefixItems.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2020-12/prefixItems.json\"",
-      "tests": 2,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 2
-      }
-    },
-    {
-      "reason": "$ref: $ref \"http://localhost:1234/draft2019-09/ignore-prefixItems.json\" at root (\"http://localhost:1234/draft2019-09/ignore-prefixItems.json\") does not resolve: could not retrieve \"http://localhost:1234/draft2019-09/ignore-prefixItems.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft2019-09/ignore-prefixItems.json\"",
-      "tests": 1,
-      "cases": 1,
-      "by_group": {
-        "draft2020-12": 1
-      }
-    },
-    {
-      "reason": "$ref: $ref \"http://localhost:1234/draft7/ignore-dependentRequired.json\" at /allOf/1 (\"http://localhost:1234/draft7/ignore-dependentRequired.json\") does not resolve: could not retrieve \"http://localhost:1234/draft7/ignore-dependentRequired.json\": retrieval is disabled; no document was given for \"http://localhost:1234/draft7/ignore-dependentRequired.json\"",
-      "tests": 1,
-      "cases": 1,
-      "by_group": {
-        "draft2019-09": 1
-      }
-    }
-  ],
+  "unsupported": [],
   "fixtures": [
     {
       "id": "small/config",
@@ -7043,7 +5961,6 @@
       "title": "additionalProperties being false does not allow other properties / an additional property is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "patternProperties": {
           "^v": {}
@@ -7089,7 +6006,6 @@
       "title": "allOf / mismatch second",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "allOf": [
           {
             "properties": {
@@ -7153,8 +6069,7 @@
             "type": "integer"
           }
         },
-        "$ref": "#foo",
-        "$schema": "https://json-schema.org/draft/2020-12/schema"
+        "$ref": "#foo"
       },
       "instance_path": null,
       "instance": "a",
@@ -7188,7 +6103,6 @@
       "title": "anyOf / neither anyOf valid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "type": "integer"
@@ -7264,7 +6178,6 @@
       "title": "const validation / another value is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "const": 2
       },
       "instance_path": null,
@@ -7299,7 +6212,6 @@
       "title": "contains keyword validation / array without items matching schema is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "contains": {
           "minimum": 5
         }
@@ -7343,7 +6255,6 @@
       "title": "the default keyword does not do anything if the property is missing / an explicit property value is checked against maximum (failing)",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "alpha": {
             "default": 5,
@@ -7383,54 +6294,10 @@
       ]
     },
     {
-      "source": "suite draft2020-12/defs.json",
-      "title": "validate definition against metaschema / invalid definition schema",
-      "schema_path": null,
-      "schema": {
-        "$ref": "https://json-schema.org/draft/2020-12/schema",
-        "$schema": "https://json-schema.org/draft/2020-12/schema"
-      },
-      "instance_path": null,
-      "instance": {
-        "$defs": {
-          "foo": {
-            "type": 1
-          }
-        }
-      },
-      "outputs": [
-        {
-          "tool": "json-schema-rs",
-          "outcome": "invalid",
-          "messages": [
-            "/$defs/foo/type: instance does not match any of the 2 subschema(s)"
-          ]
-        },
-        {
-          "tool": "jsonschema",
-          "outcome": "invalid",
-          "messages": [
-            "/$defs/foo/type: 1 is not valid under any of the schemas listed in the 'anyOf' keyword"
-          ]
-        },
-        {
-          "tool": "boon",
-          "outcome": "invalid",
-          "messages": [
-            "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '/$defs/foo/type': anyOf failed",
-            "  - at '/$defs/foo/type': value must be one of 'array', 'boolean', 'integer', 'null', 'number', 'object', 'string'",
-            "  - at '/$defs/foo/type': want array, but got number"
-          ]
-        }
-      ]
-    },
-    {
       "source": "suite draft2020-12/dependentRequired.json",
       "title": "single dependency / missing dependency",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "dependentRequired": {
           "bar": [
             "foo"
@@ -7471,7 +6338,6 @@
       "title": "single dependency / wrong type",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "dependentSchemas": {
           "bar": {
             "properties": {
@@ -7517,7 +6383,7 @@
     },
     {
       "source": "suite draft2020-12/dynamicRef.json",
-      "title": "A $dynamicRef to a $dynamicAnchor in the same schema resource behaves like a normal $ref to an $anchor / An array containing non-strings is invalid",
+      "title": "A $dynamicRef to a $dynamicAnchor in the same schema resource behaves like a normal $ref to an $anchor (2020) / An array containing non-strings is invalid",
       "schema_path": null,
       "schema": {
         "$defs": {
@@ -7526,8 +6392,6 @@
             "type": "string"
           }
         },
-        "$id": "https://test.json-schema.org/dynamicRef-dynamicAnchor-same-schema/root",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "items": {
           "$dynamicRef": "#items"
         },
@@ -7568,7 +6432,6 @@
       "title": "simple enum validation / something else is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "enum": [
           1,
           2,
@@ -7603,63 +6466,48 @@
       ]
     },
     {
-      "source": "suite draft2020-12/exclusiveMaximum.json",
-      "title": "exclusiveMaximum validation / boundary point is invalid",
+      "source": "suite draft2020-12/id.json",
+      "title": "refs with relative uris and defs / invalid on inner field",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "exclusiveMaximum": 3.0
-      },
-      "instance_path": null,
-      "instance": 3.0,
-      "outputs": [
-        {
-          "tool": "json-schema-rs",
-          "outcome": "invalid",
-          "messages": [
-            "root: value 3.0 is not below exclusiveMaximum 3.0"
-          ]
-        },
-        {
-          "tool": "jsonschema",
-          "outcome": "invalid",
-          "messages": [
-            "/: 3.0 is greater than or equal to the maximum of 3.0"
-          ]
-        },
-        {
-          "tool": "boon",
-          "outcome": "invalid",
-          "messages": [
-            "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '': must be < 3.0 but got 3.0"
-          ]
+        "$id": "http://example.com/schema-relative-uri-defs1.json",
+        "$ref": "schema-relative-uri-defs2.json",
+        "properties": {
+          "foo": {
+            "$defs": {
+              "inner": {
+                "properties": {
+                  "bar": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "$id": "schema-relative-uri-defs2.json",
+            "$ref": "#/$defs/inner"
+          }
         }
-      ]
-    },
-    {
-      "source": "suite draft2020-12/exclusiveMinimum.json",
-      "title": "exclusiveMinimum validation / boundary point is invalid",
-      "schema_path": null,
-      "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "exclusiveMinimum": 1.1
       },
       "instance_path": null,
-      "instance": 1.1,
+      "instance": {
+        "bar": "a",
+        "foo": {
+          "bar": 1
+        }
+      },
       "outputs": [
         {
           "tool": "json-schema-rs",
           "outcome": "invalid",
           "messages": [
-            "root: value 1.1 is not above exclusiveMinimum 1.1"
+            "/foo/bar: expected string, got number"
           ]
         },
         {
           "tool": "jsonschema",
           "outcome": "invalid",
           "messages": [
-            "/: 1.1 is less than or equal to the minimum of 1.1"
+            "/foo/bar: 1 is not of type \"string\""
           ]
         },
         {
@@ -7667,7 +6515,7 @@
           "outcome": "invalid",
           "messages": [
             "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '': must be > 1.1 but got 1.1"
+            "- at '/foo/bar': want string, but got number"
           ]
         }
       ]
@@ -7677,7 +6525,6 @@
       "title": "if and then without else / invalid through then",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "if": {
           "exclusiveMaximum": 0
         },
@@ -7722,7 +6569,6 @@
             "type": "integer"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "allOf": [
           {
             "properties": {
@@ -7776,7 +6622,6 @@
       "title": "a schema given for items / wrong type of items",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "items": {
           "type": "integer"
         }
@@ -7812,49 +6657,10 @@
       ]
     },
     {
-      "source": "suite draft2020-12/maxContains.json",
-      "title": "maxContains with contains / empty data",
-      "schema_path": null,
-      "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "contains": {
-          "const": 1
-        },
-        "maxContains": 1
-      },
-      "instance_path": null,
-      "instance": [],
-      "outputs": [
-        {
-          "tool": "json-schema-rs",
-          "outcome": "invalid",
-          "messages": [
-            "root: 0 item(s) match contains, minimum is 1"
-          ]
-        },
-        {
-          "tool": "jsonschema",
-          "outcome": "invalid",
-          "messages": [
-            "/: None of [] are valid under the given schema"
-          ]
-        },
-        {
-          "tool": "boon",
-          "outcome": "invalid",
-          "messages": [
-            "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '': no items match contains schema"
-          ]
-        }
-      ]
-    },
-    {
       "source": "suite draft2020-12/maxItems.json",
       "title": "maxItems validation / too long is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "maxItems": 2
       },
       "instance_path": null,
@@ -7893,7 +6699,6 @@
       "title": "maxLength validation / too long is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "maxLength": 2
       },
       "instance_path": null,
@@ -7928,7 +6733,6 @@
       "title": "maxProperties validation / too long is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "maxProperties": 2
       },
       "instance_path": null,
@@ -7967,7 +6771,6 @@
       "title": "maximum validation / above the maximum is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "maximum": 3.0
       },
       "instance_path": null,
@@ -7998,49 +6801,10 @@
       ]
     },
     {
-      "source": "suite draft2020-12/minContains.json",
-      "title": "minContains=1 with contains / empty data",
-      "schema_path": null,
-      "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "contains": {
-          "const": 1
-        },
-        "minContains": 1
-      },
-      "instance_path": null,
-      "instance": [],
-      "outputs": [
-        {
-          "tool": "json-schema-rs",
-          "outcome": "invalid",
-          "messages": [
-            "root: 0 item(s) match contains, minimum is 1"
-          ]
-        },
-        {
-          "tool": "jsonschema",
-          "outcome": "invalid",
-          "messages": [
-            "/: None of [] are valid under the given schema"
-          ]
-        },
-        {
-          "tool": "boon",
-          "outcome": "invalid",
-          "messages": [
-            "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '': minimum 1 items required to match contains schema, but found none"
-          ]
-        }
-      ]
-    },
-    {
       "source": "suite draft2020-12/minItems.json",
       "title": "minItems validation / too short is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "minItems": 1
       },
       "instance_path": null,
@@ -8075,7 +6839,6 @@
       "title": "minLength validation / too short is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "minLength": 2
       },
       "instance_path": null,
@@ -8110,7 +6873,6 @@
       "title": "minProperties validation / too short is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "minProperties": 1
       },
       "instance_path": null,
@@ -8145,7 +6907,6 @@
       "title": "minimum validation / below the minimum is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "minimum": 1.1
       },
       "instance_path": null,
@@ -8177,10 +6938,9 @@
     },
     {
       "source": "suite draft2020-12/multipleOf.json",
-      "title": "by int / int by int fail",
+      "title": "multipleOf int / int by int fail",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "multipleOf": 2
       },
       "instance_path": null,
@@ -8215,7 +6975,6 @@
       "title": "not / disallowed",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "not": {
           "type": "integer"
         }
@@ -8252,7 +7011,6 @@
       "title": "oneOf / both oneOf valid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "oneOf": [
           {
             "type": "integer"
@@ -8294,7 +7052,6 @@
       "title": "pattern validation / a non-matching pattern is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "pattern": "^a*$"
       },
       "instance_path": null,
@@ -8329,7 +7086,6 @@
       "title": "patternProperties validates properties matching a regex / a single invalid match is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "patternProperties": {
           "f.*o": {
             "type": "integer"
@@ -8367,59 +7123,10 @@
       ]
     },
     {
-      "source": "suite draft2020-12/prefixItems.json",
-      "title": "a schema given for prefixItems / wrong types",
-      "schema_path": null,
-      "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "prefixItems": [
-          {
-            "type": "integer"
-          },
-          {
-            "type": "string"
-          }
-        ]
-      },
-      "instance_path": null,
-      "instance": [
-        "foo",
-        1
-      ],
-      "outputs": [
-        {
-          "tool": "json-schema-rs",
-          "outcome": "invalid",
-          "messages": [
-            "/0: expected integer, got string",
-            "/1: expected string, got number"
-          ]
-        },
-        {
-          "tool": "jsonschema",
-          "outcome": "invalid",
-          "messages": [
-            "/0: \"foo\" is not of type \"integer\"",
-            "/1: 1 is not of type \"string\""
-          ]
-        },
-        {
-          "tool": "boon",
-          "outcome": "invalid",
-          "messages": [
-            "jsonschema validation failed with mem://differential/schema.json#",
-            "- at '/0': want integer, but got string",
-            "- at '/1': want string, but got number"
-          ]
-        }
-      ]
-    },
-    {
       "source": "suite draft2020-12/properties.json",
       "title": "object properties validation / one property invalid is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "bar": {
             "type": "string"
@@ -8464,7 +7171,6 @@
       "title": "propertyNames validation / some property names invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "propertyNames": {
           "maxLength": 3
         }
@@ -8505,7 +7211,6 @@
       "title": "root pointer ref / mismatch",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "foo": {
@@ -8547,7 +7252,6 @@
       "title": "required validation / non-present required property is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "bar": {},
           "foo": {}
@@ -8590,7 +7294,6 @@
       "title": "integer type matches integers / a float is not an integer",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "integer"
       },
       "instance_path": null,
@@ -8625,7 +7328,6 @@
       "title": "unevaluatedItems false / with unevaluated items",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "unevaluatedItems": false
       },
       "instance_path": null,
@@ -8662,7 +7364,7 @@
       "title": "unevaluatedProperties schema / with invalid unevaluated properties",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
         "unevaluatedProperties": {
           "minLength": 3,
           "type": "string"
@@ -8702,7 +7404,6 @@
       "title": "uniqueItems validation / non-unique array of integers is invalid",
       "schema_path": null,
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "uniqueItems": true
       },
       "instance_path": null,
@@ -8737,10 +7438,9 @@
     },
     {
       "source": "suite draft2020-12/vocabulary.json",
-      "title": "schema that uses custom metaschema with with no validation vocabulary / applicator vocabulary still works",
+      "title": "schema that uses custom metaschema with no validation vocabulary / applicator vocabulary still works",
       "schema_path": null,
       "schema": {
-        "$id": "https://schema/using/no/validation",
         "$schema": "http://localhost:1234/draft2020-12/metaschema-no-validation.json",
         "properties": {
           "badProperty": false,

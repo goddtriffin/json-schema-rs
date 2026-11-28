@@ -13,7 +13,7 @@ workspace member and is **not published** (`publish = false`).
 Prerequisites (the driver checks each one before it starts):
 
 ```sh
-uv tool install bowtie-json-schema   # the Bowtie CLI
+# uv (https://docs.astral.sh/uv/): the driver runs the latest Bowtie with uvx, no install
 # a running container engine (Docker Desktop, or another engine Bowtie supports)
 make vendor_test_suite                # clone the official test suite
 ```
@@ -33,6 +33,9 @@ and writes:
 - `results.json`: the same data, machine-readable. **Committed.**
 - `reports/`: the raw Bowtie JSONL reports and their logs. **Gitignored.**
 
+When you are done, `make docker-clean` removes our image (labelled `repo=json-schema-rs`) and
+the competitor images the run pulled (`ghcr.io/bowtie-json-schema/*`), and nothing else.
+
 Settings (environment variables):
 
 | Variable | Effect |
@@ -48,7 +51,8 @@ Settings (environment variables):
 |---|---|
 | `src/bin/bowtie_harness.rs` | Our Bowtie harness. It reads Bowtie's protocol on stdin and validates with `json-schema-rs` using the default settings. When it can't handle a schema it returns a skip with the reason, not a verdict. |
 | `Dockerfile` (+ `Dockerfile.dockerignore`) | Builds the harness into `localhost/json-schema-rs:latest` from the repo root. Bowtie runs it as `-i image:localhost/json-schema-rs`. |
-| `scripts/run_differential.sh` | The driver: prerequisite checks, image build, `bowtie suite` per draft (main and optional tests), and `bowtie run` per fixture (its resource documents in the case registry). The competitor list is `COMPETITORS` here. |
+| `scripts/run_differential.sh` | The driver (Linux, macOS, Windows via Git Bash or WSL): prerequisite checks, image build, `bowtie suite -D <draft>` per draft (main and optional tests), and `bowtie run` per fixture (its resource documents in the case registry). The competitor list is `COMPETITORS` here. |
+| `scripts/docker_clean.sh` | `make docker-clean`. |
 | `src/bin/differential_report.rs` + `src/*.rs` | Parse the Bowtie reports and work out compliance, coverage and correctness, and the majority vote. Also compare error messages in-process against the `jsonschema` and `boon` crates (Bowtie only reports valid/invalid, not messages). Writes `results.{json,md}`. |
 
 The design and its reasoning are in [design.md](../design.md) under

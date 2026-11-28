@@ -4,9 +4,9 @@
 //! Report layout under `--reports-dir`:
 //!
 //! - `suite/<draft>.jsonl` (required) for every draft in [`crate::DRAFTS`], from
-//!   `bowtie suite <suite>/tests/<draft>`;
+//!   `bowtie suite -D <draft> <suite>/validation/tests`;
 //! - `suite/<draft>__optional.jsonl` (required) for every draft's optional suite
-//!   (`tests/<draft>/optional/`); every case in it is reported as optional;
+//!   (`validation/tests/optional/`); every case in it is reported as optional;
 //! - `fixtures/<fixture id with / replaced by __>__valid.jsonl` and `...__invalid.jsonl`
 //!   (required) for every manifest fixture, from `bowtie run` on one case per expectation: the
 //!   schema, its instances in manifest order, and the fixture's resources as the registry.
@@ -14,7 +14,7 @@
 use crate::error::DifferentialError;
 use crate::messages::{MessageCase, fixture_cases, select_suite_case};
 use crate::report::{BowtieReport, parse_report};
-use crate::suite::{SuiteFile, SuiteFileCase, SuiteIndex};
+use crate::suite::{SuiteFile, SuiteFileCase, SuiteIndex, bowtie_runs_tags, compatible, release};
 use crate::{DRAFTS, DifferentialReport, FixtureInput, SuiteInput, build_report, markdown};
 use serde::Deserialize;
 use serde_json::Value;
@@ -29,7 +29,7 @@ pub const MESSAGE_DRAFT: &str = "draft2020-12";
 pub struct Config {
     /// Directory holding `suite/` and `fixtures/` Bowtie reports.
     pub reports_dir: PathBuf,
-    /// Root of the JSON Schema Test Suite checkout (contains `tests/`).
+    /// Root of the JSON Schema Test Suite checkout (contains `validation/tests/`).
     pub suite_dir: PathBuf,
     /// Benchmark fixtures directory (contains `manifest.json`).
     pub fixtures_dir: PathBuf,
@@ -126,17 +126,42 @@ pub fn load_report(path: &Path, ours: &str) -> Result<BowtieReport, Differential
     Ok(report)
 }
 
-/// Load every `.json` file under `<suite_dir>/tests/<draft>/` (optional subdirectories
-/// included), sorted by draft-relative path.
+/// A suite file as on disk: every draft's cases together.
+#[derive(Debug, Deserialize)]
+struct SuiteDocument {
+    tests: Vec<SuiteDocumentCase>,
+}
+
+/// A suite case as on disk, with the properties that say which drafts Bowtie runs it for.
+#[derive(Debug, Deserialize)]
+struct SuiteDocumentCase {
+    #[serde(flatten)]
+    case: SuiteFileCase,
+    compatibility: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// The suite directory of draft proposals not (yet) in any draft; Bowtie's runs leave it out.
+const PROPOSALS_DIR: &str = "proposals";
+
+/// Load every `.json` file under `<suite_dir>/validation/tests/` (`optional/` included,
+/// `proposals/` not), sorted by path, keeping the cases `bowtie suite -D <draft>` runs: those
+/// whose `compatibility` admits the draft and whose `tags` it expects.
 ///
 /// # Errors
 ///
-/// I/O and JSON errors for the directory walk and each file.
+/// I/O and JSON errors for the directory walk and each file; a draft not in
+/// [`crate::DRAFTS`]; a malformed `compatibility`.
 pub fn load_suite_files(
     suite_dir: &Path,
     draft: &str,
 ) -> Result<Vec<SuiteFile>, DifferentialError> {
-    let root: PathBuf = suite_dir.join("tests").join(draft);
+    let root: PathBuf = suite_dir.join("validation").join("tests");
+    let release: u32 = release(draft).ok_or_else(|| DifferentialError::Suite {
+        path: root.clone(),
+        message: format!("unknown draft {draft:?}"),
+    })?;
     let mut stack: Vec<PathBuf> = vec![root.clone()];
     let mut paths: Vec<PathBuf> = Vec::new();
     while let Some(dir) = stack.pop() {
@@ -146,7 +171,12 @@ pub fn load_suite_files(
             let entry: fs::DirEntry = entry.map_err(|e: std::io::Error| io_error(&dir, e))?;
             let path: PathBuf = entry.path();
             if path.is_dir() {
-                stack.push(path);
+                if path
+                    .file_name()
+                    .is_none_or(|n: &std::ffi::OsStr| n != PROPOSALS_DIR)
+                {
+                    stack.push(path);
+                }
             } else if path
                 .extension()
                 .is_some_and(|e: &std::ffi::OsStr| e == "json")
@@ -164,7 +194,20 @@ pub fn load_suite_files(
             .map(|c: std::path::Component<'_>| c.as_os_str().to_string_lossy().into_owned())
             .collect::<Vec<String>>()
             .join("/");
-        let cases: Vec<SuiteFileCase> = read_json(&path)?;
+        let document: SuiteDocument = read_json(&path)?;
+        let mut cases: Vec<SuiteFileCase> = Vec::with_capacity(document.tests.len());
+        for case in document.tests {
+            let admitted: bool =
+                compatible(case.compatibility.as_deref(), release).map_err(|message: String| {
+                    DifferentialError::Suite {
+                        path: path.clone(),
+                        message,
+                    }
+                })?;
+            if admitted && bowtie_runs_tags(draft, &case.tags) {
+                cases.push(case.case);
+            }
+        }
         files.push(SuiteFile {
             path: relative,
             cases,

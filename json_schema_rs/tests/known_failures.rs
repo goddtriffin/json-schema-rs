@@ -49,10 +49,6 @@ fn unexpected_pass_message(issue: u32) -> String {
 }
 
 /// Runs `body`, which asserts the correct behaviour for `issue`; passes while `body` panics.
-#[expect(
-    dead_code,
-    reason = "no open validator, parser or codegen bug has a known-failing test; remove this when adding one"
-)]
 fn known_failure(issue: u32, body: impl FnOnce()) {
     let expected: Outcome = Outcome::Failed;
     let actual: Outcome = match catch_unwind(AssertUnwindSafe(body)) {
@@ -466,4 +462,45 @@ fn in_place_ref_loop_schema_accepts_matching_branch() {
     let expected: bool = true;
     let actual: bool = is_valid(IN_PLACE_LOOP_SCHEMA, r#""hi""#);
     assert_eq!(expected, actual);
+}
+
+// --- #330: idn-hostname skips the UTS 46 mapping and the RFC 5893 Bidi rule ---
+
+/// Draft 7 asserts `format`, so these see the verdict, not an annotation.
+const IDN_HOSTNAME_SCHEMA: &str =
+    r#"{"$schema": "http://json-schema.org/draft-07/schema#", "format": "idn-hostname"}"#;
+
+/// UTS 46 maps fullwidth digits to ASCII ones, so the label is `123`.
+#[test]
+fn idn_hostname_accepts_fullwidth_digits_after_mapping() {
+    known_failure(330, || {
+        let expected: bool = true;
+        let actual: bool = is_valid(IDN_HOSTNAME_SCHEMA, r#""\uff11\uff12\uff13""#);
+        assert_eq!(expected, actual);
+    });
+}
+
+/// RFC 5893 section 2: a left-to-right label must not contain a right-to-left letter.
+#[test]
+fn idn_hostname_rejects_left_to_right_label_with_right_to_left_letter() {
+    known_failure(330, || {
+        let expected: bool = false;
+        let actual: bool = is_valid(IDN_HOSTNAME_SCHEMA, r#""a\u05d0""#);
+        assert_eq!(expected, actual);
+    });
+}
+
+// --- #331: uri-template rejects an apostrophe in a literal ---
+
+/// RFC 6570 section 2.1 as corrected by Verified Errata 6937: `'` is allowed in a literal.
+#[test]
+fn uri_template_accepts_apostrophe_in_literal() {
+    known_failure(331, || {
+        let expected: bool = true;
+        let actual: bool = is_valid(
+            r#"{"$schema": "http://json-schema.org/draft-07/schema#", "format": "uri-template"}"#,
+            r#""a'b""#,
+        );
+        assert_eq!(expected, actual);
+    });
 }

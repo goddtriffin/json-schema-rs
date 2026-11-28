@@ -924,8 +924,8 @@ Please submit an issue or bug request if the library needs updating.
 - **Commands:** `make lint`, `make test`, `make fix`
 - **Official JSON Schema Test Suite:** `make test` runs every test of the
   [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
-  (drafts 4, 6, 7, 2019-09, 2020-12, including `optional/`) as its own test case.
-  Run `make vendor_test_suite` once to clone the suite at its pinned commit into
+  (drafts 4, 6, 7, 2019-09, 2020-12, including `optional/`) as its own test case, once per
+  draft it applies to. Run `make vendor_test_suite` once to clone the suite at its pinned commit into
   `research/json-schema-test-suite/` (gitignored); the test hard-fails if it is missing.
   Known failures are listed in
   [`json_schema_rs/tests/suite_xfail.json`](json_schema_rs/tests/suite_xfail.json); the
