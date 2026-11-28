@@ -8,6 +8,7 @@
 //! does not depend on the real document base. The placeholder directories are deeper than all
 //! the `..` segments the ids can climb, so no resolution is clamped at the root.
 
+use crate::json_schema::JsonSchema;
 use crate::json_schema::registry::{Uri, parse_uri, resolve_uri};
 
 /// A resource's URI under each placeholder document base (equal when it is absolute).
@@ -33,6 +34,32 @@ pub(super) fn placeholder_bases(depth: usize) -> Placed {
 pub(super) fn placeholder_depth<'a>(ids: impl Iterator<Item = &'a str>, nesting: usize) -> usize {
     let climbs: usize = ids.map(|id| id.matches("..").count()).sum();
     1 + climbs * nesting.max(1)
+}
+
+/// Whether a schema whose `$id` (draft-04 `id`) is `id` is the root of a schema resource of its
+/// own. It is unless the part of `id` before `#` is empty, as the registry decides it: a
+/// fragment-only `$id` (`#a`, `#`) does not change the base URI, so `$ref`s inside it resolve
+/// against the enclosing resource. In draft 4-7 `#a` is a plain-name fragment, a
+/// location-independent identifier (draft-04 core §7.2, draft-07 core §8.2.3), not a new
+/// resource. From 2019-09 that is `$anchor`'s job, and `$id` may carry only an empty fragment
+/// (`https://x/y#`), which still names a resource (2019-09 core §8.2.2, 2020-12 core §8.2.1).
+pub(super) fn starts_resource(id: &str) -> bool {
+    !id.split_once('#')
+        .map_or(id, |(resource, _)| resource)
+        .is_empty()
+}
+
+/// Whether `schema` is the root of a schema resource of its own (see [`starts_resource`]).
+pub(super) fn is_resource(schema: &JsonSchema) -> bool {
+    schema.id.as_deref().is_some_and(starts_resource)
+}
+
+/// The plain-name anchor a fragment-only `$id` declares in the enclosing resource in draft 4-7
+/// (`a` for `#a`), as the registry reads it: an empty fragment (`#`) and a JSON Pointer one
+/// (`#/a`) declare none.
+pub(super) fn fragment_only_anchor(id: &str) -> Option<&str> {
+    id.strip_prefix('#')
+        .filter(|name: &&str| !name.is_empty() && !name.starts_with('/'))
 }
 
 /// Resolves `id` against each of `bases`, without its fragment, or says why `id` is not a URI
