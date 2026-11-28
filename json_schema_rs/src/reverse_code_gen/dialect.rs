@@ -13,7 +13,6 @@ use super::error::ReverseCodeGenError;
 use super::settings::TargetDialect;
 use crate::json_schema::{Dialect, SpecVersion, SubschemaPosition};
 use crate::number::{cmp_num, json_equal};
-use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -101,9 +100,6 @@ struct Work<'a> {
 /// Converts schemas built as 2020-12 into `target`, collecting every keyword it cannot express.
 pub(super) struct Converter<'a> {
     target: TargetDialect,
-    /// `#` and the definitions path (as a URI fragment) and a slash: the prefix of the references
-    /// to the document's definitions, which are written final and must not be rewritten.
-    document_prefix: String,
     /// The JSON Pointer of every schema reached, as its parent's index and its last token (the
     /// first entry holds the whole pointer of the schema the walk started at). A pointer is
     /// built only when an error names it, so the walk costs no string per level of nesting.
@@ -119,14 +115,9 @@ pub(super) struct Converter<'a> {
 }
 
 impl<'a> Converter<'a> {
-    pub(super) fn new(
-        target: TargetDialect,
-        definitions_path: &str,
-        errors: &'a mut Vec<ReverseCodeGenError>,
-    ) -> Self {
+    pub(super) fn new(target: TargetDialect, errors: &'a mut Vec<ReverseCodeGenError>) -> Self {
         Converter {
             target,
-            document_prefix: format!("#{}/", super::pointer_to_fragment(definitions_path)),
             pointers: Vec::new(),
             errors,
             target_table: target.spec_version().map(Dialect::for_spec_version),
@@ -140,12 +131,10 @@ impl<'a> Converter<'a> {
         self
     }
 
-    /// Converts one schema, located at `pointer` in the generated document, to JSON in the
-    /// target dialect. `root` marks the document root.
-    pub(super) fn convert(&mut self, schema: &impl Serialize, pointer: &str, root: bool) -> Value {
-        let Ok(mut value) = serde_json::to_value(schema) else {
-            unreachable!("a schema serializes to JSON");
-        };
+    /// Converts one schema, located at `pointer` in the generated document, to the target
+    /// dialect. `root` marks the document root. Its refs are already written as they read after
+    /// the conversion (see [`super::ref_tails`]).
+    pub(super) fn convert(&mut self, mut value: Value, pointer: &str, root: bool) -> Value {
         self.convert_value(&mut value, pointer, root);
         value
     }
@@ -284,14 +273,9 @@ impl<'a> Converter<'a> {
             reported.insert("$schema".to_string());
         }
 
-        // Definitions live in `definitions` before 2019-09.
+        // Definitions live in `definitions` before 2019-09 (refs to them were rewritten before
+        // the walk, see `super::ref_tails`).
         if is_draft_4_to_7 {
-            if let Some(Value::String(reference)) = map.get_mut("$ref")
-                && !reference.starts_with(&self.document_prefix)
-                && let Some((true, rest)) = super::split_definitions_ref(reference)
-            {
-                *reference = format!("#/definitions/{rest}");
-            }
             if let Some(defs) = map.remove("$defs") {
                 match (map.get_mut("definitions"), defs) {
                     (None, defs) => {
@@ -694,12 +678,18 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// `input` converted to `target`, or the keywords it could not express.
+    /// `input` converted to `target` (its refs first, as the generator does), or the keywords
+    /// it could not express.
     fn converted(target: TargetDialect, input: Value) -> Result<Value, Vec<ReverseCodeGenError>> {
         let mut errors: Vec<ReverseCodeGenError> = Vec::new();
         let mut value: Value = input;
-        Converter::new(target, target.default_definitions_path(), &mut errors)
-            .convert_value(&mut value, "", false);
+        super::super::ref_tails::convert_ref_tails(
+            target,
+            target.default_definitions_path(),
+            &mut value,
+            &mut [],
+        );
+        Converter::new(target, &mut errors).convert_value(&mut value, "", false);
         if errors.is_empty() {
             Ok(value)
         } else {
@@ -1459,17 +1449,6 @@ mod tests {
     }
 
     #[test]
-    fn document_refs_under_a_defs_path_are_not_rewritten() {
-        let mut errors: Vec<ReverseCodeGenError> = Vec::new();
-        let mut value: Value = json!({"$ref": "#/$defs/x/A"});
-        Converter::new(TargetDialect::Draft07, "/$defs/x", &mut errors)
-            .convert_value(&mut value, "", false);
-        let expected: Value = json!({"$ref": "#/$defs/x/A"});
-        let actual: Value = value;
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn deep_nesting_does_not_overflow_the_stack() {
         let mut value: Value = json!({"type": "string"});
         for _ in 0..50_000 {
@@ -1479,7 +1458,7 @@ mod tests {
         }
         let mut errors: Vec<ReverseCodeGenError> = Vec::new();
         let mut converted: Value = value;
-        Converter::new(TargetDialect::Draft07, "/definitions", &mut errors).convert_value(
+        Converter::new(TargetDialect::Draft07, &mut errors).convert_value(
             &mut converted,
             "",
             false,
