@@ -819,6 +819,13 @@ impl SchemaGenerator {
     /// to the one nested `Inner` when exactly one exists (a top-level `definitions` entry is not
     /// nested). Inlining an equal standalone schema again reuses its entries.
     ///
+    /// Any other same-document JSON Pointer `$ref` (`#`, `""`, `#/properties/a`, also inside a
+    /// hoisted entry) points into the standalone schema's own body, which has no fixed place in
+    /// the document once inlined. Then the body itself becomes a definition too (preferred key
+    /// `Inlined`), those refs are rewritten to point into it, and the subschema returned is a
+    /// `$ref` to it. A ref into `$defs` or `definitions` that names no hoisted entry is left as
+    /// written.
+    ///
     /// A schema with `$id` is its own resource and is embedded whole, `$schema`, `$defs` and
     /// `definitions` included. So is an entry with `$id`, and no `$ref` inside a resource is
     /// rewritten, since it resolves against that resource. A fragment-only `$id` (`#a`) is an
@@ -1030,33 +1037,16 @@ impl Scope {
         (body, defs)
     }
 
-    /// See [`SchemaGenerator::inline_subschema`].
-    fn inline_subschema(&mut self, mut schema: JsonSchema) -> JsonSchema {
-        if resource_uri::is_resource(&schema) {
-            return schema;
-        }
-        let has_definitions: bool = [schema.defs.as_ref(), schema.definitions.as_ref()]
-            .into_iter()
-            .flatten()
-            .any(|entries: &BTreeMap<String, Schema>| !entries.is_empty());
-        if !has_definitions {
-            schema.schema = None;
-            return schema;
-        }
-        if let Some(previous) = self
-            .inlined
-            .iter()
-            .find(|previous| previous.standalone == schema)
-        {
-            return previous.inlined.clone();
-        }
-
-        let standalone: JsonSchema = schema.clone();
-        let (mut flat, hoisted): (JsonSchema, Vec<HoistedDefinition>) = flatten_defs(schema);
+    /// Registers the entries `inline_subschema` hoisted as definitions, and returns where refs
+    /// to each go (keyed by `#` and its JSON Pointer) and each one's index.
+    fn register_hoisted(
+        &mut self,
+        hoisted: &[HoistedDefinition],
+    ) -> (BTreeMap<String, String>, Vec<usize>) {
         let mut by_pointer: BTreeMap<String, String> = BTreeMap::new();
         let mut nested_by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut indices: Vec<usize> = Vec::with_capacity(hoisted.len());
-        for definition in &hoisted {
+        for definition in hoisted {
             let index: usize = self.definitions.len();
             self.definitions.push(Definition {
                 identity: DefinitionIdentity::Hoisted(index),
@@ -1087,24 +1077,68 @@ impl Scope {
                 by_pointer.insert(top_level, target);
             }
         }
+        (by_pointer, indices)
+    }
+
+    /// See [`SchemaGenerator::inline_subschema`].
+    fn inline_subschema(&mut self, mut schema: JsonSchema) -> JsonSchema {
+        if resource_uri::is_resource(&schema) {
+            return schema;
+        }
+        let has_definitions: bool = [schema.defs.as_ref(), schema.definitions.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|entries: &BTreeMap<String, Schema>| !entries.is_empty());
+        if !has_definitions && !refers_to_own_body(&mut schema, &BTreeMap::new()) {
+            schema.schema = None;
+            return schema;
+        }
+        if let Some(previous) = self
+            .inlined
+            .iter()
+            .find(|previous| previous.standalone == schema)
+        {
+            return previous.inlined.clone();
+        }
+
+        let standalone: JsonSchema = schema.clone();
+        let (mut flat, mut hoisted): (JsonSchema, Vec<HoistedDefinition>) = flatten_defs(schema);
+        let (by_pointer, indices): (BTreeMap<String, String>, Vec<usize>) =
+            self.register_hoisted(&hoisted);
+
+        // A ref into the standalone schema's own body has no place to point to where the body
+        // is written (it may be written at several places, or merged into another schema), so
+        // the body becomes a definition of its own and the subschema is a ref to it.
+        let refers_to_body: bool = refers_to_own_body(&mut flat, &by_pointer)
+            || hoisted
+                .iter_mut()
+                .any(|definition: &mut HoistedDefinition| {
+                    definition
+                        .body
+                        .as_object_mut()
+                        .is_some_and(|object| refers_to_own_body(object, &by_pointer))
+                });
+        let body_index: Option<usize> = refers_to_body.then(|| {
+            let index: usize = self.definitions.len();
+            self.definitions.push(Definition {
+                identity: DefinitionIdentity::Hoisted(index),
+                name: INLINED_BODY_NAME.to_string(),
+                body: None,
+            });
+            index
+        });
+        let body_ref: Option<String> = body_index.map(provisional_ref);
 
         // A ref is matched by the JSON Pointer its fragment holds (percent-decoded), and the
-        // rest of it after the entry is written back as a URI fragment.
+        // rest of it after the entry (or the body) is written back as a URI fragment.
         let resolve = |reference: &str| -> Option<String> {
-            if parse_provisional_ref(reference).is_some() || parse_resource_ref(reference).is_some()
-            {
-                return None;
+            let pointer: std::borrow::Cow<'_, str> = same_document_pointer(reference)?;
+            if let Some((target, rest)) = hoisted_entry(&by_pointer, &pointer) {
+                return Some(format!("{target}{}", pointer_to_fragment(rest)));
             }
-            let pointer: std::borrow::Cow<'_, str> =
-                fragment_to_pointer(reference.strip_prefix('#')?)?;
-            by_pointer
-                .iter()
-                .filter_map(|(entry, target)| {
-                    let rest: &str = pointer.strip_prefix(entry.strip_prefix('#')?)?;
-                    (rest.is_empty() || rest.starts_with('/')).then_some((entry, target, rest))
-                })
-                .max_by_key(|(entry, _, _)| entry.len())
-                .map(|(_, target, rest)| format!("{target}{}", pointer_to_fragment(rest)))
+            let body_ref: &str = body_ref.as_deref()?;
+            (!names_definition_container(&pointer))
+                .then(|| format!("{body_ref}{}", pointer_to_fragment(&pointer)))
         };
         rewrite_refs_outside_resources(&mut flat, &resolve);
         for (definition, index) in hoisted.into_iter().zip(indices) {
@@ -1116,12 +1150,79 @@ impl Scope {
         }
 
         flat.schema = None;
+        let inlined: JsonSchema = match (body_index, body_ref) {
+            (Some(index), Some(reference)) => {
+                self.definitions[index].body = Some(flat.into());
+                ref_schema(reference)
+            }
+            _ => flat,
+        };
         self.inlined.push(InlinedSchema {
             standalone,
-            inlined: flat.clone(),
+            inlined: inlined.clone(),
         });
-        flat
+        inlined
     }
+}
+
+/// Preferred `$defs` key of the body of a standalone schema that
+/// [`SchemaGenerator::inline_subschema`] makes a definition, because refs inside it point into
+/// the body itself.
+const INLINED_BODY_NAME: &str = "Inlined";
+
+/// The JSON Pointer a same-document `$ref` names (`""` and `#` the document root, `#/a/b` a
+/// location in it), read from its percent-decoded fragment. `None` for a plain-name fragment
+/// (`#a`), a ref with any other part, a fragment that does not decode, and the generator's own
+/// provisional refs.
+fn same_document_pointer(reference: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if parse_provisional_ref(reference).is_some() || parse_resource_ref(reference).is_some() {
+        return None;
+    }
+    if reference.is_empty() {
+        return Some(std::borrow::Cow::Borrowed(""));
+    }
+    let pointer: std::borrow::Cow<'_, str> = fragment_to_pointer(reference.strip_prefix('#')?)?;
+    (pointer.is_empty() || pointer.starts_with('/')).then_some(pointer)
+}
+
+/// The provisional ref of the hoisted entry (`by_pointer`, keyed by `#` and the entry's JSON
+/// Pointer) that holds `pointer`, the deepest one, and the rest of `pointer` below it.
+fn hoisted_entry<'a, 'p>(
+    by_pointer: &'a BTreeMap<String, String>,
+    pointer: &'p str,
+) -> Option<(&'a str, &'p str)> {
+    by_pointer
+        .iter()
+        .filter_map(|(entry, target)| {
+            let rest: &str = pointer.strip_prefix(entry.strip_prefix('#')?)?;
+            (rest.is_empty() || rest.starts_with('/')).then_some((entry, target.as_str(), rest))
+        })
+        .max_by_key(|(entry, _, _)| entry.len())
+        .map(|(_, target, rest)| (target, rest))
+}
+
+/// Whether `pointer` starts in the root's `$defs` or `definitions`: a ref there that names no
+/// hoisted entry is left as written.
+fn names_definition_container(pointer: &str) -> bool {
+    pointer
+        .split('/')
+        .nth(1)
+        .is_some_and(|token: &str| token == "$defs" || token == "definitions")
+}
+
+/// Whether `schema` (outside nested resources) holds a same-document ref into the body of the
+/// standalone schema: one that names no hoisted entry (`by_pointer`) and does not start in a
+/// definitions container.
+fn refers_to_own_body(schema: &mut JsonSchema, by_pointer: &BTreeMap<String, String>) -> bool {
+    let mut found: bool = false;
+    for_each_ref(schema, true, &mut |reference: &mut String| {
+        found = found
+            || same_document_pointer(reference).is_some_and(|pointer| {
+                hoisted_entry(by_pointer, &pointer).is_none()
+                    && !names_definition_container(&pointer)
+            });
+    });
+    found
 }
 
 /// Returns `T`'s schema as a standalone root schema built with a fresh [`SchemaGenerator`]:
@@ -8775,6 +8876,431 @@ mod tests {
                 )
             })
             .collect();
+        assert_eq!(expected, actual);
+    }
+
+    // --- inline_subschema makes the body of a standalone schema a definition when a ref inside
+    // it points into the body, so the ref keeps its target ---
+
+    /// A standalone schema whose refs point into its own body: a property (also one whose name
+    /// needs `~` and percent escaping), `items` and the root.
+    fn standalone_with_body_refs() -> serde_json::Value {
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "items": {"type": "integer"},
+            "properties": {
+                "a": {"type": "string"},
+                "a/b c": {"type": "boolean"},
+                "b": {"$ref": "#/properties/a"},
+                "escaped": {"$ref": "#/properties/a~1b%20c"},
+                "child": {"$ref": "#"},
+                "first": {"$ref": "#/items"}
+            }
+        })
+    }
+
+    /// `standalone` inlined as root property `s` beside a root property `a` of another type (the
+    /// one a ref left pointing at the generated root would hit), written for `dialect`.
+    fn inlined_beside_root_property(
+        dialect: TargetDialect,
+        standalone: serde_json::Value,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let inlined: JsonSchema =
+            generator.inline_subschema(serde_json::from_value(standalone).expect("a schema"));
+        generator
+            .into_root_schema(object_schema(&[("a", integer_schema()), ("s", inlined)]))
+            .expect("generated")
+    }
+
+    /// The body of [`standalone_with_body_refs`] as a definition whose refs start with `prefix`.
+    fn inlined_body_with_refs(prefix: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "items": {"type": "integer"},
+            "properties": {
+                "a": {"type": "string"},
+                "a/b c": {"type": "boolean"},
+                "b": {"$ref": format!("{prefix}/properties/a")},
+                "escaped": {"$ref": format!("{prefix}/properties/a~1b%20c")},
+                "child": {"$ref": prefix},
+                "first": {"$ref": format!("{prefix}/items")}
+            }
+        })
+    }
+
+    #[test]
+    fn inline_subschema_makes_a_body_with_pointer_refs_into_it_a_definition() {
+        let expected: [serde_json::Value; 3] = [
+            serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "$defs": {"Inlined": inlined_body_with_refs("#/$defs/Inlined")},
+                "properties": {"a": {"type": "integer"}, "s": {"$ref": "#/$defs/Inlined"}}
+            }),
+            serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "$defs": {"Inlined": inlined_body_with_refs("#/$defs/Inlined")},
+                "properties": {"a": {"type": "integer"}, "s": {"$ref": "#/$defs/Inlined"}}
+            }),
+            serde_json::json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "definitions": {"Inlined": inlined_body_with_refs("#/definitions/Inlined")},
+                "properties": {"a": {"type": "integer"}, "s": {"$ref": "#/definitions/Inlined"}}
+            }),
+        ];
+        let draft_07: GeneratedSchema =
+            inlined_beside_root_property(TargetDialect::Draft07, standalone_with_body_refs());
+        let [draft_07_model, draft_07_document] = model_and_document(&draft_07);
+        let actual: [serde_json::Value; 3] = [
+            inlined_beside_root_property(TargetDialect::Draft202012, standalone_with_body_refs())
+                .to_value(),
+            draft_07_model,
+            draft_07_document,
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_body_pointer_refs_resolve_on_every_target() {
+        let expected: Vec<[Vec<String>; 2]> =
+            vec![[Vec::new(), Vec::new()]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<[Vec<String>; 2]> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                model_and_document(&inlined_beside_root_property(
+                    *target,
+                    standalone_with_body_refs(),
+                ))
+                .map(|v| bad_refs(&v))
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_body_pointer_refs_keep_their_targets_on_every_target() {
+        let instances: [serde_json::Value; 6] = [
+            serde_json::json!({"a": 1, "s": {
+                "a": "x", "a/b c": true, "b": "y", "escaped": false, "child": {"b": "z"}, "first": 1
+            }}),
+            serde_json::json!({"s": {"b": 5}}),
+            serde_json::json!({"s": {"escaped": "x"}}),
+            serde_json::json!({"s": {"child": {"b": 5}}}),
+            serde_json::json!({"s": {"child": {"first": "x"}}}),
+            serde_json::json!({"s": {"first": "x"}}),
+        ];
+        let verdicts: Vec<bool> = vec![true, false, false, false, false, false];
+        let expected: Vec<Vec<Vec<bool>>> =
+            vec![vec![verdicts.clone(), verdicts]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<Vec<Vec<bool>>> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                model_and_document_verdicts(
+                    &inlined_beside_root_property(*target, standalone_with_body_refs()),
+                    &instances,
+                )
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// `standalone` inlined as root property `s` on 2020-12, written out.
+    fn inlined_document(standalone: serde_json::Value) -> serde_json::Value {
+        let mut generator: SchemaGenerator = SchemaGenerator::default();
+        let inlined: JsonSchema =
+            generator.inline_subschema(serde_json::from_value(standalone).expect("a schema"));
+        generator
+            .into_root_schema(object_schema(&[("s", inlined)]))
+            .expect("generated")
+            .to_value()
+    }
+
+    #[test]
+    fn inline_subschema_reads_an_empty_ref_as_a_ref_to_the_body() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"Inlined": {"properties": {"next": {"$ref": "#/$defs/Inlined"}}}},
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
+        });
+        let actual: serde_json::Value =
+            inlined_document(serde_json::json!({"properties": {"next": {"$ref": ""}}}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_body_ref_in_a_hoisted_entry_and_keeps_refs_to_entries() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {
+                "Inlined": {"$ref": "#/$defs/N", "properties": {"m": {"$ref": "#/$defs/N/properties/up"}}},
+                "N": {"properties": {"up": {"$ref": "#/$defs/Inlined"}}}
+            },
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
+        });
+        let actual: serde_json::Value = inlined_document(serde_json::json!({
+            "$defs": {"N": {"properties": {"up": {"$ref": "#"}}}},
+            "$ref": "#/$defs/N",
+            "properties": {"m": {"$ref": "#/$defs/N/properties/up"}}
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_keeps_a_body_without_body_refs_in_place() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"N": {"type": "string"}},
+            "properties": {"s": {
+                "$anchor": "top",
+                "properties": {
+                    "n": {"$ref": "#/$defs/N"},
+                    "anchor": {"$ref": "#top"},
+                    "missing": {"$ref": "#/$defs/Missing"},
+                    "malformed": {"$ref": "#/properties/%zz"},
+                    "other": {"$ref": "other.json#/properties/a"}
+                }
+            }}
+        });
+        let actual: serde_json::Value = inlined_document(serde_json::json!({
+            "$defs": {"N": {"type": "string"}},
+            "$anchor": "top",
+            "properties": {
+                "n": {"$ref": "#/$defs/N"},
+                "anchor": {"$ref": "#top"},
+                "missing": {"$ref": "#/$defs/Missing"},
+                "malformed": {"$ref": "#/properties/%zz"},
+                "other": {"$ref": "other.json#/properties/a"}
+            }
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_keeps_a_body_without_definitions_or_body_refs_in_place() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"s": {"properties": {"missing": {"$ref": "#/definitions/Missing"}}}}
+        });
+        let actual: serde_json::Value = inlined_document(serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {"missing": {"$ref": "#/definitions/Missing"}}
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_an_unmatched_definitions_ref_beside_a_body_ref_as_written() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"Inlined": {"properties": {
+                "missing": {"$ref": "#/$defs/Missing"},
+                "self": {"$ref": "#/$defs/Inlined"}
+            }}},
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
+        });
+        let actual: serde_json::Value = inlined_document(serde_json::json!({"properties": {
+            "missing": {"$ref": "#/$defs/Missing"},
+            "self": {"$ref": "#"}
+        }}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_the_refs_of_a_nested_resource_alone() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"s": {"properties": {"r": {
+                "$id": "https://example.com/r",
+                "properties": {"x": {"type": "string"}, "y": {"$ref": "#/properties/x"}, "z": {"$ref": "#"}}
+            }}}}
+        });
+        let actual: serde_json::Value = inlined_document(serde_json::json!({"properties": {"r": {
+            "$id": "https://example.com/r",
+            "properties": {"x": {"type": "string"}, "y": {"$ref": "#/properties/x"}, "z": {"$ref": "#"}}
+        }}}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_body_refs_around_a_nested_resource_but_not_inside_it() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"Inlined": {"properties": {
+                "r": {"$id": "https://example.com/r", "properties": {"z": {"$ref": "#"}}},
+                "to_r": {"$ref": "#/$defs/Inlined/properties/r"}
+            }}},
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
+        });
+        let actual: serde_json::Value = inlined_document(serde_json::json!({"properties": {
+            "r": {"$id": "https://example.com/r", "properties": {"z": {"$ref": "#"}}},
+            "to_r": {"$ref": "#/properties/r"}
+        }}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_body_refs_inside_a_fragment_only_id_anchor_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"Inlined": {"properties": {"p": {
+                "$id": "#p",
+                "properties": {"a": {"type": "string"}, "b": {"$ref": "#/definitions/Inlined/properties/p/properties/a"}}
+            }}}},
+            "properties": {"a": {"type": "integer"}, "s": {"$ref": "#/definitions/Inlined"}}
+        });
+        let actual: serde_json::Value = inlined_beside_root_property(
+            TargetDialect::Draft07,
+            serde_json::json!({"properties": {"p": {
+                "$id": "#p",
+                "properties": {"a": {"type": "string"}, "b": {"$ref": "#/properties/p/properties/a"}}
+            }}}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// A standalone schema whose refs point into a `definitions` container that is not the
+    /// root's (so it is not hoisted) and beside it into the root itself.
+    fn standalone_with_nested_definitions_ref() -> serde_json::Value {
+        serde_json::json!({"properties": {
+            "x": {"definitions": {"Z": {"type": "integer"}}},
+            "z": {"$ref": "#/properties/x/definitions/Z"}
+        }})
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_ref_into_a_nested_definitions_container_in_place() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"Inlined": {"properties": {
+                "x": {"definitions": {"Z": {"type": "integer"}}},
+                "z": {"$ref": "#/$defs/Inlined/properties/x/definitions/Z"}
+            }}},
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
+        });
+        let actual: serde_json::Value = inlined_document(standalone_with_nested_definitions_ref());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_a_nested_definitions_container_keeps_its_target_on_every_target() {
+        let instances: [serde_json::Value; 2] = [
+            serde_json::json!({"s": {"z": 1}}),
+            serde_json::json!({"s": {"z": "x"}}),
+        ];
+        let expected: Vec<Vec<Vec<bool>>> =
+            vec![vec![vec![true, false], vec![true, false]]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<Vec<Vec<bool>>> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                model_and_document_verdicts(
+                    &inlined_beside_root_property(
+                        *target,
+                        standalone_with_nested_definitions_ref(),
+                    ),
+                    &instances,
+                )
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_reuses_one_body_definition_for_a_schema_used_twice() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"Inlined": {"properties": {"next": {"$ref": "#/$defs/Inlined"}}}},
+            "properties": {
+                "first": {"$ref": "#/$defs/Inlined"},
+                "second": {"items": {"$ref": "#/$defs/Inlined"}}
+            }
+        });
+        let standalone: JsonSchema =
+            serde_json::from_value(serde_json::json!({"properties": {"next": {"$ref": "#"}}}))
+                .expect("a schema");
+        let mut generator: SchemaGenerator = SchemaGenerator::default();
+        let first: JsonSchema = generator.inline_subschema(standalone.clone());
+        let second: JsonSchema = generator.inline_subschema(standalone);
+        let actual: serde_json::Value = generator
+            .into_root_schema(object_schema(&[
+                ("first", first),
+                ("second", array_of(second)),
+            ]))
+            .expect("generated")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_suffixes_the_body_definitions_of_two_different_schemas() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {
+                "Inlined0": {"properties": {"next": {"$ref": "#/$defs/Inlined0"}}},
+                "Inlined1": {"items": {"$ref": "#/$defs/Inlined1"}}
+            },
+            "properties": {"a": {"$ref": "#/$defs/Inlined0"}, "b": {"$ref": "#/$defs/Inlined1"}}
+        });
+        let mut generator: SchemaGenerator = SchemaGenerator::default();
+        let a: JsonSchema = generator.inline_subschema(
+            serde_json::from_value(serde_json::json!({"properties": {"next": {"$ref": "#"}}}))
+                .expect("a schema"),
+        );
+        let b: JsonSchema = generator.inline_subschema(
+            serde_json::from_value(serde_json::json!({"items": {"$ref": "#"}})).expect("a schema"),
+        );
+        let actual: serde_json::Value = generator
+            .into_root_schema(object_schema(&[("a", a), ("b", b)]))
+            .expect("generated")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_inside_a_resource_puts_the_body_definition_in_the_resource() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$ref": "#/$defs/R",
+            "$defs": {"R": {
+                "$id": "https://example.com/r",
+                "type": "object",
+                "$defs": {"Inlined": {"properties": {"next": {"$ref": "#/$defs/Inlined"}}}},
+                "properties": {"s": {"$ref": "#/$defs/Inlined"}}
+            }}
+        });
+        let mut generator: SchemaGenerator = SchemaGenerator::default();
+        let reference: JsonSchema =
+            generator.resource_subschema("a::R", "R", "https://example.com/r", |generator| {
+                let inlined: JsonSchema = generator.inline_subschema(
+                    serde_json::from_value(
+                        serde_json::json!({"properties": {"next": {"$ref": "#"}}}),
+                    )
+                    .expect("a schema"),
+                );
+                JsonSchema {
+                    id: Some("https://example.com/r".to_string()),
+                    ..object_schema(&[("s", inlined)])
+                }
+            });
+        let actual: serde_json::Value = generator
+            .into_root_schema(reference)
+            .expect("generated")
+            .to_value();
         assert_eq!(expected, actual);
     }
 }
