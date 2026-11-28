@@ -1,5 +1,7 @@
 //! Rewriting the same-document `$ref`s of a document built as 2020-12 so they resolve once the
 //! dialect conversion (see [`super::dialect`]) has renamed the keywords along their pointers.
+//! `$dynamicRef` and `$recursiveRef` first resolve like `$ref`, so "`$ref`" here means all
+//! three ([`REFERENCE_KEYWORDS`]).
 //!
 //! The conversion moves schemas: `$defs` entries into `definitions` (draft 4 to 7),
 //! `prefixItems` into `items` and `items` into `additionalItems` (draft 4 to 2019-09), and
@@ -17,6 +19,7 @@
 //! mapped by its 2020-12 position: the conversion reports that keyword as
 //! [`super::ReverseCodeGenError::UnrepresentableKeyword`], so no document is produced.
 
+use super::REFERENCE_KEYWORDS;
 use super::resource_uri::{Placed, place, placeholder_bases, placeholder_depth, starts_resource};
 use super::settings::TargetDialect;
 use crate::json_pointer::{decode_token, fragment_to_pointer, pointer_to_fragment};
@@ -94,6 +97,8 @@ struct Resource<'d> {
 struct Pending<'d> {
     piece: Option<usize>,
     location: String,
+    /// The reference keyword ([`REFERENCE_KEYWORDS`]).
+    keyword: &'static str,
     /// The resource the ref is written in, whose URI it resolves against.
     resource: usize,
     /// The part before `#`.
@@ -106,9 +111,11 @@ struct Pending<'d> {
 struct Walk<'d> {
     resources: Vec<Resource<'d>>,
     pending: Vec<Pending<'d>>,
-    /// `(piece, location, new ref)`.
-    rewrites: Vec<(Option<usize>, String, String)>,
+    rewrites: Vec<Rewrite>,
 }
+
+/// A reference to write: `(piece, location, keyword, new reference)`.
+type Rewrite = (Option<usize>, String, &'static str, String);
 
 /// Rewrites every `$ref` in `root` and `definitions` (placed under the JSON Pointer `path`, as
 /// `(name, schema)`, sorted by name) that names a schema of this document by a pointer through
@@ -140,7 +147,7 @@ pub(super) fn convert_ref_tails(
         .collect();
     // Found against the unchanged document first, written after: a ref names a schema where
     // the 2020-12 document holds it, whichever refs are rewritten before it.
-    let rewrites: Vec<(Option<usize>, String, String)> = {
+    let rewrites: Vec<Rewrite> = {
         let document: Document<'_> = Document {
             target,
             target_table: target.spec_version().map(Dialect::for_spec_version),
@@ -165,13 +172,13 @@ pub(super) fn convert_ref_tails(
         document.map_pending(&mut walk);
         walk.rewrites
     };
-    for (piece, location, reference) in rewrites {
+    for (piece, location, keyword, reference) in rewrites {
         let value: &mut Value = match piece {
             None => &mut *root,
             Some(index) => &mut definitions[index].1,
         };
         if let Some(Value::Object(map)) = value.pointer_mut(&location) {
-            map.insert("$ref".to_string(), Value::String(reference));
+            map.insert(keyword.to_string(), Value::String(reference));
         }
     }
 }
@@ -204,19 +211,24 @@ impl<'d> Document<'d> {
                 }
                 None => resource,
             };
-            if let Some(Value::String(reference)) = map.get("$ref") {
+            for keyword in REFERENCE_KEYWORDS {
+                let Some(Value::String(reference)) = map.get(keyword) else {
+                    continue;
+                };
                 match reference.split_once('#') {
                     Some(("", fragment)) => {
                         if let Some(mapped) =
                             self.map_fragment(walk.resources[resource].base, fragment)
                         {
-                            walk.rewrites.push((index, location(&steps, at), mapped));
+                            walk.rewrites
+                                .push((index, location(&steps, at), keyword, mapped));
                         }
                     }
                     Some((uri, fragment)) if may_move(fragment) => {
                         walk.pending.push(Pending {
                             piece: index,
                             location: location(&steps, at),
+                            keyword,
                             resource,
                             uri,
                             fragment,
@@ -313,6 +325,7 @@ impl<'d> Document<'d> {
                 walk.rewrites.push((
                     pending.piece,
                     pending.location.clone(),
+                    pending.keyword,
                     format!("{}{mapped}", pending.uri),
                 ));
             }
