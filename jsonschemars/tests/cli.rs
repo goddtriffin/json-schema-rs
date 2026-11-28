@@ -5339,6 +5339,38 @@ fn cli_bundle_embeds_a_resource_reached_by_its_root_id() {
 }
 
 #[test]
+fn cli_bundle_names_a_non_ascii_file_by_a_strict_id() {
+    let (_dir, path): (tempfile::TempDir, PathBuf) = cross_file_dir(&[
+        (
+            "order.json",
+            r#"{"properties":{"customer":{"$ref":"m%C3%BCller.json"}}}"#,
+        ),
+        ("müller.json", r#"{"type":"string"}"#),
+    ]);
+    let actual: (i32, String, String) = cli_bundle_from(&path, &["-s", "order.json"]);
+    let expected: (i32, String, String) = (
+        0,
+        r#"{
+  "$defs": {
+    "m%C3%BCller.json": {
+      "$id": "m%C3%BCller.json",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "customer": {
+      "$ref": "m%C3%BCller.json"
+    }
+  }
+}
+"#
+        .to_string(),
+        String::new(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_bundle_reports_an_unresolvable_ref_with_no_bundle() {
     let (_dir, path): (tempfile::TempDir, PathBuf) =
         cross_file_dir(&[("order.json", ORDER_WITH_ID)]);

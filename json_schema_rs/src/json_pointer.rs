@@ -83,11 +83,17 @@ fn is_uri_fragment_char(c: char) -> bool {
 /// Appends `c` to `out` as a URI fragment holds it: as written when RFC 3986 §3.5 allows it
 /// there, else as its UTF-8 bytes percent-encoded (`é` → `%C3%A9`, `%` → `%25`).
 fn push_fragment_char(c: char, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     if is_uri_fragment_char(c) {
         out.push(c);
         return;
     }
+    push_percent_encoded(c, out);
+}
+
+/// Appends `c` to `out` as its UTF-8 bytes percent-encoded, upper-case hex (RFC 3986 §2.1,
+/// §6.2.2.1): `é` → `%C3%A9`.
+pub(crate) fn push_percent_encoded(c: char, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut utf8: [u8; 4] = [0; 4];
     for byte in c.encode_utf8(&mut utf8).bytes() {
         out.push('%');
