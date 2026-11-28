@@ -21,7 +21,9 @@ pub use settings::{
 
 use crate::json_pointer::{fragment_to_pointer, pointer_to_fragment};
 use crate::json_schema::registry::parse_uri;
-use crate::json_schema::{Dialect, JsonSchema, JsonType, Schema, SpecVersion, SubschemaPosition};
+use crate::json_schema::{
+    Dialect, JsonSchema, JsonType, RefSiblings, Schema, SpecVersion, SubschemaPosition,
+};
 use resource_uri::Placed;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -888,7 +890,15 @@ impl SchemaGenerator {
     /// `definitions` included. So is an entry with `$id`, and no `$ref` inside a resource is
     /// rewritten, since it resolves against that resource. A fragment-only `$id` (`#a`) is an
     /// anchor, not a resource: the schema or entry holding it is treated like one without `$id`.
-    pub fn inline_subschema(&mut self, schema: JsonSchema) -> JsonSchema {
+    ///
+    /// In a dialect that ignores the siblings of `$ref` (draft 4, 6 and 7), an `$id` (draft-04
+    /// `id`) beside a `$ref` is ignored too: it starts no resource and declares no anchor. It is
+    /// dropped before inlining, at any depth, so that schema is inlined like one without `$id`
+    /// and its `$ref` keeps resolving where it did. The dialect is the one the schema's own
+    /// `$schema` (or the nearest enclosing one) names, else the target's; under a `$schema`
+    /// this crate does not know, nothing is dropped.
+    pub fn inline_subschema(&mut self, mut schema: JsonSchema) -> JsonSchema {
+        drop_ids_beside_refs(&mut schema, self.settings.target().spec_version());
         self.current_scope().inline_subschema(schema)
     }
 
@@ -2089,6 +2099,126 @@ fn push_raw_subschemas<'a>(
             stack.push(RefNode::Raw(value));
         }
         _ => {}
+    }
+}
+
+/// The dialect a schema is read in while [`drop_ids_beside_refs`] walks it (none under an
+/// unknown `$schema`, or on `OpenAPI` 3.0 without one), and the keyword tables of its raw
+/// subschemas.
+#[derive(Clone, Copy)]
+struct Reading {
+    dialect: Option<Dialect>,
+    tables: anchors::Tables,
+}
+
+impl Reading {
+    /// How a schema whose own `$schema` is `own_schema` is read inside `parent`: by that
+    /// `$schema`'s draft when it has one (`dialect` none when the draft is unknown), else as
+    /// `parent`.
+    fn of(own_schema: Option<&str>, parent: Reading) -> Reading {
+        match own_schema {
+            None => parent,
+            Some(uri) => match SpecVersion::from_schema_uri(uri) {
+                Some(version) => Reading {
+                    dialect: Some(Dialect::for_spec_version(version)),
+                    tables: anchors::Tables::for_resource(version),
+                },
+                None => Reading {
+                    dialect: None,
+                    tables: parent.tables,
+                },
+            },
+        }
+    }
+
+    /// The `$id`-like keyword this reading drops beside a `$ref` besides `$id` (draft-04 `id`),
+    /// or none when the dialect evaluates the siblings of `$ref` (or is unknown).
+    fn dropped_id_keyword(self) -> Option<&'static str> {
+        self.dialect
+            .filter(|dialect: &Dialect| dialect.ref_siblings == RefSiblings::Ignored)
+            .map(|dialect: Dialect| dialect.id_keyword())
+    }
+}
+
+/// Removes every `$id`, and every draft-04 `id`, that sits beside a `$ref` in `schema` at any
+/// depth where the schema is read in a dialect that ignores the siblings of `$ref`, so those
+/// ids mean nothing. A schema is read in the draft its own `$schema` (or the nearest enclosing
+/// one) names, else in `target`'s; under an unknown `$schema` nothing is dropped. Raw
+/// (extension) subschemas are found by [`anchors::Tables`]: the 2020-12 table the model is
+/// written in, then the target's (`dependencies`, the array form of `items`), or an embedded
+/// `$schema`'s own table alone.
+fn drop_ids_beside_refs(schema: &mut JsonSchema, target: Option<SpecVersion>) {
+    let top: Reading = Reading {
+        dialect: target.map(Dialect::for_spec_version),
+        tables: anchors::Tables::for_model(target),
+    };
+    let mut stack: Vec<(RefNode<'_>, Reading)> = vec![(RefNode::Typed(schema), top)];
+    while let Some((node, parent)) = stack.pop() {
+        match node {
+            RefNode::Typed(current) => {
+                let reading: Reading = Reading::of(current.schema.as_deref(), parent);
+                if current.ref_.is_some()
+                    && let Some(id_keyword) = reading.dropped_id_keyword()
+                {
+                    current.id = None;
+                    current.extensions.remove(id_keyword);
+                }
+                let (subschemas, extensions) = current.subschemas_mut();
+                for (keyword, value) in extensions {
+                    push_raw_by_tables(reading, keyword, value, &mut stack);
+                }
+                stack.extend(
+                    subschemas
+                        .into_iter()
+                        .map(|child: &mut JsonSchema| (RefNode::Typed(child), reading)),
+                );
+            }
+            RefNode::Raw(value) => {
+                let serde_json::Value::Object(object) = value else {
+                    continue;
+                };
+                let own_schema: Option<&str> =
+                    object.get("$schema").and_then(serde_json::Value::as_str);
+                let reading: Reading = Reading::of(own_schema, parent);
+                if object.contains_key("$ref")
+                    && let Some(id_keyword) = reading.dropped_id_keyword()
+                {
+                    object.remove("$id");
+                    object.remove(id_keyword);
+                }
+                for (keyword, value) in object.iter_mut() {
+                    push_raw_by_tables(reading, keyword, value, &mut stack);
+                }
+            }
+        }
+    }
+}
+
+/// Pushes the subschemas a raw `keyword: value` holds, where `reading`'s tables say, each read
+/// as `reading`.
+fn push_raw_by_tables<'a>(
+    reading: Reading,
+    keyword: &str,
+    value: &'a mut serde_json::Value,
+    stack: &mut Vec<(RefNode<'a>, Reading)>,
+) {
+    let Some(position) = reading.tables.position(keyword) else {
+        return;
+    };
+    match (position, value) {
+        (
+            SubschemaPosition::Array | SubschemaPosition::SingleOrArray,
+            serde_json::Value::Array(items),
+        ) => {
+            stack.extend(items.iter_mut().map(|item| (RefNode::Raw(item), reading)));
+        }
+        (SubschemaPosition::Map, serde_json::Value::Object(map)) => {
+            stack.extend(map.values_mut().map(|entry| (RefNode::Raw(entry), reading)));
+        }
+        (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, value) => {
+            stack.push((RefNode::Raw(value), reading));
+        }
+        (SubschemaPosition::Array | SubschemaPosition::Map, _) => {}
     }
 }
 
@@ -12052,6 +12182,596 @@ mod tests {
             )
             .expect("generated")
             .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    // --- on draft 4-7 an `$id` beside `$ref` is ignored, so inlining drops it: that schema
+    // starts no resource and its `$ref` resolves where it did. On 2019-09 and 2020-12 the `$id`
+    // starts a resource and the schema is embedded whole ---
+
+    /// A standalone schema whose property `x` is a `$ref` to its definition `B` (a string) with
+    /// the `$id` `id` beside it.
+    fn id_beside_ref(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "definitions": {"B": {"type": "string"}},
+            "properties": {"x": {"$id": id, "$ref": "#/definitions/B"}}
+        })
+    }
+
+    /// The `id_beside_ref(id)` standalone schema inlined as property `s`, on `target`.
+    fn inlined_id_beside_ref(target: TargetDialect, id: &str) -> GeneratedSchema {
+        generated_with_inlined(
+            settings_for(target),
+            id_beside_ref(id),
+            serde_json::json!({}),
+        )
+    }
+
+    /// The document `id_beside_ref` inlines to on a draft 4-7 `target` (`$schema` `uri`): `x`
+    /// is a plain `$ref` to the hoisted `B`.
+    fn id_beside_ref_dropped(uri: &str) -> serde_json::Value {
+        serde_json::json!({
+            "$schema": uri,
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {"$ref": "#/definitions/B"}}}},
+            "definitions": {"B": {"type": "string"}}
+        })
+    }
+
+    const DRAFT_04_URI: &str = "http://json-schema.org/draft-04/schema#";
+    const DRAFT_06_URI: &str = "http://json-schema.org/draft-06/schema#";
+    const DRAFT_07_URI: &str = "http://json-schema.org/draft-07/schema#";
+
+    #[test]
+    fn an_absolute_id_beside_a_ref_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = id_beside_ref_dropped(DRAFT_07_URI);
+        let actual: serde_json::Value =
+            inlined_id_beside_ref(TargetDialect::Draft07, "https://example.com/x.json").to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_absolute_id_beside_a_ref_is_dropped_from_the_model_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/B"}}}},
+            "$defs": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = serde_json::to_value(
+            inlined_id_beside_ref(TargetDialect::Draft07, "https://example.com/x.json").schema(),
+        )
+        .expect("json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_relative_id_beside_a_ref_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = id_beside_ref_dropped(DRAFT_07_URI);
+        let actual: serde_json::Value =
+            inlined_id_beside_ref(TargetDialect::Draft07, "x.json").to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_only_id_beside_a_ref_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = id_beside_ref_dropped(DRAFT_07_URI);
+        let actual: serde_json::Value =
+            inlined_id_beside_ref(TargetDialect::Draft07, "#a").to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_with_a_fragment_beside_a_ref_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = id_beside_ref_dropped(DRAFT_07_URI);
+        let actual: serde_json::Value =
+            inlined_id_beside_ref(TargetDialect::Draft07, "x.json#a").to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_is_dropped_on_draft_06() {
+        let expected: serde_json::Value = id_beside_ref_dropped(DRAFT_06_URI);
+        let actual: serde_json::Value =
+            inlined_id_beside_ref(TargetDialect::Draft06, "https://example.com/x.json").to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_draft_04_id_beside_a_ref_is_dropped_on_draft_04() {
+        let expected: serde_json::Value = id_beside_ref_dropped(DRAFT_04_URI);
+        let standalone: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_04_URI,
+            "definitions": {"B": {"type": "string"}},
+            "properties": {"x": {"id": "https://example.com/x.json", "$ref": "#/definitions/B"}}
+        });
+        let parsed: Schema = Schema::try_from(standalone.to_string().as_str()).expect("a schema");
+        let Some(parsed) = parsed.as_object() else {
+            unreachable!("an object schema");
+        };
+        let mut generator: SchemaGenerator =
+            SchemaGenerator::new(settings_for(TargetDialect::Draft04));
+        let inlined: JsonSchema = generator.inline_subschema(parsed.clone());
+        let actual: serde_json::Value = generator
+            .into_root_schema(object_schema(&[("s", inlined)]))
+            .expect("generated")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_is_dropped_on_draft_07_with_inline_subschemas() {
+        let expected: serde_json::Value = id_beside_ref_dropped(DRAFT_07_URI);
+        let settings: ReverseCodeGenSettings = ReverseCodeGenSettings {
+            inline_subschemas: true,
+            ..settings_for(TargetDialect::Draft07)
+        };
+        let actual: serde_json::Value = generated_with_inlined(
+            settings,
+            id_beside_ref("https://example.com/x.json"),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_at_the_standalone_root_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"$ref": "#/definitions/B"}},
+            "definitions": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            serde_json::json!({
+                "$id": "https://example.com/x.json",
+                "$ref": "#/definitions/B",
+                "definitions": {"B": {"type": "string"}}
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_to_the_document_root_beside_an_id_points_at_the_inlined_body_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"$ref": "#/definitions/Inlined"}},
+            "definitions": {"Inlined": {"properties": {
+                "x": {"$ref": "#/definitions/Inlined"},
+                "y": {"type": "string"}
+            }}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            serde_json::json!({"properties": {
+                "x": {"$id": "https://example.com/x.json", "$ref": "#"},
+                "y": {"type": "string"}
+            }}),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// A standalone schema whose entry `R` is a resource with its own `B` (an integer) and whose
+    /// property `x` is a `$ref` to `R` with an `$id` beside it.
+    fn id_beside_ref_to_a_resource() -> serde_json::Value {
+        serde_json::json!({
+            "definitions": {"R": {
+                "$id": "https://example.com/r.json",
+                "definitions": {"B": {"type": "integer"}},
+                "properties": {"b": {"$ref": "#/definitions/B"}}
+            }},
+            "properties": {"x": {"$id": "https://example.com/x.json", "$ref": "https://example.com/r.json"}}
+        })
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_to_a_nested_resource_is_dropped_and_the_resource_kept_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {"$ref": "https://example.com/r.json"}}}},
+            "definitions": {"R": {
+                "$id": "https://example.com/r.json",
+                "definitions": {"B": {"type": "integer"}},
+                "properties": {"b": {"$ref": "#/definitions/B"}}
+            }}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            id_beside_ref_to_a_resource(),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_definition_is_dropped_and_a_ref_to_that_id_dangles_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"properties": {
+                "x": {"$ref": "#/definitions/X"},
+                "y": {"$ref": "https://example.com/x.json"}
+            }}},
+            "definitions": {"B": {"type": "string"}, "X": {"$ref": "#/definitions/B"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            serde_json::json!({
+                "definitions": {
+                    "B": {"type": "string"},
+                    "X": {"$id": "https://example.com/x.json", "$ref": "#/definitions/B"}
+                },
+                "properties": {
+                    "x": {"$ref": "#/definitions/X"},
+                    "y": {"$ref": "https://example.com/x.json"}
+                }
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_raw_subschema_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"items": [{"$ref": "#/definitions/B"}]}},
+            "definitions": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "prefixItems": [{"$id": "https://example.com/x.json", "$ref": "#/definitions/B"}]
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_raw_items_array_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"items": [{"items": [{"$ref": "#/definitions/B"}]}]}},
+            "definitions": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "prefixItems": [{"items": [{"$id": "https://example.com/x.json", "$ref": "#/definitions/B"}]}]
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_raw_items_array_is_kept_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"s": {"prefixItems": [{"items": [
+                {"$id": "https://example.com/x.json", "$ref": "#/definitions/B"}
+            ]}]}},
+            "$defs": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft202012),
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "prefixItems": [{"items": [{"$id": "https://example.com/x.json", "$ref": "#/definitions/B"}]}]
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_keyword_only_the_target_defines_is_dropped_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"dependencies": {"a": {"$ref": "#/definitions/B"}}}},
+            "definitions": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "dependencies": {"a": {"$id": "https://example.com/x.json", "$ref": "#/definitions/B"}}
+            }),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// A standalone schema whose property `x` is a `$ref` to `#/definitions/B` beside an `$id`
+    /// and its own `B` (an integer); the standalone schema's `B` is a string.
+    fn id_beside_ref_with_own_definitions() -> serde_json::Value {
+        serde_json::json!({
+            "definitions": {"B": {"type": "string"}},
+            "properties": {"x": {
+                "$id": "https://example.com/x.json",
+                "$ref": "#/definitions/B",
+                "definitions": {"B": {"type": "integer"}}
+            }}
+        })
+    }
+
+    #[test]
+    fn a_ref_beside_an_id_resolves_against_the_outer_base_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {
+                "allOf": [{"$ref": "#/definitions/B"}],
+                "definitions": {"B": {"type": "integer"}}
+            }}}},
+            "definitions": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            id_beside_ref_with_own_definitions(),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// The document `id_beside_ref_with_own_definitions` inlines to on 2019-09 or 2020-12
+    /// (`$schema` `uri`, outer definitions under `defs`): `x` is a resource, embedded whole.
+    fn id_beside_ref_kept_as_resource(uri: &str, defs: &str) -> serde_json::Value {
+        let mut expected: serde_json::Value = serde_json::json!({
+            "$schema": uri,
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {
+                "$id": "https://example.com/x.json",
+                "$ref": "#/definitions/B",
+                "definitions": {"B": {"type": "integer"}}
+            }}}}
+        });
+        expected[defs] = serde_json::json!({"B": {"type": "string"}});
+        expected
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_starts_a_resource_on_2020_12() {
+        let expected: serde_json::Value =
+            id_beside_ref_kept_as_resource("https://json-schema.org/draft/2020-12/schema", "$defs");
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft202012),
+            id_beside_ref_with_own_definitions(),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_starts_a_resource_on_2019_09() {
+        let expected: serde_json::Value =
+            id_beside_ref_kept_as_resource("https://json-schema.org/draft/2019-09/schema", "$defs");
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft201909),
+            id_beside_ref_with_own_definitions(),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// `id_beside_ref_with_own_definitions` with the `$schema` `uri`, outer definitions under
+    /// `defs`.
+    fn id_beside_ref_with_own_definitions_in(uri: &str, defs: &str) -> serde_json::Value {
+        let mut standalone: serde_json::Value = serde_json::json!({
+            "$schema": uri,
+            "properties": {"x": {
+                "$id": "https://example.com/x.json",
+                "$ref": format!("#/{defs}/B"),
+                defs: {"B": {"type": "integer"}}
+            }}
+        });
+        standalone[defs] = serde_json::json!({"B": {"type": "string"}});
+        standalone
+    }
+
+    /// The `id_beside_ref_with_own_definitions_in` standalone of 2020-12 inlined on `target`.
+    fn inlined_2020_12_id_beside_ref(target: TargetDialect) -> serde_json::Value {
+        generated_with_inlined(
+            settings_for(target),
+            id_beside_ref_with_own_definitions_in(
+                "https://json-schema.org/draft/2020-12/schema",
+                "$defs",
+            ),
+            serde_json::json!({}),
+        )
+        .to_value()
+    }
+
+    /// The document a 2020-12 standalone `id_beside_ref_with_own_definitions_in` inlines to on
+    /// a draft 4-7 target (`$schema` `uri`, `$id` keyword `id_keyword`): `x` is a resource
+    /// embedded whole, and its wrapped `$ref` resolves against its `$id`, so it still names its
+    /// own integer `B`.
+    fn id_beside_ref_kept_from_2020_12(uri: &str, id_keyword: &str) -> serde_json::Value {
+        let mut expected: serde_json::Value = serde_json::json!({
+            "$schema": uri,
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {
+                "allOf": [{"$ref": "#/definitions/B"}],
+                "definitions": {"B": {"type": "integer"}}
+            }}}},
+            "definitions": {"B": {"type": "string"}}
+        });
+        expected["properties"]["s"]["properties"]["x"][id_keyword] =
+            serde_json::json!("https://example.com/x.json");
+        expected
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_2020_12_standalone_is_kept_on_draft_07() {
+        let expected: serde_json::Value = id_beside_ref_kept_from_2020_12(DRAFT_07_URI, "$id");
+        let actual: serde_json::Value = inlined_2020_12_id_beside_ref(TargetDialect::Draft07);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_2020_12_standalone_is_kept_on_draft_04() {
+        let expected: serde_json::Value = id_beside_ref_kept_from_2020_12(DRAFT_04_URI, "id");
+        let actual: serde_json::Value = inlined_2020_12_id_beside_ref(TargetDialect::Draft04);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_draft_07_standalone_is_dropped_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {
+                "$ref": "#/$defs/B",
+                "definitions": {"B": {"type": "integer"}}
+            }}}},
+            "$defs": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft201909),
+            id_beside_ref_with_own_definitions_in(DRAFT_07_URI, "definitions"),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_in_a_draft_07_standalone_is_dropped_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"s": {"properties": {"x": {
+                "$ref": "#/$defs/B",
+                "definitions": {"B": {"type": "integer"}}
+            }}}},
+            "$defs": {"B": {"type": "string"}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft202012),
+            id_beside_ref_with_own_definitions_in(DRAFT_07_URI, "definitions"),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_under_an_unknown_schema_is_kept_on_draft_07() {
+        let expected: serde_json::Value = id_beside_ref_kept_from_2020_12(DRAFT_07_URI, "$id");
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft07),
+            id_beside_ref_with_own_definitions_in("https://example.com/my-meta", "definitions"),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_id_beside_a_ref_under_a_nested_draft_07_schema_is_dropped_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"s": {"properties": {"r": {
+                "$id": "https://example.com/r.json",
+                "$schema": DRAFT_07_URI,
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$ref": "#/definitions/B"}}
+            }}}}
+        });
+        let actual: serde_json::Value = generated_with_inlined(
+            settings_for(TargetDialect::Draft202012),
+            serde_json::json!({"properties": {"r": {
+                "$id": "https://example.com/r.json",
+                "$schema": DRAFT_07_URI,
+                "definitions": {"B": {"type": "string"}},
+                "properties": {"x": {"$id": "https://example.com/x.json", "$ref": "#/definitions/B"}}
+            }}}),
+            serde_json::json!({}),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    /// The fragment refs that dangle in the model or the document when each `id_beside_ref`
+    /// variant, and the nested-resource one, is inlined on `target` with and without
+    /// `inline_subschemas`.
+    fn dangling_refs_with_ids_beside_refs(target: TargetDialect) -> Vec<String> {
+        let ids: [&str; 4] = ["https://example.com/x.json", "x.json", "#a", "x.json#a"];
+        let standalones: Vec<serde_json::Value> = ids
+            .iter()
+            .map(|id: &&str| id_beside_ref(id))
+            .chain([
+                id_beside_ref_to_a_resource(),
+                id_beside_ref_with_own_definitions(),
+                id_beside_ref_with_own_definitions_in(
+                    "https://json-schema.org/draft/2020-12/schema",
+                    "$defs",
+                ),
+                id_beside_ref_with_own_definitions_in(DRAFT_07_URI, "definitions"),
+            ])
+            .collect();
+        let mut dangling: Vec<String> = Vec::new();
+        for inline_subschemas in [false, true] {
+            for standalone in &standalones {
+                let settings: ReverseCodeGenSettings = ReverseCodeGenSettings {
+                    inline_subschemas,
+                    ..settings_for(target)
+                };
+                let generated: GeneratedSchema =
+                    generated_with_inlined(settings, standalone.clone(), serde_json::json!({}));
+                let model: serde_json::Value =
+                    serde_json::to_value(generated.schema()).expect("json");
+                dangling.extend(dangling_refs(&model));
+                dangling.extend(dangling_refs(&generated.to_value()));
+            }
+        }
+        dangling
+    }
+
+    #[test]
+    fn no_ref_dangles_with_ids_beside_refs_on_draft_04() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = dangling_refs_with_ids_beside_refs(TargetDialect::Draft04);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn no_ref_dangles_with_ids_beside_refs_on_draft_06() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = dangling_refs_with_ids_beside_refs(TargetDialect::Draft06);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn no_ref_dangles_with_ids_beside_refs_on_draft_07() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = dangling_refs_with_ids_beside_refs(TargetDialect::Draft07);
         assert_eq!(expected, actual);
     }
 }

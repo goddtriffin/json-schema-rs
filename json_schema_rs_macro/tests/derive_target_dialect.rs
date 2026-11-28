@@ -3,8 +3,8 @@
 //! definitions path, inlined subschemas, the meta schema and the number formats.
 
 use json_schema_rs::{
-    GeneratedSchema, MetaSchema, NumberFormats, ReverseCodeGenError, ReverseCodeGenSettings,
-    Schema, SchemaGenerator, TargetDialect, ToJsonSchema, meta,
+    GeneratedSchema, MetaSchema, NumberFormats, ReverseCodeGenError, ReverseCodeGenResult,
+    ReverseCodeGenSettings, Schema, SchemaGenerator, TargetDialect, ToJsonSchema, meta,
 };
 use json_schema_rs_macro::ToJsonSchema;
 use serde::Deserialize;
@@ -986,5 +986,70 @@ fn the_readme_schemars_options_map_one_to_one() {
         "required": ["city"]
     }));
     let actual: Result<Value, Vec<ReverseCodeGenError>> = written::<Address>(settings);
+    assert_eq!(expected, actual);
+}
+
+#[derive(ToJsonSchema)]
+#[json_schema(id = "https://example.com/wrapped.json")]
+#[expect(dead_code)]
+struct WrappedAddress(Address);
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsWrappedAddress {
+    w: WrappedAddress,
+}
+
+/// A newtype with an `id` is a `$ref` beside an `$id` the generator wrote: on a draft 4-7
+/// target it is still a resource, its `$ref` goes into an `allOf` and the definition it refers
+/// to is written inside it.
+#[test]
+fn a_newtype_with_an_id_stays_a_resource_on_draft_07() {
+    let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {"w": {"$ref": "#/definitions/WrappedAddress"}},
+        "additionalProperties": false,
+        "required": ["w"],
+        "definitions": {"WrappedAddress": {
+            "$id": "https://example.com/wrapped.json",
+            "allOf": [{"$ref": "#/definitions/Address"}],
+            "definitions": {"Address": address_schema()}
+        }}
+    }));
+    let actual: Result<Value, Vec<ReverseCodeGenError>> =
+        written_in::<HoldsWrappedAddress>(TargetDialect::Draft07);
+    assert_eq!(expected, actual);
+}
+
+/// A hand-written impl that returns the derived `WrappedAddress` schema, `$schema` 2020-12
+/// included.
+struct HandWrittenWrappedAddress;
+
+impl ToJsonSchema for HandWrittenWrappedAddress {
+    fn json_schema() -> ReverseCodeGenResult {
+        WrappedAddress::json_schema()
+    }
+}
+
+#[derive(ToJsonSchema)]
+#[expect(dead_code)]
+struct HoldsHandWrittenWrappedAddress {
+    w: HandWrittenWrappedAddress,
+}
+
+/// A derived schema returned by a hand-written impl is read in its own `$schema` (2020-12),
+/// where the `$id` beside its `$ref` starts a resource: on a draft 4-7 target that `$id` is
+/// kept, never dropped, and the embedded `$schema` is reported as unrepresentable.
+#[test]
+fn a_derived_schema_returned_by_a_hand_written_impl_keeps_its_id_on_draft_07() {
+    let expected: Result<Value, Vec<ReverseCodeGenError>> =
+        Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
+            dialect: TargetDialect::Draft07,
+            keyword: "$schema".to_string(),
+            pointer: "/properties/w".to_string(),
+        }]);
+    let actual: Result<Value, Vec<ReverseCodeGenError>> =
+        written_in::<HoldsHandWrittenWrappedAddress>(TargetDialect::Draft07);
     assert_eq!(expected, actual);
 }
