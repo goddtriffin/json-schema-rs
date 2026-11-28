@@ -8444,6 +8444,88 @@ mod tests {
         hand_written_ref_into_nested_defs(settings, "definitions")
     }
 
+    /// The repro of a ref through a hoisted `$defs` entry, inlined into a root with `$id`.
+    fn inlined_ref_into_nested_defs_beside_a_root_id(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "$defs": {"X": {"properties": {"x": {"$defs": {"Y": {"type": "string"}}}}}},
+                "properties": {"a": {"$ref": "#/$defs/X/properties/x/$defs/Y"}}
+            }),
+            serde_json::json!({"$id": "https://example.com/root.json"}),
+        )
+    }
+
+    /// The same, inlined into the root of [`SchemaGenerator::into_resource_root_schema`], with a
+    /// ref into a hoisted entry's `prefixItems`.
+    fn resource_root_with_inlined_ref_into_prefix_items(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        let standalone: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$defs": {"G": {"prefixItems": [{"type": "string"}]}},
+            "properties": {"a": {"$ref": "#/$defs/G/prefixItems/0"}}
+        }))
+        .expect("a schema");
+        SchemaGenerator::new(settings)
+            .into_resource_root_schema(
+                "a::Root",
+                "Root",
+                "https://example.com/root.json",
+                |generator: &mut SchemaGenerator| {
+                    let inlined: JsonSchema = generator.inline_subschema(standalone);
+                    JsonSchema {
+                        id: Some("https://example.com/root.json".to_string()),
+                        ..object_schema(&[("s", inlined)])
+                    }
+                },
+            )
+            .expect("generated")
+    }
+
+    /// A hand-written root with `$id` whose property refers into a `$defs` entry's
+    /// `prefixItems`.
+    fn hand_written_root_id_ref_into_prefix_items(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        let body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$id": "https://example.com/root.json",
+            "$defs": {"G": {"prefixItems": [{"type": "string"}]}},
+            "properties": {"a": {"$ref": "#/$defs/G/prefixItems/0"}}
+        }))
+        .expect("a schema");
+        SchemaGenerator::new(settings)
+            .into_root_schema(body)
+            .expect("generated")
+    }
+
+    /// A hand-written root with `$id` whose nested resource refers back into it by a relative
+    /// and an absolute URI, and to a sibling resource by a relative one.
+    fn hand_written_base_uri_refs_within_the_document(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        let body: JsonSchema = serde_json::from_value(serde_json::json!({
+            "$id": "https://example.com/dir/root.json",
+            "$defs": {"H": {"prefixItems": [{"type": "string"}], "items": {"type": "integer"}}},
+            "properties": {
+                "m": {"$id": "m.json", "$defs": {"Y": {"type": "boolean"}}},
+                "n": {
+                    "$id": "n.json",
+                    "properties": {
+                        "a": {"$ref": "root.json#/$defs/H/prefixItems/0"},
+                        "b": {"$ref": "https://example.com/dir/root.json#/$defs/H/items"},
+                        "c": {"$ref": "m.json#/$defs/Y"}
+                    }
+                }
+            }
+        }))
+        .expect("a schema");
+        SchemaGenerator::new(settings)
+            .into_root_schema(body)
+            .expect("generated")
+    }
+
     #[test]
     fn a_ref_into_a_nested_defs_of_the_inlined_body_follows_it_into_definitions_on_draft_07() {
         let expected: serde_json::Value = serde_json::json!({
@@ -8621,6 +8703,415 @@ mod tests {
     }
 
     #[test]
+    fn a_ref_through_a_hoisted_defs_beside_a_root_id_follows_it_into_definitions_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/root.json",
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "X": {
+                    "properties": {
+                        "x": {
+                            "definitions": {
+                                "Y": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "properties": {
+                "s": {
+                    "properties": {
+                        "a": {
+                            "$ref": "#/definitions/X/properties/x/definitions/Y"
+                        }
+                    }
+                }
+            },
+            "type": "object"
+        });
+        let actual: serde_json::Value =
+            inlined_ref_into_nested_defs_beside_a_root_id(settings_for(TargetDialect::Draft07))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_of_a_resource_root_reaches_its_definitions_on_draft_04() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "definitions": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "id": "https://example.com/root.json",
+            "properties": {
+                "s": {
+                    "properties": {
+                        "a": {
+                            "$ref": "#/definitions/G/items/0"
+                        }
+                    }
+                }
+            },
+            "type": "object"
+        });
+        let actual: serde_json::Value =
+            resource_root_with_inlined_ref_into_prefix_items(settings_for(TargetDialect::Draft04))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_of_a_resource_root_reaches_its_definitions_on_draft_06() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/root.json",
+            "$schema": "http://json-schema.org/draft-06/schema#",
+            "definitions": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "properties": {
+                "s": {
+                    "properties": {
+                        "a": {
+                            "$ref": "#/definitions/G/items/0"
+                        }
+                    }
+                }
+            },
+            "type": "object"
+        });
+        let actual: serde_json::Value =
+            resource_root_with_inlined_ref_into_prefix_items(settings_for(TargetDialect::Draft06))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_of_a_resource_root_reaches_its_definitions_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/root.json",
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "properties": {
+                "s": {
+                    "properties": {
+                        "a": {
+                            "$ref": "#/definitions/G/items/0"
+                        }
+                    }
+                }
+            },
+            "type": "object"
+        });
+        let actual: serde_json::Value =
+            resource_root_with_inlined_ref_into_prefix_items(settings_for(TargetDialect::Draft07))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_of_a_resource_root_reaches_its_definitions_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$defs": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "$id": "https://example.com/root.json",
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "properties": {
+                "s": {
+                    "properties": {
+                        "a": {
+                            "$ref": "#/$defs/G/items/0"
+                        }
+                    }
+                }
+            },
+            "type": "object"
+        });
+        let actual: serde_json::Value = resource_root_with_inlined_ref_into_prefix_items(
+            settings_for(TargetDialect::Draft201909),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_beside_a_hand_written_root_id_names_items_on_draft_04() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "definitions": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "id": "https://example.com/root.json",
+            "properties": {
+                "a": {
+                    "$ref": "#/definitions/G/items/0"
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            hand_written_root_id_ref_into_prefix_items(settings_for(TargetDialect::Draft04))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_beside_a_hand_written_root_id_names_items_on_draft_06() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/root.json",
+            "$schema": "http://json-schema.org/draft-06/schema#",
+            "definitions": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "properties": {
+                "a": {
+                    "$ref": "#/definitions/G/items/0"
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            hand_written_root_id_ref_into_prefix_items(settings_for(TargetDialect::Draft06))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_beside_a_hand_written_root_id_names_items_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/root.json",
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "properties": {
+                "a": {
+                    "$ref": "#/definitions/G/items/0"
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            hand_written_root_id_ref_into_prefix_items(settings_for(TargetDialect::Draft07))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_into_prefix_items_beside_a_hand_written_root_id_names_items_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$defs": {
+                "G": {
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "$id": "https://example.com/root.json",
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "properties": {
+                "a": {
+                    "$ref": "#/$defs/G/items/0"
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            hand_written_root_id_ref_into_prefix_items(settings_for(TargetDialect::Draft201909))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn refs_with_a_base_uri_into_this_document_map_their_fragment_and_keep_the_uri_on_draft_04() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "definitions": {
+                "H": {
+                    "additionalItems": {
+                        "type": "integer"
+                    },
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "id": "https://example.com/dir/root.json",
+            "properties": {
+                "m": {
+                    "definitions": {
+                        "Y": {
+                            "type": "boolean"
+                        }
+                    },
+                    "id": "m.json"
+                },
+                "n": {
+                    "id": "n.json",
+                    "properties": {
+                        "a": {
+                            "$ref": "root.json#/definitions/H/items/0"
+                        },
+                        "b": {
+                            "$ref": "https://example.com/dir/root.json#/definitions/H/additionalItems"
+                        },
+                        "c": {
+                            "$ref": "m.json#/definitions/Y"
+                        }
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            hand_written_base_uri_refs_within_the_document(settings_for(TargetDialect::Draft04))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn refs_with_a_base_uri_into_this_document_map_their_fragment_and_keep_the_uri_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/dir/root.json",
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "H": {
+                    "additionalItems": {
+                        "type": "integer"
+                    },
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "properties": {
+                "m": {
+                    "$id": "m.json",
+                    "definitions": {
+                        "Y": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "n": {
+                    "$id": "n.json",
+                    "properties": {
+                        "a": {
+                            "$ref": "root.json#/definitions/H/items/0"
+                        },
+                        "b": {
+                            "$ref": "https://example.com/dir/root.json#/definitions/H/additionalItems"
+                        },
+                        "c": {
+                            "$ref": "m.json#/definitions/Y"
+                        }
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            hand_written_base_uri_refs_within_the_document(settings_for(TargetDialect::Draft07))
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn refs_with_a_base_uri_into_this_document_map_their_fragment_and_keep_the_uri_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$defs": {
+                "H": {
+                    "additionalItems": {
+                        "type": "integer"
+                    },
+                    "items": [
+                        {
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "$id": "https://example.com/dir/root.json",
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "properties": {
+                "m": {
+                    "$defs": {
+                        "Y": {
+                            "type": "boolean"
+                        }
+                    },
+                    "$id": "m.json"
+                },
+                "n": {
+                    "$id": "n.json",
+                    "properties": {
+                        "a": {
+                            "$ref": "root.json#/$defs/H/items/0"
+                        },
+                        "b": {
+                            "$ref": "https://example.com/dir/root.json#/$defs/H/additionalItems"
+                        },
+                        "c": {
+                            "$ref": "m.json#/$defs/Y"
+                        }
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value = hand_written_base_uri_refs_within_the_document(
+            settings_for(TargetDialect::Draft201909),
+        )
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn a_ref_through_a_keyword_the_target_lacks_is_unrepresentable_on_draft_07() {
         let expected: Result<String, Vec<ReverseCodeGenError>> =
             Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
@@ -8729,6 +9220,9 @@ mod tests {
                 inlined_ref_into_items_of_a_nested_resource => ref_into_items_of_a_nested_resource_resolves_in_the_model, ref_into_items_of_a_nested_resource_resolves_in_the_document;
                 hand_written_defs_ref_into_nested_defs => hand_written_defs_ref_into_nested_defs_resolves_in_the_model, hand_written_defs_ref_into_nested_defs_resolves_in_the_document;
                 hand_written_definitions_ref_into_nested_defs => hand_written_definitions_ref_into_nested_defs_resolves_in_the_model, hand_written_definitions_ref_into_nested_defs_resolves_in_the_document;
+                inlined_ref_into_nested_defs_beside_a_root_id => ref_into_nested_defs_beside_a_root_id_resolves_in_the_model, ref_into_nested_defs_beside_a_root_id_resolves_in_the_document;
+                resource_root_with_inlined_ref_into_prefix_items => resource_root_with_inlined_ref_into_prefix_items_resolves_in_the_model, resource_root_with_inlined_ref_into_prefix_items_resolves_in_the_document;
+                hand_written_root_id_ref_into_prefix_items => hand_written_root_id_ref_into_prefix_items_resolves_in_the_model, hand_written_root_id_ref_into_prefix_items_resolves_in_the_document;
             }
 
             model_and_document_agree! {
@@ -8759,6 +9253,10 @@ mod tests {
                 inlined_ref_into_items_of_a_nested_resource => the_model_and_the_document_agree_through_ref_into_items_of_a_nested_resource, [{"s": {"v": "a", "r": {"u": 5}}}, {"s": {"v": 5, "r": {"u": "a"}}}];
                 hand_written_defs_ref_into_nested_defs => the_model_and_the_document_agree_through_hand_written_defs_ref_into_nested_defs, [{"a": "z"}, {"a": 5}];
                 hand_written_definitions_ref_into_nested_defs => the_model_and_the_document_agree_through_hand_written_definitions_ref_into_nested_defs, [{"a": "z"}, {"a": 5}];
+                inlined_ref_into_nested_defs_beside_a_root_id => the_model_and_the_document_agree_through_ref_into_nested_defs_beside_a_root_id, [{"s": {"a": "z"}}, {"s": {"a": 5}}];
+                resource_root_with_inlined_ref_into_prefix_items => the_model_and_the_document_agree_through_resource_root_with_inlined_ref_into_prefix_items, [{"s": {"a": "z"}}, {"s": {"a": 5}}];
+                hand_written_root_id_ref_into_prefix_items => the_model_and_the_document_agree_through_hand_written_root_id_ref_into_prefix_items, [{"a": "z"}, {"a": 5}];
+                hand_written_base_uri_refs_within_the_document => the_model_and_the_document_agree_through_hand_written_base_uri_refs_within_the_document, [{"n": {"a": "z", "b": 5, "c": true}}, {"n": {"a": "z", "b": "z", "c": true}}];
             }
         };
     }

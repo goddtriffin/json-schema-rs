@@ -6,7 +6,9 @@
 //! `dependentSchemas` / `dependentRequired` entries into `dependencies` (draft 4 to 7, under an
 //! `allOf` when a property has several). A `$ref` whose JSON Pointer passes through one of them
 //! names the schema where the 2020-12 document holds it. Before the conversion, each such
-//! pointer is followed through the 2020-12 document from the root of the ref's schema resource,
+//! pointer is followed through the 2020-12 document from the root of the resource it names: the
+//! ref's own schema resource for a fragment-only ref, else the resource of this document its
+//! base URI resolves to (a ref to another document is kept as written),
 //! and every token is mapped by what it is there: a keyword of the schema it is read in, an
 //! entry name or an index. So a property named `$defs` or `items` is never renamed. The pointer
 //! is percent-decoded and split into tokens first, and written back with
@@ -15,11 +17,12 @@
 //! mapped by its 2020-12 position: the conversion reports that keyword as
 //! [`super::ReverseCodeGenError::UnrepresentableKeyword`], so no document is produced.
 
-use super::resource_uri::starts_resource;
+use super::resource_uri::{Placed, place, placeholder_bases, placeholder_depth, starts_resource};
 use super::settings::TargetDialect;
 use crate::json_pointer::{decode_token, fragment_to_pointer, pointer_to_fragment};
 use crate::json_schema::{Dialect, SubschemaPosition};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 /// Keywords the conversion renames, or under which it moves schemas: only a pointer holding one
 /// of these as a token can change. Each is written without `~` or `%`, so a raw token equals
@@ -76,10 +79,43 @@ enum Step<'d> {
     Index(usize),
 }
 
-/// Rewrites every same-document `$ref` in `root` and `definitions` (placed under the JSON
-/// Pointer `path`, as `(name, schema)`) whose pointer passes through a keyword the conversion
-/// to `target` renames or moves. A no-op for targets that move nothing (2020-12, `OpenAPI`
-/// 3.0 and 3.1, which keep the names or report the keywords).
+/// A schema resource of the document: the document itself (always the first) or one embedded
+/// in it.
+struct Resource<'d> {
+    /// The resource it is embedded in, `None` for the document.
+    parent: Option<usize>,
+    /// Its `$id` (or, in draft 4, `id`), `None` for a document root without one.
+    id: Option<&'d str>,
+    /// Where a fragment of a ref to it is read.
+    base: Base<'d>,
+}
+
+/// A ref with a base URI, mapped once every resource of the document is known.
+struct Pending<'d> {
+    piece: Option<usize>,
+    location: String,
+    /// The resource the ref is written in, whose URI it resolves against.
+    resource: usize,
+    /// The part before `#`.
+    uri: &'d str,
+    /// The part after `#`.
+    fragment: &'d str,
+}
+
+/// What a walk over the document found.
+struct Walk<'d> {
+    resources: Vec<Resource<'d>>,
+    pending: Vec<Pending<'d>>,
+    /// `(piece, location, new ref)`.
+    rewrites: Vec<(Option<usize>, String, String)>,
+}
+
+/// Rewrites every `$ref` in `root` and `definitions` (placed under the JSON Pointer `path`, as
+/// `(name, schema)`, sorted by name) that names a schema of this document by a pointer through
+/// a keyword the conversion to `target` renames or moves: a fragment-only ref, or one whose base
+/// URI resolves to a resource of this document (the root or a nested `$id`), whose URI part is
+/// kept. A no-op for targets that move nothing (2020-12, `OpenAPI` 3.0 and 3.1, which keep the
+/// names or report the keywords).
 pub(super) fn convert_ref_tails(
     target: TargetDialect,
     path: &str,
@@ -93,6 +129,10 @@ pub(super) fn convert_ref_tails(
     if !renames_containers && target != TargetDialect::Draft201909 {
         return;
     }
+    debug_assert!(
+        definitions.is_sorted_by(|a, b| a.0 < b.0),
+        "the generated definitions are sorted by name"
+    );
     let path: Vec<String> = path
         .split('/')
         .skip(1)
@@ -109,12 +149,21 @@ pub(super) fn convert_ref_tails(
             root,
             definitions,
         };
-        let mut rewrites: Vec<(Option<usize>, String, String)> = Vec::new();
-        document.collect(None, root, &mut rewrites);
+        let mut walk: Walk<'_> = Walk {
+            resources: vec![Resource {
+                parent: None,
+                id: None,
+                base: Base::Document,
+            }],
+            pending: Vec::new(),
+            rewrites: Vec::new(),
+        };
+        document.collect(None, root, &mut walk);
         for (index, (_, schema)) in definitions.iter().enumerate() {
-            document.collect(Some(index), schema, &mut rewrites);
+            document.collect(Some(index), schema, &mut walk);
         }
-        rewrites
+        document.map_pending(&mut walk);
+        walk.rewrites
     };
     for (piece, location, reference) in rewrites {
         let value: &mut Value = match piece {
@@ -128,29 +177,53 @@ pub(super) fn convert_ref_tails(
 }
 
 impl<'d> Document<'d> {
-    /// Collects, as `(piece, location, new ref)`, every ref in `piece` (the root body for
-    /// `None`, else that definition) that the conversion would leave dangling.
-    fn collect(
-        &self,
-        index: Option<usize>,
-        piece: &'d Value,
-        rewrites: &mut Vec<(Option<usize>, String, String)>,
-    ) {
+    /// Records in `walk` the resources of `piece` (the root body for `None`, else that
+    /// definition), every fragment-only ref there that the conversion would leave dangling,
+    /// with its new form, and every ref with a base URI whose pointer may move.
+    fn collect(&self, index: Option<usize>, piece: &'d Value, walk: &mut Walk<'d>) {
         let mut steps: Vec<(usize, Step<'d>)> = vec![(0, Step::Index(0))];
-        let mut stack: Vec<(&'d Value, usize, Base<'d>)> = vec![(piece, 0, Base::Document)];
-        while let Some((value, at, base)) = stack.pop() {
+        let mut stack: Vec<(&'d Value, usize, usize)> = vec![(piece, 0, 0)];
+        while let Some((value, at, resource)) = stack.pop() {
             let Value::Object(map) = value else {
                 continue;
             };
-            let base: Base<'d> = if self.is_resource(map) {
-                Base::Resource(value)
-            } else {
-                base
+            let resource: usize = match self.resource_id(map) {
+                // The document root's own `$id` names the document: its refs still reach the
+                // generated definitions.
+                Some(id) if at == 0 && index.is_none() => {
+                    walk.resources[0].id = Some(id);
+                    0
+                }
+                Some(id) => {
+                    walk.resources.push(Resource {
+                        parent: Some(resource),
+                        id: Some(id),
+                        base: Base::Resource(value),
+                    });
+                    walk.resources.len() - 1
+                }
+                None => resource,
             };
-            if let Some(Value::String(reference)) = map.get("$ref")
-                && let Some(mapped) = self.map_ref(base, reference)
-            {
-                rewrites.push((index, location(&steps, at), mapped));
+            if let Some(Value::String(reference)) = map.get("$ref") {
+                match reference.split_once('#') {
+                    Some(("", fragment)) => {
+                        if let Some(mapped) =
+                            self.map_fragment(walk.resources[resource].base, fragment)
+                        {
+                            walk.rewrites.push((index, location(&steps, at), mapped));
+                        }
+                    }
+                    Some((uri, fragment)) if may_move(fragment) => {
+                        walk.pending.push(Pending {
+                            piece: index,
+                            location: location(&steps, at),
+                            resource,
+                            uri,
+                            fragment,
+                        });
+                    }
+                    _ => {}
+                }
             }
             for (key, child) in map {
                 let Some(position) = self.position(key) else {
@@ -164,17 +237,17 @@ impl<'d> Document<'d> {
                     {
                         for (item_index, item) in items.iter().enumerate() {
                             steps.push((here, Step::Index(item_index)));
-                            stack.push((item, steps.len() - 1, base));
+                            stack.push((item, steps.len() - 1, resource));
                         }
                     }
                     Value::Object(entries) if position == SubschemaPosition::Map => {
                         for (name, entry) in entries {
                             steps.push((here, Step::Key(name)));
-                            stack.push((entry, steps.len() - 1, base));
+                            stack.push((entry, steps.len() - 1, resource));
                         }
                     }
                     Value::Object(_) if position != SubschemaPosition::Array => {
-                        stack.push((child, here, base));
+                        stack.push((child, here, resource));
                     }
                     _ => {}
                 }
@@ -182,18 +255,82 @@ impl<'d> Document<'d> {
         }
     }
 
-    /// Whether the schema `map` starts a schema resource of its own in the target: its `$id`
-    /// (or, in draft 4, `id`) is not fragment-only.
-    fn is_resource(&self, map: &Map<String, Value>) -> bool {
+    /// Maps each ref with a base URI in `walk` that resolves to a resource of this document,
+    /// reading its fragment from that resource like a fragment-only ref there. Each resource's
+    /// URI is resolved under the two placeholder document bases (see [`placeholder_bases`]), and
+    /// a ref counts as naming a resource only when it does under both: it then does not depend
+    /// on where the document is loaded from. Any other ref names another document and is kept.
+    fn map_pending(&self, walk: &mut Walk<'d>) {
+        if walk.pending.is_empty() {
+            return;
+        }
+        let mut nesting: Vec<usize> = Vec::with_capacity(walk.resources.len());
+        for resource in &walk.resources {
+            nesting.push(
+                resource
+                    .parent
+                    .map_or(0, |parent: usize| nesting[parent] + 1),
+            );
+        }
+        let ids = walk
+            .resources
+            .iter()
+            .filter_map(|resource: &Resource<'d>| resource.id)
+            .chain(walk.pending.iter().map(|pending: &Pending<'d>| pending.uri));
+        let depth: usize = placeholder_depth(ids, nesting.iter().copied().max().unwrap_or(0) + 1);
+        let bases: Placed = placeholder_bases(depth);
+        // A resource comes after the one it is embedded in.
+        let mut placed: Vec<Option<Placed>> = Vec::with_capacity(walk.resources.len());
+        for resource in &walk.resources {
+            let parent: Option<&Placed> = match resource.parent {
+                None => Some(&bases),
+                Some(parent) => placed[parent].as_ref(),
+            };
+            let here: Option<Placed> = match (parent, resource.id) {
+                (Some(parent), Some(id)) => place(parent, id).ok(),
+                (Some(parent), None) => Some(parent.clone()),
+                (None, _) => None,
+            };
+            placed.push(here);
+        }
+        let mut by_uri: HashMap<[&str; 2], usize> = HashMap::new();
+        for (index, uris) in placed.iter().enumerate() {
+            if let Some([a, b]) = uris {
+                by_uri.entry([a.as_str(), b.as_str()]).or_insert(index);
+            }
+        }
+        for pending in &walk.pending {
+            let Some(from) = &placed[pending.resource] else {
+                continue;
+            };
+            let Ok([a, b]) = place(from, pending.uri) else {
+                continue;
+            };
+            let Some(&target) = by_uri.get(&[a.as_str(), b.as_str()]) else {
+                continue;
+            };
+            if let Some(mapped) = self.map_fragment(walk.resources[target].base, pending.fragment) {
+                walk.rewrites.push((
+                    pending.piece,
+                    pending.location.clone(),
+                    format!("{}{mapped}", pending.uri),
+                ));
+            }
+        }
+    }
+
+    /// The `$id` (or, in draft 4, `id`) with which the schema `map` starts a schema resource of
+    /// its own in the target: one that is not fragment-only.
+    fn resource_id(&self, map: &'d Map<String, Value>) -> Option<&'d str> {
         let keywords: &[&str] = if self.target == TargetDialect::Draft04 {
             &["$id", "id"]
         } else {
             &["$id"]
         };
-        keywords.iter().any(|keyword: &&str| {
+        keywords.iter().find_map(|keyword: &&str| {
             map.get(*keyword)
                 .and_then(Value::as_str)
-                .is_some_and(starts_resource)
+                .filter(|id: &&str| starts_resource(id))
         })
     }
 
@@ -209,14 +346,14 @@ impl<'d> Document<'d> {
             })
     }
 
-    /// The ref `reference`, found in a schema of `base`, as it reads after the conversion:
-    /// `None` when it stays as written (it is not a JSON Pointer fragment, or no token changes).
-    fn map_ref(&self, base: Base<'d>, reference: &str) -> Option<String> {
-        let pointer: std::borrow::Cow<'_, str> = fragment_to_pointer(reference.strip_prefix('#')?)?;
-        let raw: &str = pointer.strip_prefix('/')?;
-        if !raw.split('/').any(|token: &str| MOVED.contains(&token)) {
+    /// The fragment `fragment` of a ref to `base`, as it reads after the conversion, with its
+    /// `#`: `None` when it stays as written (it is not a JSON Pointer, or no token changes).
+    fn map_fragment(&self, base: Base<'d>, fragment: &str) -> Option<String> {
+        if !may_move(fragment) {
             return None;
         }
+        let pointer: std::borrow::Cow<'_, str> = fragment_to_pointer(fragment)?;
+        let raw: &str = pointer.strip_prefix('/')?;
         let tokens: Vec<String> = raw
             .split('/')
             .map(decode_token)
@@ -398,13 +535,22 @@ impl<'d> Document<'d> {
         }
     }
 
-    /// The generated definition `name`.
+    /// The generated definition `name`, found by binary search: the definitions are sorted by
+    /// name, and a document may hold many of them.
     fn generated(&self, name: &str) -> Option<&'d Value> {
         self.definitions
-            .iter()
-            .find(|(entry, _)| entry == name)
-            .map(|(_, schema)| schema)
+            .binary_search_by(|(entry, _)| entry.as_str().cmp(name))
+            .ok()
+            .map(|index: usize| &self.definitions[index].1)
     }
+}
+
+/// Whether the URI fragment `fragment` is a JSON Pointer holding a token the conversion may
+/// rename or move under.
+fn may_move(fragment: &str) -> bool {
+    fragment_to_pointer(fragment).is_some_and(|pointer| {
+        pointer.starts_with('/') && pointer.split('/').any(|token: &str| MOVED.contains(&token))
+    })
 }
 
 /// Tokens of a pointer read in one schema, as they read after the conversion.
@@ -794,6 +940,342 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    /// The `$ref` of the property `r` once `root` (which holds it) and the generated
+    /// definitions `definitions` (under the target's default path) are mapped for `target`.
+    fn mapped_ref_with(
+        target: TargetDialect,
+        root: Value,
+        definitions: Vec<(String, Value)>,
+    ) -> Value {
+        let mut root: Value = root;
+        let mut definitions: Vec<(String, Value)> = definitions;
+        convert_ref_tails(
+            target,
+            target.default_definitions_path(),
+            &mut root,
+            &mut definitions,
+        );
+        root["properties"]["r"]["$ref"].clone()
+    }
+
+    /// The `$ref` of the property `r` of the nested resource `n` once `root` is mapped.
+    fn mapped_nested_ref(target: TargetDialect, root: Value) -> Value {
+        mapped(target, root)["properties"]["n"]["properties"]["r"]["$ref"].clone()
+    }
+
+    #[test]
+    fn a_root_id_keeps_the_generated_definitions_in_reach_on_draft_07() {
+        let expected: Value = json!("#/definitions/G/items/0");
+        let actual: Value = mapped_ref_with(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "properties": {"r": {"$ref": "#/definitions/G/prefixItems/0"}}
+            }),
+            vec![("G".to_string(), json!({"prefixItems": [true]}))],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_root_id_keeps_the_generated_definitions_in_reach_on_2019_09() {
+        let expected: Value = json!("#/$defs/G/items/0");
+        let actual: Value = mapped_ref_with(
+            TargetDialect::Draft201909,
+            json!({
+                "$id": "https://example.com/root.json",
+                "properties": {"r": {"$ref": "#/$defs/G/prefixItems/0"}}
+            }),
+            vec![("G".to_string(), json!({"prefixItems": [true]}))],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_root_draft_04_id_keeps_the_generated_definitions_in_reach() {
+        let expected: Value = json!("#/definitions/G/properties/x/definitions/Y");
+        let actual: Value = mapped_ref_with(
+            TargetDialect::Draft04,
+            json!({
+                "id": "https://example.com/root.json",
+                "properties": {"r": {"$ref": "#/definitions/G/properties/x/$defs/Y"}}
+            }),
+            vec![(
+                "G".to_string(),
+                json!({"properties": {"x": {"$defs": {"Y": true}}}}),
+            )],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_root_id_keeps_its_own_defs_mapped_on_draft_06() {
+        let expected: Value = json!("#/definitions/X/properties/x/definitions/Y");
+        let actual: Value = mapped_ref(
+            TargetDialect::Draft06,
+            json!({
+                "$id": "https://example.com/root.json",
+                "$defs": {"X": {"properties": {"x": {"$defs": {"Y": true}}}}},
+                "properties": {"r": {"$ref": "#/$defs/X/properties/x/$defs/Y"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_generated_definition_with_an_id_is_a_resource_of_its_own_on_draft_07() {
+        let expected: Value = json!("#/properties/t/additionalItems");
+        let mut root: Value = json!({"$id": "https://example.com/root.json"});
+        let mut definitions: Vec<(String, Value)> = vec![(
+            "G".to_string(),
+            json!({
+                "$id": "g.json",
+                "properties": {
+                    "t": {"prefixItems": [true], "items": true},
+                    "r": {"$ref": "#/properties/t/items"}
+                }
+            }),
+        )];
+        convert_ref_tails(
+            TargetDialect::Draft07,
+            "/definitions",
+            &mut root,
+            &mut definitions,
+        );
+        let actual: Value = definitions[0].1["properties"]["r"]["$ref"].clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_absolute_ref_to_the_root_from_a_nested_resource_is_mapped_on_draft_07() {
+        let expected: Value = json!("https://example.com/root.json#/definitions/H/items/0");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "$defs": {"H": {"prefixItems": [true]}},
+                "properties": {"n": {
+                    "$id": "https://example.com/n.json",
+                    "properties": {
+                        "r": {"$ref": "https://example.com/root.json#/$defs/H/prefixItems/0"}
+                    }
+                }}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_relative_ref_to_the_root_from_a_nested_resource_is_mapped_on_draft_07() {
+        let expected: Value = json!("root.json#/definitions/H");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "$defs": {"H": true},
+                "properties": {"n": {
+                    "$id": "n.json",
+                    "properties": {"r": {"$ref": "root.json#/$defs/H"}}
+                }}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_with_a_base_uri_to_the_root_reaches_the_generated_definitions_on_2019_09() {
+        let expected: Value = json!("https://example.com/root.json#/$defs/G/items/0");
+        let actual: Value = mapped_ref_with(
+            TargetDialect::Draft201909,
+            json!({
+                "$id": "https://example.com/root.json",
+                "properties": {
+                    "r": {"$ref": "https://example.com/root.json#/$defs/G/prefixItems/0"}
+                }
+            }),
+            vec![("G".to_string(), json!({"prefixItems": [true]}))],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_with_a_base_uri_to_a_nested_resource_reads_that_resource_on_draft_07() {
+        let expected: Value = json!("https://example.com/n.json#/properties/t/additionalItems");
+        let actual: Value = mapped_ref(
+            TargetDialect::Draft07,
+            json!({"properties": {
+                "t": {"items": true},
+                "n": {
+                    "$id": "https://example.com/n.json",
+                    "properties": {"t": {"prefixItems": [true], "items": true}}
+                },
+                "r": {"$ref": "https://example.com/n.json#/properties/t/items"}
+            }}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_from_one_nested_resource_to_another_is_mapped_on_draft_06() {
+        let expected: Value = json!("m.json#/definitions/Y");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft06,
+            json!({
+                "$id": "https://example.com/dir/root.json",
+                "properties": {
+                    "m": {"$id": "m.json", "$defs": {"Y": true}},
+                    "n": {"$id": "n.json", "properties": {"r": {"$ref": "m.json#/$defs/Y"}}}
+                }
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_between_nested_resources_resolves_without_a_root_id_on_draft_07() {
+        let expected: Value = json!("m.json#/definitions/Y");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft07,
+            json!({"properties": {
+                "m": {"$id": "m.json", "$defs": {"Y": true}},
+                "n": {"$id": "n.json", "properties": {"r": {"$ref": "m.json#/$defs/Y"}}}
+            }}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_to_a_nested_resource_by_its_draft_04_id_is_mapped() {
+        let expected: Value = json!("n.json#/properties/t/items/0");
+        let actual: Value = mapped_ref(
+            TargetDialect::Draft04,
+            json!({
+                "id": "https://example.com/root.json",
+                "properties": {
+                    "n": {"id": "n.json", "properties": {"t": {"prefixItems": [true]}}},
+                    "r": {"$ref": "n.json#/properties/t/prefixItems/0"}
+                }
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_with_a_base_uri_and_a_percent_encoded_fragment_is_re_encoded_on_draft_07() {
+        let expected: Value = json!("root.json#/definitions/a%20b");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "$defs": {"a b": true},
+                "properties": {"n": {
+                    "$id": "n.json",
+                    "properties": {"r": {"$ref": "root.json#/%24defs/a%20b"}}
+                }}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_with_a_differently_spelled_base_uri_to_the_root_is_mapped_on_draft_07() {
+        let expected: Value = json!("HTTPS://EXAMPLE.COM/./root.json#/definitions/H");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "$defs": {"H": true},
+                "properties": {"n": {
+                    "$id": "n.json",
+                    "properties": {"r": {"$ref": "HTTPS://EXAMPLE.COM/./root.json#/$defs/H"}}
+                }}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_naming_the_root_by_a_guessed_base_uri_is_kept_without_a_root_id_on_draft_07() {
+        let expected: Value = json!("root.json#/$defs/H");
+        let actual: Value = mapped_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$defs": {"H": true},
+                "properties": {"r": {"$ref": "root.json#/$defs/H"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_to_another_document_is_kept_beside_a_root_id_on_draft_07() {
+        let expected: Value = json!("https://example.com/other.json#/$defs/H");
+        let actual: Value = mapped_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "$defs": {"H": true},
+                "properties": {"r": {"$ref": "https://example.com/other.json#/$defs/H"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_with_a_base_uri_and_an_anchor_fragment_is_kept_on_draft_07() {
+        let expected: Value = json!("root.json#defs");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "properties": {"n": {
+                    "$id": "n.json",
+                    "properties": {"r": {"$ref": "root.json#defs"}}
+                }}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_with_a_base_uri_to_the_root_keeps_it_on_2020_12() {
+        let expected: Value = json!("root.json#/$defs/H/prefixItems/0");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft202012,
+            json!({
+                "$id": "https://example.com/root.json",
+                "$defs": {"H": {"prefixItems": [true]}},
+                "properties": {"n": {
+                    "$id": "n.json",
+                    "properties": {"r": {"$ref": "root.json#/$defs/H/prefixItems/0"}}
+                }}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_with_a_base_uri_into_a_nested_resource_beside_the_root_reads_the_root_on_draft_07() {
+        let expected: Value = json!("root.json#/properties/t/items");
+        let actual: Value = mapped_nested_ref(
+            TargetDialect::Draft07,
+            json!({
+                "$id": "https://example.com/root.json",
+                "properties": {
+                    "t": {"items": true},
+                    "n": {
+                        "$id": "n.json",
+                        "properties": {
+                            "t": {"prefixItems": [true], "items": true},
+                            "r": {"$ref": "root.json#/properties/t/items"}
+                        }
+                    }
+                }
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn a_ref_with_a_base_uri_is_kept_on_draft_07() {
         let expected: Value = json!("other.json#/properties/x/$defs/Y");
@@ -879,6 +1361,43 @@ mod tests {
         )];
         convert_ref_tails(TargetDialect::Draft07, "/x", &mut root, &mut definitions);
         let actual: Value = root["properties"]["r"]["$ref"].clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn refs_into_each_of_many_generated_definitions_are_all_mapped_on_draft_07() {
+        const COUNT: usize = 50_000;
+        let names: Vec<String> = (0..COUNT)
+            .map(|index: usize| format!("D{index:05}"))
+            .collect();
+        let expected: Vec<Value> = names
+            .iter()
+            .map(|name: &String| json!(format!("#/definitions/{name}/items/0")))
+            .collect();
+        let properties: serde_json::Map<String, Value> = names
+            .iter()
+            .map(|name: &String| {
+                (
+                    name.clone(),
+                    json!({"$ref": format!("#/definitions/{name}/prefixItems/0")}),
+                )
+            })
+            .collect();
+        let mut root: Value = json!({"properties": properties});
+        let mut definitions: Vec<(String, Value)> = names
+            .iter()
+            .map(|name: &String| (name.clone(), json!({"prefixItems": [true]})))
+            .collect();
+        convert_ref_tails(
+            TargetDialect::Draft07,
+            "/definitions",
+            &mut root,
+            &mut definitions,
+        );
+        let actual: Vec<Value> = names
+            .iter()
+            .map(|name: &String| root["properties"][name]["$ref"].clone())
+            .collect();
         assert_eq!(expected, actual);
     }
 
