@@ -54,14 +54,6 @@ pub(super) fn is_resource(schema: &JsonSchema) -> bool {
     schema.id.as_deref().is_some_and(starts_resource)
 }
 
-/// The plain-name anchor a fragment-only `$id` declares in the enclosing resource in draft 4-7
-/// (`a` for `#a`), as the registry reads it: an empty fragment (`#`) and a JSON Pointer one
-/// (`#/a`) declare none.
-pub(super) fn fragment_only_anchor(id: &str) -> Option<&str> {
-    id.strip_prefix('#')
-        .filter(|name: &&str| !name.is_empty() && !name.starts_with('/'))
-}
-
 /// Resolves `id` against each of `bases`, without its fragment, or says why `id` is not a URI
 /// reference (or cannot be resolved against a base without a hierarchical path).
 pub(super) fn place(bases: &Placed, id: &str) -> Result<Placed, String> {

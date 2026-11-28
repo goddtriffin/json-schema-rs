@@ -131,6 +131,10 @@ struct Definition {
     /// `None` while the body is being built, and for a root that nothing refers back to. A
     /// hoisted entry may be a boolean schema.
     body: Option<Schema>,
+    /// Whether the body of a hoisted definition declares an identifier (see
+    /// [`declares_identifier`]), so an equal body merges into it whatever its name. Always
+    /// `false` for a named type, which is never merged away.
+    declares_identifier: bool,
 }
 
 /// A standalone schema already passed to [`SchemaGenerator::inline_subschema`] and the
@@ -891,6 +895,16 @@ impl SchemaGenerator {
     /// rewritten, since it resolves against that resource. A fragment-only `$id` (`#a`) is an
     /// anchor, not a resource: the schema or entry holding it is treated like one without `$id`.
     ///
+    /// An identifier names exactly one schema, so a body that declares one outside its
+    /// definitions (an `$id`, `$anchor`, `$dynamicAnchor` or `$recursiveAnchor`, at any depth,
+    /// nested resources included) is never written in place either: it becomes a definition
+    /// and the subschema is a `$ref` to it, so every use of an equal schema shares the one
+    /// declaration. A hoisted entry or body that declares an identifier and equals another
+    /// definition is merged into it whatever their names. Two different schemas that declare
+    /// the same anchor in one resource are a [`ReverseCodeGenError::DuplicateAnchor`] when the
+    /// document is finished; an anchor is never renamed, since a `$ref` from outside the
+    /// document may name it.
+    ///
     /// In a dialect that ignores the siblings of `$ref` (draft 4, 6 and 7), an `$id` (draft-04
     /// `id`) beside a `$ref` is ignored too: it starts no resource and declares no anchor. It is
     /// dropped before inlining, at any depth, so that schema is inlined like one without `$id`
@@ -899,7 +913,8 @@ impl SchemaGenerator {
     /// this crate does not know, nothing is dropped.
     pub fn inline_subschema(&mut self, mut schema: JsonSchema) -> JsonSchema {
         drop_ids_beside_refs(&mut schema, self.settings.target().spec_version());
-        self.current_scope().inline_subschema(schema)
+        let target: Option<SpecVersion> = self.settings.target().spec_version();
+        self.current_scope().inline_subschema(schema, target)
     }
 
     /// When `schema` is exactly the `$ref` [`SchemaGenerator::inline_subschema`] returned for a
@@ -946,6 +961,7 @@ impl Scope {
             identity: DefinitionIdentity::Type(schema_id.to_string()),
             name: name.to_string(),
             body: None,
+            declares_identifier: false,
         });
         self.type_definitions.insert(schema_id.to_string(), index);
         index
@@ -1083,18 +1099,7 @@ impl Scope {
                 merged.remove(&index);
             }
         }
-        // Only a draft 4-7 target sets `aliases`, and only there is a fragment-only `$id` an
-        // anchor.
-        let ids_declare_anchors: bool = aliases != ModelAliases::None;
-        report_duplicate_ids(
-            &definitions,
-            &canonical,
-            &merged,
-            existing,
-            body.id.as_deref(),
-            ids_declare_anchors,
-            errors,
-        );
+        report_duplicate_ids(&definitions, &canonical, &merged, existing, errors);
         let alias = alias_resolver(aliases, &final_names, &merged, &hand_written);
         let resolve = |reference: &str| -> Option<String> {
             let (index, rest): (usize, &str) = parse_provisional_ref(reference)?;
@@ -1141,6 +1146,7 @@ impl Scope {
                 identity: DefinitionIdentity::Hoisted(index),
                 name: definition.key.clone(),
                 body: None,
+                declares_identifier: false,
             });
             indices.push(index);
             by_pointer.insert(definition.pointer.clone(), provisional_ref(index));
@@ -1170,7 +1176,11 @@ impl Scope {
     }
 
     /// See [`SchemaGenerator::inline_subschema`].
-    fn inline_subschema(&mut self, mut schema: JsonSchema) -> JsonSchema {
+    fn inline_subschema(
+        &mut self,
+        mut schema: JsonSchema,
+        target: Option<SpecVersion>,
+    ) -> JsonSchema {
         if resource_uri::is_resource(&schema) {
             return schema;
         }
@@ -1178,9 +1188,12 @@ impl Scope {
             .into_iter()
             .flatten()
             .any(|entries: &BTreeMap<String, Schema>| !entries.is_empty());
-        // Without definitions, one read-only walk decides whether the schema is written in place
-        // as is; with them, the rewrite below finds the refs into the body itself.
-        if !has_definitions && !refers_to_own_body(&mut schema) {
+        // Without definitions, read-only walks decide whether the schema is written in place as
+        // is; with them, the rewrite below finds the refs into the body itself.
+        if !has_definitions
+            && !refers_to_own_body(&mut schema)
+            && !declares_identifier(&mut schema, target)
+        {
             schema.schema = None;
             return schema;
         }
@@ -1194,6 +1207,9 @@ impl Scope {
 
         let standalone: JsonSchema = schema.clone();
         let (mut flat, hoisted): (JsonSchema, Vec<HoistedDefinition>) = flatten_defs(schema);
+        // An identifier names exactly one schema, so a body that declares one (an anchor, or a
+        // nested resource) is never written in place: a second use would declare it twice.
+        let body_declares_identifier: bool = declares_identifier(&mut flat, target);
         let (by_pointer, indices): (BTreeMap<String, String>, Vec<usize>) =
             self.register_hoisted(&hoisted);
 
@@ -1223,16 +1239,18 @@ impl Scope {
             let mut body: Schema = definition.body;
             if let Some(object) = body.as_object_mut() {
                 rewrite_refs_outside_resources(object, &resolve);
+                self.definitions[index].declares_identifier = declares_identifier(object, target);
             }
             self.definitions[index].body = Some(body);
         }
 
         flat.schema = None;
-        let inlined: JsonSchema = if refers_to_body.get() {
+        let inlined: JsonSchema = if refers_to_body.get() || body_declares_identifier {
             self.definitions.push(Definition {
                 identity: DefinitionIdentity::Hoisted(body_index),
                 name: INLINED_BODY_NAME.to_string(),
                 body: Some(flat.into()),
+                declares_identifier: body_declares_identifier,
             });
             self.inlined_bodies.insert(body_index);
             ref_schema(body_ref)
@@ -1600,21 +1618,14 @@ fn ref_targets(
 /// merged into a hand-written entry yet carries the same resolved `$id` as one, since the
 /// document would hold two resources with one URI (2020-12 core §8.2.1).
 ///
-/// With `ids_declare_anchors` (a draft 4-7 target), a fragment-only `$id` (`#a`) is a
-/// plain-name anchor of the scope's resource, not a resource, so such a definition whose
-/// anchor the scope's body (`body_id`, whose fragment declares an anchor of the scope's
-/// resource), a hand-written entry or an earlier definition also declares is a
-/// [`ReverseCodeGenError::DuplicateAnchor`] (`#a` against `#b` is not). All of them sit in the
-/// scope's resource; an anchor inside a nested resource belongs to that resource and is not
-/// compared. From 2019-09 such an `$id` is written as `$anchor`, and
-/// [`anchors::ids_to_anchors`] reports the duplicates.
+/// A fragment-only `$id` (`#a`) declares an anchor, not a resource, so it is skipped here:
+/// [`anchors::ids_to_anchors`] walks the finished document and reports an anchor that one
+/// resource declares twice, at any depth and on every target.
 fn report_duplicate_ids(
     definitions: &[Definition],
     canonical: &[usize],
     merged: &BTreeSet<usize>,
     existing: &ExistingDefinitions,
-    body_id: Option<&str>,
-    ids_declare_anchors: bool,
     errors: &mut Vec<ReverseCodeGenError>,
 ) {
     let hand_written_ids: Vec<(&String, &str)> = existing
@@ -1641,35 +1652,6 @@ fn report_duplicate_ids(
             }
         }
     };
-    if ids_declare_anchors {
-        // Each anchor with the first place that declares it.
-        let mut declared: BTreeMap<&str, String> = BTreeMap::new();
-        let body_anchor: Option<&str> =
-            body_id.and_then(|id| resource_uri::fragment_only_anchor(&id[id.find('#')?..]));
-        if let Some(anchor) = body_anchor {
-            declared.insert(anchor, "#".to_string());
-        }
-        for (name, existing_id) in &hand_written_ids {
-            if let Some(anchor) = resource_uri::fragment_only_anchor(existing_id) {
-                declared.entry(anchor).or_insert_with(|| first(name));
-            }
-        }
-        for (index, id) in &generated_ids {
-            let Some(anchor) = resource_uri::fragment_only_anchor(id) else {
-                continue;
-            };
-            match declared.get(anchor) {
-                Some(first) => errors.push(ReverseCodeGenError::DuplicateAnchor {
-                    first: first.clone(),
-                    second: second(*index),
-                    anchor: anchor.to_string(),
-                }),
-                None => {
-                    declared.insert(anchor, second(*index));
-                }
-            }
-        }
-    }
     let hand_written: Vec<(&String, &str)> = hand_written_ids
         .into_iter()
         .filter(|(_, id)| resource_uri::starts_resource(id))
@@ -1805,11 +1787,16 @@ fn finish_document(
             }
         },
     };
-    anchors::ids_to_anchors(target, &mut body, &mut definitions, path, errors);
     if !target.needs_conversion() {
+        anchors::ids_to_anchors(target, &mut body, &mut definitions, path, errors);
         body.schema = schema_uri;
         return GeneratedSchema::native(place_definitions(body, model_path, definitions, errors));
     }
+    // The model's fragment ids become anchors here, but what the walk reports is reported from
+    // the converted document below, by the positions it has there (`items/0`, not
+    // `prefixItems/0`).
+    anchors::ids_to_anchors(target, &mut body, &mut definitions, path, &mut Vec::new());
+    let anchor_errors_at: usize = errors.len();
     let root_siblings: bool = schema_uri.is_some() || !definitions.is_empty();
     let mut body_json: serde_json::Value = to_json(&body);
     let mut definitions_json: Vec<(String, serde_json::Value)> = definitions
@@ -1820,7 +1807,7 @@ fn finish_document(
     let mut pass: dialect::Converter<'_> =
         dialect::Converter::new(target, errors).with_root_siblings(root_siblings);
     let mut target_json: serde_json::Value = pass.convert(body_json, "", true);
-    let target_definitions: serde_json::Map<String, serde_json::Value> = definitions_json
+    let mut target_definitions: serde_json::Map<String, serde_json::Value> = definitions_json
         .into_iter()
         .map(|(name, schema)| {
             let pointer: String = format!("{path}/{}", escape_pointer_token(&name));
@@ -1828,6 +1815,15 @@ fn finish_document(
             (name, converted)
         })
         .collect();
+    let mut anchor_errors: Vec<ReverseCodeGenError> = Vec::new();
+    anchors::report_converted_anchors(
+        target,
+        &mut target_json,
+        &mut target_definitions,
+        path,
+        &mut anchor_errors,
+    );
+    errors.splice(anchor_errors_at..anchor_errors_at, anchor_errors);
     if let (serde_json::Value::Object(root), Some(uri)) = (&mut target_json, schema_uri) {
         root.insert("$schema".to_string(), serde_json::Value::String(uri));
     }
@@ -2282,46 +2278,92 @@ fn for_each_ref(
 }
 
 /// Whether `schema` declares an identifier at any depth (nested resources included): an `$id`
-/// (fragment-only too), `$anchor`, `$dynamicAnchor` or `$recursiveAnchor`. A copy of such a
-/// schema written beside it would declare it twice.
-pub(super) fn declares_identifier(schema: &mut JsonSchema) -> bool {
-    const ANCHORS: [&str; 3] = ["$anchor", "$dynamicAnchor", "$recursiveAnchor"];
-    let dialect: Dialect = Dialect::for_spec_version(SpecVersion::Draft202012);
-    let mut stack: Vec<RefNode<'_>> = vec![RefNode::Typed(schema)];
-    while let Some(node) = stack.pop() {
+/// (draft-04 `id` where draft 4 reads the schema) that starts a resource or names an anchor, an
+/// `$anchor`, a `$dynamicAnchor`, or `"$recursiveAnchor": true`. A copy of such a schema
+/// written beside it would declare it twice. An empty `$id` (`""`, `"#"`) and
+/// `"$recursiveAnchor": false` name nothing.
+///
+/// Subschemas are found as [`drop_ids_beside_refs`] finds them: raw (extension) ones by
+/// [`anchors::Tables`] for `target` (the 2020-12 model's table, then the target's:
+/// `additionalItems`, the array form of `items`, `dependencies`), or by an embedded `$schema`'s
+/// own table.
+pub(super) fn declares_identifier(schema: &mut JsonSchema, target: Option<SpecVersion>) -> bool {
+    node_declares_identifier(RefNode::Typed(schema), target)
+}
+
+/// [`declares_identifier`] for a subschema held as raw JSON.
+pub(super) fn raw_declares_identifier(
+    value: &mut serde_json::Value,
+    target: Option<SpecVersion>,
+) -> bool {
+    node_declares_identifier(RefNode::Raw(value), target)
+}
+
+fn node_declares_identifier(node: RefNode<'_>, target: Option<SpecVersion>) -> bool {
+    let top: Reading = Reading {
+        dialect: target.map(Dialect::for_spec_version),
+        tables: anchors::Tables::for_model(target),
+    };
+    let mut stack: Vec<(RefNode<'_>, Reading)> = vec![(node, top)];
+    while let Some((node, parent)) = stack.pop() {
         match node {
             RefNode::Typed(current) => {
-                if current.id.is_some()
-                    || ANCHORS
-                        .iter()
-                        .any(|keyword: &&str| current.extensions.contains_key(*keyword))
-                {
+                let reading: Reading = Reading::of(current.schema.as_deref(), parent);
+                if names_identifier(reading, current.id.as_deref(), |keyword: &str| {
+                    current.extensions.get(keyword)
+                }) {
                     return true;
                 }
                 let (subschemas, extensions) = current.subschemas_mut();
                 for (keyword, value) in extensions {
-                    push_raw_subschemas(dialect, keyword, value, &mut stack);
+                    push_raw_by_tables(reading, keyword, value, &mut stack);
                 }
-                stack.extend(subschemas.into_iter().map(RefNode::Typed));
+                stack.extend(
+                    subschemas
+                        .into_iter()
+                        .map(|child: &mut JsonSchema| (RefNode::Typed(child), reading)),
+                );
             }
             RefNode::Raw(value) => {
                 let serde_json::Value::Object(object) = value else {
                     continue;
                 };
-                if object.contains_key("$id")
-                    || ANCHORS
-                        .iter()
-                        .any(|keyword: &&str| object.contains_key(*keyword))
-                {
+                let own_schema: Option<&str> =
+                    object.get("$schema").and_then(serde_json::Value::as_str);
+                let reading: Reading = Reading::of(own_schema, parent);
+                let id: Option<&str> = object.get("$id").and_then(serde_json::Value::as_str);
+                if names_identifier(reading, id, |keyword: &str| object.get(keyword)) {
                     return true;
                 }
                 for (keyword, value) in object.iter_mut() {
-                    push_raw_subschemas(dialect, keyword, value, &mut stack);
+                    push_raw_by_tables(reading, keyword, value, &mut stack);
                 }
             }
         }
     }
     false
+}
+
+/// Whether a schema read as `reading`, whose `$id` is `id` and whose other keyword values `get`
+/// gives, declares an identifier (see [`declares_identifier`]).
+fn names_identifier<'v>(
+    reading: Reading,
+    id: Option<&str>,
+    get: impl Fn(&str) -> Option<&'v serde_json::Value>,
+) -> bool {
+    let names = |id: &str| -> bool { !id.is_empty() && id != "#" };
+    let draft_04_id: Option<&str> = reading
+        .dialect
+        .map(|dialect: Dialect| dialect.id_keyword())
+        .filter(|keyword: &&str| *keyword != "$id")
+        .and_then(|keyword: &str| get(keyword))
+        .and_then(serde_json::Value::as_str);
+    id.is_some_and(names)
+        || draft_04_id.is_some_and(names)
+        || ["$anchor", "$dynamicAnchor"]
+            .iter()
+            .any(|keyword: &&str| get(keyword).is_some_and(serde_json::Value::is_string))
+        || get("$recursiveAnchor") == Some(&serde_json::Value::Bool(true))
 }
 
 /// A `$defs` or `definitions` entry taken out of a standalone schema by [`flatten_defs`].
@@ -2371,8 +2413,10 @@ fn push_definition_containers(
 }
 
 /// Merges each hoisted definition into another live definition with the same name and an
-/// equal body (preferring a named type, then the earliest entry), rewriting its `$ref`s.
-/// Repeats until nothing merges, since a merge can make two referring bodies equal.
+/// equal body (preferring a named type, then the earliest entry), rewriting its `$ref`s. An
+/// equal body that declares an identifier merges whatever the names, since the document can
+/// hold only one schema that declares it. Repeats until nothing merges, since a merge can make
+/// two referring bodies equal.
 fn merge_equal_hoisted_definitions(
     definitions: &mut [Definition],
     canonical: &mut [usize],
@@ -2405,8 +2449,9 @@ fn merge_equal_hoisted_definitions(
                 if target != duplicate
                     && is_preferred
                     && canonical[target] == target
-                    && definitions[target].name == definitions[duplicate].name
                     && definitions[target].body.as_ref() == Some(duplicate_body)
+                    && (definitions[target].name == definitions[duplicate].name
+                        || definitions[duplicate].declares_identifier)
                 {
                     merge = Some((duplicate, target));
                     break 'search;
@@ -2895,11 +2940,11 @@ mod tests {
     use super::{
         GeneratedSchema, GeneratedSchemaResult, HandWrittenContainers, MetaSchema, ModelAliases,
         NumberFormats, ReverseCodeGenError, ReverseCodeGenResult, ReverseCodeGenSettings,
-        SchemaGenerator, TargetDialect, ToJsonSchema, alias_resolver, derive_support,
-        escape_pointer_token, fragment_to_pointer, is_draft_4_to_7, pointer_to_fragment,
-        root_schema_for,
+        SchemaGenerator, TargetDialect, ToJsonSchema, alias_resolver, declares_identifier,
+        derive_support, escape_pointer_token, fragment_to_pointer, is_draft_4_to_7,
+        pointer_to_fragment, root_schema_for,
     };
-    use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
+    use crate::json_schema::{JsonSchema, JsonType, Schema, SpecVersion, TypeSet};
     use std::collections::{BTreeMap, BTreeSet};
 
     /// The `$schema` of a root document written with the default settings.
@@ -3687,18 +3732,16 @@ mod tests {
                 ("S0", string_schema()),
                 ("S1", integer_schema()),
                 ("R", resource_def),
-            ])),
-            ..object_schema(&[
-                ("named", ref_to("S0")),
                 (
-                    "inlined",
+                    "Inlined",
                     object_schema(&[
                         ("n", ref_to("S1")),
                         ("def", ref_to("R")),
                         ("resource", resource),
                     ]),
                 ),
-            ])
+            ])),
+            ..object_schema(&[("named", ref_to("S0")), ("inlined", ref_to("Inlined"))])
         });
         assert_eq!(expected, actual);
     }
@@ -7475,9 +7518,9 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "http://json-schema.org/draft-07/schema#",
             "type": "object",
-            "definitions": {"B": {"type": "string"}},
-            "properties": {
-                "s": {
+            "definitions": {
+                "B": {"type": "string"},
+                "Inlined": {
                     "properties": {
                         "x": {"$ref": "#/definitions/B"},
                         "r": {
@@ -7487,7 +7530,8 @@ mod tests {
                         }
                     }
                 }
-            }
+            },
+            "properties": {"s": {"$ref": "#/definitions/Inlined"}}
         });
         let actual: serde_json::Value =
             inlined_with_nested_resource(settings_for(TargetDialect::Draft07)).to_value();
@@ -8085,8 +8129,8 @@ mod tests {
     fn resource_subschemas_with_one_fragment_only_id_are_a_duplicate_anchor_in_draft_07() {
         let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
             Err(vec![ReverseCodeGenError::DuplicateAnchor {
-                first: "a::A".to_string(),
-                second: "a::B".to_string(),
+                first: "#/definitions/A".to_string(),
+                second: "#/definitions/B".to_string(),
                 anchor: "a".to_string(),
             }]);
         let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
@@ -8198,7 +8242,7 @@ mod tests {
         let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
             Err(vec![ReverseCodeGenError::DuplicateAnchor {
                 first: "#".to_string(),
-                second: "a::B".to_string(),
+                second: "#/definitions/B".to_string(),
                 anchor: "root".to_string(),
             }]);
         let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
@@ -8256,14 +8300,15 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "http://json-schema.org/draft-07/schema#",
             "type": "object",
-            "definitions": {"B": {"type": "string"}},
-            "properties": {
-                "s": {
+            "definitions": {
+                "B": {"type": "string"},
+                "Inlined": {
                     "properties": {
                         "x": {"$id": "#x", "properties": {"y": {"$ref": "#/definitions/B"}}}
                     }
                 }
-            }
+            },
+            "properties": {"s": {"$ref": "#/definitions/Inlined"}}
         });
         let actual: serde_json::Value =
             inlined_fragment_id_property_defs_ref(settings_for(TargetDialect::Draft07)).to_value();
@@ -8367,9 +8412,9 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "$defs": {"B": {"type": "string"}},
-            "properties": {
-                "s": {
+            "$defs": {
+                "B": {"type": "string"},
+                "Inlined": {
                     "properties": {
                         "x": {"$ref": "#/$defs/B"},
                         "r": {
@@ -8379,7 +8424,8 @@ mod tests {
                         }
                     }
                 }
-            }
+            },
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
         });
         let actual: serde_json::Value =
             inlined_empty_fragment_resource(ReverseCodeGenSettings::default()).to_value();
@@ -8391,9 +8437,9 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "$defs": {"B": {"type": "string"}},
-            "properties": {
-                "s": {
+            "$defs": {
+                "B": {"type": "string"},
+                "Inlined": {
                     "properties": {
                         "x": {"$ref": "#/$defs/B"},
                         "r": {
@@ -8408,7 +8454,8 @@ mod tests {
                         }
                     }
                 }
-            }
+            },
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
         });
         let actual: serde_json::Value =
             inlined_fragment_id_inside_resource(ReverseCodeGenSettings::default()).to_value();
@@ -8470,27 +8517,10 @@ mod tests {
     }
 
     #[test]
-    fn fragment_only_anchor_skips_empty_and_pointer_fragments() {
-        let ids: [&str; 5] = [
-            "#a",
-            "#",
-            "#/definitions/a",
-            "",
-            "https://example.com/r.json#a",
-        ];
-        let expected: Vec<Option<&str>> = vec![Some("a"), None, None, None, None];
-        let actual: Vec<Option<&str>> = ids
-            .iter()
-            .map(|id| super::resource_uri::fragment_only_anchor(id))
-            .collect();
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn an_inlined_definition_with_a_hand_written_entrys_anchor_is_a_duplicate_anchor_on_draft_07() {
         let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
             first: "#/definitions/H".to_string(),
-            second: "a hoisted definition `A`".to_string(),
+            second: "#/definitions/A".to_string(),
             anchor: "a".to_string(),
         }]);
         let actual: GeneratedSchemaResult =
@@ -8502,8 +8532,8 @@ mod tests {
     fn an_inlined_definition_with_a_hand_written_defs_entrys_anchor_is_a_duplicate_anchor_on_draft_04()
      {
         let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
-            first: "#/$defs/H".to_string(),
-            second: "a hoisted definition `A`".to_string(),
+            first: "#/definitions/H".to_string(),
+            second: "#/definitions/A".to_string(),
             anchor: "a".to_string(),
         }]);
         let actual: GeneratedSchemaResult = generated_result_with_inlined(
@@ -8625,14 +8655,15 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "$defs": {"B": {"type": "string"}},
-            "properties": {
-                "s": {
+            "$defs": {
+                "B": {"type": "string"},
+                "Inlined": {
                     "prefixItems": [
                         {"$anchor": "a", "properties": {"y": {"$ref": "#/$defs/B"}}}
                     ]
                 }
-            }
+            },
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
         });
         let actual: serde_json::Value =
             inlined_fragment_id_prefix_item(ReverseCodeGenSettings::default()).to_value();
@@ -8644,14 +8675,15 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "http://json-schema.org/draft-07/schema#",
             "type": "object",
-            "definitions": {"B": {"type": "string"}},
-            "properties": {
-                "s": {
+            "definitions": {
+                "B": {"type": "string"},
+                "Inlined": {
                     "items": [
                         {"$id": "#a", "properties": {"y": {"$ref": "#/definitions/B"}}}
                     ]
                 }
-            }
+            },
+            "properties": {"s": {"$ref": "#/definitions/Inlined"}}
         });
         let actual: serde_json::Value =
             inlined_fragment_id_prefix_item(settings_for(TargetDialect::Draft07)).to_value();
@@ -8671,7 +8703,8 @@ mod tests {
         if let Some(anchor) = definition
             .get("$id")
             .and_then(serde_json::Value::as_str)
-            .and_then(super::resource_uri::fragment_only_anchor)
+            .and_then(|id: &str| id.strip_prefix('#'))
+            .filter(|name: &&str| !name.is_empty() && !name.starts_with('/'))
         {
             properties["y"] = serde_json::json!({"$ref": format!("#{anchor}")});
         }
@@ -9125,14 +9158,15 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2019-09/schema",
             "type": "object",
-            "$defs": {"B": {"type": "string"}},
-            "properties": {
-                "s": {
+            "$defs": {
+                "B": {"type": "string"},
+                "Inlined": {
                     "items": [
                         {"$anchor": "a", "properties": {"y": {"$ref": "#/$defs/B"}}}
                     ]
                 }
-            }
+            },
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
         });
         let actual: serde_json::Value =
             inlined_fragment_id_prefix_item(settings_for(TargetDialect::Draft201909)).to_value();
@@ -9156,7 +9190,7 @@ mod tests {
         let actual: serde_json::Value = serde_json::to_value(
             inlined_fragment_id_prefix_item(settings_for(TargetDialect::Draft201909)).schema(),
         )
-        .expect("serialized")["properties"]["s"]["prefixItems"]
+        .expect("serialized")["$defs"]["Inlined"]["prefixItems"]
             .clone();
         assert_eq!(expected, actual);
     }
@@ -9167,7 +9201,7 @@ mod tests {
         let actual: serde_json::Value = inlined_raw_document(
             TargetDialect::OpenApi31,
             serde_json::json!({"prefixItems": [{"$id": "#a"}]}),
-        )["properties"]["s"]
+        )["components"]["schemas"]["Inlined"]
             .clone();
         assert_eq!(expected, actual);
     }
@@ -9205,9 +9239,13 @@ mod tests {
         let actual: Vec<serde_json::Value> = [TargetDialect::Draft201909, TargetDialect::OpenApi31]
             .into_iter()
             .map(|target: TargetDialect| {
-                inlined_raw_document(target, fragment_ids_under_shared_keywords())["properties"]
-                    ["s"]["not"]
-                    .clone()
+                let document: serde_json::Value =
+                    inlined_raw_document(target, fragment_ids_under_shared_keywords());
+                let inlined: &serde_json::Value = match target {
+                    TargetDialect::OpenApi31 => &document["components"]["schemas"]["Inlined"],
+                    _ => &document["$defs"]["Inlined"],
+                };
+                inlined["not"].clone()
             })
             .collect();
         assert_eq!(expected, actual);
@@ -9243,7 +9281,7 @@ mod tests {
         let actual: serde_json::Value = inlined_raw_document(
             TargetDialect::Draft201909,
             fragment_ids_under_2019_09_only_keywords(),
-        )["properties"]["s"]["not"]
+        )["$defs"]["Inlined"]["not"]
             .clone();
         assert_eq!(expected, actual);
     }
@@ -9285,7 +9323,7 @@ mod tests {
                     {"$dynamicRef": "#a"}
                 ]
             }),
-        )["properties"]["s"]
+        )["components"]["schemas"]["Inlined"]
             .clone();
         assert_eq!(expected, actual);
     }
@@ -9294,8 +9332,8 @@ mod tests {
     fn a_fragment_id_equal_to_another_schemas_dynamic_anchor_is_a_duplicate_anchor_on_openapi_3_1()
     {
         let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
-            first: "#/properties/s/prefixItems/1".to_string(),
-            second: "#/properties/s/prefixItems/0".to_string(),
+            first: "#/components/schemas/Inlined/prefixItems/1".to_string(),
+            second: "#/components/schemas/Inlined/prefixItems/0".to_string(),
             anchor: "a".to_string(),
         }]);
         let actual: GeneratedSchemaResult = inlined_raw(
@@ -9313,7 +9351,7 @@ mod tests {
             Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
                 dialect: TargetDialect::Draft201909,
                 keyword: "$dynamicAnchor".to_string(),
-                pointer: "/properties/s/items/1".to_string(),
+                pointer: "/$defs/Inlined/items/1".to_string(),
             }]);
         let actual: GeneratedSchemaResult = inlined_raw(
             TargetDialect::Draft201909,
@@ -11186,10 +11224,8 @@ mod tests {
             "type": "object",
             "$defs": {"N": {"type": "string"}},
             "properties": {"s": {
-                "$anchor": "top",
                 "properties": {
                     "n": {"$ref": "#/$defs/N"},
-                    "anchor": {"$ref": "#top"},
                     "missing": {"$ref": "#/$defs/Missing"},
                     "malformed": {"$ref": "#/properties/%zz"},
                     "other": {"$ref": "other.json#/properties/a"}
@@ -11198,10 +11234,8 @@ mod tests {
         });
         let actual: serde_json::Value = inlined_document(serde_json::json!({
             "$defs": {"N": {"type": "string"}},
-            "$anchor": "top",
             "properties": {
                 "n": {"$ref": "#/$defs/N"},
-                "anchor": {"$ref": "#top"},
                 "missing": {"$ref": "#/$defs/Missing"},
                 "malformed": {"$ref": "#/properties/%zz"},
                 "other": {"$ref": "other.json#/properties/a"}
@@ -11247,10 +11281,11 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "properties": {"s": {"properties": {"r": {
+            "$defs": {"Inlined": {"properties": {"r": {
                 "$id": "https://example.com/r",
                 "properties": {"x": {"type": "string"}, "y": {"$ref": "#/properties/x"}, "z": {"$ref": "#"}}
-            }}}}
+            }}}},
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
         });
         let actual: serde_json::Value = inlined_document(serde_json::json!({"properties": {"r": {
             "$id": "https://example.com/r",
@@ -11985,11 +12020,18 @@ mod tests {
     }
 
     #[test]
-    fn a_flattened_non_plain_inlined_body_declaring_an_anchor_stays_a_ref_to_the_body_definition() {
+    fn a_flattened_non_plain_inlined_body_declaring_an_anchor_merges_its_properties_as_refs() {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "allOf": [{"$ref": "#/$defs/Inlined"}],
+            "allOf": [{
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                    "a": {"$ref": "#/$defs/Inlined/properties/a"},
+                    "b": {"$ref": "#/$defs/Inlined/properties/b"}
+                }
+            }],
             "$defs": {"Inlined": {
                 "type": "object",
                 "minProperties": 1,
@@ -12543,13 +12585,16 @@ mod tests {
         let mut expected: serde_json::Value = serde_json::json!({
             "$schema": uri,
             "type": "object",
-            "properties": {"s": {"properties": {"x": {
+            "properties": {"s": {"$ref": format!("#/{defs}/Inlined")}}
+        });
+        expected[defs] = serde_json::json!({
+            "B": {"type": "string"},
+            "Inlined": {"properties": {"x": {
                 "$id": "https://example.com/x.json",
                 "$ref": "#/definitions/B",
                 "definitions": {"B": {"type": "integer"}}
-            }}}}
+            }}}
         });
-        expected[defs] = serde_json::json!({"B": {"type": "string"}});
         expected
     }
 
@@ -12615,13 +12660,16 @@ mod tests {
         let mut expected: serde_json::Value = serde_json::json!({
             "$schema": uri,
             "type": "object",
-            "properties": {"s": {"properties": {"x": {
-                "allOf": [{"$ref": "#/definitions/B"}],
-                "definitions": {"B": {"type": "integer"}}
-            }}}},
-            "definitions": {"B": {"type": "string"}}
+            "properties": {"s": {"$ref": "#/definitions/Inlined"}},
+            "definitions": {
+                "B": {"type": "string"},
+                "Inlined": {"properties": {"x": {
+                    "allOf": [{"$ref": "#/definitions/B"}],
+                    "definitions": {"B": {"type": "integer"}}
+                }}}
+            }
         });
-        expected["properties"]["s"]["properties"]["x"][id_keyword] =
+        expected["definitions"]["Inlined"]["properties"]["x"][id_keyword] =
             serde_json::json!("https://example.com/x.json");
         expected
     }
@@ -12697,12 +12745,13 @@ mod tests {
         let expected: serde_json::Value = serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "properties": {"s": {"properties": {"r": {
+            "$defs": {"Inlined": {"properties": {"r": {
                 "$id": "https://example.com/r.json",
                 "$schema": DRAFT_07_URI,
                 "definitions": {"B": {"type": "string"}},
                 "properties": {"x": {"$ref": "#/definitions/B"}}
-            }}}}
+            }}}},
+            "properties": {"s": {"$ref": "#/$defs/Inlined"}}
         });
         let actual: serde_json::Value = generated_with_inlined(
             settings_for(TargetDialect::Draft202012),
@@ -12772,6 +12821,1264 @@ mod tests {
     fn no_ref_dangles_with_ids_beside_refs_on_draft_07() {
         let expected: Vec<String> = Vec::new();
         let actual: Vec<String> = dangling_refs_with_ids_beside_refs(TargetDialect::Draft07);
+        assert_eq!(expected, actual);
+    }
+
+    // --- anchors in inlined schemas: a reused schema declares each anchor once ---
+
+    /// Every target a generated document can be written in.
+    const ALL_TARGETS: [TargetDialect; 6] = [
+        TargetDialect::Draft04,
+        TargetDialect::Draft06,
+        TargetDialect::Draft07,
+        TargetDialect::Draft201909,
+        TargetDialect::Draft202012,
+        TargetDialect::OpenApi31,
+    ];
+
+    /// The root `root` (an object) with each of `standalones` inlined, in order, as its
+    /// properties `p0`, `p1`, ...
+    fn generated_with_each_inlined(
+        settings: ReverseCodeGenSettings,
+        standalones: &[serde_json::Value],
+        root: serde_json::Value,
+    ) -> GeneratedSchemaResult {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings);
+        let mut body: JsonSchema = serde_json::from_value(root).expect("a schema");
+        body.type_ = Some(JsonType::Object.into());
+        for (index, standalone) in standalones.iter().enumerate() {
+            let inlined: JsonSchema = generator
+                .inline_subschema(serde_json::from_value(standalone.clone()).expect("a schema"));
+            body.properties
+                .insert(format!("p{index}"), Schema::from(inlined));
+        }
+        generator.into_root_schema(body)
+    }
+
+    /// [`generated_with_each_inlined`] on every target, with `inline_subschemas` off and on.
+    fn generated_on_every_target(
+        standalones: &[serde_json::Value],
+        root: &serde_json::Value,
+    ) -> Vec<(String, GeneratedSchemaResult)> {
+        let mut generated: Vec<(String, GeneratedSchemaResult)> = Vec::new();
+        for inline_subschemas in [false, true] {
+            for target in ALL_TARGETS {
+                let settings: ReverseCodeGenSettings = ReverseCodeGenSettings {
+                    inline_subschemas,
+                    ..settings_for(target)
+                };
+                generated.push((
+                    format!("{target} inline_subschemas={inline_subschemas}"),
+                    generated_with_each_inlined(settings, standalones, root.clone()),
+                ));
+            }
+        }
+        generated
+    }
+
+    /// Why the registry rejects `document`, if it does.
+    fn registry_rejection(document: &serde_json::Value) -> Option<String> {
+        let schema: Schema = match Schema::try_from(document) {
+            Ok(schema) => schema,
+            Err(errors) => return Some(format!("{errors:?}")),
+        };
+        crate::json_schema::Registry::new(&schema)
+            .err()
+            .map(|errors| format!("{:?}", errors.into_vec()))
+    }
+
+    /// What fails for `standalones` inlined into `root` on every target, with
+    /// `inline_subschemas` off and on: a generation error, a document (`to_value()`) or 2020-12
+    /// model (`schema()`) the registry rejects, or a fragment `$ref` of the document that
+    /// dangles.
+    fn failures_on_every_target(
+        standalones: &[serde_json::Value],
+        root: &serde_json::Value,
+    ) -> Vec<String> {
+        let mut failures: Vec<String> = Vec::new();
+        for (case, result) in generated_on_every_target(standalones, root) {
+            let generated: GeneratedSchema = match result {
+                Ok(generated) => generated,
+                Err(errors) => {
+                    failures.push(format!("{case}: {errors:?}"));
+                    continue;
+                }
+            };
+            let document: serde_json::Value = generated.to_value();
+            let model: serde_json::Value = serde_json::to_value(generated.schema()).expect("json");
+            for (output, value) in [("document", &document), ("model", &model)] {
+                if let Some(rejection) = registry_rejection(value) {
+                    failures.push(format!("{case} {output}: {rejection}"));
+                }
+            }
+            for reference in dangling_refs(&document) {
+                failures.push(format!("{case} document: `{reference}` dangles"));
+            }
+        }
+        failures
+    }
+
+    /// Whether each target, with `inline_subschemas` off and on, reports a
+    /// [`ReverseCodeGenError::DuplicateAnchor`] for `standalones`.
+    fn duplicate_anchor_on_every_target(standalones: &[serde_json::Value]) -> Vec<bool> {
+        generated_on_every_target(standalones, &serde_json::json!({}))
+            .into_iter()
+            .map(|(_, result)| {
+                result.is_err_and(|errors: Vec<ReverseCodeGenError>| {
+                    errors.iter().all(|error: &ReverseCodeGenError| {
+                        matches!(error, ReverseCodeGenError::DuplicateAnchor { .. })
+                    })
+                })
+            })
+            .collect()
+    }
+
+    fn nested_fragment_id() -> serde_json::Value {
+        serde_json::json!({"properties": {"x": {"$id": "#x"}}})
+    }
+
+    fn nested_fragment_id_of_type(type_: &str) -> serde_json::Value {
+        serde_json::json!({"properties": {"x": {"$id": "#x", "type": type_}}})
+    }
+
+    fn hoisted_fragment_id(name: &str, type_: &str) -> serde_json::Value {
+        serde_json::json!({
+            "definitions": {name: {"$id": "#a", "type": type_}},
+            "properties": {"y": {"$ref": format!("#/definitions/{name}")}}
+        })
+    }
+
+    fn fragment_id_in_nested_definitions() -> serde_json::Value {
+        serde_json::json!({
+            "definitions": {"O": {
+                "definitions": {"I": {"$id": "#i", "type": "string"}},
+                "properties": {"q": {"$ref": "#/definitions/O/definitions/I"}}
+            }},
+            "properties": {"y": {"$ref": "#/definitions/O"}}
+        })
+    }
+
+    #[test]
+    fn a_nested_fragment_id_inlined_twice_is_one_shared_definition_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "definitions": {"Inlined": {"properties": {"x": {"$id": "#x"}}}},
+            "properties": {
+                "p0": {"$ref": "#/definitions/Inlined"},
+                "p1": {"$ref": "#/definitions/Inlined"}
+            }
+        });
+        let actual: serde_json::Value = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[nested_fragment_id(), nested_fragment_id()],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_nested_fragment_id_inlined_twice_is_one_shared_definition_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": SCHEMA_2020_12,
+            "type": "object",
+            "$defs": {"Inlined": {"properties": {"x": {"$anchor": "x"}}}},
+            "properties": {
+                "p0": {"$ref": "#/$defs/Inlined"},
+                "p1": {"$ref": "#/$defs/Inlined"}
+            }
+        });
+        let actual: serde_json::Value = generated_with_each_inlined(
+            ReverseCodeGenSettings::default(),
+            &[nested_fragment_id(), nested_fragment_id()],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_nested_fragment_id_inlined_twice_is_accepted_on_every_target() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = failures_on_every_target(
+            &[nested_fragment_id(), nested_fragment_id()],
+            &serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_nested_fragment_id_with_a_resource_inlined_twice_is_accepted_on_every_target() {
+        let standalone: serde_json::Value =
+            serde_json::json!({"properties": {"x": {"$id": "https://example.com/x.json#a"}}});
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> =
+            failures_on_every_target(&[standalone.clone(), standalone], &serde_json::json!({}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_nested_resource_inlined_twice_is_accepted_on_every_target() {
+        let standalone: serde_json::Value = serde_json::json!({"properties": {"r": {
+            "$id": "https://example.com/r.json",
+            "properties": {"x": {"$id": "#a"}}
+        }}});
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> =
+            failures_on_every_target(&[standalone.clone(), standalone], &serde_json::json!({}));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_in_nested_definitions_inlined_twice_is_accepted_on_every_target() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = failures_on_every_target(
+            &[
+                fragment_id_in_nested_definitions(),
+                fragment_id_in_nested_definitions(),
+            ],
+            &serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_in_nested_definitions_inlined_twice_is_one_definition_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "definitions": {
+                "I": {"$id": "#i", "type": "string"},
+                "O": {"properties": {"q": {"$ref": "#/definitions/I"}}}
+            },
+            "properties": {
+                "p0": {"properties": {"y": {"$ref": "#/definitions/O"}}},
+                "p1": {"properties": {"y": {"$ref": "#/definitions/O"}}}
+            }
+        });
+        let actual: serde_json::Value = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[
+                fragment_id_in_nested_definitions(),
+                fragment_id_in_nested_definitions(),
+            ],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn equal_hoisted_definitions_with_one_fragment_id_under_two_names_merge_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "definitions": {"A": {"$id": "#a", "type": "string"}},
+            "properties": {
+                "p0": {"properties": {"y": {"$ref": "#/definitions/A"}}},
+                "p1": {"properties": {"y": {"$ref": "#/definitions/A"}}}
+            }
+        });
+        let actual: serde_json::Value = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[
+                hoisted_fragment_id("A", "string"),
+                hoisted_fragment_id("B", "string"),
+            ],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn equal_hoisted_definitions_with_one_fragment_id_under_two_names_are_accepted_on_every_target()
+    {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = failures_on_every_target(
+            &[
+                hoisted_fragment_id("A", "string"),
+                hoisted_fragment_id("B", "string"),
+            ],
+            &serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_anchored_body_equal_to_a_hoisted_entry_merges_with_it_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": SCHEMA_2020_12,
+            "type": "object",
+            "$defs": {"Inlined": {"$anchor": "a", "type": "string"}},
+            "properties": {
+                "p0": {"$ref": "#/$defs/Inlined"},
+                "p1": {"properties": {"y": {"$ref": "#/$defs/Inlined"}}}
+            }
+        });
+        let actual: serde_json::Value = generated_with_each_inlined(
+            ReverseCodeGenSettings::default(),
+            &[
+                serde_json::json!({"$id": "#a", "type": "string"}),
+                hoisted_fragment_id("B", "string"),
+            ],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_anchored_body_equal_to_a_hoisted_entry_is_accepted_on_every_target() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = failures_on_every_target(
+            &[
+                serde_json::json!({"$id": "#a", "type": "string"}),
+                hoisted_fragment_id("B", "string"),
+            ],
+            &serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// `dangling_refs` counts a ref to an anchor as dangling, and the draft 4-7 model keeps a
+    /// fragment `$id` that 2020-12 reads as no anchor, so only the registry's verdict on each
+    /// document is checked.
+    #[test]
+    fn a_ref_by_name_to_a_reused_nested_anchor_resolves_on_every_target() {
+        let standalone: serde_json::Value = serde_json::json!({"properties": {
+            "x": {"$id": "#x", "type": "string"},
+            "y": {"$ref": "#x"}
+        }});
+        let expected: Vec<(String, Option<String>)> = Vec::new();
+        let actual: Vec<(String, Option<String>)> = generated_on_every_target(
+            &[standalone.clone(), standalone],
+            &serde_json::json!({"properties": {"r": {"$ref": "#x"}}}),
+        )
+        .into_iter()
+        .map(|(case, result)| match result {
+            Ok(generated) => (case, registry_rejection(&generated.to_value())),
+            Err(errors) => (case, Some(format!("{errors:?}"))),
+        })
+        .filter(|(_, rejection)| rejection.is_some())
+        .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn one_anchor_name_in_different_resources_is_accepted_on_every_target() {
+        let standalone: serde_json::Value = serde_json::json!({"properties": {
+            "p": {"$id": "https://example.com/p.json", "properties": {"x": {"$id": "#a"}}},
+            "q": {"$id": "https://example.com/q.json", "properties": {"x": {"$id": "#a"}}}
+        }});
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = failures_on_every_target(
+            &[standalone],
+            &serde_json::json!({"properties": {"x": {"$id": "#a"}}}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn different_schemas_with_different_nested_fragment_ids_are_accepted_on_every_target() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = failures_on_every_target(
+            &[
+                serde_json::json!({"properties": {"x": {"$id": "#x", "type": "string"}}}),
+                serde_json::json!({"properties": {"x": {"$id": "#y", "type": "integer"}}}),
+            ],
+            &serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn different_schemas_with_one_nested_fragment_id_are_a_duplicate_anchor_on_draft_07() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/definitions/Inlined0/properties/x".to_string(),
+            second: "#/definitions/Inlined1/properties/x".to_string(),
+            anchor: "x".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[
+                nested_fragment_id_of_type("string"),
+                nested_fragment_id_of_type("integer"),
+            ],
+            serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn different_schemas_with_one_nested_fragment_id_are_a_duplicate_anchor_on_2020_12() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/$defs/Inlined0/properties/x".to_string(),
+            second: "#/$defs/Inlined1/properties/x".to_string(),
+            anchor: "x".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            ReverseCodeGenSettings::default(),
+            &[
+                nested_fragment_id_of_type("string"),
+                nested_fragment_id_of_type("integer"),
+            ],
+            serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn different_schemas_with_one_nested_fragment_id_are_a_duplicate_anchor_on_every_target() {
+        let expected: Vec<bool> = vec![true; 2 * ALL_TARGETS.len()];
+        let actual: Vec<bool> = duplicate_anchor_on_every_target(&[
+            nested_fragment_id_of_type("string"),
+            nested_fragment_id_of_type("integer"),
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn different_hoisted_definitions_with_one_fragment_id_are_a_duplicate_anchor_on_draft_07() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/definitions/A0".to_string(),
+            second: "#/definitions/A1".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[
+                hoisted_fragment_id("A", "string"),
+                hoisted_fragment_id("A", "integer"),
+            ],
+            serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn different_hoisted_definitions_with_one_fragment_id_are_a_duplicate_anchor_on_every_target() {
+        let expected: Vec<bool> = vec![true; 2 * ALL_TARGETS.len()];
+        let actual: Vec<bool> = duplicate_anchor_on_every_target(&[
+            hoisted_fragment_id("A", "string"),
+            hoisted_fragment_id("A", "integer"),
+        ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_nested_fragment_id_equal_to_the_roots_is_a_duplicate_anchor_on_draft_07() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/properties/r".to_string(),
+            second: "#/definitions/Inlined/properties/x".to_string(),
+            anchor: "x".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[nested_fragment_id()],
+            serde_json::json!({"properties": {"r": {"$id": "#x"}}}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn duplicate_fragment_ids_in_an_embedded_draft_07_resource_are_a_duplicate_anchor_on_2020_12() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/properties/r/properties/b".to_string(),
+            second: "#/properties/r/properties/a".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            ReverseCodeGenSettings::default(),
+            &[],
+            serde_json::json!({"properties": {"r": {
+                "$schema": DRAFT_07_URI,
+                "$id": "https://example.com/r.json",
+                "properties": {"a": {"$id": "#a"}, "b": {"$id": "#a"}}
+            }}}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    // --- a flattened body that declares an identifier merges as it would in place: its anchored
+    // subschemas stay reachable through refs, the rest is opened ---
+
+    /// A closed, non-plain body whose property `a` declares the `$anchor` `A`, with no ref into
+    /// itself.
+    fn inlined_anchored_body(generator: &mut SchemaGenerator) -> JsonSchema {
+        inline_json(
+            generator,
+            serde_json::json!({
+                "type": "object",
+                "minProperties": 1,
+                "properties": {"a": {"$anchor": "A", "type": "string"}},
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    /// [`inlined_anchored_body`] with the anchor written as a fragment id, which every target
+    /// can express.
+    fn inlined_fragment_id_body(generator: &mut SchemaGenerator) -> JsonSchema {
+        inline_json(
+            generator,
+            serde_json::json!({
+                "type": "object",
+                "minProperties": 1,
+                "properties": {"a": {"$id": "#A", "type": "string"}},
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    /// [`inlined_fragment_id_body`] whose property `b` refers to the anchor by name.
+    fn inlined_fragment_id_body_with_an_anchor_ref(generator: &mut SchemaGenerator) -> JsonSchema {
+        inline_json(
+            generator,
+            serde_json::json!({
+                "type": "object",
+                "minProperties": 1,
+                "properties": {"a": {"$id": "#A", "type": "string"}, "b": {"$ref": "#A"}},
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    /// A body whose closed `allOf` branch itself declares the anchor, and whose prefix item does.
+    fn inlined_anchored_branch_body(generator: &mut SchemaGenerator) -> JsonSchema {
+        inline_json(
+            generator,
+            serde_json::json!({
+                "allOf": [{
+                    "$id": "#A",
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}, "b": {"$ref": "#B"}},
+                    "additionalProperties": false
+                }],
+                "prefixItems": [{"$id": "#B", "type": "string"}]
+            }),
+        )
+    }
+
+    /// Defines `$name`, an open parent object that flattens the schema `$body` returns.
+    macro_rules! open_parent_flattening {
+        ($name:ident, $body:ident) => {
+            fn $name(generator: &mut SchemaGenerator) -> JsonSchema {
+                const FLATTENS: &[derive_support::FlattenSpec] = &[derive_support::FlattenSpec {
+                    schema: $body,
+                    optional: false,
+                }];
+                derive_support::object_schema(
+                    generator,
+                    &derive_support::ObjectSpec {
+                        fields: &[],
+                        flattens: FLATTENS,
+                        closed: false,
+                    },
+                )
+            }
+        };
+    }
+
+    open_parent_flattening!(
+        open_parent_flattening_the_anchored_body,
+        inlined_anchored_body
+    );
+    open_parent_flattening!(
+        open_parent_flattening_the_fragment_id_body,
+        inlined_fragment_id_body
+    );
+    open_parent_flattening!(
+        open_parent_flattening_the_body_with_an_anchor_ref,
+        inlined_fragment_id_body_with_an_anchor_ref
+    );
+    open_parent_flattening!(
+        open_parent_flattening_the_anchored_branch_body,
+        inlined_anchored_branch_body
+    );
+
+    /// Defines `$name`, an internally tagged (`t`) enum, closed or open as `$closed`, whose one
+    /// variant `V` is a newtype of the type returning `$body`.
+    macro_rules! internally_tagged_newtype {
+        ($name:ident, $body:ident, $closed:expr) => {
+            fn $name(generator: &mut SchemaGenerator) -> JsonSchema {
+                const VARIANTS: &[derive_support::VariantSpec] = &[derive_support::VariantSpec {
+                    name: "V",
+                    aliases: &[],
+                    doc: &[],
+                    shape: derive_support::VariantShape::Newtype {
+                        schema: $body,
+                        flattened: $body,
+                    },
+                    untagged: false,
+                    other: false,
+                }];
+                derive_support::enum_schema(
+                    generator,
+                    &derive_support::EnumSpec {
+                        tagging: derive_support::Tagging::Internal { tag: "t" },
+                        variants: VARIANTS,
+                        closed: $closed,
+                        flattened: false,
+                    },
+                )
+            }
+        };
+    }
+
+    internally_tagged_newtype!(
+        closed_internally_tagged_newtype_of_the_fragment_id_body,
+        inlined_fragment_id_body,
+        true
+    );
+    internally_tagged_newtype!(
+        open_internally_tagged_newtype_of_the_fragment_id_body,
+        inlined_fragment_id_body,
+        false
+    );
+
+    /// The verdicts on `instances` of the model and the document `build` makes, at every
+    /// placement on each of `targets`.
+    fn verdicts_on_every_placement(
+        targets: &[TargetDialect],
+        build: fn(&mut SchemaGenerator) -> JsonSchema,
+        instances: &[serde_json::Value],
+    ) -> Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> {
+        targets
+            .iter()
+            .flat_map(|target: &TargetDialect| {
+                PLACEMENTS.map(|placement: Placement| {
+                    let instances: Vec<serde_json::Value> = instances
+                        .iter()
+                        .map(|instance| placed_instance(placement, instance))
+                        .collect();
+                    placed_document(*target, placement, build).map(|generated: GeneratedSchema| {
+                        model_and_document_verdicts(&generated, &instances)
+                    })
+                })
+            })
+            .collect()
+    }
+
+    /// What is wrong with the `outputs` (`"model"`, `"document"`) `build` makes, at every
+    /// placement on each of `targets`: a generation error, a registry rejection, or a bad ref.
+    fn flattened_failures_on_every_placement(
+        targets: &[TargetDialect],
+        build: fn(&mut SchemaGenerator) -> JsonSchema,
+        outputs: &[&str],
+    ) -> Vec<String> {
+        let mut failures: Vec<String> = Vec::new();
+        for target in targets.iter().copied() {
+            for placement in PLACEMENTS {
+                let case: String = format!("{target} {placement:?}");
+                let generated: GeneratedSchema = match placed_document(target, placement, build) {
+                    Ok(generated) => generated,
+                    Err(errors) => {
+                        failures.push(format!("{case}: {errors:?}"));
+                        continue;
+                    }
+                };
+                for (output, value) in ["model", "document"]
+                    .into_iter()
+                    .zip(model_and_document(&generated))
+                    .filter(|(output, _)| outputs.contains(output))
+                {
+                    if let Some(rejection) = registry_rejection(&value) {
+                        failures.push(format!("{case} {output}: {rejection}"));
+                    }
+                    // `bad_refs` follows JSON Pointers only; the registry above resolved any
+                    // ref to an anchor by name.
+                    for reference in bad_refs(&value).into_iter().filter(|reference: &String| {
+                        !reference.starts_with('#') || reference.starts_with("#/")
+                    }) {
+                        failures.push(format!("{case} {output}: bad ref `{reference}`"));
+                    }
+                }
+            }
+        }
+        failures
+    }
+
+    #[test]
+    fn a_flattened_anchored_body_without_a_self_ref_merges_opened_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": SCHEMA_2020_12,
+            "type": "object",
+            "allOf": [{
+                "type": "object",
+                "minProperties": 1,
+                "properties": {"a": {"$ref": "#/$defs/Inlined/properties/a"}}
+            }],
+            "$defs": {"Inlined": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {"a": {"$anchor": "A", "type": "string"}},
+                "additionalProperties": false
+            }}
+        });
+        let actual: serde_json::Value = placed_document(
+            TargetDialect::Draft202012,
+            Placement::Root,
+            open_parent_flattening_the_anchored_body,
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_anchored_body_without_a_self_ref_accepts_the_parent_keys_on_2020_12() {
+        let instances: [serde_json::Value; 3] = [
+            serde_json::json!({"x": 1, "a": "s"}),
+            serde_json::json!({"a": 5}),
+            serde_json::json!({}),
+        ];
+        let verdicts: Vec<bool> = vec![true, false, false];
+        let expected: Vec<Vec<Vec<bool>>> =
+            vec![vec![verdicts.clone(), verdicts]; PLACEMENTS.len()];
+        let actual: Vec<Vec<Vec<bool>>> = PLACEMENTS
+            .iter()
+            .map(|placement: &Placement| {
+                let instances: Vec<serde_json::Value> = instances
+                    .iter()
+                    .map(|instance| placed_instance(*placement, instance))
+                    .collect();
+                model_and_document_verdicts(
+                    &placed_document(
+                        TargetDialect::Draft202012,
+                        *placement,
+                        open_parent_flattening_the_anchored_body,
+                    )
+                    .expect("generated"),
+                    &instances,
+                )
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_fragment_id_body_accepts_the_parent_keys_on_every_target_and_placement() {
+        let verdicts: Vec<bool> = vec![true, false, false];
+        let expected: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> =
+            vec![
+                Ok(vec![verdicts.clone(), verdicts]);
+                JSON_SCHEMA_TARGETS.len() * PLACEMENTS.len()
+            ];
+        let actual: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> =
+            verdicts_on_every_placement(
+                &JSON_SCHEMA_TARGETS,
+                open_parent_flattening_the_fragment_id_body,
+                &[
+                    serde_json::json!({"x": 1, "a": "s"}),
+                    serde_json::json!({"a": 5}),
+                    serde_json::json!({}),
+                ],
+            );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_fragment_id_body_is_accepted_on_every_target_and_placement() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = flattened_failures_on_every_placement(
+            &JSON_SCHEMA_TARGETS,
+            open_parent_flattening_the_fragment_id_body,
+            &["model", "document"],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_internally_tagged_newtype_of_an_anchored_body_accepts_the_tag_on_every_target() {
+        let verdicts: Vec<bool> = vec![true, false, false];
+        let instances: [serde_json::Value; 3] = [
+            serde_json::json!({"t": "V", "a": "s"}),
+            serde_json::json!({"t": "V", "a": 5}),
+            serde_json::json!({"a": "s"}),
+        ];
+        let enums: [fn(&mut SchemaGenerator) -> JsonSchema; 2] = [
+            closed_internally_tagged_newtype_of_the_fragment_id_body,
+            open_internally_tagged_newtype_of_the_fragment_id_body,
+        ];
+        let expected: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> =
+            vec![
+                Ok(vec![verdicts.clone(), verdicts]);
+                enums.len() * JSON_SCHEMA_TARGETS.len() * PLACEMENTS.len()
+            ];
+        let actual: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> = enums
+            .into_iter()
+            .flat_map(|build| verdicts_on_every_placement(&JSON_SCHEMA_TARGETS, build, &instances))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_internally_tagged_newtype_of_an_anchored_body_is_accepted_on_every_target() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = [
+            closed_internally_tagged_newtype_of_the_fragment_id_body,
+            open_internally_tagged_newtype_of_the_fragment_id_body,
+        ]
+        .into_iter()
+        .flat_map(|build| {
+            flattened_failures_on_every_placement(
+                &JSON_SCHEMA_TARGETS,
+                build,
+                &["model", "document"],
+            )
+        })
+        .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// The targets whose model resolves a ref to a fragment id. On draft 4-7 the model keeps
+    /// the fragment-only `$id` (#315), so there only the document is checked.
+    const ANCHOR_TARGETS: [TargetDialect; 2] =
+        [TargetDialect::Draft201909, TargetDialect::Draft202012];
+    const DRAFT_4_TO_7_TARGETS: [TargetDialect; 3] = [
+        TargetDialect::Draft04,
+        TargetDialect::Draft06,
+        TargetDialect::Draft07,
+    ];
+
+    fn anchor_ref_instances() -> [serde_json::Value; 3] {
+        [
+            serde_json::json!({"x": 1, "a": "s", "b": "t"}),
+            serde_json::json!({"x": 1, "a": "s", "b": 5}),
+            serde_json::json!({"b": 5}),
+        ]
+    }
+
+    fn anchored_branch_instances() -> [serde_json::Value; 3] {
+        [
+            serde_json::json!({"x": 1, "a": "s", "b": "t"}),
+            serde_json::json!({"x": 1, "a": 5}),
+            serde_json::json!({"b": 5}),
+        ]
+    }
+
+    /// The document verdicts alone, out of [`verdicts_on_every_placement`].
+    fn document_verdicts_on_every_placement(
+        targets: &[TargetDialect],
+        build: fn(&mut SchemaGenerator) -> JsonSchema,
+        instances: &[serde_json::Value],
+    ) -> Vec<Result<Vec<bool>, Vec<ReverseCodeGenError>>> {
+        verdicts_on_every_placement(targets, build, instances)
+            .into_iter()
+            .map(|verdicts| verdicts.map(|mut outputs: Vec<Vec<bool>>| outputs.remove(1)))
+            .collect()
+    }
+
+    /// The model and document failures on 2019-09 and 2020-12, and the document failures on
+    /// draft 4-7, of what `build` makes.
+    fn anchor_ref_failures(build: fn(&mut SchemaGenerator) -> JsonSchema) -> Vec<String> {
+        let mut failures: Vec<String> =
+            flattened_failures_on_every_placement(&ANCHOR_TARGETS, build, &["model", "document"]);
+        failures.extend(flattened_failures_on_every_placement(
+            &DRAFT_4_TO_7_TARGETS,
+            build,
+            &["document"],
+        ));
+        failures
+    }
+
+    #[test]
+    fn a_flattened_body_with_an_anchor_ref_keeps_resolving_it_on_2019_09_and_2020_12() {
+        let verdicts: Vec<bool> = vec![true, false, false];
+        let expected: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> =
+            vec![Ok(vec![verdicts.clone(), verdicts]); ANCHOR_TARGETS.len() * PLACEMENTS.len()];
+        let actual: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> =
+            verdicts_on_every_placement(
+                &ANCHOR_TARGETS,
+                open_parent_flattening_the_body_with_an_anchor_ref,
+                &anchor_ref_instances(),
+            );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_body_with_an_anchor_ref_keeps_resolving_it_in_the_draft_4_to_7_document() {
+        let expected: Vec<Result<Vec<bool>, Vec<ReverseCodeGenError>>> =
+            vec![Ok(vec![true, false, false]); DRAFT_4_TO_7_TARGETS.len() * PLACEMENTS.len()];
+        let actual: Vec<Result<Vec<bool>, Vec<ReverseCodeGenError>>> =
+            document_verdicts_on_every_placement(
+                &DRAFT_4_TO_7_TARGETS,
+                open_parent_flattening_the_body_with_an_anchor_ref,
+                &anchor_ref_instances(),
+            );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_body_with_an_anchor_ref_is_accepted_on_every_target_and_placement() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> =
+            anchor_ref_failures(open_parent_flattening_the_body_with_an_anchor_ref);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_anchored_branch_is_opened_and_its_anchors_stay_in_the_body_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": SCHEMA_2020_12,
+            "type": "object",
+            "allOf": [{
+                "allOf": [{
+                    "type": "object",
+                    "properties": {
+                        "a": {"$ref": "#/$defs/Inlined/allOf/0/properties/a"},
+                        "b": {"$ref": "#/$defs/Inlined/allOf/0/properties/b"}
+                    }
+                }],
+                "prefixItems": [{"$ref": "#/$defs/Inlined/prefixItems/0"}]
+            }],
+            "$defs": {"Inlined": {
+                "allOf": [{
+                    "$anchor": "A",
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}, "b": {"$ref": "#B"}},
+                    "additionalProperties": false
+                }],
+                "prefixItems": [{"$anchor": "B", "type": "string"}]
+            }}
+        });
+        let actual: serde_json::Value = placed_document(
+            TargetDialect::Draft202012,
+            Placement::Root,
+            open_parent_flattening_the_anchored_branch_body,
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_anchored_branch_accepts_the_parent_keys_on_2019_09_and_2020_12() {
+        let verdicts: Vec<bool> = vec![true, false, false];
+        let expected: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> =
+            vec![Ok(vec![verdicts.clone(), verdicts]); ANCHOR_TARGETS.len() * PLACEMENTS.len()];
+        let actual: Vec<Result<Vec<Vec<bool>>, Vec<ReverseCodeGenError>>> =
+            verdicts_on_every_placement(
+                &ANCHOR_TARGETS,
+                open_parent_flattening_the_anchored_branch_body,
+                &anchored_branch_instances(),
+            );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_anchored_branch_accepts_the_parent_keys_in_the_draft_4_to_7_document() {
+        let expected: Vec<Result<Vec<bool>, Vec<ReverseCodeGenError>>> =
+            vec![Ok(vec![true, false, false]); DRAFT_4_TO_7_TARGETS.len() * PLACEMENTS.len()];
+        let actual: Vec<Result<Vec<bool>, Vec<ReverseCodeGenError>>> =
+            document_verdicts_on_every_placement(
+                &DRAFT_4_TO_7_TARGETS,
+                open_parent_flattening_the_anchored_branch_body,
+                &anchored_branch_instances(),
+            );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_flattened_anchored_branch_is_accepted_on_every_target_and_placement() {
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> =
+            anchor_ref_failures(open_parent_flattening_the_anchored_branch_body);
+        assert_eq!(expected, actual);
+    }
+
+    // --- declares_identifier walks the target's keyword table, and an empty `$id` or a false
+    // `$recursiveAnchor` names nothing ---
+
+    #[test]
+    fn declares_identifier_follows_each_targets_keyword_table() {
+        let schemas: [serde_json::Value; 4] = [
+            serde_json::json!({"additionalItems": {"$id": "#a"}}),
+            serde_json::json!({"not": {"items": [{"$id": "#a"}]}}),
+            serde_json::json!({"dependencies": {"d": {"$id": "#a"}}}),
+            serde_json::json!({"prefixItems": [{"$id": "#a"}]}),
+        ];
+        let targets: [Option<SpecVersion>; 5] = [
+            Some(SpecVersion::Draft04),
+            Some(SpecVersion::Draft07),
+            Some(SpecVersion::Draft201909),
+            Some(SpecVersion::Draft202012),
+            None,
+        ];
+        let expected: Vec<[bool; 5]> = vec![
+            [true, true, true, false, false],
+            [true, true, true, false, false],
+            [true, true, true, true, true],
+            [true, true, true, true, true],
+        ];
+        let actual: Vec<[bool; 5]> = schemas
+            .iter()
+            .map(|schema: &serde_json::Value| {
+                targets.map(|target: Option<SpecVersion>| {
+                    let mut schema: JsonSchema =
+                        serde_json::from_value(schema.clone()).expect("a schema");
+                    declares_identifier(&mut schema, target)
+                })
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn declares_identifier_follows_an_embedded_schemas_own_table() {
+        let expected: [bool; 2] = [true, false];
+        let actual: [bool; 2] = [
+            serde_json::json!({"not": {
+                "$schema": DRAFT_07_URI,
+                "additionalItems": {"$id": "#a"}
+            }}),
+            serde_json::json!({"not": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalItems": {"$id": "#a"}
+            }}),
+        ]
+        .map(|schema: serde_json::Value| {
+            let mut schema: JsonSchema = serde_json::from_value(schema).expect("a schema");
+            declares_identifier(&mut schema, Some(SpecVersion::Draft201909))
+        });
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn declares_identifier_skips_what_names_nothing() {
+        let schemas: [serde_json::Value; 10] = [
+            serde_json::json!({"properties": {"x": {"$id": "#"}}}),
+            serde_json::json!({"properties": {"x": {"$id": ""}}}),
+            serde_json::json!({"properties": {"x": {"$recursiveAnchor": false}}}),
+            serde_json::json!({"not": {"$recursiveAnchor": false, "$id": "#"}}),
+            serde_json::json!({"properties": {"x": {"$recursiveAnchor": true}}}),
+            serde_json::json!({"properties": {"x": {"$id": "#a"}}}),
+            serde_json::json!({"properties": {"x": {"$id": "https://example.com/x#"}}}),
+            serde_json::json!({"properties": {"x": {"$anchor": "a"}}}),
+            serde_json::json!({"properties": {"x": {"$dynamicAnchor": "a"}}}),
+            serde_json::json!({"not": {"id": "#a"}}),
+        ];
+        let expected: Vec<[bool; 2]> = vec![
+            [false, false],
+            [false, false],
+            [false, false],
+            [false, false],
+            [true, true],
+            [true, true],
+            [true, true],
+            [true, true],
+            [true, true],
+            [true, false],
+        ];
+        let actual: Vec<[bool; 2]> = schemas
+            .iter()
+            .map(|schema: &serde_json::Value| {
+                [SpecVersion::Draft04, SpecVersion::Draft07].map(|target: SpecVersion| {
+                    let mut schema: JsonSchema =
+                        serde_json::from_value(schema.clone()).expect("a schema");
+                    declares_identifier(&mut schema, Some(target))
+                })
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// Whether `standalone`, inlined twice, is written in place at both sites on `target`.
+    fn written_in_place_twice(target: TargetDialect, standalone: &serde_json::Value) -> bool {
+        let document: serde_json::Value = generated_with_each_inlined(
+            settings_for(target),
+            &[standalone.clone(), standalone.clone()],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        ["p0", "p1"]
+            .iter()
+            .all(|key: &&str| document["properties"][*key].get("$ref").is_none())
+    }
+
+    #[test]
+    fn an_empty_fragment_id_is_written_in_place_on_every_target() {
+        let expected: Vec<bool> = vec![true; ALL_TARGETS.len()];
+        let standalone: serde_json::Value =
+            serde_json::json!({"properties": {"x": {"$id": "#", "type": "string"}}});
+        let actual: Vec<bool> = ALL_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| written_in_place_twice(*target, &standalone))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_false_recursive_anchor_is_written_in_place_on_2019_09() {
+        let expected: bool = true;
+        let actual: bool = written_in_place_twice(
+            TargetDialect::Draft201909,
+            &serde_json::json!({"properties": {"x": {"$recursiveAnchor": false, "type": "string"}}}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_true_recursive_anchor_inlined_twice_is_one_shared_definition_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "type": "object",
+            "$defs": {"Inlined": {"properties": {"x": {"$recursiveAnchor": true}}}},
+            "properties": {
+                "p0": {"$ref": "#/$defs/Inlined"},
+                "p1": {"$ref": "#/$defs/Inlined"}
+            }
+        });
+        let standalone: serde_json::Value =
+            serde_json::json!({"properties": {"x": {"$recursiveAnchor": true}}});
+        let actual: serde_json::Value = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft201909),
+            &[standalone.clone(), standalone],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_under_additional_items_inlined_twice_is_one_shared_definition_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": DRAFT_07_URI,
+            "type": "object",
+            "definitions": {"Inlined": {"additionalItems": {"$id": "#a"}}},
+            "properties": {
+                "p0": {"$ref": "#/definitions/Inlined"},
+                "p1": {"$ref": "#/definitions/Inlined"}
+            }
+        });
+        let standalone: serde_json::Value = serde_json::json!({"additionalItems": {"$id": "#a"}});
+        let actual: serde_json::Value = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[standalone.clone(), standalone],
+            serde_json::json!({}),
+        )
+        .expect("generated")
+        .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_ids_under_target_only_keywords_inlined_twice_are_accepted_on_every_target() {
+        let standalones: [serde_json::Value; 4] = [
+            serde_json::json!({"additionalItems": {"$id": "#a"}}),
+            serde_json::json!({"not": {"items": [{"$id": "#a"}]}}),
+            serde_json::json!({"not": {"items": [{"$id": "#a"}], "additionalItems": {"$id": "#b"}}}),
+            serde_json::json!({"dependencies": {"d": {"$id": "#a"}}}),
+        ];
+        let expected: Vec<String> = Vec::new();
+        let actual: Vec<String> = standalones
+            .iter()
+            .flat_map(|standalone: &serde_json::Value| {
+                failures_on_every_target(
+                    &[standalone.clone(), standalone.clone()],
+                    &serde_json::json!({}),
+                )
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    // --- a duplicate anchor in a converted document is reported by its position there ---
+
+    #[test]
+    fn a_duplicate_anchor_in_prefix_items_is_reported_at_items_on_draft_07() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/definitions/Inlined0/items/0".to_string(),
+            second: "#/definitions/Inlined1/items/0".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft07),
+            &[
+                serde_json::json!({"prefixItems": [{"$id": "#a", "type": "string"}]}),
+                serde_json::json!({"prefixItems": [{"$id": "#a", "type": "integer"}]}),
+            ],
+            serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_duplicate_anchor_in_dependent_schemas_is_reported_at_dependencies_on_draft_04() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/definitions/Inlined0/dependencies/d".to_string(),
+            second: "#/definitions/Inlined1/dependencies/d".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft04),
+            &[
+                serde_json::json!({"dependentSchemas": {"d": {"$id": "#a", "type": "string"}}}),
+                serde_json::json!({"dependentSchemas": {"d": {"$id": "#a", "type": "integer"}}}),
+            ],
+            serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_duplicate_anchor_in_prefix_items_is_reported_at_items_on_2019_09() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/$defs/Inlined0/items/0".to_string(),
+            second: "#/$defs/Inlined1/items/0".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft201909),
+            &[
+                serde_json::json!({"prefixItems": [{"$id": "#a", "type": "string"}]}),
+                serde_json::json!({"prefixItems": [{"$id": "#a", "type": "integer"}]}),
+            ],
+            serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_unrepresentable_fragment_id_in_prefix_items_is_reported_at_items_on_2019_09() {
+        let expected: GeneratedSchemaResult =
+            Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
+                dialect: TargetDialect::Draft201909,
+                keyword: "$id".to_string(),
+                pointer: "/$defs/Inlined/items/0".to_string(),
+            }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            settings_for(TargetDialect::Draft201909),
+            &[serde_json::json!({"prefixItems": [{"$id": "#1a"}]})],
+            serde_json::json!({}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_duplicate_anchor_in_prefix_items_is_reported_at_prefix_items_on_2020_12() {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/$defs/Inlined0/prefixItems/0".to_string(),
+            second: "#/$defs/Inlined1/prefixItems/0".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = generated_with_each_inlined(
+            ReverseCodeGenSettings::default(),
+            &[
+                serde_json::json!({"prefixItems": [{"$id": "#a", "type": "string"}]}),
+                serde_json::json!({"prefixItems": [{"$id": "#a", "type": "integer"}]}),
+            ],
+            serde_json::json!({}),
+        );
         assert_eq!(expected, actual);
     }
 }

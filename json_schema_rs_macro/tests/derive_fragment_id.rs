@@ -450,7 +450,7 @@ fn two_types_with_one_fragment_only_id_are_a_duplicate_anchor_on_every_target() 
         }])
     };
     let draft_4_to_7: Result<Value, Vec<ReverseCodeGenError>> =
-        anchor("derive_fragment_id::DupOne", "derive_fragment_id::DupTwo");
+        anchor("#/definitions/DupOne", "#/definitions/DupTwo");
     let expected: WrittenByTarget = vec![
         (TargetDialect::Draft04, draft_4_to_7.clone()),
         (TargetDialect::Draft06, draft_4_to_7.clone()),
@@ -486,8 +486,8 @@ fn two_types_with_one_fragment_only_id_are_a_duplicate_anchor_on_every_target() 
 fn two_types_with_one_fragment_only_id_are_a_duplicate_anchor_from_schema() {
     let expected: Result<Value, Vec<ReverseCodeGenError>> =
         Err(vec![ReverseCodeGenError::DuplicateAnchor {
-            first: "derive_fragment_id::DupOne".to_string(),
-            second: "derive_fragment_id::DupTwo".to_string(),
+            first: "#/definitions/DupOne".to_string(),
+            second: "#/definitions/DupTwo".to_string(),
             anchor: "dup".to_string(),
         }]);
     let actual: Result<Value, Vec<ReverseCodeGenError>> =

@@ -5,8 +5,12 @@
 //! non-generic builders here, so the code it generates for a type is the same size whatever
 //! the type's width: a struct with 800 fields compiles one call, not 800 inlined blocks.
 
-use super::{SchemaGenerator, declares_identifier, escape_pointer_token, pointer_to_fragment};
-use crate::json_schema::{JsonSchema, JsonType, Schema};
+use super::anchors::Tables;
+use super::{
+    SchemaGenerator, declares_identifier, escape_pointer_token, pointer_to_fragment,
+    raw_declares_identifier, resource_uri,
+};
+use crate::json_schema::{JsonSchema, JsonType, Schema, SpecVersion, SubschemaPosition};
 use std::collections::BTreeMap;
 
 /// A type's `ToJsonSchema::json_schema_with`, as a fn pointer.
@@ -378,60 +382,154 @@ pub fn object_schema(generator: &mut SchemaGenerator, spec: &ObjectSpec) -> Json
 
 /// The schema a flattened position (a `#[serde(flatten)]` field, an internally tagged newtype's
 /// payload) merges: `schema` itself, except for the `$ref` to a standalone schema's body that
-/// [`SchemaGenerator::inline_subschema`] made a definition, which is read as that body so it
-/// merges as it would in place (a `$ref` to a closed body would reject the parent's keys). The
-/// body's refs already point into the definition, which stays.
+/// [`SchemaGenerator::inline_subschema`] made a definition, which is read as a copy of that
+/// body so it merges as it would in place (a `$ref` to a closed body would reject the parent's
+/// keys). The body's refs already point into the definition, which stays.
 ///
-/// A plain-object body (see [`is_plain_object`]) becomes a plain object whose property schemas,
-/// and `additionalProperties` schema, are `$ref`s to the body's own: no `$id` or anchor in them
-/// is declared a second time. Any other body is copied when it declares no identifier (see
-/// [`declares_identifier`]), and otherwise stays the `$ref`.
+/// A body that is a plain object (see [`is_plain_object`]) or declares an identifier (see
+/// [`declares_identifier`]) is copied by [`refer_to_body`], so that no `$id` or anchor in it is
+/// declared a second time; any other body is copied as is.
 fn flattened_view(generator: &SchemaGenerator, schema: JsonSchema) -> JsonSchema {
     let Some((body, reference)) = generator.inlined_body(&schema) else {
         return schema;
     };
-    let into_body = |pointer: String| -> Schema {
-        Schema::from(JsonSchema {
-            ref_: Some(format!("{reference}{}", pointer_to_fragment(&pointer))),
-            ..JsonSchema::default()
-        })
-    };
-    if is_plain_object(body) {
-        let properties: BTreeMap<String, Schema> = body
-            .properties
-            .iter()
-            .map(|(key, property): (&String, &Schema)| {
-                let property: Schema = match property {
-                    Schema::Bool(value) => Schema::Bool(*value),
-                    Schema::Object(_) => {
-                        into_body(format!("/properties/{}", escape_pointer_token(key)))
-                    }
-                };
-                (key.clone(), property)
-            })
-            .collect();
-        let additional_properties: Option<Schema> = match &body.additional_properties {
-            Some(Schema::Object(value)) if **value != JsonSchema::default() => {
-                Some(into_body("/additionalProperties".to_string()))
-            }
-            other => other.clone(),
-        };
-        return JsonSchema {
-            type_: body.type_,
-            properties,
-            additional_properties,
-            required: body.required.clone(),
-            title: body.title.clone(),
-            description: body.description.clone(),
-            comment: body.comment.clone(),
-            ..JsonSchema::default()
-        };
-    }
+    let target: Option<SpecVersion> = generator.settings.target().spec_version();
     let mut copy: JsonSchema = body.clone();
-    if declares_identifier(&mut copy) {
-        schema
-    } else {
-        copy
+    if is_plain_object(body) || declares_identifier(&mut copy, target) {
+        refer_to_body(&mut copy, reference, target);
+    }
+    copy
+}
+
+/// Rewrites `copy`, a copy of the body definition `reference` names, into the schema a
+/// flattened position merges, declaring no identifier the definition declares:
+///
+/// - its property schemas and its `additionalProperties` schema become `$ref`s to the body's
+///   own, so a plain object still merges property by property;
+/// - each branch of its `allOf`, `anyOf` and `oneOf` is rewritten the same way, since the
+///   parent opens those too (a branch that is a resource or has its own `$schema` becomes a
+///   `$ref` instead);
+/// - any other subschema that declares an identifier becomes a `$ref` to the body's own, so
+///   the anchor still resolves to the one schema that declares it;
+/// - its own `$id`, `$anchor`, `$dynamicAnchor` and `$recursiveAnchor` (draft-04 `id` too) are
+///   dropped, since the definition still declares them in the same resource;
+/// - every other keyword stays as written, `additionalProperties: false` included, which the
+///   parent then removes or keeps as it would in place.
+fn refer_to_body(copy: &mut JsonSchema, reference: &str, target: Option<SpecVersion>) {
+    let tables: Tables = Tables::for_model(target);
+    let into_body = |pointer: &str| -> JsonSchema {
+        JsonSchema {
+            ref_: Some(format!("{reference}{}", pointer_to_fragment(pointer))),
+            ..JsonSchema::default()
+        }
+    };
+    let raw_into_body = |pointer: &str| -> serde_json::Value {
+        serde_json::json!({"$ref": format!("{reference}{}", pointer_to_fragment(pointer))})
+    };
+    let mut stack: Vec<(&mut JsonSchema, String)> = vec![(copy, String::new())];
+    while let Some((node, pointer)) = stack.pop() {
+        node.id = None;
+        for keyword in ["$anchor", "$dynamicAnchor", "$recursiveAnchor"] {
+            node.extensions.remove(keyword);
+        }
+        if target == Some(SpecVersion::Draft04) {
+            node.extensions.remove("id");
+        }
+        for (key, property) in &mut node.properties {
+            if let Schema::Object(_) = property {
+                let at: String = format!("{pointer}/properties/{}", escape_pointer_token(key));
+                *property = Schema::from(into_body(&at));
+            }
+        }
+        if let Some(Schema::Object(value)) = &node.additional_properties
+            && **value != JsonSchema::default()
+        {
+            let at: String = format!("{pointer}/additionalProperties");
+            node.additional_properties = Some(Schema::from(into_body(&at)));
+        }
+        if let Some(Schema::Object(items)) = &mut node.items
+            && declares_identifier(items, target)
+        {
+            node.items = Some(Schema::from(into_body(&format!("{pointer}/items"))));
+        }
+        for (keyword, entries) in [
+            ("$defs", node.defs.as_mut()),
+            ("definitions", node.definitions.as_mut()),
+        ] {
+            for (key, entry) in entries.into_iter().flatten() {
+                if let Schema::Object(object) = entry
+                    && declares_identifier(object, target)
+                {
+                    let at: String = format!("{pointer}/{keyword}/{}", escape_pointer_token(key));
+                    *entry = Schema::from(into_body(&at));
+                }
+            }
+        }
+        refer_raw_subschemas_to_body(node, &pointer, tables, target, &raw_into_body);
+        let JsonSchema {
+            all_of,
+            any_of,
+            one_of,
+            ..
+        } = node;
+        for (keyword, branches) in [("allOf", all_of), ("anyOf", any_of), ("oneOf", one_of)] {
+            for (index, branch) in branches.iter_mut().flatten().enumerate() {
+                let at: String = format!("{pointer}/{keyword}/{index}");
+                let own_resource: bool = matches!(
+                    branch,
+                    Schema::Object(object)
+                        if object.schema.is_some() || resource_uri::is_resource(object)
+                );
+                if own_resource {
+                    *branch = Schema::from(into_body(&at));
+                } else if let Schema::Object(object) = branch {
+                    stack.push((object.as_mut(), at));
+                }
+            }
+        }
+    }
+}
+
+/// The part of [`refer_to_body`] for the subschemas `node` holds as raw extensions (found by
+/// `tables`): each one that declares an identifier becomes the `$ref` `into_body` makes for its
+/// pointer below `pointer`.
+fn refer_raw_subschemas_to_body(
+    node: &mut JsonSchema,
+    pointer: &str,
+    tables: Tables,
+    target: Option<SpecVersion>,
+    into_body: &dyn Fn(&str) -> serde_json::Value,
+) {
+    for (keyword, value) in &mut node.extensions {
+        let Some(position) = tables.position(keyword) else {
+            continue;
+        };
+        let at: String = format!("{pointer}/{}", escape_pointer_token(keyword));
+        match (position, value) {
+            (
+                SubschemaPosition::Array | SubschemaPosition::SingleOrArray,
+                serde_json::Value::Array(items),
+            ) => {
+                for (index, item) in items.iter_mut().enumerate() {
+                    if raw_declares_identifier(item, target) {
+                        *item = into_body(&format!("{at}/{index}"));
+                    }
+                }
+            }
+            (SubschemaPosition::Map, serde_json::Value::Object(entries)) => {
+                for (key, entry) in entries.iter_mut() {
+                    if raw_declares_identifier(entry, target) {
+                        *entry = into_body(&format!("{at}/{}", escape_pointer_token(key)));
+                    }
+                }
+            }
+            (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, value) => {
+                if raw_declares_identifier(value, target) {
+                    *value = into_body(&at);
+                }
+            }
+            (SubschemaPosition::Array | SubschemaPosition::Map, _) => {}
+        }
     }
 }
 
