@@ -28,8 +28,9 @@ pub enum ReverseCodeGenError {
     /// as) from 2019-09. A resource may not hold one anchor at two locations (the registry's
     /// `DuplicateAnchor`); equal entries of one name are merged instead.
     DuplicateAnchor {
-        /// JSON Pointer (as a `#` fragment) of the schema that declares it first: in draft 4-7
-        /// always a hand-written entry.
+        /// Where it is declared first: a JSON Pointer (as a `#` fragment, relative to the
+        /// resource), or in draft 4-7 also the [`super::ToJsonSchema::schema_id`] of an earlier
+        /// type (or hoisted definition) whose `$id` is the same fragment.
         first: String,
         /// Where it is declared again: in draft 4-7 the
         /// [`super::ToJsonSchema::schema_id`] of the type (or the hoisted definition), from

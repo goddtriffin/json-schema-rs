@@ -269,6 +269,18 @@ impl SchemaGenerator {
         build: impl FnOnce(&mut Self) -> JsonSchema,
     ) -> JsonSchema {
         let inline: bool = self.settings.inline_subschemas;
+        self.named_subschema_inlined(schema_id, name, inline, build)
+    }
+
+    /// [`SchemaGenerator::named_subschema`], writing the body where it is used only when
+    /// `inline`.
+    fn named_subschema_inlined(
+        &mut self,
+        schema_id: &str,
+        name: &str,
+        inline: bool,
+        build: impl FnOnce(&mut Self) -> JsonSchema,
+    ) -> JsonSchema {
         let scope: &mut Scope = self.current_scope();
         if inline && let Some(body) = scope.inline_bodies.get(schema_id) {
             return body.clone();
@@ -336,6 +348,14 @@ impl SchemaGenerator {
     /// until [`SchemaGenerator::into_root_schema`] writes it: `#` from inside the resource
     /// itself, else the reference that resolves to the placed resource from the referrer's base
     /// URI.
+    ///
+    /// A fragment-only or empty `id` (`#a`, `#`, `""`) starts no resource: it does not change
+    /// the base URI, so `$ref`s inside the body resolve against the enclosing resource (see
+    /// [`resource_uri::starts_resource`]). Such a type is a named type
+    /// ([`SchemaGenerator::named_subschema`]) whose body keeps the `$id`, a plain-name anchor of
+    /// the enclosing resource (`$anchor` from 2019-09). It is never written in place, even with
+    /// [`ReverseCodeGenSettings::inline_subschemas`]: an anchor names one schema, and a second
+    /// copy would declare it twice.
     pub fn resource_subschema(
         &mut self,
         schema_id: &str,
@@ -348,6 +368,9 @@ impl SchemaGenerator {
         }
         if let Some(&index) = self.resource_indices.get(schema_id) {
             return ref_schema(resource_ref(index));
+        }
+        if !resource_uri::starts_resource(id) {
+            return self.named_subschema_inlined(schema_id, name, false, build);
         }
 
         let index: usize = self.push_resource(schema_id, name, id);
@@ -395,7 +418,9 @@ impl SchemaGenerator {
     /// key `name`, used if another resource needs its own copy of it) from `build`.
     ///
     /// The document root is the resource, so a nested reference back to it is `#` and it never
-    /// appears in its own `$defs`.
+    /// appears in its own `$defs`. A fragment-only or empty `id` starts no resource (see
+    /// [`SchemaGenerator::resource_subschema`]), but a nested reference back to the root is `#`
+    /// all the same.
     ///
     /// # Errors
     ///
@@ -408,7 +433,9 @@ impl SchemaGenerator {
         build: impl FnOnce(&mut Self) -> JsonSchema,
     ) -> GeneratedSchemaResult {
         self.document.resource = Some(schema_id.to_string());
-        self.root_resource = Some(self.push_resource(schema_id, name, id));
+        if resource_uri::starts_resource(id) {
+            self.root_resource = Some(self.push_resource(schema_id, name, id));
+        }
         let body: JsonSchema = build(&mut self);
         self.into_root_schema(body)
     }
@@ -1054,6 +1081,7 @@ impl Scope {
             &canonical,
             &merged,
             existing,
+            body.id.as_deref(),
             ids_declare_anchors,
             errors,
         );
@@ -1564,14 +1592,18 @@ fn ref_targets(
 ///
 /// With `ids_declare_anchors` (a draft 4-7 target), a fragment-only `$id` (`#a`) is a
 /// plain-name anchor of the scope's resource, not a resource, so such a definition whose
-/// anchor a hand-written entry also declares is a [`ReverseCodeGenError::DuplicateAnchor`]
-/// (`#a` against `#b` is not). Both entries sit in the scope's container, so in the same
-/// resource; an anchor inside a nested resource belongs to that resource and is not compared.
+/// anchor the scope's body (`body_id`, whose fragment declares an anchor of the scope's
+/// resource), a hand-written entry or an earlier definition also declares is a
+/// [`ReverseCodeGenError::DuplicateAnchor`] (`#a` against `#b` is not). All of them sit in the
+/// scope's resource; an anchor inside a nested resource belongs to that resource and is not
+/// compared. From 2019-09 such an `$id` is written as `$anchor`, and
+/// [`anchors::ids_to_anchors`] reports the duplicates.
 fn report_duplicate_ids(
     definitions: &[Definition],
     canonical: &[usize],
     merged: &BTreeSet<usize>,
     existing: &ExistingDefinitions,
+    body_id: Option<&str>,
     ids_declare_anchors: bool,
     errors: &mut Vec<ReverseCodeGenError>,
 ) {
@@ -1579,9 +1611,6 @@ fn report_duplicate_ids(
         .iter()
         .filter_map(|(name, entry)| Some((name, entry.value.get("$id")?.as_str()?)))
         .collect();
-    if hand_written_ids.is_empty() {
-        return;
-    }
     let generated_ids: Vec<(usize, &str)> = definitions
         .iter()
         .enumerate()
@@ -1603,17 +1632,30 @@ fn report_duplicate_ids(
         }
     };
     if ids_declare_anchors {
+        // Each anchor with the first place that declares it.
+        let mut declared: BTreeMap<&str, String> = BTreeMap::new();
+        let body_anchor: Option<&str> =
+            body_id.and_then(|id| resource_uri::fragment_only_anchor(&id[id.find('#')?..]));
+        if let Some(anchor) = body_anchor {
+            declared.insert(anchor, "#".to_string());
+        }
+        for (name, existing_id) in &hand_written_ids {
+            if let Some(anchor) = resource_uri::fragment_only_anchor(existing_id) {
+                declared.entry(anchor).or_insert_with(|| first(name));
+            }
+        }
         for (index, id) in &generated_ids {
             let Some(anchor) = resource_uri::fragment_only_anchor(id) else {
                 continue;
             };
-            for (name, existing_id) in &hand_written_ids {
-                if resource_uri::fragment_only_anchor(existing_id) == Some(anchor) {
-                    errors.push(ReverseCodeGenError::DuplicateAnchor {
-                        first: first(name),
-                        second: second(*index),
-                        anchor: anchor.to_string(),
-                    });
+            match declared.get(anchor) {
+                Some(first) => errors.push(ReverseCodeGenError::DuplicateAnchor {
+                    first: first.clone(),
+                    second: second(*index),
+                    anchor: anchor.to_string(),
+                }),
+                None => {
+                    declared.insert(anchor, second(*index));
                 }
             }
         }
@@ -7766,6 +7808,287 @@ mod tests {
             .iter()
             .map(|id| super::resource_uri::starts_resource(id))
             .collect();
+        assert_eq!(expected, actual);
+    }
+
+    // --- a type whose `$id` is fragment-only or empty starts no resource: it is a definition
+    // of the enclosing resource, and its refs resolve there ---
+
+    /// The root `{"properties":{"a": <A>, "b": <B>}}` built with `generator`, where `A` (`a::A`)
+    /// has the `$id` `a_id` and `B` (`a::B`) has `b_id` (no `B` when it is `None`), each with a
+    /// property referring to the named type `a::Leaf`.
+    fn fragment_id_types(
+        settings: ReverseCodeGenSettings,
+        a_id: &str,
+        b_id: Option<&str>,
+    ) -> GeneratedSchemaResult {
+        fn typed(
+            generator: &mut SchemaGenerator,
+            schema_id: &str,
+            name: &str,
+            id: &str,
+        ) -> JsonSchema {
+            let owned: String = id.to_string();
+            generator.resource_subschema(schema_id, name, id, |generator: &mut SchemaGenerator| {
+                let leaf: JsonSchema =
+                    generator.named_subschema("a::Leaf", "Leaf", |_| string_schema());
+                JsonSchema {
+                    id: Some(owned),
+                    properties: BTreeMap::from([("leaf".to_string(), leaf.into())]),
+                    ..JsonSchema::default()
+                }
+            })
+        }
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings);
+        let mut properties: BTreeMap<String, Schema> = BTreeMap::new();
+        properties.insert(
+            "a".to_string(),
+            typed(&mut generator, "a::A", "A", a_id).into(),
+        );
+        if let Some(b_id) = b_id {
+            properties.insert(
+                "b".to_string(),
+                typed(&mut generator, "a::B", "B", b_id).into(),
+            );
+        }
+        generator.into_root_schema(JsonSchema {
+            properties,
+            ..JsonSchema::default()
+        })
+    }
+
+    #[test]
+    fn resource_subschema_with_a_fragment_only_id_is_a_definition_of_the_enclosing_resource() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "A": {"$anchor": "a", "properties": {"leaf": {"$ref": "#/$defs/Leaf"}}},
+                "Leaf": {"type": "string"}
+            },
+            "properties": {"a": {"$ref": "#/$defs/A"}}
+        });
+        let actual: serde_json::Value =
+            fragment_id_types(ReverseCodeGenSettings::default(), "#a", None)
+                .expect("generated")
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschema_with_a_fragment_only_id_is_a_draft_07_definition_keeping_the_id() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "A": {"$id": "#a", "properties": {"leaf": {"$ref": "#/definitions/Leaf"}}},
+                "Leaf": {"type": "string"}
+            },
+            "properties": {"a": {"$ref": "#/definitions/A"}}
+        });
+        let actual: serde_json::Value =
+            fragment_id_types(settings_for(TargetDialect::Draft07), "#a", None)
+                .expect("generated")
+                .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschema_with_a_fragment_only_or_empty_id_leaves_no_dangling_ref_on_any_target() {
+        type DanglingByTarget = Vec<(
+            TargetDialect,
+            &'static str,
+            Result<Vec<String>, Vec<ReverseCodeGenError>>,
+        )>;
+        let targets: [TargetDialect; 6] = [
+            TargetDialect::Draft04,
+            TargetDialect::Draft06,
+            TargetDialect::Draft07,
+            TargetDialect::Draft201909,
+            TargetDialect::Draft202012,
+            TargetDialect::OpenApi31,
+        ];
+        let ids: [&str; 3] = ["#a", "#", ""];
+        let expected: DanglingByTarget = targets
+            .iter()
+            .flat_map(|target| ids.iter().map(move |id| (*target, *id, Ok(Vec::new()))))
+            .collect();
+        let actual: DanglingByTarget = targets
+            .iter()
+            .flat_map(|target| {
+                ids.iter().map(move |id| {
+                    let generated: GeneratedSchemaResult =
+                        fragment_id_types(settings_for(*target), id, None);
+                    let dangling: Result<Vec<String>, Vec<ReverseCodeGenError>> =
+                        generated.map(|generated| {
+                            let mut found: Vec<String> = dangling_refs(&generated.to_value());
+                            found.extend(dangling_refs(
+                                &serde_json::to_value(generated.schema()).expect("model"),
+                            ));
+                            found
+                        });
+                    (*target, *id, dangling)
+                })
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschema_with_a_fragment_only_id_is_never_written_in_place() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "A": {"$anchor": "a", "properties": {"leaf": {"type": "string"}}}
+            },
+            "properties": {"a": {"$ref": "#/$defs/A"}}
+        });
+        let settings: ReverseCodeGenSettings = ReverseCodeGenSettings {
+            inline_subschemas: true,
+            ..ReverseCodeGenSettings::default()
+        };
+        let actual: serde_json::Value = fragment_id_types(settings, "#a", None)
+            .expect("generated")
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschemas_with_one_fragment_only_id_are_a_duplicate_anchor_in_draft_07() {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            Err(vec![ReverseCodeGenError::DuplicateAnchor {
+                first: "a::A".to_string(),
+                second: "a::B".to_string(),
+                anchor: "a".to_string(),
+            }]);
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            fragment_id_types(settings_for(TargetDialect::Draft07), "#a", Some("#a"))
+                .map(|generated| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschemas_with_one_fragment_only_id_are_a_duplicate_anchor_in_2020_12() {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            Err(vec![ReverseCodeGenError::DuplicateAnchor {
+                first: "#/$defs/A".to_string(),
+                second: "#/$defs/B".to_string(),
+                anchor: "a".to_string(),
+            }]);
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            fragment_id_types(ReverseCodeGenSettings::default(), "#a", Some("#a"))
+                .map(|generated| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschemas_with_different_fragment_only_ids_are_both_definitions_in_draft_07() {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> = Ok(serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "A": {"$id": "#a", "properties": {"leaf": {"$ref": "#/definitions/Leaf"}}},
+                "B": {"$id": "#b", "properties": {"leaf": {"$ref": "#/definitions/Leaf"}}},
+                "Leaf": {"type": "string"}
+            },
+            "properties": {"a": {"$ref": "#/definitions/A"}, "b": {"$ref": "#/definitions/B"}}
+        }));
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            fragment_id_types(settings_for(TargetDialect::Draft07), "#a", Some("#b"))
+                .map(|generated| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn resource_subschemas_with_a_fragment_only_and_an_empty_id_do_not_collide() {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> = Ok(serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "A": {"$anchor": "a", "properties": {"leaf": {"$ref": "#/$defs/Leaf"}}},
+                "B": {"$id": "", "properties": {"leaf": {"$ref": "#/$defs/Leaf"}}},
+                "Leaf": {"type": "string"}
+            },
+            "properties": {"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/B"}}
+        }));
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            fragment_id_types(ReverseCodeGenSettings::default(), "#a", Some(""))
+                .map(|generated| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    /// The root `a::Root` with the `$id` `root_id`, whose property `self` refers back to it and
+    /// whose property `b` is `a::B` with the `$id` `b_id`.
+    fn fragment_id_root(
+        settings: ReverseCodeGenSettings,
+        root_id: &str,
+        b_id: &str,
+    ) -> GeneratedSchemaResult {
+        let root_id_owned: String = root_id.to_string();
+        let b_id_owned: String = b_id.to_string();
+        SchemaGenerator::new(settings).into_resource_root_schema(
+            "a::Root",
+            "Root",
+            root_id,
+            |generator: &mut SchemaGenerator| {
+                let back: JsonSchema =
+                    generator.resource_subschema("a::Root", "Root", &root_id_owned, |_| {
+                        panic!("a pending root must not be rebuilt")
+                    });
+                let b: JsonSchema =
+                    generator.resource_subschema("a::B", "B", &b_id_owned, |_| JsonSchema {
+                        id: Some(b_id_owned.clone()),
+                        ..integer_schema()
+                    });
+                JsonSchema {
+                    id: Some(root_id_owned.clone()),
+                    properties: BTreeMap::from([
+                        ("self".to_string(), back.into()),
+                        ("b".to_string(), b.into()),
+                    ]),
+                    ..JsonSchema::default()
+                }
+            },
+        )
+    }
+
+    #[test]
+    fn into_resource_root_schema_with_a_fragment_only_id_refers_to_itself_as_hash() {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> = Ok(serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$id": "#root",
+            "definitions": {"B": {"$id": "#b", "type": "integer"}},
+            "properties": {"self": {"$ref": "#"}, "b": {"$ref": "#/definitions/B"}}
+        }));
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            fragment_id_root(settings_for(TargetDialect::Draft07), "#root", "#b")
+                .map(|generated| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_resource_root_schema_with_a_fragment_only_id_is_a_duplicate_anchor_of_a_definition_in_draft_07()
+     {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            Err(vec![ReverseCodeGenError::DuplicateAnchor {
+                first: "#".to_string(),
+                second: "a::B".to_string(),
+                anchor: "root".to_string(),
+            }]);
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            fragment_id_root(settings_for(TargetDialect::Draft07), "#root", "#root")
+                .map(|generated| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn into_resource_root_schema_with_a_fragment_only_id_is_a_duplicate_anchor_of_a_definition_in_2020_12()
+     {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            Err(vec![ReverseCodeGenError::DuplicateAnchor {
+                first: "#".to_string(),
+                second: "#/$defs/B".to_string(),
+                anchor: "root".to_string(),
+            }]);
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            fragment_id_root(ReverseCodeGenSettings::default(), "#root", "#root")
+                .map(|generated| generated.to_value());
         assert_eq!(expected, actual);
     }
 
