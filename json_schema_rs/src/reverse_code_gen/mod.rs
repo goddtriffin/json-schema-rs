@@ -821,7 +821,8 @@ impl SchemaGenerator {
     ///
     /// A schema with `$id` is its own resource and is embedded whole, `$schema`, `$defs` and
     /// `definitions` included. So is an entry with `$id`, and no `$ref` inside a resource is
-    /// rewritten, since it resolves against that resource.
+    /// rewritten, since it resolves against that resource. A fragment-only `$id` (`#a`) is an
+    /// anchor, not a resource: the schema or entry holding it is treated like one without `$id`.
     pub fn inline_subschema(&mut self, schema: JsonSchema) -> JsonSchema {
         self.current_scope().inline_subschema(schema)
     }
@@ -1019,7 +1020,7 @@ impl Scope {
 
     /// See [`SchemaGenerator::inline_subschema`].
     fn inline_subschema(&mut self, mut schema: JsonSchema) -> JsonSchema {
-        if schema.id.is_some() {
+        if resource_uri::is_resource(&schema) {
             return schema;
         }
         let has_definitions: bool = [schema.defs.as_ref(), schema.definitions.as_ref()]
@@ -1412,6 +1413,7 @@ fn report_duplicate_ids(
     let hand_written: Vec<(&String, &str)> = existing
         .iter()
         .filter_map(|(name, entry)| Some((name, entry.value.get("$id")?.as_str()?)))
+        .filter(|(_, id)| resource_uri::starts_resource(id))
         .collect();
     if hand_written.is_empty() {
         return;
@@ -1424,6 +1426,7 @@ fn report_duplicate_ids(
             let object: &JsonSchema = definition.body.as_ref()?.as_object()?;
             Some((index, object.id.as_deref()?))
         })
+        .filter(|(_, id)| resource_uri::starts_resource(id))
         .collect();
     let depth: usize = resource_uri::placeholder_depth(
         hand_written
@@ -1784,8 +1787,9 @@ fn rewrite_refs(schema: &mut JsonSchema, resolve: &impl Fn(&str) -> Option<Strin
     });
 }
 
-/// Like [`rewrite_refs`], but leaves every subschema with `$id` (and everything inside it)
-/// untouched: its `$ref`s resolve against that resource, not the schema being rewritten.
+/// Like [`rewrite_refs`], but leaves every subschema that is a resource (its `$id` is not
+/// fragment-only, see [`resource_uri::starts_resource`]) and everything inside it untouched:
+/// its `$ref`s resolve against that resource, not the schema being rewritten.
 fn rewrite_refs_outside_resources(
     schema: &mut JsonSchema,
     resolve: &impl Fn(&str) -> Option<String>,
@@ -1844,7 +1848,8 @@ enum RefNode<'a> {
 
 /// Calls `visit` on every `$ref` in `schema` at any depth, through typed subschemas and through
 /// the subschema keywords (per the 2020-12 keyword table) of its raw `extensions` values. With
-/// `skip_resources`, a subschema with `$id` and everything inside it is not visited.
+/// `skip_resources`, a subschema that is a resource ([`resource_uri::starts_resource`]) and
+/// everything inside it is not visited.
 fn for_each_ref(
     schema: &mut JsonSchema,
     skip_resources: bool,
@@ -1855,7 +1860,7 @@ fn for_each_ref(
     while let Some(node) = stack.pop() {
         match node {
             RefNode::Typed(current) => {
-                if skip_resources && current.id.is_some() {
+                if skip_resources && resource_uri::is_resource(current) {
                     continue;
                 }
                 if let Some(reference) = current.ref_.as_mut() {
@@ -1871,7 +1876,12 @@ fn for_each_ref(
                 let serde_json::Value::Object(object) = value else {
                     continue;
                 };
-                if skip_resources && object.contains_key("$id") {
+                if skip_resources
+                    && object
+                        .get("$id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(resource_uri::starts_resource)
+                {
                     continue;
                 }
                 for (keyword, value) in object.iter_mut() {
@@ -1898,8 +1908,8 @@ struct HoistedDefinition {
 }
 
 /// Removes the `$defs` and `definitions` of `schema` and, transitively, of every entry of
-/// either that is not a resource (has no `$id`; a resource keeps its own containers). Returns
-/// the schema without them and the entries ordered by pointer.
+/// either that is not a resource (has no `$id`, or a fragment-only one; a resource keeps its own
+/// containers). Returns the schema without them and the entries ordered by pointer.
 fn flatten_defs(schema: JsonSchema) -> (JsonSchema, Vec<HoistedDefinition>) {
     let mut root: JsonSchema = schema;
     let mut hoisted: Vec<HoistedDefinition> = Vec::new();
@@ -1909,7 +1919,7 @@ fn flatten_defs(schema: JsonSchema) -> (JsonSchema, Vec<HoistedDefinition>) {
         for (key, mut body) in entries {
             let pointer: String = format!("{parent}/{container}/{}", escape_pointer_token(&key));
             if let Some(object) = body.as_object_mut()
-                && object.id.is_none()
+                && !resource_uri::is_resource(object)
             {
                 push_definition_containers(&mut stack, &pointer, object);
             }
@@ -6555,7 +6565,7 @@ mod tests {
 
     /// The fragment `$ref`s in `document` that resolve to nothing. Each one is read as a JSON
     /// Pointer (tokens decoded as in a URI fragment) against the nearest enclosing schema with
-    /// a string `$id` (or draft-04 `id`), else the document root. Anchors count as dangling;
+    /// a string `$id` (or draft-04 `id`) that is not fragment-only, else the document root. Anchors count as dangling;
     /// refs that are not fragments are not checked.
     fn dangling_refs(document: &serde_json::Value) -> Vec<String> {
         let mut dangling: Vec<String> = Vec::new();
@@ -6566,7 +6576,8 @@ mod tests {
                     let is_resource: bool = ["$id", "id"].iter().any(|keyword: &&str| {
                         object
                             .get(*keyword)
-                            .is_some_and(serde_json::Value::is_string)
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(super::resource_uri::starts_resource)
                     });
                     let base: &serde_json::Value = if is_resource { value } else { base };
                     if let Some(serde_json::Value::String(reference)) = object.get("$ref")
@@ -7306,6 +7317,373 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    // --- a fragment-only `$id` (`#a`) is an anchor, not a resource: the refs inside it are
+    // rewritten like any other ---
+
+    /// The standalone schema `B` (a string) in `container`, with `A` (`$id` `#a`) whose `y`
+    /// refers to `B`, and `x` referring to `A`.
+    fn fragment_id_definition(container: &str) -> serde_json::Value {
+        serde_json::json!({
+            container: {
+                "B": {"type": "string"},
+                "A": {"$id": "#a", "properties": {"y": {"$ref": format!("#/{container}/B")}}}
+            },
+            "properties": {"x": {"$ref": format!("#/{container}/A")}}
+        })
+    }
+
+    /// The standalone schema `B` (a string) in `container`, with a plain property `x`
+    /// (`$id` `#x`) whose `y` refers to `B`.
+    fn fragment_id_property(container: &str) -> serde_json::Value {
+        serde_json::json!({
+            container: {"B": {"type": "string"}},
+            "properties": {
+                "x": {"$id": "#x", "properties": {"y": {"$ref": format!("#/{container}/B")}}}
+            }
+        })
+    }
+
+    fn inlined_fragment_id_definition(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            fragment_id_definition("definitions"),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_fragment_id_defs_entry(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            fragment_id_definition("$defs"),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_fragment_id_property(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            fragment_id_property("definitions"),
+            serde_json::json!({}),
+        )
+    }
+
+    fn inlined_fragment_id_property_defs_ref(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            fragment_id_property("$defs"),
+            serde_json::json!({}),
+        )
+    }
+
+    /// A draft-04 standalone schema whose definition `A` has the fragment-only `id` `#a`,
+    /// parsed as a draft-04 document (so `id` is read as `$id`).
+    fn inlined_draft_04_fragment_id(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        let mut standalone: serde_json::Value = fragment_id_definition("definitions");
+        standalone["$schema"] = serde_json::json!("http://json-schema.org/draft-04/schema#");
+        let a: &mut serde_json::Map<String, serde_json::Value> = standalone["definitions"]["A"]
+            .as_object_mut()
+            .expect("an object");
+        let id: serde_json::Value = a.remove("$id").expect("an id");
+        a.insert("id".to_string(), id);
+        let parsed: Schema = Schema::try_from(standalone.to_string().as_str()).expect("a schema");
+        let Some(parsed) = parsed.as_object() else {
+            unreachable!("an object schema");
+        };
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings);
+        let inlined: JsonSchema = generator.inline_subschema(parsed.clone());
+        generator
+            .into_root_schema(object_schema(&[("s", inlined)]))
+            .expect("generated")
+    }
+
+    /// The fragment-id definition beside a hand-written root `definitions` entry `B` that is an
+    /// integer, referred to by the root's property `h`.
+    fn inlined_fragment_id_beside_different_hand_written_definitions(
+        settings: ReverseCodeGenSettings,
+    ) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            fragment_id_definition("definitions"),
+            serde_json::json!({
+                "definitions": {"B": {"type": "integer"}},
+                "properties": {"h": {"$ref": "#/definitions/B"}}
+            }),
+        )
+    }
+
+    /// A real resource entry `R` (its own `B` is an integer) beside a fragment-id entry `A`.
+    fn inlined_resource_beside_fragment_id(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {
+                    "B": {"type": "string"},
+                    "A": {"$id": "#a", "properties": {"y": {"$ref": "#/definitions/B"}}},
+                    "R": {
+                        "$id": "https://example.com/r.json",
+                        "definitions": {"B": {"type": "integer"}},
+                        "properties": {"y": {"$ref": "#/definitions/B"}}
+                    }
+                },
+                "properties": {"a": {"$ref": "#/definitions/A"}, "r": {"$ref": "#/definitions/R"}}
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    /// A plain property `r` whose `$id` has an empty fragment (`https://example.com/r.json#`):
+    /// still a resource, so its ref to its own integer `B` stays as written.
+    fn inlined_empty_fragment_resource(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "properties": {
+                    "x": {"$ref": "#/definitions/B"},
+                    "r": {
+                        "$id": "https://example.com/r.json#",
+                        "definitions": {"B": {"type": "integer"}},
+                        "properties": {"y": {"$ref": "#/definitions/B"}}
+                    }
+                }
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    /// A fragment-id subschema `f` inside a real resource `r`: its ref resolves against `r`.
+    fn inlined_fragment_id_inside_resource(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        generated_with_inlined(
+            settings,
+            serde_json::json!({
+                "definitions": {"B": {"type": "string"}},
+                "properties": {
+                    "x": {"$ref": "#/definitions/B"},
+                    "r": {
+                        "$id": "https://example.com/r.json",
+                        "definitions": {"B": {"type": "integer"}},
+                        "properties": {
+                            "f": {"$id": "#f", "properties": {"y": {"$ref": "#/definitions/B"}}}
+                        }
+                    }
+                }
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    #[test]
+    fn starts_resource_only_when_the_id_is_not_fragment_only() {
+        let ids: [&str; 7] = [
+            "#a",
+            "#",
+            "",
+            "#/definitions/a",
+            "https://example.com/r.json#",
+            "https://example.com/r.json#a",
+            "r.json",
+        ];
+        let expected: Vec<bool> = vec![false, false, false, false, true, true, true];
+        let actual: Vec<bool> = ids
+            .iter()
+            .map(|id| super::resource_uri::starts_resource(id))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn dangling_refs_resolves_a_ref_in_a_fragment_id_against_the_enclosing_resource() {
+        let expected: Vec<String> = vec!["#/definitions/C".to_string()];
+        let actual: Vec<String> = dangling_refs(&serde_json::json!({
+            "definitions": {"B": {"type": "string"}},
+            "properties": {
+                "a": {"$id": "#a", "properties": {"y": {"$ref": "#/definitions/B"}}},
+                "c": {"id": "#c", "properties": {"y": {"$ref": "#/definitions/C"}}}
+            }
+        }));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_ref_inside_a_fragment_id_definition() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {
+                "A": {"$id": "#a", "properties": {"y": {"$ref": "#/$defs/B"}}},
+                "B": {"type": "string"}
+            },
+            "properties": {"s": {"properties": {"x": {"$ref": "#/$defs/A"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_fragment_id_definition(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_ref_inside_a_fragment_id_property_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {"B": {"type": "string"}},
+            "properties": {
+                "s": {
+                    "properties": {
+                        "x": {"$id": "#x", "properties": {"y": {"$ref": "#/definitions/B"}}}
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_fragment_id_property_defs_ref(settings_for(TargetDialect::Draft07)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_ref_inside_a_draft_04_fragment_id() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "type": "object",
+            "definitions": {
+                "A": {"id": "#a", "properties": {"y": {"$ref": "#/definitions/B"}}},
+                "B": {"type": "string"}
+            },
+            "properties": {"s": {"properties": {"x": {"$ref": "#/definitions/A"}}}}
+        });
+        let actual: serde_json::Value =
+            inlined_draft_04_fragment_id(settings_for(TargetDialect::Draft04)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_points_a_fragment_id_ref_at_the_suffixed_entry_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {
+                "A": {"$id": "#a", "properties": {"y": {"$ref": "#/definitions/B0"}}},
+                "B": {"type": "integer"},
+                "B0": {"type": "string"}
+            },
+            "properties": {
+                "h": {"$ref": "#/definitions/B"},
+                "s": {"properties": {"x": {"$ref": "#/definitions/A"}}}
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_fragment_id_beside_different_hand_written_definitions(settings_for(
+                TargetDialect::Draft07,
+            ))
+            .to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_points_a_fragment_id_ref_at_the_suffixed_entry_in_the_draft_07_model() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "definitions": {"B": {"type": "integer"}},
+            "$defs": {
+                "A": {"$id": "#a", "properties": {"y": {"$ref": "#/$defs/B0"}}},
+                "B0": {"type": "string"}
+            },
+            "properties": {
+                "h": {"$ref": "#/definitions/B"},
+                "s": {"properties": {"x": {"$ref": "#/$defs/A"}}}
+            }
+        });
+        let actual: serde_json::Value = serde_json::to_value(
+            inlined_fragment_id_beside_different_hand_written_definitions(settings_for(
+                TargetDialect::Draft07,
+            ))
+            .schema(),
+        )
+        .expect("json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_a_resource_beside_a_fragment_id_untouched() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {
+                "A": {"$id": "#a", "properties": {"y": {"$ref": "#/definitions/B"}}},
+                "B": {"type": "string"},
+                "R": {
+                    "$id": "https://example.com/r.json",
+                    "definitions": {"B": {"type": "integer"}},
+                    "properties": {"y": {"$ref": "#/definitions/B"}}
+                }
+            },
+            "properties": {
+                "s": {
+                    "properties": {
+                        "a": {"$ref": "#/definitions/A"},
+                        "r": {"$ref": "#/definitions/R"}
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_resource_beside_fragment_id(settings_for(TargetDialect::Draft07)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_an_empty_fragment_resource_untouched() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {
+                "s": {
+                    "properties": {
+                        "x": {"$ref": "#/$defs/B"},
+                        "r": {
+                            "$id": "https://example.com/r.json#",
+                            "definitions": {"B": {"type": "integer"}},
+                            "properties": {"y": {"$ref": "#/definitions/B"}}
+                        }
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_empty_fragment_resource(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_a_fragment_id_inside_a_resource_untouched() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {
+                "s": {
+                    "properties": {
+                        "x": {"$ref": "#/$defs/B"},
+                        "r": {
+                            "$id": "https://example.com/r.json",
+                            "definitions": {"B": {"type": "integer"}},
+                            "properties": {
+                                "f": {
+                                    "$id": "#f",
+                                    "properties": {"y": {"$ref": "#/definitions/B"}}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_fragment_id_inside_resource(ReverseCodeGenSettings::default()).to_value();
+        assert_eq!(expected, actual);
+    }
+
     /// Tests that every `$ref` of each scenario, built for the enclosing module's `DIALECT`,
     /// resolves in the model and in the document.
     macro_rules! no_dangling_refs {
@@ -7375,6 +7753,15 @@ mod tests {
                 inlined_beside_different_hand_written_definitions => beside_different_hand_written_definitions_resolves_in_the_model, beside_different_hand_written_definitions_resolves_in_the_document;
                 inlined_beside_equal_generated => beside_equal_generated_resolves_in_the_model, beside_equal_generated_resolves_in_the_document;
                 inlined_beside_different_generated => beside_different_generated_resolves_in_the_model, beside_different_generated_resolves_in_the_document;
+                inlined_fragment_id_definition => fragment_id_definition_resolves_in_the_model, fragment_id_definition_resolves_in_the_document;
+                inlined_fragment_id_defs_entry => fragment_id_defs_entry_resolves_in_the_model, fragment_id_defs_entry_resolves_in_the_document;
+                inlined_fragment_id_property => fragment_id_property_resolves_in_the_model, fragment_id_property_resolves_in_the_document;
+                inlined_fragment_id_property_defs_ref => fragment_id_property_defs_ref_resolves_in_the_model, fragment_id_property_defs_ref_resolves_in_the_document;
+                inlined_draft_04_fragment_id => draft_04_fragment_id_resolves_in_the_model, draft_04_fragment_id_resolves_in_the_document;
+                inlined_fragment_id_beside_different_hand_written_definitions => fragment_id_beside_different_hand_written_definitions_resolves_in_the_model, fragment_id_beside_different_hand_written_definitions_resolves_in_the_document;
+                inlined_resource_beside_fragment_id => resource_beside_fragment_id_resolves_in_the_model, resource_beside_fragment_id_resolves_in_the_document;
+                inlined_empty_fragment_resource => empty_fragment_resource_resolves_in_the_model, empty_fragment_resource_resolves_in_the_document;
+                inlined_fragment_id_inside_resource => fragment_id_inside_resource_resolves_in_the_model, fragment_id_inside_resource_resolves_in_the_document;
             }
 
             model_and_document_agree! {
@@ -7388,6 +7775,12 @@ mod tests {
                 inlined_beside_different_hand_written_defs => the_model_and_the_document_agree_through_beside_different_hand_written_defs, [{"h": 5, "s": {"x": "a"}}, {"h": "a", "s": {"x": 5}}];
                 inlined_beside_different_hand_written_definitions => the_model_and_the_document_agree_through_beside_different_hand_written_definitions, [{"h": 5, "s": {"x": "a"}}, {"h": "a", "s": {"x": 5}}];
                 inlined_beside_different_generated => the_model_and_the_document_agree_through_beside_different_generated, [{"g": 5, "s": {"x": "a"}}, {"g": "a", "s": {"x": 5}}];
+                inlined_fragment_id_definition => the_model_and_the_document_agree_through_fragment_id_definition, [{"s": {"x": {"y": "a"}}}, {"s": {"x": {"y": 5}}}];
+                inlined_fragment_id_property => the_model_and_the_document_agree_through_fragment_id_property, [{"s": {"x": {"y": "a"}}}, {"s": {"x": {"y": 5}}}];
+                inlined_fragment_id_beside_different_hand_written_definitions => the_model_and_the_document_agree_through_fragment_id_beside_different_hand_written_definitions, [{"h": 5, "s": {"x": {"y": "a"}}}, {"h": 5, "s": {"x": {"y": 5}}}];
+                inlined_resource_beside_fragment_id => the_model_and_the_document_agree_through_resource_beside_fragment_id, [{"s": {"a": {"y": "a"}, "r": {"y": 5}}}, {"s": {"a": {"y": "a"}, "r": {"y": "a"}}}];
+                inlined_empty_fragment_resource => the_model_and_the_document_agree_through_empty_fragment_resource, [{"s": {"x": "a", "r": {"y": 5}}}, {"s": {"x": "a", "r": {"y": "a"}}}];
+                inlined_fragment_id_inside_resource => the_model_and_the_document_agree_through_fragment_id_inside_resource, [{"s": {"x": "a", "r": {"f": {"y": 5}}}}, {"s": {"x": "a", "r": {"f": {"y": "a"}}}}];
             }
         };
     }

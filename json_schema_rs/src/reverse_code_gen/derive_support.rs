@@ -559,7 +559,7 @@ pub fn enum_schema(generator: &mut SchemaGenerator, spec: &EnumSpec) -> JsonSche
     };
     if flatten_single_entry
         && let [Schema::Object(branch)] = branches.as_slice()
-        && branch.id.is_none()
+        && !super::resource_uri::is_resource(branch)
     {
         let Some(Schema::Object(branch)) = branches.pop() else {
             unreachable!("matched one object branch");
