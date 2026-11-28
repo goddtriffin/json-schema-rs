@@ -881,6 +881,13 @@ impl SchemaGenerator {
     /// to the one nested `Inner` when exactly one exists (a top-level `definitions` entry is not
     /// nested). Inlining an equal standalone schema again reuses its entries.
     ///
+    /// `$dynamicRef` (2020-12) and `$recursiveRef` (2019-09) are rewritten exactly like `$ref`,
+    /// since they first resolve like it: here "`$ref`" means all three. Their anchors
+    /// (`$dynamicAnchor`, `$recursiveAnchor`) are keywords of the schema that declares them and
+    /// move with it, and a plain-name `$dynamicRef` (`#node`) stays as written, resolving to the
+    /// anchor in the same resource. A `$recursiveRef: "#"` to the body becomes a pointer to its
+    /// definition (`#/$defs/Inlined`), the one way to name it there.
+    ///
     /// Any other same-document JSON Pointer `$ref` (`#`, `""`, `#/properties/a`, also inside a
     /// hoisted entry) points into the standalone schema's own body, which has no fixed place in
     /// the document once inlined. Then the body itself becomes a definition too (preferred key
@@ -2037,7 +2044,8 @@ fn ref_schema(reference: String) -> JsonSchema {
     }
 }
 
-/// Replaces every `$ref` in `schema` (at any depth) for which `resolve` returns a new value.
+/// Replaces every reference ([`REFERENCE_KEYWORDS`]) in `schema` (at any depth) for which
+/// `resolve` returns a new value.
 fn rewrite_refs(schema: &mut JsonSchema, resolve: &impl Fn(&str) -> Option<String>) {
     for_each_ref(schema, false, &mut |reference: &mut String| {
         if let Some(resolved) = resolve(reference) {
@@ -2225,8 +2233,14 @@ enum RefNode<'a> {
     Raw(&'a mut serde_json::Value),
 }
 
-/// Calls `visit` on every `$ref` in `schema` at any depth, through typed subschemas and through
-/// the subschema keywords (per the 2020-12 keyword table) of its raw `extensions` values. With
+/// The keywords whose value is a URI reference to a schema: `$ref`, and the dynamic references
+/// `$dynamicRef` (2020-12) and `$recursiveRef` (2019-09), which first resolve exactly like
+/// `$ref` (their initial target) and so move with the schemas they name.
+pub(super) const REFERENCE_KEYWORDS: [&str; 3] = ["$ref", "$dynamicRef", "$recursiveRef"];
+
+/// Calls `visit` on every reference ([`REFERENCE_KEYWORDS`]: `$ref`, `$dynamicRef`,
+/// `$recursiveRef`) in `schema` at any depth, through typed subschemas and through the subschema
+/// keywords (per the 2020-12 keyword table) of its raw `extensions` values. With
 /// `skip_resources`, a subschema that is a resource ([`resource_uri::starts_resource`]) and
 /// everything inside it is not visited.
 fn for_each_ref(
@@ -2247,7 +2261,13 @@ fn for_each_ref(
                 }
                 let (subschemas, extensions) = current.subschemas_mut();
                 for (keyword, value) in extensions {
-                    push_raw_subschemas(dialect, keyword, value, &mut stack);
+                    if REFERENCE_KEYWORDS.contains(&keyword.as_str()) {
+                        if let serde_json::Value::String(reference) = value {
+                            visit(reference);
+                        }
+                    } else {
+                        push_raw_subschemas(dialect, keyword, value, &mut stack);
+                    }
                 }
                 stack.extend(subschemas.into_iter().map(RefNode::Typed));
             }
@@ -2264,7 +2284,7 @@ fn for_each_ref(
                     continue;
                 }
                 for (keyword, value) in object.iter_mut() {
-                    if keyword == "$ref" {
+                    if REFERENCE_KEYWORDS.contains(&keyword.as_str()) {
                         if let serde_json::Value::String(reference) = value {
                             visit(reference);
                         }
@@ -7044,7 +7064,8 @@ mod tests {
     // --- inline_subschema hoists `definitions` entries as well as `$defs` entries, and every
     // `$ref` of the output resolves, in the model and in the document ---
 
-    /// The fragment `$ref`s in `document` that resolve to nothing. Each one is read as a JSON
+    /// The fragment references ([`super::REFERENCE_KEYWORDS`]) in `document` that resolve to
+    /// nothing. Each one is read as a JSON
     /// Pointer (tokens decoded as in a URI fragment) against the nearest enclosing schema with
     /// a string `$id` (or draft-04 `id`) that is not fragment-only, else the document root. Anchors count as dangling;
     /// refs that are not fragments are not checked.
@@ -7061,11 +7082,13 @@ mod tests {
                             .is_some_and(super::resource_uri::starts_resource)
                     });
                     let base: &serde_json::Value = if is_resource { value } else { base };
-                    if let Some(serde_json::Value::String(reference)) = object.get("$ref")
-                        && let Some(fragment) = reference.strip_prefix('#')
-                        && resolve_fragment(base, fragment).is_none()
-                    {
-                        dangling.push(reference.clone());
+                    for keyword in super::REFERENCE_KEYWORDS {
+                        if let Some(serde_json::Value::String(reference)) = object.get(keyword)
+                            && let Some(fragment) = reference.strip_prefix('#')
+                            && resolve_fragment(base, fragment).is_none()
+                        {
+                            dangling.push(reference.clone());
+                        }
                     }
                     stack.extend(
                         object
@@ -10706,17 +10729,19 @@ mod tests {
             .collect()
     }
 
-    /// Every `$ref` in `document` that is not a URI reference (RFC 3986) or does not resolve.
+    /// Every reference in `document` that is not a URI reference (RFC 3986) or does not resolve.
     fn bad_refs(document: &serde_json::Value) -> Vec<String> {
         let mut bad: Vec<String> = dangling_refs(document);
         let mut stack: Vec<&serde_json::Value> = vec![document];
         while let Some(value) = stack.pop() {
             match value {
                 serde_json::Value::Object(object) => {
-                    if let Some(serde_json::Value::String(reference)) = object.get("$ref")
-                        && fluent_uri::UriRef::parse(reference.as_str()).is_err()
-                    {
-                        bad.push(reference.clone());
+                    for keyword in super::REFERENCE_KEYWORDS {
+                        if let Some(serde_json::Value::String(reference)) = object.get(keyword)
+                            && fluent_uri::UriRef::parse(reference.as_str()).is_err()
+                        {
+                            bad.push(reference.clone());
+                        }
                     }
                     stack.extend(object.values());
                 }
@@ -14079,6 +14104,495 @@ mod tests {
             ],
             serde_json::json!({}),
         );
+        assert_eq!(expected, actual);
+    }
+
+    // --- inline_subschema rewrites `$dynamicRef` and `$recursiveRef` exactly like `$ref`, and
+    // their anchors move with the schema that declares them ---
+
+    /// `standalone` inlined as root property `s` beside a root property `a` integer, for
+    /// `dialect`: the model and the document as JSON, in that order.
+    fn inlined_dynamic(
+        dialect: TargetDialect,
+        standalone: serde_json::Value,
+    ) -> [serde_json::Value; 2] {
+        model_and_document(&inlined_beside_root_property(dialect, standalone))
+    }
+
+    /// A generated root with `$schema` `schema_uri`, `$defs` `defs`, an integer property `a` and
+    /// a property `s` that is `s`.
+    fn beside_root_property(
+        schema_uri: &str,
+        defs: &serde_json::Value,
+        s: &serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "$schema": schema_uri,
+            "type": "object",
+            "$defs": defs,
+            "properties": {"a": {"type": "integer"}, "s": s}
+        })
+    }
+
+    const SCHEMA_2019_09: &str = "https://json-schema.org/draft/2019-09/schema";
+
+    /// The model (always 2020-12) and the document for `schema_uri` of one generated schema.
+    fn model_and_document_for(
+        schema_uri: &str,
+        defs: &serde_json::Value,
+        s: &serde_json::Value,
+    ) -> [serde_json::Value; 2] {
+        [
+            beside_root_property(SCHEMA_2020_12, defs, s),
+            beside_root_property(schema_uri, defs, s),
+        ]
+    }
+
+    #[test]
+    fn dangling_refs_finds_a_dynamic_or_recursive_ref_that_resolves_to_nothing() {
+        let expected: Vec<String> = vec!["#/$defs/B".to_string(), "#/$defs/C".to_string()];
+        let mut actual: Vec<String> = dangling_refs(&serde_json::json!({
+            "$defs": {"A": {}},
+            "properties": {
+                "a": {"$dynamicRef": "#/$defs/A"},
+                "b": {"$dynamicRef": "#/$defs/B"},
+                "c": {"$recursiveRef": "#/$defs/C"},
+                "d": {"$recursiveRef": "#"}
+            }
+        }));
+        actual.sort();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_dynamic_ref_to_a_hoisted_defs_entry() {
+        let expected: [serde_json::Value; 2] = model_and_document_for(
+            SCHEMA_2020_12,
+            &serde_json::json!({"A": {"type": "string"}}),
+            &serde_json::json!({"properties": {"x": {"$dynamicRef": "#/$defs/A"}}}),
+        );
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft202012,
+            serde_json::json!({
+                "$defs": {"A": {"type": "string"}},
+                "properties": {"x": {"$dynamicRef": "#/$defs/A"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_dynamic_ref_to_a_hoisted_definitions_entry() {
+        let expected: [serde_json::Value; 2] = model_and_document_for(
+            SCHEMA_2020_12,
+            &serde_json::json!({"A": {"type": "string"}}),
+            &serde_json::json!({"properties": {"x": {"$dynamicRef": "#/$defs/A"}}}),
+        );
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft202012,
+            serde_json::json!({
+                "definitions": {"A": {"type": "string"}},
+                "properties": {"x": {"$dynamicRef": "#/definitions/A"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_dynamic_refs_to_entries_renamed_on_a_collision() {
+        let document: serde_json::Value = serde_json::json!({
+            "$schema": SCHEMA_2020_12,
+            "type": "object",
+            "$defs": {
+                "A0": {"type": "string"},
+                "A1": {"type": "integer"},
+                "Inlined0": {"properties": {"n": {"$dynamicRef": "#/$defs/Inlined0"}}},
+                "Inlined1": {"properties": {"n": {"$ref": "#/$defs/Inlined1"}}}
+            },
+            "properties": {
+                "one": {"properties": {"x": {"$dynamicRef": "#/$defs/A0"}}},
+                "two": {"properties": {"x": {"$dynamicRef": "#/$defs/A1"}}},
+                "three": {"$ref": "#/$defs/Inlined0"},
+                "four": {"$ref": "#/$defs/Inlined1"}
+            }
+        });
+        let expected: [serde_json::Value; 2] = [document.clone(), document];
+        let mut generator: SchemaGenerator = SchemaGenerator::default();
+        let mut inline = |standalone: serde_json::Value| -> JsonSchema {
+            generator.inline_subschema(serde_json::from_value(standalone).expect("a schema"))
+        };
+        let one: JsonSchema = inline(serde_json::json!({
+            "$defs": {"A": {"type": "string"}},
+            "properties": {"x": {"$dynamicRef": "#/$defs/A"}}
+        }));
+        let two: JsonSchema = inline(serde_json::json!({
+            "$defs": {"A": {"type": "integer"}},
+            "properties": {"x": {"$dynamicRef": "#/$defs/A"}}
+        }));
+        let three: JsonSchema =
+            inline(serde_json::json!({"properties": {"n": {"$dynamicRef": "#"}}}));
+        let four: JsonSchema = inline(serde_json::json!({"properties": {"n": {"$ref": "#"}}}));
+        let actual: [serde_json::Value; 2] = model_and_document(
+            &generator
+                .into_root_schema(object_schema(&[
+                    ("one", one),
+                    ("two", two),
+                    ("three", three),
+                    ("four", four),
+                ]))
+                .expect("generated"),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_reads_an_empty_fragment_dynamic_ref_as_a_ref_to_the_body() {
+        let expected: [serde_json::Value; 2] = model_and_document_for(
+            SCHEMA_2020_12,
+            &serde_json::json!({
+                "Inlined": {"properties": {"next": {"$dynamicRef": "#/$defs/Inlined"}}}
+            }),
+            &serde_json::json!({"$ref": "#/$defs/Inlined"}),
+        );
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft202012,
+            serde_json::json!({"properties": {"next": {"$dynamicRef": "#"}}}),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_keeps_a_plain_name_dynamic_ref_and_its_dynamic_anchor_on_the_body() {
+        let expected: [serde_json::Value; 2] = model_and_document_for(
+            SCHEMA_2020_12,
+            &serde_json::json!({"Inlined": {
+                "$dynamicAnchor": "node",
+                "properties": {"next": {"$dynamicRef": "#node"}}
+            }}),
+            &serde_json::json!({"$ref": "#/$defs/Inlined"}),
+        );
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft202012,
+            serde_json::json!({
+                "$dynamicAnchor": "node",
+                "properties": {"next": {"$dynamicRef": "#node"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_dynamic_refs_in_prefix_items_if_and_then() {
+        let expected: [serde_json::Value; 2] = model_and_document_for(
+            SCHEMA_2020_12,
+            &serde_json::json!({
+                "A": {"type": "string"},
+                "Inlined": {
+                    "if": {"$dynamicRef": "#/$defs/A"},
+                    "prefixItems": [{"$dynamicRef": "#/$defs/A"}],
+                    "then": {"$dynamicRef": "#/$defs/Inlined/prefixItems/0"}
+                }
+            }),
+            &serde_json::json!({"$ref": "#/$defs/Inlined"}),
+        );
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft202012,
+            serde_json::json!({
+                "$defs": {"A": {"type": "string"}},
+                "if": {"$dynamicRef": "#/$defs/A"},
+                "prefixItems": [{"$dynamicRef": "#/$defs/A"}],
+                "then": {"$dynamicRef": "#/prefixItems/0"}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_leaves_a_dynamic_ref_inside_a_nested_resource_as_written() {
+        let resource: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/a",
+            "$defs": {"B": {"type": "string"}},
+            "$dynamicRef": "#/$defs/B"
+        });
+        let expected: [serde_json::Value; 2] = model_and_document_for(
+            SCHEMA_2020_12,
+            &serde_json::json!({"A": resource}),
+            &serde_json::json!({"properties": {"x": {"$ref": "#/$defs/A"}}}),
+        );
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft202012,
+            serde_json::json!({
+                "$defs": {"A": resource},
+                "properties": {"x": {"$ref": "#/$defs/A"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_dynamic_ref_beside_a_fragment_only_id() {
+        let expected: [serde_json::Value; 2] = model_and_document_for(
+            SCHEMA_2020_12,
+            &serde_json::json!({
+                "A": {"type": "string"},
+                "Inlined": {
+                    "$anchor": "frag",
+                    "properties": {"x": {"$dynamicRef": "#/$defs/A"}}
+                }
+            }),
+            &serde_json::json!({"$ref": "#/$defs/Inlined"}),
+        );
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft202012,
+            serde_json::json!({
+                "$id": "#frag",
+                "$defs": {"A": {"type": "string"}},
+                "properties": {"x": {"$dynamicRef": "#/$defs/A"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// The model and 2019-09 document of a body with `anchor` beside a `$recursiveRef: "#"`
+    /// rewritten to its definition.
+    fn recursive_body(anchor: Option<bool>) -> [serde_json::Value; 2] {
+        let mut body: serde_json::Value = serde_json::json!({
+            "properties": {"next": {"$recursiveRef": "#/$defs/Inlined"}}
+        });
+        if let Some(anchor) = anchor {
+            body["$recursiveAnchor"] = serde_json::Value::Bool(anchor);
+        }
+        model_and_document_for(
+            SCHEMA_2019_09,
+            &serde_json::json!({"Inlined": body}),
+            &serde_json::json!({"$ref": "#/$defs/Inlined"}),
+        )
+    }
+
+    /// A standalone schema with `anchor` beside a `$recursiveRef: "#"`.
+    fn recursive_standalone(anchor: Option<bool>) -> serde_json::Value {
+        let mut standalone: serde_json::Value =
+            serde_json::json!({"properties": {"next": {"$recursiveRef": "#"}}});
+        if let Some(anchor) = anchor {
+            standalone["$recursiveAnchor"] = serde_json::Value::Bool(anchor);
+        }
+        standalone
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_recursive_ref_to_a_body_with_a_true_recursive_anchor() {
+        let expected: [serde_json::Value; 2] = recursive_body(Some(true));
+        let actual: [serde_json::Value; 2] =
+            inlined_dynamic(TargetDialect::Draft201909, recursive_standalone(Some(true)));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_recursive_ref_to_a_body_with_a_false_recursive_anchor() {
+        let expected: [serde_json::Value; 2] = recursive_body(Some(false));
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft201909,
+            recursive_standalone(Some(false)),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_a_recursive_ref_to_a_body_without_a_recursive_anchor() {
+        let expected: [serde_json::Value; 2] = recursive_body(None);
+        let actual: [serde_json::Value; 2] =
+            inlined_dynamic(TargetDialect::Draft201909, recursive_standalone(None));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_recursive_ref_through_prefix_items_points_at_items_in_the_2019_09_document() {
+        let expected: [serde_json::Value; 2] = [
+            beside_root_property(
+                SCHEMA_2020_12,
+                &serde_json::json!({"Inlined": {
+                    "prefixItems": [{"type": "string"}],
+                    "properties": {"next": {"$recursiveRef": "#/$defs/Inlined/prefixItems/0"}}
+                }}),
+                &serde_json::json!({"$ref": "#/$defs/Inlined"}),
+            ),
+            beside_root_property(
+                SCHEMA_2019_09,
+                &serde_json::json!({"Inlined": {
+                    "items": [{"type": "string"}],
+                    "properties": {"next": {"$recursiveRef": "#/$defs/Inlined/items/0"}}
+                }}),
+                &serde_json::json!({"$ref": "#/$defs/Inlined"}),
+            ),
+        ];
+        let actual: [serde_json::Value; 2] = inlined_dynamic(
+            TargetDialect::Draft201909,
+            serde_json::json!({
+                "prefixItems": [{"type": "string"}],
+                "properties": {"next": {"$recursiveRef": "#/prefixItems/0"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inlined_dynamic_and_recursive_refs_resolve_in_the_model_and_document() {
+        let cases: [(TargetDialect, serde_json::Value); 6] = [
+            (
+                TargetDialect::Draft202012,
+                serde_json::json!({"properties": {"next": {"$dynamicRef": "#"}}}),
+            ),
+            (
+                TargetDialect::Draft202012,
+                serde_json::json!({
+                    "$defs": {"A": {"$defs": {"B": {}}}},
+                    "prefixItems": [{"$dynamicRef": "#/$defs/A/$defs/B"}],
+                    "if": {"$dynamicRef": "#/prefixItems/0"}
+                }),
+            ),
+            (TargetDialect::Draft201909, recursive_standalone(Some(true))),
+            (
+                TargetDialect::Draft201909,
+                recursive_standalone(Some(false)),
+            ),
+            (TargetDialect::Draft201909, recursive_standalone(None)),
+            (
+                TargetDialect::Draft201909,
+                serde_json::json!({
+                    "definitions": {"A": {}},
+                    "prefixItems": [{"$recursiveRef": "#/definitions/A"}],
+                    "then": {"$recursiveRef": "#/prefixItems/0"}
+                }),
+            ),
+        ];
+        let expected: Vec<[Vec<String>; 2]> = vec![[Vec::new(), Vec::new()]; cases.len()];
+        let actual: Vec<[Vec<String>; 2]> = cases
+            .into_iter()
+            .map(|(dialect, standalone)| inlined_dynamic(dialect, standalone).map(|v| bad_refs(&v)))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// Instances of root property `s` whose `next` holds `{"v": ..}` or `{"a": ..}`: a
+    /// `next` that resolves to the body checks `v` as a string and does not check `a`, which
+    /// the generated root types as an integer.
+    fn recursive_instances() -> [serde_json::Value; 3] {
+        [
+            serde_json::json!({"s": {"next": {"v": "x", "a": "not an integer"}}}),
+            serde_json::json!({"s": {"next": {"v": 1}}}),
+            serde_json::json!({"s": {"next": {"next": {"v": 1}}}}),
+        ]
+    }
+
+    #[test]
+    fn an_inlined_empty_fragment_dynamic_ref_keeps_its_target() {
+        let expected: Vec<Vec<bool>> = vec![vec![true, false, false]; 2];
+        let actual: Vec<Vec<bool>> = model_and_document_verdicts(
+            &inlined_beside_root_property(
+                TargetDialect::Draft202012,
+                serde_json::json!({
+                    "properties": {"v": {"type": "string"}, "next": {"$dynamicRef": "#"}}
+                }),
+            ),
+            &recursive_instances(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_inlined_recursive_ref_keeps_its_target_whatever_its_recursive_anchor() {
+        let expected: Vec<Vec<Vec<bool>>> = vec![vec![vec![true, false, false]; 2]; 3];
+        let actual: Vec<Vec<Vec<bool>>> = [Some(true), Some(false), None]
+            .into_iter()
+            .map(|anchor: Option<bool>| {
+                let mut standalone: serde_json::Value = recursive_standalone(anchor);
+                standalone["properties"]["v"] = serde_json::json!({"type": "string"});
+                model_and_document_verdicts(
+                    &inlined_beside_root_property(TargetDialect::Draft201909, standalone),
+                    &recursive_instances(),
+                )
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_inlined_dynamic_ref_is_unrepresentable_in_2019_09() {
+        let expected: Result<serde_json::Value, Vec<ReverseCodeGenError>> =
+            Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
+                dialect: TargetDialect::Draft201909,
+                keyword: "$dynamicRef".to_string(),
+                pointer: "/$defs/Inlined/properties/next".to_string(),
+            }]);
+        let mut generator: SchemaGenerator =
+            SchemaGenerator::new(settings_for(TargetDialect::Draft201909));
+        let inlined: JsonSchema = generator.inline_subschema(
+            serde_json::from_value(serde_json::json!({
+                "properties": {"next": {"$dynamicRef": "#"}}
+            }))
+            .expect("a schema"),
+        );
+        let actual: Result<serde_json::Value, Vec<ReverseCodeGenError>> = generator
+            .into_root_schema(object_schema(&[("s", inlined)]))
+            .map(|generated: GeneratedSchema| generated.to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inlined_dynamic_and_recursive_refs_and_anchors_are_unrepresentable_on_draft_4_7() {
+        let unrepresentable = |dialect: TargetDialect, keyword: &str, pointer: &str| {
+            ReverseCodeGenError::UnrepresentableKeyword {
+                dialect,
+                keyword: keyword.to_string(),
+                pointer: pointer.to_string(),
+            }
+        };
+        let expected: Vec<Result<serde_json::Value, Vec<ReverseCodeGenError>>> = vec![
+            Err(vec![unrepresentable(
+                TargetDialect::Draft04,
+                "$dynamicRef",
+                "/properties/s/properties/next",
+            )]),
+            Err(vec![
+                unrepresentable(
+                    TargetDialect::Draft06,
+                    "$recursiveAnchor",
+                    "/definitions/Inlined",
+                ),
+                unrepresentable(
+                    TargetDialect::Draft06,
+                    "$recursiveRef",
+                    "/definitions/Inlined/properties/next",
+                ),
+            ]),
+            Err(vec![unrepresentable(
+                TargetDialect::Draft07,
+                "$recursiveRef",
+                "/definitions/Inlined/properties/next",
+            )]),
+        ];
+        let cases: [(TargetDialect, serde_json::Value); 3] = [
+            (
+                TargetDialect::Draft04,
+                serde_json::json!({
+                    "$defs": {"A": {}},
+                    "properties": {"next": {"$dynamicRef": "#/$defs/A"}}
+                }),
+            ),
+            (TargetDialect::Draft06, recursive_standalone(Some(true))),
+            (TargetDialect::Draft07, recursive_standalone(None)),
+        ];
+        let actual: Vec<Result<serde_json::Value, Vec<ReverseCodeGenError>>> = cases
+            .into_iter()
+            .map(|(dialect, standalone)| {
+                let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+                let inlined: JsonSchema = generator
+                    .inline_subschema(serde_json::from_value(standalone).expect("a schema"));
+                generator
+                    .into_root_schema(object_schema(&[("a", integer_schema()), ("s", inlined)]))
+                    .map(|generated: GeneratedSchema| generated.to_value())
+            })
+            .collect();
         assert_eq!(expected, actual);
     }
 }
