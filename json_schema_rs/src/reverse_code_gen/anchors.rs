@@ -26,6 +26,7 @@ use super::settings::TargetDialect;
 use crate::json_pointer::fragment_to_pointer;
 use crate::json_schema::{Dialect, JsonSchema, Schema, SpecVersion, SubschemaPosition};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 
 /// A class of bytes in an anchor-name grammar.
@@ -105,6 +106,32 @@ impl<'a> Walk<'a> {
 /// Whether `version` declares plain-name anchors with `$anchor` (2019-09 on).
 fn has_anchor(version: SpecVersion) -> bool {
     is_anchor_name(version, "a").is_some()
+}
+
+/// Whether the fragment of a `$id` (draft-04 `id`) declares a plain-name anchor in `version`
+/// (draft 4, 6 and 7).
+fn fragment_ids_are_anchors(version: SpecVersion) -> bool {
+    matches!(
+        version,
+        SpecVersion::Draft04 | SpecVersion::Draft06 | SpecVersion::Draft07
+    )
+}
+
+/// The keyword that holds a schema's identifier in `version`: `id` in draft 4, `$id` after it.
+fn id_keyword(version: SpecVersion) -> &'static str {
+    if version == SpecVersion::Draft04 {
+        "id"
+    } else {
+        "$id"
+    }
+}
+
+/// The plain-name anchor the fragment of the identifier `id` declares where fragment ids are
+/// anchors (`a` for `#a` and `x.json#a`), percent-decoded as the fragment of a `$ref` is: none
+/// for an empty fragment, a JSON Pointer one (`#/a`), or one that does not decode.
+fn fragment_anchor(id: Option<&str>) -> Option<Cow<'_, str>> {
+    let (_, fragment) = id?.split_once('#')?;
+    fragment_to_pointer(fragment).filter(|name| !name.is_empty() && !name.starts_with('/'))
 }
 
 /// The keyword tables that say where a schema's subschemas are.
@@ -191,7 +218,10 @@ type Declared = HashMap<(usize, String), String>;
 /// `$anchor` of the same name only the fragment goes.
 ///
 /// An anchor (`$anchor`, and `$dynamicAnchor` in 2020-12) that an earlier schema of the same
-/// resource already declares is a [`ReverseCodeGenError::DuplicateAnchor`].
+/// resource already declares is a [`ReverseCodeGenError::DuplicateAnchor`]. On a draft 4-7
+/// target, and in an embedded resource whose own `$schema` is draft 4-7, nothing is rewritten,
+/// but the walk reports the plain-name fragment of a `$id` (draft-04 `id`) that the same resource
+/// already declares the same way, which the registry rejects too.
 pub(super) fn ids_to_anchors(
     target: TargetDialect,
     body: &mut JsonSchema,
@@ -199,7 +229,10 @@ pub(super) fn ids_to_anchors(
     path: &str,
     errors: &mut Vec<ReverseCodeGenError>,
 ) {
-    let Some(version) = target.spec_version().filter(|version| has_anchor(*version)) else {
+    let Some(version) = target
+        .spec_version()
+        .filter(|version| has_anchor(*version) || fragment_ids_are_anchors(*version))
+    else {
         return;
     };
     let tables: Tables = Tables::for_model(Some(version));
@@ -261,7 +294,9 @@ impl Context<'_> {
             };
             let (version, tables): (SpecVersion, Tables) = match own_schema {
                 Some(uri) if !(document_root && at == 0) => {
-                    match SpecVersion::from_schema_uri(uri).filter(|version| has_anchor(*version)) {
+                    match SpecVersion::from_schema_uri(uri).filter(|version| {
+                        has_anchor(*version) || fragment_ids_are_anchors(*version)
+                    }) {
                         Some(version) => (version, Tables::for_resource(version)),
                         None => continue,
                     }
@@ -282,13 +317,11 @@ impl Context<'_> {
                                 .insert("$anchor".to_string(), Value::String(anchor));
                         }
                     }
-                    let resource: usize = self.resource(
-                        schema.id.as_deref(),
-                        document_root && at == 0,
-                        parent.resource,
-                    );
-                    let anchors: [Option<&str>; 2] =
-                        declared_anchors(dialect, |keyword| schema.extensions.get(keyword));
+                    let id: Option<&str> = schema.id.as_deref();
+                    let resource: usize =
+                        self.resource(id, document_root && at == 0, parent.resource);
+                    let anchors: [Option<Cow<'_, str>>; 2] =
+                        schema_anchors(version, dialect, id, |key| schema.extensions.get(key));
                     self.declare(anchors, resource, &walk, at);
                     let here: Place = Place {
                         at,
@@ -314,13 +347,14 @@ impl Context<'_> {
                             map.insert("$anchor".to_string(), Value::String(anchor));
                         }
                     }
-                    let resource: usize = self.resource(
-                        map.get("$id").and_then(Value::as_str),
-                        document_root && at == 0,
-                        parent.resource,
-                    );
-                    let anchors: [Option<&str>; 2] =
-                        declared_anchors(dialect, |keyword| map.get(keyword));
+                    let id: Option<&str> = map
+                        .get(id_keyword(version))
+                        .or_else(|| map.get("$id"))
+                        .and_then(Value::as_str);
+                    let resource: usize =
+                        self.resource(id, document_root && at == 0, parent.resource);
+                    let anchors: [Option<Cow<'_, str>>; 2] =
+                        schema_anchors(version, dialect, id, |key| map.get(key));
                     self.declare(anchors, resource, &walk, at);
                     let here: Place = Place {
                         at,
@@ -348,7 +382,13 @@ impl Context<'_> {
 
     /// Records the `anchors` the schema at `at` declares in `resource`, reporting each that
     /// another schema there already declares.
-    fn declare(&mut self, anchors: [Option<&str>; 2], resource: usize, walk: &Walk<'_>, at: usize) {
+    fn declare(
+        &mut self,
+        anchors: [Option<Cow<'_, str>>; 2],
+        resource: usize,
+        walk: &Walk<'_>,
+        at: usize,
+    ) {
         for name in anchors.into_iter().flatten() {
             let pointer: String = walk.pointer(at);
             match self.declared.entry((resource, name.to_string())) {
@@ -373,6 +413,21 @@ impl Context<'_> {
                 keyword: "$id".to_string(),
                 pointer: walk.pointer(at),
             });
+    }
+}
+
+/// The plain-name anchors a schema whose identifier is `id` declares in `version`: its
+/// `$anchor` and `$dynamicAnchor` from 2019-09, the fragment of `id` before it.
+fn schema_anchors<'v>(
+    version: SpecVersion,
+    dialect: Dialect,
+    id: Option<&'v str>,
+    get: impl Fn(&str) -> Option<&'v Value>,
+) -> [Option<Cow<'v, str>>; 2] {
+    if has_anchor(version) {
+        declared_anchors(dialect, get).map(|name| name.map(Cow::Borrowed))
+    } else {
+        [fragment_anchor(id), None]
     }
 }
 
@@ -403,8 +458,12 @@ enum Split {
 /// fragment is percent-decoded first (RFC 3986 §2.1): `#%61` and `#a` name one anchor, and the
 /// registry decodes a `$ref`'s fragment before it looks the anchor up, so `#a` and `#%61` refs
 /// both reach `"$anchor": "a"`. A malformed escape or bytes that are not UTF-8 name no anchor.
+/// Before 2019-09, which has no `$anchor`, every `$id` is kept: its fragment is the anchor.
 fn split_id(version: SpecVersion, id: Option<&str>, anchor: Option<&Value>) -> Split {
-    let Some((resource, fragment)) = id.and_then(|id| id.split_once('#')) else {
+    let Some((resource, fragment)) = id
+        .filter(|_| has_anchor(version))
+        .and_then(|id| id.split_once('#'))
+    else {
         return Split::Keep;
     };
     if fragment.is_empty() {
