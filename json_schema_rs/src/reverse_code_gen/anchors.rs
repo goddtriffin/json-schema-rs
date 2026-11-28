@@ -12,11 +12,18 @@
 //! The same walk reports an anchor declared twice in one resource, which the registry rejects
 //! (2020-12 core §8.2.2): two fragment ids that were harmless as written can become two equal
 //! `$anchor`s.
+//!
+//! The walk finds subschemas by the keyword table of the 2020-12 model, whatever the target,
+//! plus the target's own table for the keywords 2020-12 lacks, exactly as the converter does
+//! (`dialect.rs`), so every schema that reaches the output is visited (`prefixItems` on a
+//! 2019-09 target, which converts it to `items`). The target draft decides only the anchor-name
+//! grammar. A resource with its own `$schema` uses that draft's table and grammar.
 
 use super::error::ReverseCodeGenError;
 use super::escape_pointer_token;
 use super::resource_uri::starts_resource;
 use super::settings::TargetDialect;
+use crate::json_pointer::fragment_to_pointer;
 use crate::json_schema::{Dialect, JsonSchema, Schema, SpecVersion, SubschemaPosition};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -100,9 +107,49 @@ fn has_anchor(version: SpecVersion) -> bool {
     is_anchor_name(version, "a").is_some()
 }
 
-/// A schema still to visit: the schema, its index in [`Walk::steps`], the draft whose anchor
-/// grammar applies to it, and the index of the resource it sits in.
-type Pending<'a> = (Node<'a>, usize, SpecVersion, usize);
+/// The keyword tables that say where a schema's subschemas are.
+#[derive(Clone, Copy)]
+struct Tables {
+    /// The table the schema is written in: 2020-12 for the generator's model, or the draft of an
+    /// embedded resource's own `$schema`.
+    own: Dialect,
+    /// The target's table, for the keywords `own` lacks that the converter still walks
+    /// (`additionalItems` and the array form of `items` before 2020-12). None inside a resource
+    /// with its own `$schema`, and for a 2020-12 target.
+    target: Option<Dialect>,
+}
+
+impl Tables {
+    /// Where the value of `keyword` holds subschemas, the way the converter reads it: by `own`,
+    /// else by `target`; an `items` that `target` lets hold an array may hold one.
+    fn position(self, keyword: &str) -> Option<SubschemaPosition> {
+        let own: Option<SubschemaPosition> = self.own.keyword(keyword).and_then(|k| k.subschemas);
+        let target: Option<SubschemaPosition> = self
+            .target
+            .and_then(|table| table.keyword(keyword))
+            .and_then(|k| k.subschemas);
+        match (own, target) {
+            (Some(SubschemaPosition::Single), Some(SubschemaPosition::SingleOrArray)) => {
+                Some(SubschemaPosition::SingleOrArray)
+            }
+            (Some(position), _) | (None, Some(position)) => Some(position),
+            (None, None) => None,
+        }
+    }
+}
+
+/// Where a schema sits: its index in [`Walk::steps`], the draft whose anchor grammar applies to
+/// it, the keyword tables of its subschemas, and the index of the resource it sits in.
+#[derive(Clone, Copy)]
+struct Place {
+    at: usize,
+    version: SpecVersion,
+    tables: Tables,
+    resource: usize,
+}
+
+/// A schema still to visit, and where it sits.
+type Pending<'a> = (Node<'a>, Place);
 
 /// The anchors seen so far, by resource index and name, each with the JSON Pointer of the
 /// schema that declares it first.
@@ -111,9 +158,11 @@ type Declared = HashMap<(usize, String), String>;
 /// For a target with `$anchor`, writes the plain-name fragment of every `$id` in `body` and in
 /// `definitions` (whose entries sit under the JSON Pointer `path`, in the document's root
 /// resource) as `$anchor`, as the module docs say, at any depth, through typed subschemas and
-/// the subschema keywords of raw `extensions` values. An embedded resource with its own
-/// `$schema` follows that draft's anchor-name grammar, and one of a draft without `$anchor` (or
-/// an unknown `$schema`) is left as written, since its fragment ids are its anchors.
+/// the subschema keywords of raw `extensions` values (found as [`Tables`] says). An embedded
+/// resource with its own `$schema` follows that draft's keyword table and anchor-name grammar,
+/// and one of a draft without `$anchor` (or an unknown `$schema`) is left as written, since its
+/// fragment ids are its anchors. A fragment is percent-decoded before it is checked
+/// (`#%61` becomes the `$anchor` `a`), as the registry decodes a `$ref`'s fragment.
 ///
 /// A fragment that cannot become an `$anchor` is a
 /// [`ReverseCodeGenError::UnrepresentableKeyword`] for `$id` and stays as written: one that is
@@ -133,6 +182,10 @@ pub(super) fn ids_to_anchors(
     let Some(version) = target.spec_version().filter(|version| has_anchor(*version)) else {
         return;
     };
+    let tables: Tables = Tables {
+        own: Dialect::default(),
+        target: (version != SpecVersion::Draft202012).then(|| Dialect::for_spec_version(version)),
+    };
     let mut declared: Declared = HashMap::new();
     let mut resources: usize = 1;
     let mut context = Context {
@@ -141,13 +194,13 @@ pub(super) fn ids_to_anchors(
         resources: &mut resources,
         errors,
     };
-    context.walk(version, Node::Typed(body), "", true);
+    context.walk(version, tables, Node::Typed(body), "", true);
     for (name, definition) in definitions.iter_mut() {
         let Some(object) = definition.as_object_mut() else {
             continue;
         };
         let root: String = format!("{path}/{}", escape_pointer_token(name));
-        context.walk(version, Node::Typed(object), &root, false);
+        context.walk(version, tables, Node::Typed(object), &root, false);
     }
 }
 
@@ -163,26 +216,46 @@ struct Context<'c> {
 impl Context<'_> {
     /// [`ids_to_anchors`] for one tree at `root`, in the document's root resource.
     /// `document_root` marks the document's root, whose `$schema` the generator sets itself.
-    fn walk(&mut self, version: SpecVersion, node: Node<'_>, root: &str, document_root: bool) {
+    fn walk(
+        &mut self,
+        version: SpecVersion,
+        tables: Tables,
+        node: Node<'_>,
+        root: &str,
+        document_root: bool,
+    ) {
         let mut walk: Walk<'_> = Walk {
             root,
             steps: vec![(0, Token::Index(0))],
         };
-        let mut stack: Vec<Pending<'_>> = vec![(node, 0, version, 0)];
-        while let Some((node, at, parent_version, parent_resource)) = stack.pop() {
+        let place: Place = Place {
+            at: 0,
+            version,
+            tables,
+            resource: 0,
+        };
+        let mut stack: Vec<Pending<'_>> = vec![(node, place)];
+        while let Some((node, parent)) = stack.pop() {
+            let at: usize = parent.at;
             let own_schema: Option<&str> = match &node {
                 Node::Typed(schema) => schema.schema.as_deref(),
                 Node::Raw(Value::Object(map)) => map.get("$schema").and_then(Value::as_str),
                 Node::Raw(_) => continue,
             };
-            let version: SpecVersion = match own_schema {
+            let (version, tables): (SpecVersion, Tables) = match own_schema {
                 Some(uri) if !(document_root && at == 0) => {
                     match SpecVersion::from_schema_uri(uri).filter(|version| has_anchor(*version)) {
-                        Some(version) => version,
+                        Some(version) => (
+                            version,
+                            Tables {
+                                own: Dialect::for_spec_version(version),
+                                target: None,
+                            },
+                        ),
                         None => continue,
                     }
                 }
-                _ => parent_version,
+                _ => (parent.version, parent.tables),
             };
             let dialect: Dialect = Dialect::for_spec_version(version);
             match node {
@@ -201,18 +274,18 @@ impl Context<'_> {
                     let resource: usize = self.resource(
                         schema.id.as_deref(),
                         document_root && at == 0,
-                        parent_resource,
+                        parent.resource,
                     );
                     let anchors: [Option<&str>; 2] =
                         declared_anchors(dialect, |keyword| schema.extensions.get(keyword));
                     self.declare(anchors, resource, &walk, at);
-                    push_typed_children(
-                        schema,
-                        (at, version, resource),
-                        &mut walk,
-                        &mut stack,
-                        dialect,
-                    );
+                    let here: Place = Place {
+                        at,
+                        version,
+                        tables,
+                        resource,
+                    };
+                    push_typed_children(schema, here, &mut walk, &mut stack);
                 }
                 Node::Raw(value) => {
                     let Value::Object(map) = value else {
@@ -233,20 +306,19 @@ impl Context<'_> {
                     let resource: usize = self.resource(
                         map.get("$id").and_then(Value::as_str),
                         document_root && at == 0,
-                        parent_resource,
+                        parent.resource,
                     );
                     let anchors: [Option<&str>; 2] =
                         declared_anchors(dialect, |keyword| map.get(keyword));
                     self.declare(anchors, resource, &walk, at);
+                    let here: Place = Place {
+                        at,
+                        version,
+                        tables,
+                        resource,
+                    };
                     for (key, child) in map.iter_mut() {
-                        push_raw(
-                            dialect,
-                            key,
-                            child,
-                            (at, version, resource),
-                            &mut walk,
-                            &mut stack,
-                        );
+                        push_raw(key, child, here, &mut walk, &mut stack);
                     }
                 }
             }
@@ -316,7 +388,10 @@ enum Split {
     Anchor { id: Option<String>, anchor: String },
 }
 
-/// How the `$id` `id` of a schema whose `$anchor` is `anchor` is written in `version`.
+/// How the `$id` `id` of a schema whose `$anchor` is `anchor` is written in `version`. The
+/// fragment is percent-decoded first (RFC 3986 §2.1): `#%61` and `#a` name one anchor, and the
+/// registry decodes a `$ref`'s fragment before it looks the anchor up, so `#a` and `#%61` refs
+/// both reach `"$anchor": "a"`. A malformed escape or bytes that are not UTF-8 name no anchor.
 fn split_id(version: SpecVersion, id: Option<&str>, anchor: Option<&Value>) -> Split {
     let Some((resource, fragment)) = id.and_then(|id| id.split_once('#')) else {
         return Split::Keep;
@@ -324,29 +399,37 @@ fn split_id(version: SpecVersion, id: Option<&str>, anchor: Option<&Value>) -> S
     if fragment.is_empty() {
         return Split::Keep;
     }
-    if is_anchor_name(version, fragment) != Some(true)
-        || anchor.is_some_and(|anchor| anchor.as_str() != Some(fragment))
-    {
+    let Some(name) =
+        fragment_to_pointer(fragment).filter(|name| is_anchor_name(version, name) == Some(true))
+    else {
+        return Split::Unrepresentable;
+    };
+    if anchor.is_some_and(|anchor| anchor.as_str() != Some(&*name)) {
         return Split::Unrepresentable;
     }
     Split::Anchor {
         id: (!resource.is_empty()).then(|| resource.to_string()),
-        anchor: fragment.to_string(),
+        anchor: name.into_owned(),
     }
 }
 
 /// Pushes the typed subschemas of `schema` and the raw ones its `extensions` hold.
 fn push_typed_children<'a>(
     schema: &'a mut JsonSchema,
-    parent: (usize, SpecVersion, usize),
+    parent: Place,
     walk: &mut Walk<'a>,
     stack: &mut Vec<Pending<'a>>,
-    dialect: Dialect,
 ) {
-    let (at, version, resource) = parent;
+    let at: usize = parent.at;
     let mut push = |child: &'a mut Schema, index: usize| {
         if let Some(object) = child.as_object_mut() {
-            stack.push((Node::Typed(object), index, version, resource));
+            stack.push((
+                Node::Typed(object),
+                Place {
+                    at: index,
+                    ..parent
+                },
+            ));
         }
     };
     for (keyword, map) in [
@@ -390,42 +473,45 @@ fn push_typed_children<'a>(
         }
     }
     for (key, child) in &mut schema.extensions {
-        push_raw(dialect, key, child, parent, walk, stack);
+        push_raw(key, child, parent, walk, stack);
     }
 }
 
-/// Pushes the subschemas the raw `keyword: value` of the schema `parent` (its index, draft and
-/// resource) holds, per `dialect`'s keyword table.
+/// Pushes the subschemas the raw `keyword: value` of the schema at `parent` holds, per its
+/// [`Tables`].
 fn push_raw<'a>(
-    dialect: Dialect,
     keyword: &'a str,
     value: &'a mut Value,
-    parent: (usize, SpecVersion, usize),
+    parent: Place,
     walk: &mut Walk<'a>,
     stack: &mut Vec<Pending<'a>>,
 ) {
-    let (at, version, resource) = parent;
-    let Some(position) = dialect.keyword(keyword).and_then(|k| k.subschemas) else {
+    let at: usize = parent.at;
+    let Some(position) = parent.tables.position(keyword) else {
         return;
+    };
+    let place = |index: usize| Place {
+        at: index,
+        ..parent
     };
     match (position, value) {
         (SubschemaPosition::Array | SubschemaPosition::SingleOrArray, Value::Array(items)) => {
             let container: usize = walk.child(at, Token::Key(keyword));
             for (position, item) in items.iter_mut().enumerate() {
                 let index: usize = walk.child(container, Token::Index(position));
-                stack.push((Node::Raw(item), index, version, resource));
+                stack.push((Node::Raw(item), place(index)));
             }
         }
         (SubschemaPosition::Map, Value::Object(map)) => {
             let container: usize = walk.child(at, Token::Key(keyword));
             for (key, entry) in map.iter_mut() {
                 let index: usize = walk.child(container, Token::Key(key));
-                stack.push((Node::Raw(entry), index, version, resource));
+                stack.push((Node::Raw(entry), place(index)));
             }
         }
         (SubschemaPosition::Single | SubschemaPosition::SingleOrArray, value) => {
             let index: usize = walk.child(at, Token::Key(keyword));
-            stack.push((Node::Raw(value), index, version, resource));
+            stack.push((Node::Raw(value), place(index)));
         }
         (SubschemaPosition::Array | SubschemaPosition::Map, _) => {}
     }

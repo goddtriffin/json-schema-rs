@@ -8530,6 +8530,370 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    // --- a percent-encoded fragment id is decoded before it becomes an `$anchor` ---
+
+    #[test]
+    fn a_percent_encoded_fragment_id_is_decoded_into_an_anchor_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({"$anchor": "a", "type": "string"});
+        let actual: serde_json::Value =
+            inlined_fragment_id(ReverseCodeGenSettings::default(), "#%61")
+                .expect("generated")
+                .to_value()["$defs"]["A"]
+                .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_percent_encoded_fragment_id_is_decoded_into_an_anchor_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({"$anchor": "a", "type": "string"});
+        let actual: serde_json::Value =
+            inlined_fragment_id(settings_for(TargetDialect::Draft201909), "#%61")
+                .expect("generated")
+                .to_value()["$defs"]["A"]
+                .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_percent_encoded_resource_id_fragment_is_decoded_into_an_anchor_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/a.json",
+            "$anchor": "ab",
+            "type": "string"
+        });
+        let actual: serde_json::Value = inlined_fragment_id(
+            ReverseCodeGenSettings::default(),
+            "https://example.com/a.json#a%62",
+        )
+        .expect("generated")
+        .to_value()["$defs"]["A"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_percent_encoded_anchor_ref_resolves_in_the_model_and_the_document_on_2020_12_and_2019_09()
+    {
+        let instances: [serde_json::Value; 2] = [
+            serde_json::json!({"s": {"y": "s"}}),
+            serde_json::json!({"s": {"y": 5}}),
+        ];
+        let expected: Vec<Vec<Vec<bool>>> = vec![vec![vec![true, false]; 2]; 2];
+        let actual: Vec<Vec<Vec<bool>>> = [
+            ReverseCodeGenSettings::default(),
+            settings_for(TargetDialect::Draft201909),
+        ]
+        .into_iter()
+        .map(|settings: ReverseCodeGenSettings| {
+            model_and_document_verdicts(
+                &inlined_fragment_id(settings, "#%61").expect("generated"),
+                &instances,
+            )
+        })
+        .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_percent_encoded_fragment_id_and_its_decoded_anchor_are_one_anchor_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({"$anchor": "a", "type": "string"});
+        let actual: serde_json::Value = inlined_definition_with_id(
+            ReverseCodeGenSettings::default(),
+            &serde_json::json!({"$id": "#%61", "$anchor": "a", "type": "string"}),
+        )
+        .expect("generated")
+        .to_value()["$defs"]["A"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn percent_encoded_fragment_ids_that_decode_to_no_anchor_name_are_unrepresentable() {
+        let cases: [(TargetDialect, &str); 6] = [
+            (TargetDialect::Draft202012, "#%2Fa"),
+            (TargetDialect::Draft202012, "#%zz"),
+            (TargetDialect::Draft202012, "#%6"),
+            (TargetDialect::Draft202012, "#%C3%A9"),
+            (TargetDialect::Draft202012, "#a%3Ab"),
+            (TargetDialect::Draft201909, "#%5Fa"),
+        ];
+        let expected: Vec<GeneratedSchemaResult> = cases
+            .iter()
+            .map(|(target, _)| unrepresentable_id_at_a(*target))
+            .collect();
+        let actual: Vec<GeneratedSchemaResult> = cases
+            .iter()
+            .map(|(target, id)| inlined_fragment_id(settings_for(*target), id))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_percent_encoded_colon_is_an_anchor_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({"$anchor": "a:b", "type": "string"});
+        let actual: serde_json::Value =
+            inlined_fragment_id(settings_for(TargetDialect::Draft201909), "#a%3Ab")
+                .expect("generated")
+                .to_value()["$defs"]["A"]
+                .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_percent_encoded_fragment_id_stays_an_id_on_draft_07() {
+        let expected: serde_json::Value = serde_json::json!({"$id": "#%61", "type": "string"});
+        let actual: serde_json::Value =
+            inlined_fragment_id(settings_for(TargetDialect::Draft07), "#%61")
+                .expect("generated")
+                .to_value()["definitions"]["A"]
+                .clone();
+        assert_eq!(expected, actual);
+    }
+
+    // --- subschemas are found by the 2020-12 model's keyword table, whatever the target ---
+
+    /// The root whose property `s` is the standalone schema `standalone`, inlined.
+    fn inlined_raw(target: TargetDialect, standalone: serde_json::Value) -> GeneratedSchemaResult {
+        generated_result_with_inlined(settings_for(target), standalone, serde_json::json!({}))
+    }
+
+    /// The document of a successful [`inlined_raw`].
+    fn inlined_raw_document(
+        target: TargetDialect,
+        standalone: serde_json::Value,
+    ) -> serde_json::Value {
+        inlined_raw(target, standalone)
+            .expect("generated")
+            .to_value()
+    }
+
+    #[test]
+    fn a_fragment_id_in_a_prefix_item_is_an_anchor_in_items_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "type": "object",
+            "$defs": {"B": {"type": "string"}},
+            "properties": {
+                "s": {
+                    "items": [
+                        {"$anchor": "a", "properties": {"y": {"$ref": "#/$defs/B"}}}
+                    ]
+                }
+            }
+        });
+        let actual: serde_json::Value =
+            inlined_fragment_id_prefix_item(settings_for(TargetDialect::Draft201909)).to_value();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_in_a_prefix_item_conforms_to_the_2019_09_metaschema() {
+        let expected: bool = true;
+        let actual: bool = crate::meta::is_valid(
+            &inlined_fragment_id_prefix_item(settings_for(TargetDialect::Draft201909)).to_value(),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_in_a_prefix_item_is_an_anchor_in_the_2020_12_model_of_2019_09() {
+        let expected: serde_json::Value = serde_json::json!([
+            {"$anchor": "a", "properties": {"y": {"$ref": "#/$defs/B"}}}
+        ]);
+        let actual: serde_json::Value = serde_json::to_value(
+            inlined_fragment_id_prefix_item(settings_for(TargetDialect::Draft201909)).schema(),
+        )
+        .expect("serialized")["properties"]["s"]["prefixItems"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_in_a_prefix_item_is_an_anchor_on_openapi_3_1() {
+        let expected: serde_json::Value = serde_json::json!({"prefixItems": [{"$anchor": "a"}]});
+        let actual: serde_json::Value = inlined_raw_document(
+            TargetDialect::OpenApi31,
+            serde_json::json!({"prefixItems": [{"$id": "#a"}]}),
+        )["properties"]["s"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
+    /// A standalone schema with a fragment id under each keyword whose subschemas both the
+    /// 2019-09 and the 2020-12 table walk, behind a raw `not`: `$defs`, `definitions`,
+    /// `dependentSchemas`, `dependencies`, a single `items`, `contentSchema` and
+    /// `unevaluatedItems`.
+    fn fragment_ids_under_shared_keywords() -> serde_json::Value {
+        serde_json::json!({
+            "not": {
+                "$defs": {"D": {"$id": "#d"}},
+                "definitions": {"E": {"$id": "#e"}},
+                "dependentSchemas": {"p": {"$id": "#f"}},
+                "dependencies": {"q": {"$id": "#g"}},
+                "items": {"$id": "#h"},
+                "contentSchema": {"$id": "#i"},
+                "unevaluatedItems": {"$id": "#j"}
+            }
+        })
+    }
+
+    #[test]
+    fn fragment_ids_under_keywords_both_tables_share_are_anchors_on_2019_09_and_openapi_3_1() {
+        let expected_not: serde_json::Value = serde_json::json!({
+            "$defs": {"D": {"$anchor": "d"}},
+            "definitions": {"E": {"$anchor": "e"}},
+            "dependentSchemas": {"p": {"$anchor": "f"}},
+            "dependencies": {"q": {"$anchor": "g"}},
+            "items": {"$anchor": "h"},
+            "contentSchema": {"$anchor": "i"},
+            "unevaluatedItems": {"$anchor": "j"}
+        });
+        let expected: Vec<serde_json::Value> = vec![expected_not; 2];
+        let actual: Vec<serde_json::Value> = [TargetDialect::Draft201909, TargetDialect::OpenApi31]
+            .into_iter()
+            .map(|target: TargetDialect| {
+                inlined_raw_document(target, fragment_ids_under_shared_keywords())["properties"]
+                    ["s"]["not"]
+                    .clone()
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_ids_under_keywords_both_tables_share_conform_to_the_2019_09_metaschema() {
+        let expected: bool = true;
+        let actual: bool = crate::meta::is_valid(&inlined_raw_document(
+            TargetDialect::Draft201909,
+            fragment_ids_under_shared_keywords(),
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    /// A standalone schema with a fragment id under the keywords only the 2019-09 table walks
+    /// (`additionalItems`, the array form of `items`), behind a raw `not`.
+    fn fragment_ids_under_2019_09_only_keywords() -> serde_json::Value {
+        serde_json::json!({
+            "not": {
+                "items": [{"$id": "#a"}],
+                "additionalItems": {"$id": "#b"}
+            }
+        })
+    }
+
+    #[test]
+    fn fragment_ids_under_2019_09_only_keywords_are_anchors_on_2019_09() {
+        let expected: serde_json::Value = serde_json::json!({
+            "items": [{"$anchor": "a"}],
+            "additionalItems": {"$anchor": "b"}
+        });
+        let actual: serde_json::Value = inlined_raw_document(
+            TargetDialect::Draft201909,
+            fragment_ids_under_2019_09_only_keywords(),
+        )["properties"]["s"]["not"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_ids_under_2019_09_only_keywords_conform_to_the_2019_09_metaschema() {
+        let expected: bool = true;
+        let actual: bool = crate::meta::is_valid(&inlined_raw_document(
+            TargetDialect::Draft201909,
+            fragment_ids_under_2019_09_only_keywords(),
+        ));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_ids_under_2019_09_only_keywords_are_no_schemas_on_openapi_3_1() {
+        let expected: serde_json::Value = fragment_ids_under_2019_09_only_keywords()["not"].clone();
+        let actual: serde_json::Value = inlined_raw_document(
+            TargetDialect::OpenApi31,
+            fragment_ids_under_2019_09_only_keywords(),
+        )["properties"]["s"]["not"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_beside_a_dynamic_anchor_of_its_name_is_one_anchor_on_openapi_3_1() {
+        let expected: serde_json::Value = serde_json::json!({
+            "prefixItems": [
+                {"$anchor": "a", "$dynamicAnchor": "a"},
+                {"$dynamicRef": "#a"}
+            ]
+        });
+        let actual: serde_json::Value = inlined_raw_document(
+            TargetDialect::OpenApi31,
+            serde_json::json!({
+                "prefixItems": [
+                    {"$id": "#a", "$dynamicAnchor": "a"},
+                    {"$dynamicRef": "#a"}
+                ]
+            }),
+        )["properties"]["s"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_equal_to_another_schemas_dynamic_anchor_is_a_duplicate_anchor_on_openapi_3_1()
+    {
+        let expected: GeneratedSchemaResult = Err(vec![ReverseCodeGenError::DuplicateAnchor {
+            first: "#/properties/s/prefixItems/1".to_string(),
+            second: "#/properties/s/prefixItems/0".to_string(),
+            anchor: "a".to_string(),
+        }]);
+        let actual: GeneratedSchemaResult = inlined_raw(
+            TargetDialect::OpenApi31,
+            serde_json::json!({
+                "prefixItems": [{"$id": "#a"}, {"$dynamicAnchor": "a"}]
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_equal_to_another_schemas_dynamic_anchor_is_no_duplicate_on_2019_09() {
+        let expected: GeneratedSchemaResult =
+            Err(vec![ReverseCodeGenError::UnrepresentableKeyword {
+                dialect: TargetDialect::Draft201909,
+                keyword: "$dynamicAnchor".to_string(),
+                pointer: "/properties/s/items/1".to_string(),
+            }]);
+        let actual: GeneratedSchemaResult = inlined_raw(
+            TargetDialect::Draft201909,
+            serde_json::json!({
+                "prefixItems": [{"$id": "#a"}, {"$dynamicAnchor": "a"}]
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_fragment_id_in_a_prefix_item_of_an_embedded_2019_09_resource_stays_an_id_on_2020_12() {
+        let expected: serde_json::Value = serde_json::json!({
+            "$id": "https://example.com/a.json",
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "prefixItems": [{"$id": "#a"}],
+            "items": [{"$anchor": "b"}]
+        });
+        let actual: serde_json::Value = inlined_definition_with_id(
+            ReverseCodeGenSettings::default(),
+            &serde_json::json!({
+                "$id": "https://example.com/a.json",
+                "$schema": "https://json-schema.org/draft/2019-09/schema",
+                "prefixItems": [{"$id": "#a"}],
+                "items": [{"$id": "#b"}]
+            }),
+        )
+        .expect("generated")
+        .to_value()["$defs"]["A"]
+            .clone();
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn a_resource_id_with_a_fragment_is_split_into_id_and_anchor_on_2020_12() {
         let expected: serde_json::Value = serde_json::json!({
