@@ -832,6 +832,72 @@ mod tests {
     }
 
     #[test]
+    fn recursive_reference_to_a_non_ascii_ancestor_is_percent_encoded() {
+        let root: Value = json!({
+            "properties": {"é": {"$ref": "#/$defs/n%C3%B6de"}},
+            "$defs": {"nöde": {"properties": {"a b~/%": {"items": {"$ref": "#/$defs/nöde"}}}}}
+        });
+        let expected: Value = json!({
+            "properties": {"é": {"properties": {"a b~/%": {
+                "items": {"$ref": "#/properties/%C3%A9"}
+            }}}}
+        });
+        let actual: Value = dereference(&root, &[]).expect("dereference");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft7_recursive_reference_to_a_non_ascii_ancestor_is_percent_encoded() {
+        let root: Value = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {"日本": {"$ref": "#/definitions/%C3%BC"}},
+            "definitions": {"ü": {"properties": {"ü": {"$ref": "#/definitions/ü", "maximum": 1}}}}
+        });
+        let expected: Value = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {"日本": {"properties": {"ü": {
+                "$ref": "#/properties/%E6%97%A5%E6%9C%AC"
+            }}}}
+        });
+        let actual: Value = dereference(&root, &[]).expect("dereference");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn recursive_reference_to_a_non_ascii_ancestor_keeps_its_verdicts() {
+        let root: Value = json!({
+            "properties": {"é": {"$ref": "#/$defs/nöde"}},
+            "$defs": {"nöde": {
+                "required": ["v"],
+                "properties": {"a b~/%": {"items": {"$ref": "#/$defs/nöde"}}}
+            }}
+        });
+        let instances: Vec<Value> = vec![
+            json!({"é": {"v": 1, "a b~/%": [{"v": 2, "a b~/%": [{"v": 3}]}]}}),
+            json!({"é": {"v": 1, "a b~/%": [{"v": 2, "a b~/%": [{}]}]}}),
+        ];
+        let (expected, actual): (Vec<bool>, Vec<bool>) = verdicts(&root, &[], &instances);
+        assert_eq!(expected, actual);
+        assert_eq!(vec![true, false], actual);
+    }
+
+    #[test]
+    fn recursive_reference_to_a_non_ascii_ancestor_is_a_uri_reference() {
+        let root: Value = json!({
+            "properties": {"é": {"$ref": "#/$defs/n"}},
+            "$defs": {"n": {"items": {"$ref": "#/$defs/n"}}}
+        });
+        let dereferenced: Value = dereference(&root, &[]).expect("dereference");
+        let reference: &str = dereferenced
+            .pointer("/properties/é/items/$ref")
+            .and_then(Value::as_str)
+            .expect("recursive $ref kept");
+        let expected: bool = true;
+        let actual: bool = reference.bytes().all(|b| b.is_ascii_graphic());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn recursive_reference_to_the_root_points_at_the_root() {
         let root: Value = json!({"properties": {"next": {"$ref": "#"}}});
         let expected: Value = json!({"properties": {"next": {"$ref": "#"}}});

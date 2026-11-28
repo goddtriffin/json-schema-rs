@@ -4007,6 +4007,36 @@ mod tests {
     }
 
     #[test]
+    fn location_uri_percent_encodes_non_ascii_and_round_trips() {
+        let root: JsonSchema = parse(&json!({"$defs": {"é a%": {"type": "string"}}}));
+        let expected: (String, Vec<String>) = (
+            "json-schema:///#/$defs/%C3%A9%20a%25".to_string(),
+            vec!["$defs".to_string(), "é a%".to_string()],
+        );
+        let actual: (String, Vec<String>) = location_uri_round_trip(&root, &["$defs", "é a%"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_inside_nested_resource_with_non_ascii_names_round_trips() {
+        let root: JsonSchema = parse(&json!({
+            "$defs": {"日本": {"$id": "b.json", "properties": {"ü/~": {"type": "integer"}}}}
+        }));
+        let expected: (String, Vec<String>) = (
+            "json-schema:///b.json#/properties/%C3%BC~1~0".to_string(),
+            vec![
+                "$defs".to_string(),
+                "日本".to_string(),
+                "properties".to_string(),
+                "ü/~".to_string(),
+            ],
+        );
+        let actual: (String, Vec<String>) =
+            location_uri_round_trip(&root, &["$defs", "日本", "properties", "ü/~"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn location_uri_inside_nested_resource_round_trips() {
         let root: JsonSchema = parse(&json!({
             "$defs": {"B": {"$id": "b.json", "properties": {"x": {"type": "integer"}}}}

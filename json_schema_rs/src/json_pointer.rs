@@ -5,6 +5,7 @@
 //! `~1` represents `/`. A pointer keeps its encoded string, and its decoded segments
 //! next to it only when some segment needed escaping.
 
+use std::borrow::Cow;
 use std::fmt;
 
 /// Error when parsing a string as a JSON Pointer (RFC 6901).
@@ -54,7 +55,7 @@ fn encode_segment(segment: &str, out: &mut String) {
 
 /// Whether `c` may stand as written in a URI fragment (RFC 3986 §3.5): an unreserved
 /// character, a sub-delimiter, `:`, `@`, `/` or `?`.
-pub(crate) fn is_uri_fragment_char(c: char) -> bool {
+fn is_uri_fragment_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
@@ -79,35 +80,82 @@ pub(crate) fn is_uri_fragment_char(c: char) -> bool {
         )
 }
 
+/// Appends `c` to `out` as a URI fragment holds it: as written when RFC 3986 §3.5 allows it
+/// there, else as its UTF-8 bytes percent-encoded (`é` → `%C3%A9`, `%` → `%25`).
+fn push_fragment_char(c: char, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    if is_uri_fragment_char(c) {
+        out.push(c);
+        return;
+    }
+    let mut utf8: [u8; 4] = [0; 4];
+    for byte in c.encode_utf8(&mut utf8).bytes() {
+        out.push('%');
+        out.push(char::from(HEX[usize::from(byte >> 4)]));
+        out.push(char::from(HEX[usize::from(byte & 0xF)]));
+    }
+}
+
 /// Appends `segments` as a JSON Pointer in a URI fragment (RFC 6901 §6): each segment escaped
-/// for the pointer (`~0`, `~1`), then every byte a fragment may not hold as written
-/// percent-encoded (RFC 3986 §3.5: unreserved characters, sub-delimiters, `:`, `@`, `/` and `?`
-/// stay; non-ASCII characters are kept, as an IRI allows).
+/// for the pointer (`~0`, `~1`), then every character a fragment may not hold as written
+/// (RFC 3986 §3.5), `%` and non-ASCII characters included, percent-encoded as its UTF-8 bytes.
+/// The result is a strict `uri-reference` fragment, as [`pointer_to_fragment`] writes, and
+/// [`fragment_to_pointer`] reads it back.
 pub(crate) fn push_uri_fragment<'s>(segments: impl Iterator<Item = &'s str>, out: &mut String) {
-    let keep = |c: char| -> bool { !c.is_ascii() || is_uri_fragment_char(c) };
-    let mut escaped: String = String::new();
     for segment in segments {
         out.push('/');
         // Most segments need no escape of either kind: copied whole.
-        if !needs_escape(segment) && segment.chars().all(keep) {
+        if !needs_escape(segment) && segment.chars().all(is_uri_fragment_char) {
             out.push_str(segment);
             continue;
         }
-        escaped.clear();
-        encode_segment(segment, &mut escaped);
-        for c in escaped.chars() {
-            if keep(c) {
-                out.push(c);
-            } else {
-                // ASCII: one byte, two hex digits.
-                const HEX: &[u8; 16] = b"0123456789ABCDEF";
-                let byte: usize = c as usize;
-                out.push('%');
-                out.push(char::from(HEX[byte >> 4]));
-                out.push(char::from(HEX[byte & 0xF]));
+        for c in segment.chars() {
+            match c {
+                '~' => out.push_str("~0"),
+                '/' => out.push_str("~1"),
+                c => push_fragment_char(c, out),
             }
         }
     }
+}
+
+/// Writes a JSON Pointer (its RFC 6901 string, tokens escaped with `~0` / `~1`) as a URI
+/// fragment (RFC 6901 §6): every character a fragment may not hold as written (RFC 3986 §3.5),
+/// `%` and non-ASCII characters included, is percent-encoded as its UTF-8 bytes. A `$ref` is a
+/// URI reference in every draft's metaschema, so no IRI-only character is written.
+pub(crate) fn pointer_to_fragment(pointer: &str) -> Cow<'_, str> {
+    if pointer.chars().all(is_uri_fragment_char) {
+        return Cow::Borrowed(pointer);
+    }
+    let mut fragment: String = String::with_capacity(pointer.len() + 8);
+    for c in pointer.chars() {
+        push_fragment_char(c, &mut fragment);
+    }
+    Cow::Owned(fragment)
+}
+
+/// Reads a URI fragment as the JSON Pointer string it holds (RFC 6901 §6): percent-decoded,
+/// its `~0` / `~1` escapes kept. `None` when an escape is malformed or the bytes are not UTF-8.
+pub(crate) fn fragment_to_pointer(fragment: &str) -> Option<Cow<'_, str>> {
+    if !fragment.contains('%') {
+        return Some(Cow::Borrowed(fragment));
+    }
+    let bytes: &[u8] = fragment.as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut at: usize = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let hex: &str = fragment
+                .get(at + 1..at + 3)
+                .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(decoded).ok().map(Cow::Owned)
 }
 
 /// Decode one reference token: first `~1` → `/`, then `~0` → `~`.
@@ -392,8 +440,106 @@ impl From<JsonPointer> for String {
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonPointer, JsonPointerError};
+    use super::{
+        JsonPointer, JsonPointerError, fragment_to_pointer, pointer_to_fragment, push_uri_fragment,
+    };
+    use std::borrow::Cow;
     use std::convert::TryFrom;
+
+    /// Segments (decoded) and the URI fragment each is written as: pointer escapes first, then
+    /// percent-encoding of what RFC 3986 §3.5 does not allow in a fragment, non-ASCII as UTF-8.
+    const FRAGMENT_SEGMENTS: [(&str, &str); 10] = [
+        ("plain", "plain"),
+        ("", ""),
+        ("é", "%C3%A9"),
+        ("日本", "%E6%97%A5%E6%9C%AC"),
+        ("😀", "%F0%9F%98%80"),
+        ("a b", "a%20b"),
+        ("100%", "100%25"),
+        ("a~b/c", "a~0b~1c"),
+        ("~é/%", "~0%C3%A9~1%25"),
+        ("-._!$&'()*+,;=:@?", "-._!$&'()*+,;=:@?"),
+    ];
+
+    #[test]
+    fn push_uri_fragment_escapes_and_percent_encodes_each_segment() {
+        let expected: Vec<String> = FRAGMENT_SEGMENTS
+            .iter()
+            .map(|(_, fragment)| format!("/{fragment}"))
+            .collect();
+        let actual: Vec<String> = FRAGMENT_SEGMENTS
+            .iter()
+            .map(|(segment, _)| {
+                let mut out: String = String::new();
+                push_uri_fragment(std::iter::once(*segment), &mut out);
+                out
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn push_uri_fragment_writes_only_uri_characters() {
+        let segments: Vec<&str> = FRAGMENT_SEGMENTS.iter().map(|(s, _)| *s).collect();
+        let mut out: String = String::new();
+        push_uri_fragment(segments.iter().copied(), &mut out);
+        let expected: bool = true;
+        let actual: bool = out.bytes().all(|b| b.is_ascii_graphic());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn push_uri_fragment_agrees_with_pointer_to_fragment() {
+        let segments: Vec<&str> = FRAGMENT_SEGMENTS.iter().map(|(s, _)| *s).collect();
+        let pointer: JsonPointer = JsonPointer::from_segments(segments.iter().copied());
+        let expected: String = pointer_to_fragment(pointer.as_str()).into_owned();
+        let mut actual: String = String::new();
+        push_uri_fragment(segments.iter().copied(), &mut actual);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn push_uri_fragment_of_no_segments_writes_nothing() {
+        let expected: &str = "#";
+        let mut actual: String = String::from("#");
+        push_uri_fragment(std::iter::empty(), &mut actual);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_to_pointer_inverts_push_uri_fragment() {
+        let expected: Vec<Option<JsonPointer>> = FRAGMENT_SEGMENTS
+            .iter()
+            .map(|(segment, _)| Some(JsonPointer::root().push(segment)))
+            .collect();
+        let actual: Vec<Option<JsonPointer>> = FRAGMENT_SEGMENTS
+            .iter()
+            .map(|(segment, _)| {
+                let mut fragment: String = String::new();
+                push_uri_fragment(std::iter::once(*segment), &mut fragment);
+                let pointer: Cow<'_, str> = fragment_to_pointer(&fragment)?;
+                JsonPointer::try_from(pointer.as_ref()).ok()
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn pointer_to_fragment_borrows_a_pointer_that_needs_no_encoding() {
+        let expected: bool = true;
+        let actual: bool = matches!(pointer_to_fragment("/$defs/a~0b~1c"), Cow::Borrowed(_));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_to_pointer_borrows_a_fragment_without_escapes() {
+        let expected: bool = true;
+        let actual: bool = matches!(
+            fragment_to_pointer("/$defs/é"),
+            Some(Cow::Borrowed("/$defs/é"))
+        );
+        assert_eq!(expected, actual);
+    }
 
     #[test]
     fn root_is_empty() {
