@@ -137,7 +137,7 @@ fn render_summary(out: &mut String, report: &DifferentialReport) {
         out.push_str("### Compliance per implementation (optional suite, all drafts)\n\n");
         render_stats_table(out, report, optional);
     } else {
-        out.push_str("_No optional-suite (`tests/<draft>/optional/`) tests were reported._\n\n");
+        out.push_str("_No optional-suite (`validation/tests/optional/`) tests were reported._\n\n");
     }
     out.push_str("### Agreement with the fixture manifest per implementation (all fixtures)\n\n");
     render_stats_table(out, report, &report.summary.fixtures);
@@ -498,7 +498,7 @@ fn render_tool_output(out: &mut String, tool: &ToolOutput) {
 }
 
 fn render_messages(out: &mut String, cases: &[MessageCase]) {
-    out.push_str("## Error messages side by side\n\nIn-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.\n\n");
+    out.push_str("## Error messages side by side\n\nIn-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `validation/tests/*.json` suite file that applies to 2020-12, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.\n\n");
     if cases.is_empty() {
         out.push_str("_No cases selected._\n");
         return;
@@ -688,7 +688,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 | `ours` (ours) | 20.00% | 1 | 3 | 1 | 0 | 5 |
 | `a` | 80.00% | 4 | 1 | 0 | 0 | 5 |
 
-_No optional-suite (`tests/<draft>/optional/`) tests were reported._
+_No optional-suite (`validation/tests/optional/`) tests were reported._
 
 ### Agreement with the fixture manifest per implementation (all fixtures)
 
@@ -793,7 +793,7 @@ _No tests were skipped._
 
 ## Error messages side by side
 
-In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
+In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `validation/tests/*.json` suite file that applies to 2020-12, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
 
 ### 1. suite draft2020-12/type.json — string / number
 

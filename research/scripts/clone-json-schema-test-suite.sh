@@ -2,17 +2,18 @@
 # Clone the JSON Schema Test Suite into research/json-schema-test-suite/ at the pinned commit.
 # Run from repository root. Idempotent: safe to run repeatedly.
 #
-# The suite is pinned because json_schema_rs/tests/suite_xfail.json lists known failures by
-# draft/file/group/test description: a moving suite would change the gate under us. To move
-# to a newer suite, change SUITE_REV, run `make vendor_test_suite update_suite_xfail`, and
-# review the manifest diff (and refresh `make differential`).
+# The repository tracks the latest suite (and the latest Bowtie, which runs it in `make
+# differential`) and adapts when they change. It is still pinned, so the known failures in
+# json_schema_rs/tests/suite_xfail*.json (by draft/file/group/test description) never move under
+# us: to take a newer suite, set SUITE_REV to its latest commit, run `make vendor_test_suite
+# update_suite_xfail`, review the manifest diff, and refresh `make differential`.
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 SUITE_URL="https://github.com/json-schema-org/JSON-Schema-Test-Suite"
-SUITE_REV="583d7c62c9f5fc382530d59e0fa01481a6d10470"
+SUITE_REV="e2a68a15cd490750fd6b95e604e4054d7d978d1f"
 SUITE_DIR="$REPO_ROOT/research/json-schema-test-suite"
 
 mkdir -p "$(dirname "$SUITE_DIR")"

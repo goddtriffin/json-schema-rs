@@ -4,7 +4,8 @@
 #
 # Build from the REPOSITORY ROOT (the build context must contain the whole Cargo workspace):
 #
-#   docker build -f json_schema_rs_differential/Dockerfile -t localhost/json-schema-rs:latest .
+#   docker build --label repo=json-schema-rs -f json_schema_rs_differential/Dockerfile \
+#     -t localhost/json-schema-rs:latest .
 #
 # Run it through Bowtie with `-i image:localhost/json-schema-rs`. The context is trimmed by
 # json_schema_rs_differential/Dockerfile.dockerignore.

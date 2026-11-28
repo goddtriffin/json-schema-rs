@@ -3,12 +3,13 @@
 # run_differential.sh — top-level driver for the json-schema-rs differential-testing harness.
 #
 # Pipeline:
-#   1. Check prerequisites (bowtie CLI, a running container engine, the vendored JSON Schema
-#      Test Suite) and abort up front with a hint if any is missing.
-#   2. Build our Bowtie harness image (localhost/json-schema-rs:latest) from the repo root.
-#   3. Run the official test suite through Bowtie, once per draft, for our harness plus every
-#      competitor implementation in COMPETITORS -> reports/suite/<draft>.jsonl, plus the
-#      draft's optional/ tests (run from a flattened temporary copy)
+#   1. Check prerequisites (uv, a running container engine, the vendored JSON Schema Test
+#      Suite) and abort up front with a hint if any is missing; fetch the latest Bowtie.
+#   2. Build our Bowtie harness image (localhost/json-schema-rs:latest, labelled
+#      repo=json-schema-rs so `make docker-clean` finds it) from the repo root.
+#   3. Run the official test suite (validation/tests/) through Bowtie, once per draft, for our
+#      harness plus every competitor implementation in COMPETITORS
+#      -> reports/suite/<draft>.jsonl, plus its optional tests (validation/tests/optional/)
 #      -> reports/suite/<draft>__optional.jsonl.
 #   4. Run every benchmark fixture in the manifest (real-world / massive schemas) through
 #      `bowtie run`, with the fixture's resource documents in each case's registry, once for its
@@ -19,6 +20,9 @@
 #      side-by-side) with the differential_report bin.
 #
 # Raw Bowtie reports (reports/) are gitignored; results.{json,md} are committed.
+#
+# Portable across Linux, macOS (bash 3.2, BSD tools) and Windows (Git Bash or WSL): Bowtie and
+# Python come from uv, timeouts are done in Python, and temporary files go under mktemp.
 #
 # Env knobs:
 #   DIFF_DRAFTS             space-separated suite drafts to run
@@ -37,8 +41,17 @@ SUITE_DIR="${REPO_ROOT}/research/json-schema-test-suite"
 FIXTURES_DIR="${REPO_ROOT}/json_schema_rs_benchmark/fixtures"
 REPORTS_DIR="${CRATE_DIR}/reports"
 
-# Our harness image and the id Bowtie records for it in reports.
+# Bowtie, always the latest release: the repository tracks the latest Bowtie and test suite
+# (research/scripts/clone-json-schema-test-suite.sh) and adapts when they change. uvx runs it
+# on every platform, with no global install.
+BOWTIE=(uvx --quiet --from bowtie-json-schema@latest bowtie)
+# Python from uv too: `python3` is missing (or a store stub) on Windows.
+PYTHON=(uv run --quiet --no-project python)
+
+# Our harness image, its label (`make docker-clean` removes everything carrying it), and the id
+# Bowtie records for it in reports.
 OUR_IMAGE="localhost/json-schema-rs:latest"
+OUR_LABEL="repo=json-schema-rs"
 OUR_CONNECTABLE="image:localhost/json-schema-rs"
 OUR_REPORT_ID="localhost/json-schema-rs"
 
@@ -62,18 +75,20 @@ DIFF_BOWTIE_TIMEOUT="${DIFF_BOWTIE_TIMEOUT:-900}"
 echo "==> json-schema-rs differential-testing harness"
 
 # --- 1. Prerequisites --------------------------------------------------------------------
-if ! command -v bowtie >/dev/null 2>&1; then
-  echo "error: bowtie not found. Install it with: uv tool install bowtie-json-schema" >&2
+if ! command -v uv >/dev/null 2>&1 || ! command -v uvx >/dev/null 2>&1; then
+  echo "error: uv not found. Install it: https://docs.astral.sh/uv/getting-started/installation/" >&2
   exit 1
 fi
 if ! docker info >/dev/null 2>&1; then
   echo "error: no running container engine. Start Docker (or another engine Bowtie supports)." >&2
   exit 1
 fi
-if [[ ! -d "${SUITE_DIR}/tests" ]]; then
+if [[ ! -d "${SUITE_DIR}/validation/tests" ]]; then
   echo "error: JSON Schema Test Suite not found at ${SUITE_DIR}. Run: make vendor_test_suite" >&2
   exit 1
 fi
+# Fetch the latest Bowtie once up front, so the first timed run does not include the download.
+echo "==> $("${BOWTIE[@]}" --version)"
 
 # Competitors run on the REQUIRED suite only, and left out of the optional-suite and fixture
 # runs. cpp-blaze's harness answers a case without a `seq` whenever a schema has a `$ref` it
@@ -92,8 +107,9 @@ select_implementations() {
   done
   IMPLEMENTATIONS=("${OUR_REPORT_ID}")
   while IFS= read -r supported; do
+    supported="${supported%$'\r'}"
     [[ -n "${supported}" ]] && IMPLEMENTATIONS+=("${supported}")
-  done < <(bowtie filter-implementations --supports-dialect "$1" "${filter_args[@]}")
+  done < <("${BOWTIE[@]}" filter-implementations --supports-dialect "$1" "${filter_args[@]}")
 }
 
 # drop_required_suite_only_competitors: remove REQUIRED_SUITE_ONLY_COMPETITORS from
@@ -134,6 +150,26 @@ schema_dialect() {
   esac
 }
 
+# A timeout every platform has (GNU `timeout` is not on macOS): run argv[3:] with stdout to
+# argv[2] and stderr to argv[2].log; past argv[1] seconds, stop it and exit 124. uv passes the
+# stop on to the Bowtie process it started.
+RUN_WITH_TIMEOUT_PY='
+import subprocess, sys
+seconds, out, command = float(sys.argv[1]), sys.argv[2], sys.argv[3:]
+with open(out, "wb") as stdout, open(out + ".log", "wb") as stderr:
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
+    try:
+        sys.exit(process.wait(timeout=seconds))
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        sys.exit(124)
+'
+
 # run_bowtie <out_file> <bowtie args...>: run bowtie, writing its report to <out_file> and its
 # (verbose) diagnostics to <out_file>.log. Bowtie exits non-zero when any implementation fails
 # or errors on a test, which is expected here, so the exit status is not fatal; instead the
@@ -143,10 +179,9 @@ run_bowtie() {
   local out="$1"
   shift
   local status=0
-  # perl's alarm is a portable (macOS + Linux) timeout: a hung Bowtie run fails loudly.
-  perl -e 'alarm shift; exec @ARGV' "${DIFF_BOWTIE_TIMEOUT}" bowtie "$@" >"${out}" 2>"${out}.log" ||
+  "${PYTHON[@]}" -c "${RUN_WITH_TIMEOUT_PY}" "${DIFF_BOWTIE_TIMEOUT}" "${out}" "${BOWTIE[@]}" "$@" ||
     status=$?
-  if [[ "${status}" == 142 ]]; then
+  if [[ "${status}" == 124 ]]; then
     echo "error: bowtie timed out after ${DIFF_BOWTIE_TIMEOUT}s writing ${out}; see ${out}.log" >&2
     exit 1
   fi
@@ -168,7 +203,10 @@ else
     echo "==> reusing existing ${OUR_IMAGE} (DIFF_SKIP_IMAGE_BUILD=1)"
   else
     echo "==> building ${OUR_IMAGE}"
-    docker build --quiet -f "${CRATE_DIR}/Dockerfile" -t "${OUR_IMAGE}" "${REPO_ROOT}" >/dev/null
+    docker build --quiet --label "${OUR_LABEL}" -f "${CRATE_DIR}/Dockerfile" -t "${OUR_IMAGE}" \
+      "${REPO_ROOT}" >/dev/null
+    # The rebuild leaves the previous image dangling; remove only this repo's dangling images.
+    docker image prune -f --filter "label=${OUR_LABEL}" >/dev/null
   fi
 
   rm -rf "${REPORTS_DIR}"
@@ -180,24 +218,12 @@ else
     select_implementations "${draft}"
     echo "==> bowtie suite ${draft} (${#IMPLEMENTATIONS[@]} implementations)"
     run_bowtie "${REPORTS_DIR}/suite/${draft}.jsonl" \
-      suite $(implementation_args) "${SUITE_DIR}/tests/${draft}"
-    # `bowtie suite <dir>` runs only top-level files and infers the dialect from the directory
-    # name, so it refuses `<draft>/optional` directly. Instead, flatten the draft's optional
-    # tests (including optional/format/) into a temporary `tests/<draft>/` directory, next to a
-    # `remotes` link so remote-ref cases still resolve. The report builder maps each case back
-    # to its real optional/... file.
+      suite -D "${draft}" $(implementation_args) "${SUITE_DIR}/validation/tests"
+    # `bowtie suite <dir>` runs only the directory's own files, so optional/ is its own run.
     drop_required_suite_only_competitors
     echo "==> bowtie suite ${draft} (optional, ${#IMPLEMENTATIONS[@]} implementations)"
-    optional_root="$(mktemp -d)"
-    mkdir -p "${optional_root}/tests/${draft}"
-    ln -s "${SUITE_DIR}/remotes" "${optional_root}/remotes"
-    while IFS= read -r optional_file; do
-      relative="${optional_file#"${SUITE_DIR}/tests/${draft}/optional/"}"
-      cp "${optional_file}" "${optional_root}/tests/${draft}/${relative//\//__}"
-    done < <(find "${SUITE_DIR}/tests/${draft}/optional" -name '*.json' | sort)
     run_bowtie "${REPORTS_DIR}/suite/${draft}__optional.jsonl" \
-      suite $(implementation_args) "${optional_root}/tests/${draft}"
-    rm -rf "${optional_root}"
+      suite -D "${draft}" $(implementation_args) "${SUITE_DIR}/validation/tests/optional"
   done
 
   # --- 4. Benchmark fixtures (real-world / massive schemas) --------------------------------
@@ -215,8 +241,9 @@ else
     # shellcheck disable=SC2046
     run_bowtie "${REPORTS_DIR}/fixtures/${id//\//__}__${expectation}.jsonl" \
       run $(implementation_args) -D "${dialect}" "${case_file}"
-  done < <(python3 -c '
+  done < <("${PYTHON[@]}" -c '
 import json, os, sys
+sys.stdout.reconfigure(newline="\n")  # no \r on Windows, which `read` would keep
 fixtures_dir, cases_dir = sys.argv[1], sys.argv[2]
 def load(path):
     with open(os.path.join(fixtures_dir, path)) as f:

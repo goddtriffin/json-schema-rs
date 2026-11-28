@@ -9,7 +9,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 | Id | Name | Language | Version |
 |---|---|---|---|
 | `cpp-blaze` | blaze | c++ | 5eeef87e |
-| `dotnet-jsonschema-net` | JsonSchema.Net | dotnet | 9.2.2 |
+| `dotnet-jsonschema-net` | JsonSchema.Net | dotnet | 9.7.0 |
 | `go-jsonschema` | jsonschema | go | v6.0.2 |
 | `java-networknt-json-schema-validator` | com.networknt-json-schema-validator | java | 3.0.6 |
 | `js-ajv` | ajv | javascript | 8.20.0 |
@@ -25,40 +25,40 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 | Draft | Tests | Compliance | Coverage | Correctness | Failed | Skipped (unsupported) | Errored | Disagree with majority | Wrong vs expected |
 |---|---|---|---|---|---|---|---|---|---|
-| draft4 | 615 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
-| draft6 | 834 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
-| draft7 | 922 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
-| draft2019-09 | 1242 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
-| draft2020-12 | 1277 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
+| draft4 | 666 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
+| draft6 | 869 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
+| draft7 | 955 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
+| draft2019-09 | 1292 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
+| draft2020-12 | 1319 | 100.00% | 100.00% | 100.00% | 0 | 0 | 0 | 0 | 0 |
 
 ### Compliance per implementation (non-optional suite, all drafts)
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
-| `cpp-blaze` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
-| `dotnet-jsonschema-net` | 100.00% | 4275 | 0 | 0 | 0 | 4275 |
-| `go-jsonschema` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
-| `java-networknt-json-schema-validator` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
-| `js-ajv` | 85.15% | 4164 | 63 | 0 | 663 | 4890 |
-| `js-hyperjump` | 99.18% | 4850 | 0 | 40 | 0 | 4890 |
-| `python-jsonschema` | 99.94% | 4887 | 3 | 0 | 0 | 4890 |
-| `rust-boon` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
-| `rust-jsonschema` | 100.00% | 4890 | 0 | 0 | 0 | 4890 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 5101 | 0 | 0 | 0 | 5101 |
+| `cpp-blaze` | 100.00% | 5101 | 0 | 0 | 0 | 5101 |
+| `dotnet-jsonschema-net` | 100.00% | 4435 | 0 | 0 | 0 | 4435 |
+| `go-jsonschema` | 100.00% | 5101 | 0 | 0 | 0 | 5101 |
+| `java-networknt-json-schema-validator` | 81.98% | 4182 | 0 | 0 | 919 | 5101 |
+| `js-ajv` | 75.57% | 3855 | 56 | 0 | 1190 | 5101 |
+| `js-hyperjump` | 99.27% | 5064 | 5 | 32 | 0 | 5101 |
+| `python-jsonschema` | 99.76% | 5089 | 3 | 0 | 9 | 5101 |
+| `rust-boon` | 100.00% | 5101 | 0 | 0 | 0 | 5101 |
+| `rust-jsonschema` | 100.00% | 5101 | 0 | 0 | 0 | 5101 |
 
 ### Compliance per implementation (optional suite, all drafts)
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 80.61% | 2149 | 511 | 6 | 0 | 2666 |
-| `dotnet-jsonschema-net` | 60.11% | 1439 | 917 | 0 | 38 | 2394 |
-| `go-jsonschema` | 74.08% | 1975 | 661 | 0 | 30 | 2666 |
-| `java-networknt-json-schema-validator` | 77.72% | 2072 | 584 | 0 | 10 | 2666 |
-| `js-ajv` | 22.02% | 587 | 11 | 0 | 2068 | 2666 |
-| `js-hyperjump` | 62.79% | 1674 | 982 | 0 | 10 | 2666 |
-| `python-jsonschema` | 57.80% | 1541 | 1029 | 0 | 96 | 2666 |
-| `rust-boon` | 79.26% | 2113 | 543 | 0 | 10 | 2666 |
-| `rust-jsonschema` | 80.61% | 2149 | 511 | 0 | 6 | 2666 |
+| `localhost/json-schema-rs` (ours) | 92.71% | 636 | 50 | 0 | 0 | 686 |
+| `dotnet-jsonschema-net` | 78.76% | 456 | 112 | 0 | 11 | 579 |
+| `go-jsonschema` | 81.92% | 562 | 99 | 0 | 25 | 686 |
+| `java-networknt-json-schema-validator` | 86.44% | 593 | 88 | 0 | 5 | 686 |
+| `js-ajv` | 82.07% | 563 | 69 | 0 | 54 | 686 |
+| `js-hyperjump` | 80.03% | 549 | 119 | 0 | 18 | 686 |
+| `python-jsonschema` | 72.89% | 500 | 147 | 0 | 39 | 686 |
+| `rust-boon` | 89.21% | 612 | 69 | 0 | 5 | 686 |
+| `rust-jsonschema` | 91.69% | 629 | 52 | 0 | 5 | 686 |
 
 ### Agreement with the fixture manifest per implementation (all fixtures)
 
@@ -78,12 +78,7 @@ Definitions: **compliance** = tests passed / all tests; **coverage** = tests we 
 
 Every suite test our harness skipped, grouped by reason and sorted by impact. This is the coverage roadmap signal.
 
-| Reason | Tests | Cases | By group |
-|---|---|---|---|
-| $ref: $ref "http://localhost:1234/draft2019-09/dependentRequired.json" at /allOf/1 ("http://localhost:1234/draft2019-09/dependentRequired.json") does not resolve: could not retrieve "http://localhost:1234/draft2019-09/dependentRequired.json": retrieval is disabled; no document was given for "http://localhost:1234/draft2019-09/dependentRequired.json" | 2 | 1 | draft7: 2 |
-| $ref: $ref "http://localhost:1234/draft2020-12/prefixItems.json" at root ("http://localhost:1234/draft2020-12/prefixItems.json") does not resolve: could not retrieve "http://localhost:1234/draft2020-12/prefixItems.json": retrieval is disabled; no document was given for "http://localhost:1234/draft2020-12/prefixItems.json" | 2 | 1 | draft2019-09: 2 |
-| $ref: $ref "http://localhost:1234/draft2019-09/ignore-prefixItems.json" at root ("http://localhost:1234/draft2019-09/ignore-prefixItems.json") does not resolve: could not retrieve "http://localhost:1234/draft2019-09/ignore-prefixItems.json": retrieval is disabled; no document was given for "http://localhost:1234/draft2019-09/ignore-prefixItems.json" | 1 | 1 | draft2020-12: 1 |
-| $ref: $ref "http://localhost:1234/draft7/ignore-dependentRequired.json" at /allOf/1 ("http://localhost:1234/draft7/ignore-dependentRequired.json") does not resolve: could not retrieve "http://localhost:1234/draft7/ignore-dependentRequired.json": retrieval is disabled; no document was given for "http://localhost:1234/draft7/ignore-dependentRequired.json" | 1 | 1 | draft2019-09: 1 |
+_No tests were skipped._
 
 ## Per-draft results
 
@@ -95,46 +90,53 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 615 | 0 | 0 | 0 | 615 |
-| `cpp-blaze` | 100.00% | 615 | 0 | 0 | 0 | 615 |
-| `go-jsonschema` | 100.00% | 615 | 0 | 0 | 0 | 615 |
-| `java-networknt-json-schema-validator` | 100.00% | 615 | 0 | 0 | 0 | 615 |
-| `js-ajv` | 90.89% | 559 | 8 | 0 | 48 | 615 |
-| `js-hyperjump` | 98.37% | 605 | 0 | 10 | 0 | 615 |
-| `python-jsonschema` | 100.00% | 615 | 0 | 0 | 0 | 615 |
-| `rust-boon` | 100.00% | 615 | 0 | 0 | 0 | 615 |
-| `rust-jsonschema` | 100.00% | 615 | 0 | 0 | 0 | 615 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 666 | 0 | 0 | 0 | 666 |
+| `cpp-blaze` | 100.00% | 666 | 0 | 0 | 0 | 666 |
+| `go-jsonschema` | 100.00% | 666 | 0 | 0 | 0 | 666 |
+| `java-networknt-json-schema-validator` | 100.00% | 666 | 0 | 0 | 0 | 666 |
+| `js-ajv` | 90.24% | 601 | 8 | 0 | 57 | 666 |
+| `js-hyperjump` | 98.65% | 657 | 1 | 8 | 0 | 666 |
+| `python-jsonschema` | 100.00% | 666 | 0 | 0 | 0 | 666 |
+| `rust-boon` | 100.00% | 666 | 0 | 0 | 0 | 666 |
+| `rust-jsonschema` | 100.00% | 666 | 0 | 0 | 0 | 666 |
 
 Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 99.26% | 270 | 2 | 0 | 0 | 272 |
-| `go-jsonschema` | 90.81% | 247 | 21 | 0 | 4 | 272 |
-| `java-networknt-json-schema-validator` | 96.69% | 263 | 9 | 0 | 0 | 272 |
-| `js-ajv` | 36.03% | 98 | 2 | 0 | 172 | 272 |
-| `js-hyperjump` | 68.01% | 185 | 87 | 0 | 0 | 272 |
-| `python-jsonschema` | 57.35% | 156 | 98 | 0 | 18 | 272 |
-| `rust-boon` | 98.90% | 269 | 3 | 0 | 0 | 272 |
-| `rust-jsonschema` | 99.26% | 270 | 2 | 0 | 0 | 272 |
+| `localhost/json-schema-rs` (ours) | 90.65% | 97 | 10 | 0 | 0 | 107 |
+| `go-jsonschema` | 78.50% | 84 | 18 | 0 | 5 | 107 |
+| `java-networknt-json-schema-validator` | 84.11% | 90 | 16 | 0 | 1 | 107 |
+| `js-ajv` | 87.85% | 94 | 12 | 0 | 1 | 107 |
+| `js-hyperjump` | 85.05% | 91 | 15 | 0 | 1 | 107 |
+| `python-jsonschema` | 75.70% | 81 | 21 | 0 | 5 | 107 |
+| `rust-boon` | 87.85% | 94 | 12 | 0 | 1 | 107 |
+| `rust-jsonschema` | 89.72% | 96 | 10 | 0 | 1 | 107 |
 
-**Disagreements with the competitor majority: 4**
+**Disagreements with the competitor majority: 3**
 
-<details><summary>Disagreements with the competitor majority (4)</summary>
+<details><summary>Disagreements with the competitor majority (3)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
 | File | Case | Tests (expected) | Majority | Triage |
 |---|---|---|---|---|
 | `optional/bignum.json` | integer | a bignum is an integer (valid); a negative bignum is an integer (valid) | 6/7 | likely our bug |
-| `optional/format/hostname.json` | validation of host names | trailing dot (invalid) | 4/6 | competitors differ from expected |
-| `optional/zeroTerminatedFloats.json` | some languages do not distinguish between different types of numeric value | a float is not an integer even without fractional part (invalid) | 4/7 | competitors differ from expected |
+| `optional/zero-terminated-floats.json` | some languages do not distinguish between different types of numeric value | a float is not an integer even without fractional part (invalid) | 4/7 | competitors differ from expected |
 
 </details>
 
 **Wrong vs. expected with no competitor consensus: 0**
 
-**Wrong vs. expected but agreeing with the competitor majority: 0**
+**Wrong vs. expected but agreeing with the competitor majority: 8**
+
+<details><summary>Wrong vs. expected, majority agrees with us (aggregated per file)</summary>
+
+| File | Tests | Majority (agreeing/voters: tests) |
+|---|---|---|
+| `optional/bignum.json` | 8 | 4/7: 1, 7/7: 7 |
+
+</details>
 
 **Tests our harness errored on: 0**
 
@@ -146,48 +148,54 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 834 | 0 | 0 | 0 | 834 |
-| `cpp-blaze` | 100.00% | 834 | 0 | 0 | 0 | 834 |
-| `dotnet-jsonschema-net` | 100.00% | 834 | 0 | 0 | 0 | 834 |
-| `go-jsonschema` | 100.00% | 834 | 0 | 0 | 0 | 834 |
-| `java-networknt-json-schema-validator` | 100.00% | 834 | 0 | 0 | 0 | 834 |
-| `js-ajv` | 90.89% | 758 | 8 | 0 | 68 | 834 |
-| `js-hyperjump` | 98.68% | 823 | 0 | 11 | 0 | 834 |
-| `python-jsonschema` | 100.00% | 834 | 0 | 0 | 0 | 834 |
-| `rust-boon` | 100.00% | 834 | 0 | 0 | 0 | 834 |
-| `rust-jsonschema` | 100.00% | 834 | 0 | 0 | 0 | 834 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 869 | 0 | 0 | 0 | 869 |
+| `cpp-blaze` | 100.00% | 869 | 0 | 0 | 0 | 869 |
+| `dotnet-jsonschema-net` | 100.00% | 869 | 0 | 0 | 0 | 869 |
+| `go-jsonschema` | 100.00% | 869 | 0 | 0 | 0 | 869 |
+| `java-networknt-json-schema-validator` | 100.00% | 869 | 0 | 0 | 0 | 869 |
+| `js-ajv` | 90.45% | 786 | 8 | 0 | 75 | 869 |
+| `js-hyperjump` | 98.96% | 860 | 1 | 8 | 0 | 869 |
+| `python-jsonschema` | 100.00% | 869 | 0 | 0 | 0 | 869 |
+| `rust-boon` | 100.00% | 869 | 0 | 0 | 0 | 869 |
+| `rust-jsonschema` | 100.00% | 869 | 0 | 0 | 0 | 869 |
 
 Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 341 | 0 | 0 | 0 | 341 |
-| `dotnet-jsonschema-net` | 65.10% | 222 | 112 | 0 | 7 | 341 |
-| `go-jsonschema` | 92.67% | 316 | 21 | 0 | 4 | 341 |
-| `java-networknt-json-schema-validator` | 97.36% | 332 | 9 | 0 | 0 | 341 |
-| `js-ajv` | 29.91% | 102 | 1 | 0 | 238 | 341 |
-| `js-hyperjump` | 69.21% | 236 | 105 | 0 | 0 | 341 |
-| `python-jsonschema` | 61.00% | 208 | 115 | 0 | 18 | 341 |
-| `rust-boon` | 99.41% | 339 | 2 | 0 | 0 | 341 |
-| `rust-jsonschema` | 100.00% | 341 | 0 | 0 | 0 | 341 |
+| `localhost/json-schema-rs` (ours) | 91.07% | 102 | 10 | 0 | 0 | 112 |
+| `dotnet-jsonschema-net` | 81.25% | 91 | 20 | 0 | 1 | 112 |
+| `go-jsonschema` | 78.57% | 88 | 19 | 0 | 5 | 112 |
+| `java-networknt-json-schema-validator` | 83.04% | 93 | 18 | 0 | 1 | 112 |
+| `js-ajv` | 84.82% | 95 | 13 | 0 | 4 | 112 |
+| `js-hyperjump` | 83.04% | 93 | 18 | 0 | 1 | 112 |
+| `python-jsonschema` | 75.00% | 84 | 23 | 0 | 5 | 112 |
+| `rust-boon` | 87.50% | 98 | 13 | 0 | 1 | 112 |
+| `rust-jsonschema` | 90.18% | 101 | 10 | 0 | 1 | 112 |
 
-**Disagreements with the competitor majority: 11**
+**Disagreements with the competitor majority: 0**
 
-<details><summary>Disagreements with the competitor majority (11)</summary>
+**Wrong vs. expected with no competitor consensus: 1**
+
+<details><summary>Wrong vs. expected with no competitor consensus (1)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
 | File | Case | Tests (expected) | Majority | Triage |
 |---|---|---|---|---|
-| `optional/format/hostname.json` | validation of host names | trailing dot (invalid) | 5/7 | competitors differ from expected |
-| `optional/format/uri-reference.json` | validation of URI References | unescaped non US-ASCII characters (invalid) | 4/7 | competitors differ from expected |
-| `optional/format/uri.json` | validation of URIs | unescaped non US-ASCII characters (invalid); invalid backslash character (invalid); invalid " character (invalid); invalid &lt;&gt; characters (invalid); invalid {} characters (invalid); invalid ^ character (invalid); invalid ` character (invalid); invalid SPACE character (invalid); invalid \| character (invalid) | 4/7 | competitors differ from expected |
+| `optional/bignum.json` | minimum integer comparison | just below the minimum is invalid (invalid) | 4/8 | no consensus |
 
 </details>
 
-**Wrong vs. expected with no competitor consensus: 0**
+**Wrong vs. expected but agreeing with the competitor majority: 9**
 
-**Wrong vs. expected but agreeing with the competitor majority: 0**
+<details><summary>Wrong vs. expected, majority agrees with us (aggregated per file)</summary>
+
+| File | Tests | Majority (agreeing/voters: tests) |
+|---|---|---|
+| `optional/bignum.json` | 9 | 8/8: 9 |
+
+</details>
 
 **Tests our harness errored on: 0**
 
@@ -199,34 +207,34 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 922 | 0 | 0 | 0 | 922 |
-| `cpp-blaze` | 100.00% | 922 | 0 | 0 | 0 | 922 |
-| `dotnet-jsonschema-net` | 100.00% | 922 | 0 | 0 | 0 | 922 |
-| `go-jsonschema` | 100.00% | 922 | 0 | 0 | 0 | 922 |
-| `java-networknt-json-schema-validator` | 100.00% | 922 | 0 | 0 | 0 | 922 |
-| `js-ajv` | 85.03% | 784 | 8 | 0 | 130 | 922 |
-| `js-hyperjump` | 98.81% | 911 | 0 | 11 | 0 | 922 |
-| `python-jsonschema` | 100.00% | 922 | 0 | 0 | 0 | 922 |
-| `rust-boon` | 100.00% | 922 | 0 | 0 | 0 | 922 |
-| `rust-jsonschema` | 100.00% | 922 | 0 | 0 | 0 | 922 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 955 | 0 | 0 | 0 | 955 |
+| `cpp-blaze` | 100.00% | 955 | 0 | 0 | 0 | 955 |
+| `dotnet-jsonschema-net` | 100.00% | 955 | 0 | 0 | 0 | 955 |
+| `go-jsonschema` | 100.00% | 955 | 0 | 0 | 0 | 955 |
+| `java-networknt-json-schema-validator` | 100.00% | 955 | 0 | 0 | 0 | 955 |
+| `js-ajv` | 84.82% | 810 | 8 | 0 | 137 | 955 |
+| `js-hyperjump` | 99.06% | 946 | 1 | 8 | 0 | 955 |
+| `python-jsonschema` | 100.00% | 955 | 0 | 0 | 0 | 955 |
+| `rust-boon` | 100.00% | 955 | 0 | 0 | 0 | 955 |
+| `rust-jsonschema` | 100.00% | 955 | 0 | 0 | 0 | 955 |
 
 Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 99.68% | 619 | 0 | 2 | 0 | 621 |
-| `dotnet-jsonschema-net` | 58.62% | 364 | 248 | 0 | 9 | 621 |
-| `go-jsonschema` | 84.22% | 523 | 92 | 0 | 6 | 621 |
-| `java-networknt-json-schema-validator` | 93.08% | 578 | 41 | 0 | 2 | 621 |
-| `js-ajv` | 17.39% | 108 | 5 | 0 | 508 | 621 |
-| `js-hyperjump` | 60.87% | 378 | 241 | 0 | 2 | 621 |
-| `python-jsonschema` | 56.36% | 350 | 251 | 0 | 20 | 621 |
-| `rust-boon` | 95.01% | 590 | 29 | 0 | 2 | 621 |
-| `rust-jsonschema` | 99.68% | 619 | 0 | 0 | 2 | 621 |
+| `localhost/json-schema-rs` (ours) | 92.06% | 116 | 10 | 0 | 0 | 126 |
+| `dotnet-jsonschema-net` | 80.16% | 101 | 24 | 0 | 1 | 126 |
+| `go-jsonschema` | 77.78% | 98 | 23 | 0 | 5 | 126 |
+| `java-networknt-json-schema-validator` | 84.92% | 107 | 18 | 0 | 1 | 126 |
+| `js-ajv` | 80.16% | 101 | 17 | 0 | 8 | 126 |
+| `js-hyperjump` | 78.57% | 99 | 22 | 0 | 5 | 126 |
+| `python-jsonschema` | 74.60% | 94 | 27 | 0 | 5 | 126 |
+| `rust-boon` | 85.71% | 108 | 17 | 0 | 1 | 126 |
+| `rust-jsonschema` | 91.27% | 115 | 10 | 0 | 1 | 126 |
 
-**Disagreements with the competitor majority: 83**
+**Disagreements with the competitor majority: 4**
 
-<details><summary>Disagreements with the competitor majority (83)</summary>
+<details><summary>Disagreements with the competitor majority (4)</summary>
 
 One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
 
@@ -235,19 +243,30 @@ One row per case; each test lists its expected verdict. Majority is `agreeing/vo
 | `optional/content.json` | validation of string-encoded content based on media type | an invalid JSON document (invalid) | 6/8 | competitors differ from expected |
 | `optional/content.json` | validation of binary string-encoding | an invalid base64 string (% is not a valid character) (invalid) | 6/8 | competitors differ from expected |
 | `optional/content.json` | validation of binary-encoded media type documents | a validly-encoded invalid JSON document (invalid); an invalid base64 string that is valid JSON (invalid) | 6/8 | competitors differ from expected |
-| `optional/format/hostname.json` | validation of host names | trailing dot (invalid); contains "--" in the 3rd and 4th position (invalid); exceeds maximum overall length (256) (invalid) | 4/7, 5/7, 6/7 | competitors differ from expected |
-| `optional/format/hostname.json` | validation of A-label (punycode) host names | invalid Punycode (invalid); contains illegal char U+302E Hangul single dot tone mark (invalid); Begins with a Spacing Combining Mark (invalid); Begins with a Nonspacing Mark (invalid); Begins with an Enclosing Mark (invalid); Exceptions that are DISALLOWED, right-to-left chars (invalid); Exceptions that are DISALLOWED, left-to-right chars (invalid); MIDDLE DOT with no preceding 'l' (invalid); MIDDLE DOT with nothing preceding (invalid); MIDDLE DOT with no following 'l' (invalid); MIDDLE DOT with nothing following (invalid); Greek KERAIA not followed by Greek (invalid); Greek KERAIA not followed by anything (invalid); Hebrew GERESH not preceded by Hebrew (invalid); Hebrew GERESH not preceded by anything (invalid); Hebrew GERSHAYIM not preceded by Hebrew (invalid); Hebrew GERSHAYIM not preceded by anything (invalid); KATAKANA MIDDLE DOT with no Hiragana, Katakana, or Han (invalid); KATAKANA MIDDLE DOT with no other characters (invalid); Arabic-Indic digits mixed with Extended Arabic-Indic digits (invalid); ZERO WIDTH JOINER not preceded by Virama (invalid); ZERO WIDTH JOINER not preceded by anything (invalid) | 6/7 | competitors differ from expected |
-| `optional/format/idn-email.json` | validation of an internationalized e-mail addresses | an invalid idn e-mail address (invalid); an invalid e-mail address (invalid) | 4/7 | competitors differ from expected |
-| `optional/format/idn-hostname.json` | validation of internationalized host names | illegal first char U+302E Hangul single dot tone mark (invalid); contains illegal char U+302E Hangul single dot tone mark (invalid); a host name with a component too long (invalid); invalid label, correct Punycode (invalid); invalid Punycode (invalid); U-label contains "--" in the 3rd and 4th position (invalid); U-label starts with a dash (invalid); U-label ends with a dash (invalid); U-label starts and ends with a dash (invalid); Begins with a Spacing Combining Mark (invalid); Begins with a Nonspacing Mark (invalid); Begins with an Enclosing Mark (invalid); Exceptions that are DISALLOWED, right-to-left chars (invalid); Exceptions that are DISALLOWED, left-to-right chars (invalid); MIDDLE DOT with no preceding 'l' (invalid); MIDDLE DOT with nothing preceding (invalid); MIDDLE DOT with no following 'l' (invalid); MIDDLE DOT with nothing following (invalid); Greek KERAIA not followed by Greek (invalid); Greek KERAIA not followed by anything (invalid); Hebrew GERESH not preceded by Hebrew (invalid); Hebrew GERESH not preceded by anything (invalid); Hebrew GERSHAYIM not preceded by Hebrew (invalid); Hebrew GERSHAYIM not preceded by anything (invalid); KATAKANA MIDDLE DOT with no Hiragana, Katakana, or Han (invalid); KATAKANA MIDDLE DOT with no other characters (invalid); Arabic-Indic digits mixed with Extended Arabic-Indic digits (invalid); ZERO WIDTH JOINER not preceded by Virama (invalid); ZERO WIDTH JOINER not preceded by anything (invalid); empty string (invalid) | 4/7 | competitors differ from expected |
-| `optional/format/idn-hostname.json` | validation of separators in internationalized host names | single dot (invalid); single ideographic full stop (invalid); single fullwidth full stop (invalid); single halfwidth ideographic full stop (invalid); leading dot (invalid); leading ideographic full stop (invalid); leading fullwidth full stop (invalid); leading halfwidth ideographic full stop (invalid); trailing dot (invalid); trailing ideographic full stop (invalid); trailing fullwidth full stop (invalid); trailing halfwidth ideographic full stop (invalid) | 4/7, 5/7 | competitors differ from expected |
-| `optional/format/uri-reference.json` | validation of URI References | unescaped non US-ASCII characters (invalid) | 4/7 | competitors differ from expected |
-| `optional/format/uri.json` | validation of URIs | unescaped non US-ASCII characters (invalid); invalid backslash character (invalid); invalid " character (invalid); invalid &lt;&gt; characters (invalid); invalid {} characters (invalid); invalid ^ character (invalid); invalid ` character (invalid); invalid SPACE character (invalid); invalid \| character (invalid) | 4/7 | competitors differ from expected |
 
 </details>
 
-**Wrong vs. expected with no competitor consensus: 0**
+**Wrong vs. expected with no competitor consensus: 1**
 
-**Wrong vs. expected but agreeing with the competitor majority: 0**
+<details><summary>Wrong vs. expected with no competitor consensus (1)</summary>
+
+One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
+
+| File | Case | Tests (expected) | Majority | Triage |
+|---|---|---|---|---|
+| `optional/bignum.json` | minimum integer comparison | just below the minimum is invalid (invalid) | 4/8 | no consensus |
+
+</details>
+
+**Wrong vs. expected but agreeing with the competitor majority: 9**
+
+<details><summary>Wrong vs. expected, majority agrees with us (aggregated per file)</summary>
+
+| File | Tests | Majority (agreeing/voters: tests) |
+|---|---|---|
+| `optional/bignum.json` | 9 | 8/8: 9 |
+
+</details>
 
 **Tests our harness errored on: 0**
 
@@ -259,60 +278,52 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
-| `cpp-blaze` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
-| `dotnet-jsonschema-net` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
-| `go-jsonschema` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
-| `java-networknt-json-schema-validator` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
-| `js-ajv` | 83.25% | 1034 | 12 | 0 | 196 | 1242 |
-| `js-hyperjump` | 99.68% | 1238 | 0 | 4 | 0 | 1242 |
-| `python-jsonschema` | 99.84% | 1240 | 2 | 0 | 0 | 1242 |
-| `rust-boon` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
-| `rust-jsonschema` | 100.00% | 1242 | 0 | 0 | 0 | 1242 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 1292 | 0 | 0 | 0 | 1292 |
+| `cpp-blaze` | 100.00% | 1292 | 0 | 0 | 0 | 1292 |
+| `dotnet-jsonschema-net` | 100.00% | 1292 | 0 | 0 | 0 | 1292 |
+| `go-jsonschema` | 100.00% | 1292 | 0 | 0 | 0 | 1292 |
+| `java-networknt-json-schema-validator` | 100.00% | 1292 | 0 | 0 | 0 | 1292 |
+| `js-ajv` | 74.85% | 967 | 12 | 0 | 313 | 1292 |
+| `js-hyperjump` | 99.61% | 1287 | 1 | 4 | 0 | 1292 |
+| `python-jsonschema` | 99.85% | 1290 | 2 | 0 | 0 | 1292 |
+| `rust-boon` | 100.00% | 1292 | 0 | 0 | 0 | 1292 |
+| `rust-jsonschema` | 100.00% | 1292 | 0 | 0 | 0 | 1292 |
 
 Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 64.08% | 455 | 252 | 3 | 0 | 710 |
-| `dotnet-jsonschema-net` | 59.58% | 423 | 277 | 0 | 10 | 710 |
-| `go-jsonschema` | 62.11% | 441 | 262 | 0 | 7 | 710 |
-| `java-networknt-json-schema-validator` | 62.82% | 446 | 261 | 0 | 3 | 710 |
-| `js-ajv` | 19.58% | 139 | 1 | 0 | 570 | 710 |
-| `js-hyperjump` | 61.13% | 434 | 273 | 0 | 3 | 710 |
-| `python-jsonschema` | 57.61% | 409 | 280 | 0 | 21 | 710 |
-| `rust-boon` | 63.94% | 454 | 253 | 0 | 3 | 710 |
-| `rust-jsonschema` | 64.08% | 455 | 252 | 0 | 3 | 710 |
+| `localhost/json-schema-rs` (ours) | 93.79% | 151 | 10 | 0 | 0 | 161 |
+| `dotnet-jsonschema-net` | 78.26% | 126 | 34 | 0 | 1 | 161 |
+| `go-jsonschema` | 85.09% | 137 | 19 | 0 | 5 | 161 |
+| `java-networknt-json-schema-validator` | 88.20% | 142 | 18 | 0 | 1 | 161 |
+| `js-ajv` | 80.12% | 129 | 13 | 0 | 19 | 161 |
+| `js-hyperjump` | 77.64% | 125 | 32 | 0 | 4 | 161 |
+| `python-jsonschema` | 73.91% | 119 | 37 | 0 | 5 | 161 |
+| `rust-boon` | 91.30% | 147 | 13 | 0 | 1 | 161 |
+| `rust-jsonschema` | 93.17% | 150 | 10 | 0 | 1 | 161 |
 
 **Disagreements with the competitor majority: 0**
 
-**Wrong vs. expected with no competitor consensus: 0**
+**Wrong vs. expected with no competitor consensus: 1**
 
-**Wrong vs. expected but agreeing with the competitor majority: 252**
+<details><summary>Wrong vs. expected with no competitor consensus (1)</summary>
+
+One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
+
+| File | Case | Tests (expected) | Majority | Triage |
+|---|---|---|---|---|
+| `optional/bignum.json` | minimum integer comparison | just below the minimum is invalid (invalid) | 4/8 | no consensus |
+
+</details>
+
+**Wrong vs. expected but agreeing with the competitor majority: 9**
 
 <details><summary>Wrong vs. expected, majority agrees with us (aggregated per file)</summary>
 
 | File | Tests | Majority (agreeing/voters: tests) |
 |---|---|---|
-| `format.json` | 8 | 7/7: 8 |
-| `optional/format/date-time.json` | 16 | 7/7: 16 |
-| `optional/format/date.json` | 27 | 7/7: 27 |
-| `optional/format/duration.json` | 11 | 7/7: 11 |
-| `optional/format/email.json` | 6 | 7/7: 6 |
-| `optional/format/hostname.json` | 33 | 7/7: 33 |
-| `optional/format/idn-email.json` | 2 | 7/7: 2 |
-| `optional/format/idn-hostname.json` | 42 | 7/7: 42 |
-| `optional/format/ipv4.json` | 8 | 7/7: 8 |
-| `optional/format/ipv6.json` | 23 | 7/7: 23 |
-| `optional/format/iri-reference.json` | 2 | 7/7: 2 |
-| `optional/format/iri.json` | 4 | 7/7: 4 |
-| `optional/format/json-pointer.json` | 12 | 7/7: 12 |
-| `optional/format/regex.json` | 1 | 7/7: 1 |
-| `optional/format/relative-json-pointer.json` | 7 | 7/7: 7 |
-| `optional/format/time.json` | 28 | 7/7: 28 |
-| `optional/format/uri-reference.json` | 4 | 7/7: 4 |
-| `optional/format/uri-template.json` | 1 | 7/7: 1 |
-| `optional/format/uri.json` | 17 | 7/7: 17 |
+| `optional/bignum.json` | 9 | 8/8: 9 |
 
 </details>
 
@@ -326,62 +337,62 @@ Non-optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
-| `cpp-blaze` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
-| `dotnet-jsonschema-net` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
-| `go-jsonschema` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
-| `java-networknt-json-schema-validator` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
-| `js-ajv` | 80.58% | 1029 | 27 | 0 | 221 | 1277 |
-| `js-hyperjump` | 99.69% | 1273 | 0 | 4 | 0 | 1277 |
-| `python-jsonschema` | 99.92% | 1276 | 1 | 0 | 0 | 1277 |
-| `rust-boon` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
-| `rust-jsonschema` | 100.00% | 1277 | 0 | 0 | 0 | 1277 |
+| `localhost/json-schema-rs` (ours) | 100.00% | 1319 | 0 | 0 | 0 | 1319 |
+| `cpp-blaze` | 100.00% | 1319 | 0 | 0 | 0 | 1319 |
+| `dotnet-jsonschema-net` | 100.00% | 1319 | 0 | 0 | 0 | 1319 |
+| `go-jsonschema` | 100.00% | 1319 | 0 | 0 | 0 | 1319 |
+| `java-networknt-json-schema-validator` | 30.33% | 400 | 0 | 0 | 919 | 1319 |
+| `js-ajv` | 52.39% | 691 | 20 | 0 | 608 | 1319 |
+| `js-hyperjump` | 99.62% | 1314 | 1 | 4 | 0 | 1319 |
+| `python-jsonschema` | 99.24% | 1309 | 1 | 0 | 9 | 1319 |
+| `rust-boon` | 100.00% | 1319 | 0 | 0 | 0 | 1319 |
+| `rust-jsonschema` | 100.00% | 1319 | 0 | 0 | 0 | 1319 |
 
 Optional suite:
 
 | Implementation | Compliance | Passed | Failed | Skipped | Errored | Total |
 |---|---|---|---|---|---|---|
-| `localhost/json-schema-rs` (ours) | 64.27% | 464 | 257 | 1 | 0 | 722 |
-| `dotnet-jsonschema-net` | 59.56% | 430 | 280 | 0 | 12 | 722 |
-| `go-jsonschema` | 62.05% | 448 | 265 | 0 | 9 | 722 |
-| `java-networknt-json-schema-validator` | 62.74% | 453 | 264 | 0 | 5 | 722 |
-| `js-ajv` | 19.39% | 140 | 2 | 0 | 580 | 722 |
-| `js-hyperjump` | 61.08% | 441 | 276 | 0 | 5 | 722 |
-| `python-jsonschema` | 57.89% | 418 | 285 | 0 | 19 | 722 |
-| `rust-boon` | 63.85% | 461 | 256 | 0 | 5 | 722 |
-| `rust-jsonschema` | 64.27% | 464 | 257 | 0 | 1 | 722 |
+| `localhost/json-schema-rs` (ours) | 94.44% | 170 | 10 | 0 | 0 | 180 |
+| `dotnet-jsonschema-net` | 76.67% | 138 | 34 | 0 | 8 | 180 |
+| `go-jsonschema` | 86.11% | 155 | 20 | 0 | 5 | 180 |
+| `java-networknt-json-schema-validator` | 89.44% | 161 | 18 | 0 | 1 | 180 |
+| `js-ajv` | 80.00% | 144 | 14 | 0 | 22 | 180 |
+| `js-hyperjump` | 78.33% | 141 | 32 | 0 | 7 | 180 |
+| `python-jsonschema` | 67.78% | 122 | 39 | 0 | 19 | 180 |
+| `rust-boon` | 91.67% | 165 | 14 | 0 | 1 | 180 |
+| `rust-jsonschema` | 92.78% | 167 | 12 | 0 | 1 | 180 |
 
-**Disagreements with the competitor majority: 0**
+**Disagreements with the competitor majority: 1**
 
-**Wrong vs. expected with no competitor consensus: 0**
+<details><summary>Disagreements with the competitor majority (1)</summary>
 
-**Wrong vs. expected but agreeing with the competitor majority: 257**
+One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
+
+| File | Case | Tests (expected) | Majority | Triage |
+|---|---|---|---|---|
+| `optional/format-assertion.json` | schema that uses custom metaschema with format-assertion: false | format-assertion: false: invalid string (invalid) | 4/6 | competitors differ from expected |
+
+</details>
+
+**Wrong vs. expected with no competitor consensus: 1**
+
+<details><summary>Wrong vs. expected with no competitor consensus (1)</summary>
+
+One row per case; each test lists its expected verdict. Majority is `agreeing/voters`.
+
+| File | Case | Tests (expected) | Majority | Triage |
+|---|---|---|---|---|
+| `optional/bignum.json` | minimum integer comparison | just below the minimum is invalid (invalid) | 4/8 | no consensus |
+
+</details>
+
+**Wrong vs. expected but agreeing with the competitor majority: 9**
 
 <details><summary>Wrong vs. expected, majority agrees with us (aggregated per file)</summary>
 
 | File | Tests | Majority (agreeing/voters: tests) |
 |---|---|---|
-| `format.json` | 8 | 7/7: 8 |
-| `optional/format-assertion.json` | 2 | 2/2: 2 |
-| `optional/format/date-time.json` | 16 | 7/7: 16 |
-| `optional/format/date.json` | 27 | 7/7: 27 |
-| `optional/format/duration.json` | 11 | 7/7: 11 |
-| `optional/format/ecmascript-regex.json` | 1 | 7/7: 1 |
-| `optional/format/email.json` | 8 | 7/7: 8 |
-| `optional/format/hostname.json` | 33 | 7/7: 33 |
-| `optional/format/idn-email.json` | 2 | 7/7: 2 |
-| `optional/format/idn-hostname.json` | 42 | 7/7: 42 |
-| `optional/format/ipv4.json` | 8 | 7/7: 8 |
-| `optional/format/ipv6.json` | 23 | 7/7: 23 |
-| `optional/format/iri-reference.json` | 2 | 7/7: 2 |
-| `optional/format/iri.json` | 4 | 7/7: 4 |
-| `optional/format/json-pointer.json` | 12 | 7/7: 12 |
-| `optional/format/regex.json` | 1 | 7/7: 1 |
-| `optional/format/relative-json-pointer.json` | 7 | 7/7: 7 |
-| `optional/format/time.json` | 28 | 7/7: 28 |
-| `optional/format/uri-reference.json` | 4 | 7/7: 4 |
-| `optional/format/uri-template.json` | 1 | 7/7: 1 |
-| `optional/format/uri.json` | 17 | 7/7: 17 |
+| `optional/bignum.json` | 9 | 8/8: 9 |
 
 </details>
 
@@ -703,7 +714,7 @@ _No tests were skipped._
 
 ## Error messages side by side
 
-In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `tests/draft2020-12/*.json` suite file, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
+In-process comparison of our messages against the `jsonschema` and `boon` crates. Curated set: for each non-optional `validation/tests/*.json` suite file that applies to 2020-12, the first invalid test whose schema we parse and whose instance we correctly reject; plus every invalid instance of every benchmark fixture.
 
 ### 1. suite draft2020-12/additionalProperties.json — additionalProperties being false does not allow other properties / an additional property is invalid
 
@@ -711,7 +722,6 @@ Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "patternProperties": {
     "^v": {}
@@ -758,7 +768,6 @@ Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "allOf": [
     {
       "properties": {
@@ -823,8 +832,7 @@ Schema:
       "type": "integer"
     }
   },
-  "$ref": "#foo",
-  "$schema": "https://json-schema.org/draft/2020-12/schema"
+  "$ref": "#foo"
 }
 ```
 
@@ -859,7 +867,6 @@ Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "anyOf": [
     {
       "type": "integer"
@@ -937,7 +944,6 @@ Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "const": 2
 }
 ```
@@ -973,7 +979,6 @@ Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "contains": {
     "minimum": 5
   }
@@ -1018,7 +1023,6 @@ Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "alpha": {
       "default": 5,
@@ -1057,57 +1061,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/alpha': must be <=3, but got 5
 ```
 
-### 9. suite draft2020-12/defs.json — validate definition against metaschema / invalid definition schema
+### 9. suite draft2020-12/dependentRequired.json — single dependency / missing dependency
 
 Schema:
 
 ```json
 {
-  "$ref": "https://json-schema.org/draft/2020-12/schema",
-  "$schema": "https://json-schema.org/draft/2020-12/schema"
-}
-```
-
-Instance:
-
-```json
-{
-  "$defs": {
-    "foo": {
-      "type": 1
-    }
-  }
-}
-```
-
-**json-schema-rs**: invalid (1 message line(s))
-
-```text
-/$defs/foo/type: instance does not match any of the 2 subschema(s)
-```
-
-**jsonschema**: invalid (1 message line(s))
-
-```text
-/$defs/foo/type: 1 is not valid under any of the schemas listed in the 'anyOf' keyword
-```
-
-**boon**: invalid (4 message line(s))
-
-```text
-jsonschema validation failed with mem://differential/schema.json#
-- at '/$defs/foo/type': anyOf failed
-  - at '/$defs/foo/type': value must be one of 'array', 'boolean', 'integer', 'null', 'number', 'object', 'string'
-  - at '/$defs/foo/type': want array, but got number
-```
-
-### 10. suite draft2020-12/dependentRequired.json — single dependency / missing dependency
-
-Schema:
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "dependentRequired": {
     "bar": [
       "foo"
@@ -1143,13 +1102,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': properties 'foo' required, if 'bar' property exists
 ```
 
-### 11. suite draft2020-12/dependentSchemas.json — single dependency / wrong type
+### 10. suite draft2020-12/dependentSchemas.json — single dependency / wrong type
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "dependentSchemas": {
     "bar": {
       "properties": {
@@ -1193,7 +1151,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/foo': want integer, but got string
 ```
 
-### 12. suite draft2020-12/dynamicRef.json — A $dynamicRef to a $dynamicAnchor in the same schema resource behaves like a normal $ref to an $anchor / An array containing non-strings is invalid
+### 11. suite draft2020-12/dynamicRef.json — A $dynamicRef to a $dynamicAnchor in the same schema resource behaves like a normal $ref to an $anchor (2020) / An array containing non-strings is invalid
 
 Schema:
 
@@ -1205,8 +1163,6 @@ Schema:
       "type": "string"
     }
   },
-  "$id": "https://test.json-schema.org/dynamicRef-dynamicAnchor-same-schema/root",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "items": {
     "$dynamicRef": "#items"
   },
@@ -1242,13 +1198,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/1': want string, but got number
 ```
 
-### 13. suite draft2020-12/enum.json — simple enum validation / something else is invalid
+### 12. suite draft2020-12/enum.json — simple enum validation / something else is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "enum": [
     1,
     2,
@@ -1282,85 +1237,68 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': value must be one of 1, 2, 3
 ```
 
-### 14. suite draft2020-12/exclusiveMaximum.json — exclusiveMaximum validation / boundary point is invalid
+### 13. suite draft2020-12/id.json — refs with relative uris and defs / invalid on inner field
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "exclusiveMaximum": 3.0
+  "$id": "http://example.com/schema-relative-uri-defs1.json",
+  "$ref": "schema-relative-uri-defs2.json",
+  "properties": {
+    "foo": {
+      "$defs": {
+        "inner": {
+          "properties": {
+            "bar": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "$id": "schema-relative-uri-defs2.json",
+      "$ref": "#/$defs/inner"
+    }
+  }
 }
 ```
 
 Instance:
 
 ```json
-3.0
-```
-
-**json-schema-rs**: invalid (1 message line(s))
-
-```text
-root: value 3.0 is not below exclusiveMaximum 3.0
-```
-
-**jsonschema**: invalid (1 message line(s))
-
-```text
-/: 3.0 is greater than or equal to the maximum of 3.0
-```
-
-**boon**: invalid (2 message line(s))
-
-```text
-jsonschema validation failed with mem://differential/schema.json#
-- at '': must be < 3.0 but got 3.0
-```
-
-### 15. suite draft2020-12/exclusiveMinimum.json — exclusiveMinimum validation / boundary point is invalid
-
-Schema:
-
-```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "exclusiveMinimum": 1.1
+  "bar": "a",
+  "foo": {
+    "bar": 1
+  }
 }
 ```
 
-Instance:
-
-```json
-1.1
-```
-
 **json-schema-rs**: invalid (1 message line(s))
 
 ```text
-root: value 1.1 is not above exclusiveMinimum 1.1
+/foo/bar: expected string, got number
 ```
 
 **jsonschema**: invalid (1 message line(s))
 
 ```text
-/: 1.1 is less than or equal to the minimum of 1.1
+/foo/bar: 1 is not of type "string"
 ```
 
 **boon**: invalid (2 message line(s))
 
 ```text
 jsonschema validation failed with mem://differential/schema.json#
-- at '': must be > 1.1 but got 1.1
+- at '/foo/bar': want string, but got number
 ```
 
-### 16. suite draft2020-12/if-then-else.json — if and then without else / invalid through then
+### 14. suite draft2020-12/if-then-else.json — if and then without else / invalid through then
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "if": {
     "exclusiveMaximum": 0
   },
@@ -1395,7 +1333,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': must be >=-10, but got -100
 ```
 
-### 17. suite draft2020-12/infinite-loop-detection.json — evaluating the same schema location against the same data location twice is not a sign of an infinite loop / failing case
+### 15. suite draft2020-12/infinite-loop-detection.json — evaluating the same schema location against the same data location twice is not a sign of an infinite loop / failing case
 
 Schema:
 
@@ -1406,7 +1344,6 @@ Schema:
       "type": "integer"
     }
   },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "allOf": [
     {
       "properties": {
@@ -1455,13 +1392,12 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '/foo': want integer, but got string
 ```
 
-### 18. suite draft2020-12/items.json — a schema given for items / wrong type of items
+### 16. suite draft2020-12/items.json — a schema given for items / wrong type of items
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "items": {
     "type": "integer"
   }
@@ -1496,52 +1432,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/1': want integer, but got string
 ```
 
-### 19. suite draft2020-12/maxContains.json — maxContains with contains / empty data
+### 17. suite draft2020-12/maxItems.json — maxItems validation / too long is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "contains": {
-    "const": 1
-  },
-  "maxContains": 1
-}
-```
-
-Instance:
-
-```json
-[]
-```
-
-**json-schema-rs**: invalid (1 message line(s))
-
-```text
-root: 0 item(s) match contains, minimum is 1
-```
-
-**jsonschema**: invalid (1 message line(s))
-
-```text
-/: None of [] are valid under the given schema
-```
-
-**boon**: invalid (2 message line(s))
-
-```text
-jsonschema validation failed with mem://differential/schema.json#
-- at '': no items match contains schema
-```
-
-### 20. suite draft2020-12/maxItems.json — maxItems validation / too long is invalid
-
-Schema:
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "maxItems": 2
 }
 ```
@@ -1575,13 +1471,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': maximum 2 items required, but got 3 items
 ```
 
-### 21. suite draft2020-12/maxLength.json — maxLength validation / too long is invalid
+### 18. suite draft2020-12/maxLength.json — maxLength validation / too long is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "maxLength": 2
 }
 ```
@@ -1611,13 +1506,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': length must be <=2, but got 3
 ```
 
-### 22. suite draft2020-12/maxProperties.json — maxProperties validation / too long is invalid
+### 19. suite draft2020-12/maxProperties.json — maxProperties validation / too long is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "maxProperties": 2
 }
 ```
@@ -1651,13 +1545,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': maximum 2 properties required, but got 3 properties
 ```
 
-### 23. suite draft2020-12/maximum.json — maximum validation / above the maximum is invalid
+### 20. suite draft2020-12/maximum.json — maximum validation / above the maximum is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "maximum": 3.0
 }
 ```
@@ -1687,52 +1580,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': must be <=3.0, but got 3.5
 ```
 
-### 24. suite draft2020-12/minContains.json — minContains=1 with contains / empty data
+### 21. suite draft2020-12/minItems.json — minItems validation / too short is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "contains": {
-    "const": 1
-  },
-  "minContains": 1
-}
-```
-
-Instance:
-
-```json
-[]
-```
-
-**json-schema-rs**: invalid (1 message line(s))
-
-```text
-root: 0 item(s) match contains, minimum is 1
-```
-
-**jsonschema**: invalid (1 message line(s))
-
-```text
-/: None of [] are valid under the given schema
-```
-
-**boon**: invalid (2 message line(s))
-
-```text
-jsonschema validation failed with mem://differential/schema.json#
-- at '': minimum 1 items required to match contains schema, but found none
-```
-
-### 25. suite draft2020-12/minItems.json — minItems validation / too short is invalid
-
-Schema:
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "minItems": 1
 }
 ```
@@ -1762,13 +1615,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': minimum 1 items required, but got 0 items
 ```
 
-### 26. suite draft2020-12/minLength.json — minLength validation / too short is invalid
+### 22. suite draft2020-12/minLength.json — minLength validation / too short is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "minLength": 2
 }
 ```
@@ -1798,13 +1650,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': length must be >=2, but got 1
 ```
 
-### 27. suite draft2020-12/minProperties.json — minProperties validation / too short is invalid
+### 23. suite draft2020-12/minProperties.json — minProperties validation / too short is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "minProperties": 1
 }
 ```
@@ -1834,13 +1685,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': minimum 1 properties required, but got 0 properties
 ```
 
-### 28. suite draft2020-12/minimum.json — minimum validation / below the minimum is invalid
+### 24. suite draft2020-12/minimum.json — minimum validation / below the minimum is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "minimum": 1.1
 }
 ```
@@ -1870,13 +1720,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': must be >=1.1, but got 0.6
 ```
 
-### 29. suite draft2020-12/multipleOf.json — by int / int by int fail
+### 25. suite draft2020-12/multipleOf.json — multipleOf int / int by int fail
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "multipleOf": 2
 }
 ```
@@ -1906,13 +1755,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': 7 is not multipleOf 2
 ```
 
-### 30. suite draft2020-12/not.json — not / disallowed
+### 26. suite draft2020-12/not.json — not / disallowed
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "not": {
     "type": "integer"
   }
@@ -1944,13 +1792,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': not failed
 ```
 
-### 31. suite draft2020-12/oneOf.json — oneOf / both oneOf valid
+### 27. suite draft2020-12/oneOf.json — oneOf / both oneOf valid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
       "type": "integer"
@@ -1987,13 +1834,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': oneOf failed, subschemas 0, 1 matched
 ```
 
-### 32. suite draft2020-12/pattern.json — pattern validation / a non-matching pattern is invalid
+### 28. suite draft2020-12/pattern.json — pattern validation / a non-matching pattern is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "pattern": "^a*$"
 }
 ```
@@ -2023,13 +1869,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': 'abc' does not match pattern '^a*$'
 ```
 
-### 33. suite draft2020-12/patternProperties.json — patternProperties validates properties matching a regex / a single invalid match is invalid
+### 29. suite draft2020-12/patternProperties.json — patternProperties validates properties matching a regex / a single invalid match is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "patternProperties": {
     "f.*o": {
       "type": "integer"
@@ -2066,62 +1911,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/foo': want integer, but got string
 ```
 
-### 34. suite draft2020-12/prefixItems.json — a schema given for prefixItems / wrong types
+### 30. suite draft2020-12/properties.json — object properties validation / one property invalid is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "prefixItems": [
-    {
-      "type": "integer"
-    },
-    {
-      "type": "string"
-    }
-  ]
-}
-```
-
-Instance:
-
-```json
-[
-  "foo",
-  1
-]
-```
-
-**json-schema-rs**: invalid (2 message line(s))
-
-```text
-/0: expected integer, got string
-/1: expected string, got number
-```
-
-**jsonschema**: invalid (2 message line(s))
-
-```text
-/0: "foo" is not of type "integer"
-/1: 1 is not of type "string"
-```
-
-**boon**: invalid (3 message line(s))
-
-```text
-jsonschema validation failed with mem://differential/schema.json#
-- at '/0': want integer, but got string
-- at '/1': want string, but got number
-```
-
-### 35. suite draft2020-12/properties.json — object properties validation / one property invalid is invalid
-
-Schema:
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "bar": {
       "type": "string"
@@ -2161,13 +1956,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/bar': want string, but got object
 ```
 
-### 36. suite draft2020-12/propertyNames.json — propertyNames validation / some property names invalid
+### 31. suite draft2020-12/propertyNames.json — propertyNames validation / some property names invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "propertyNames": {
     "maxLength": 3
   }
@@ -2203,13 +1997,12 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': length must be <=3, but got 6
 ```
 
-### 37. suite draft2020-12/ref.json — root pointer ref / mismatch
+### 32. suite draft2020-12/ref.json — root pointer ref / mismatch
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
     "foo": {
@@ -2246,13 +2039,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': additionalProperties 'bar' not allowed
 ```
 
-### 38. suite draft2020-12/required.json — required validation / non-present required property is invalid
+### 33. suite draft2020-12/required.json — required validation / non-present required property is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "bar": {},
     "foo": {}
@@ -2290,13 +2082,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'foo'
 ```
 
-### 39. suite draft2020-12/type.json — integer type matches integers / a float is not an integer
+### 34. suite draft2020-12/type.json — integer type matches integers / a float is not an integer
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "integer"
 }
 ```
@@ -2326,13 +2117,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': want integer, but got number
 ```
 
-### 40. suite draft2020-12/unevaluatedItems.json — unevaluatedItems false / with unevaluated items
+### 35. suite draft2020-12/unevaluatedItems.json — unevaluatedItems false / with unevaluated items
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "unevaluatedItems": false
 }
 ```
@@ -2364,13 +2154,13 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/0': false schema
 ```
 
-### 41. suite draft2020-12/unevaluatedProperties.json — unevaluatedProperties schema / with invalid unevaluated properties
+### 36. suite draft2020-12/unevaluatedProperties.json — unevaluatedProperties schema / with invalid unevaluated properties
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
   "unevaluatedProperties": {
     "minLength": 3,
     "type": "string"
@@ -2405,13 +2195,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/foo': length must be >=3, but got 2
 ```
 
-### 42. suite draft2020-12/uniqueItems.json — uniqueItems validation / non-unique array of integers is invalid
+### 37. suite draft2020-12/uniqueItems.json — uniqueItems validation / non-unique array of integers is invalid
 
 Schema:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "uniqueItems": true
 }
 ```
@@ -2444,13 +2233,12 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': items at 0 and 1 are equal
 ```
 
-### 43. suite draft2020-12/vocabulary.json — schema that uses custom metaschema with with no validation vocabulary / applicator vocabulary still works
+### 38. suite draft2020-12/vocabulary.json — schema that uses custom metaschema with no validation vocabulary / applicator vocabulary still works
 
 Schema:
 
 ```json
 {
-  "$id": "https://schema/using/no/validation",
   "$schema": "http://localhost:1234/draft2020-12/metaschema-no-validation.json",
   "properties": {
     "badProperty": false,
@@ -2487,7 +2275,7 @@ schema rejected: Unknown meta-schema: 'http://localhost:1234/draft2020-12/metasc
 schema rejected: error loading http://localhost:1234/draft2020-12/metaschema-no-validation.json
 ```
 
-### 44. fixture small/config — small/config/instances/invalid/bad-port-and-enum.json
+### 39. fixture small/config — small/config/instances/invalid/bad-port-and-enum.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2524,7 +2312,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/port': must be <=65535, but got 99999
 ```
 
-### 45. fixture small/config — small/config/instances/invalid/missing-required.json
+### 40. fixture small/config — small/config/instances/invalid/missing-required.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2556,7 +2344,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'version'
 ```
 
-### 46. fixture small/config — small/config/instances/invalid/wrong-type.json
+### 41. fixture small/config — small/config/instances/invalid/wrong-type.json
 
 Schema: `small/config/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2589,7 +2377,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/debug': want boolean, but got string
 ```
 
-### 47. fixture small/prettierrc — small/prettierrc/instances/invalid/bad-enum.json
+### 42. fixture small/prettierrc — small/prettierrc/instances/invalid/bad-enum.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2624,7 +2412,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 48. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-semi.json
+### 43. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-semi.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2657,7 +2445,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 49. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-tabwidth.json
+### 44. fixture small/prettierrc — small/prettierrc/instances/invalid/wrong-type-tabwidth.json
 
 Schema: `small/prettierrc/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2690,7 +2478,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '': want string, but got object
 ```
 
-### 50. fixture medium/user-profile — medium/user-profile/instances/invalid/duplicate-roles-and-bad-username.json
+### 45. fixture medium/user-profile — medium/user-profile/instances/invalid/duplicate-roles-and-bad-username.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2730,7 +2518,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/username': 'no spaces!' does not match pattern '^[a-zA-Z0-9_]+$'
 ```
 
-### 51. fixture medium/user-profile — medium/user-profile/instances/invalid/empty-roles-and-bad-enum.json
+### 46. fixture medium/user-profile — medium/user-profile/instances/invalid/empty-roles-and-bad-enum.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2770,7 +2558,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/roles': minimum 1 items required, but got 0 items
 ```
 
-### 52. fixture medium/user-profile — medium/user-profile/instances/invalid/missing-nested-required.json
+### 47. fixture medium/user-profile — medium/user-profile/instances/invalid/missing-nested-required.json
 
 Schema: `medium/user-profile/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2814,7 +2602,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/addresses/0': missing properties 'city', 'country'
 ```
 
-### 53. fixture medium/package-json — medium/package-json/instances/invalid/name-wrong-type.json
+### 48. fixture medium/package-json — medium/package-json/instances/invalid/name-wrong-type.json
 
 Schema: `medium/package-json/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2852,7 +2640,7 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading https://json.schemastore.org/ava.json
 ```
 
-### 54. fixture medium/package-json — medium/package-json/instances/invalid/scripts-wrong-type.json
+### 49. fixture medium/package-json — medium/package-json/instances/invalid/scripts-wrong-type.json
 
 Schema: `medium/package-json/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2891,7 +2679,7 @@ schema rejected: references an external resource that is not available offline (
 schema rejected: error loading https://json.schemastore.org/ava.json
 ```
 
-### 55. fixture medium/geojson — medium/geojson/instances/invalid/bad-geometries.json
+### 50. fixture medium/geojson — medium/geojson/instances/invalid/bad-geometries.json
 
 Schema: `medium/geojson/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2959,7 +2747,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(56 more lines in results.json)_
 
-### 56. fixture medium/geojson — medium/geojson/instances/invalid/missing-geometry.json
+### 51. fixture medium/geojson — medium/geojson/instances/invalid/missing-geometry.json
 
 Schema: `medium/geojson/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -2996,7 +2784,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/features/0': missing properties 'geometry'
 ```
 
-### 57. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
+### 52. fixture large/api-catalog — large/api-catalog/instances/invalid/bad-enum-and-empty-endpoints.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3040,7 +2828,7 @@ jsonschema validation failed with mem://differential/schema.json#
   - at '/services/0/language': value must be one of 'rust', 'go', 'python', 'typescript', 'java', 'csharp'
 ```
 
-### 58. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
+### 53. fixture large/api-catalog — large/api-catalog/instances/invalid/missing-required-and-additional.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3088,7 +2876,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0': additionalProperties 'unexpectedField' not allowed
 ```
 
-### 59. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
+### 54. fixture large/api-catalog — large/api-catalog/instances/invalid/out-of-bounds-resources.json
 
 Schema: `large/api-catalog/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3137,7 +2925,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/services/0/resources/cpuMillicores': must be >=10, but got 5
 ```
 
-### 60. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
+### 55. fixture large/circleci — large/circleci/instances/invalid/bad-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3168,7 +2956,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/version': value must be one of '2.1', 2.1
 ```
 
-### 61. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
+### 56. fixture large/circleci — large/circleci/instances/invalid/missing-version.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3199,7 +2987,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': missing properties 'version'
 ```
 
-### 62. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
+### 57. fixture large/circleci — large/circleci/instances/invalid/workflows-wrong-type.json
 
 Schema: `large/circleci/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3231,7 +3019,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/workflows': want object, but got string
 ```
 
-### 63. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
+### 58. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-column-type.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3314,7 +3102,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 64. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
+### 59. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/bad-version-and-schema.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3399,7 +3187,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(183 more lines in results.json)_
 
-### 65. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
+### 60. fixture massive/data-warehouse — massive/data-warehouse/instances/invalid/missing-columns.json
 
 Schema: `massive/data-warehouse/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3476,7 +3264,7 @@ jsonschema validation failed with mem://differential/schema.json#
 ```
 _(182 more lines in results.json)_
 
-### 66. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
+### 61. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/additional-property.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3509,7 +3297,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '': additionalProperties 'bogusTopLevel' not allowed
 ```
 
-### 67. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
+### 62. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/bad-replicas-type.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
@@ -3559,7 +3347,7 @@ jsonschema validation failed with mem://differential/schema.json#
 - at '/spec/replicas': want null or integer, but got string
 ```
 
-### 68. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
+### 63. fixture massive/k8s-deployment — massive/k8s-deployment/instances/invalid/wrong-kind.json
 
 Schema: `massive/k8s-deployment/schema.json` (relative to the fixtures directory; not embedded).
 
