@@ -2,6 +2,7 @@
 //! references reach, each embedded as a schema resource (see [`Registry::bundle`]).
 
 use super::{Node, Registry, Scope, Uri, resolve_uri, without_fragment};
+use crate::json_pointer::push_percent_encoded;
 use crate::json_schema::dialect::{Dialect, ExclusiveBounds, RefSiblings, SubschemaPosition};
 use crate::json_schema::json_schema::SchemaRef;
 use serde_json::{Map, Value};
@@ -34,6 +35,9 @@ impl Registry<'_> {
     /// - References are kept as written, as §9.3.1 requires, with one exception: a reference to
     ///   a document by the URI it was retrieved from, when its root `$id` names it otherwise,
     ///   is rewritten to that `$id` (the bundle has no resource at the retrieval URI).
+    /// - Every `$id` and rewritten reference the bundle writes is a strict URI reference: each
+    ///   non-ASCII character is percent-encoded as its UTF-8 bytes (`%C3%BC.json` for a
+    ///   document at `ü.json` or `%c3%bc.json`), in the host and query too.
     /// - An embedded document of another draft than the root's gets its `$schema`, and both
     ///   `id` and `$id` when the two drafts name a resource with different keywords.
     /// - A draft 4, 6 or 7 document whose root has `$ref` ignores the `$id` beside it, so the
@@ -124,7 +128,7 @@ impl Registry<'_> {
             unreachable!("the model holds `$defs` and `definitions` as maps");
         };
         for (part, value) in parts[1..].iter().zip(values) {
-            let id: String = relative_uri(&root.canonical, &part.canonical);
+            let id: String = strict_reference(relative_uri(&root.canonical, &part.canonical));
             let value: Value = embedded(value, &id, part.dialect, root.dialect);
             let mut key: String = id.clone();
             let mut suffix: usize = 2;
@@ -315,6 +319,26 @@ fn relative_uri(base: &Uri, target: &Uri) -> String {
     }
 }
 
+/// `reference`, an IRI reference built from normalised IRIs, as a strict URI reference
+/// (RFC 3987 §3.1): each non-ASCII character percent-encoded as its UTF-8 bytes, upper-case
+/// hex, in the host too (no punycode), so every `$id` and `$ref` the bundle writes is a
+/// `uri-reference` whether the input spelled it raw or encoded (normalisation decodes it). The
+/// registry reads it back to the same IRI. An ASCII reference is returned as is.
+fn strict_reference(reference: String) -> String {
+    if reference.is_ascii() {
+        return reference;
+    }
+    let mut strict: String = String::with_capacity(reference.len() * 2);
+    for c in reference.chars() {
+        if c.is_ascii() {
+            strict.push(c);
+        } else {
+            push_percent_encoded(c, &mut strict);
+        }
+    }
+    strict
+}
+
 /// The path and query of `uri`, when its path is hierarchical (starts with `/`).
 fn hierarchical_tail(uri: &Uri) -> Option<&str> {
     let text: &str = uri.as_str();
@@ -362,7 +386,7 @@ fn rewrite_refs(value: &mut Value, base: &Uri, dialect: Dialect, renamed: &HashM
                     rewritten.push('#');
                     rewritten.push_str(fragment.as_str());
                 }
-                *reference = rewritten;
+                *reference = strict_reference(rewritten);
             }
         }
         push_subschemas(object, dialect, |child| stack.push((child, base.clone())));
@@ -432,7 +456,8 @@ pub(super) fn restore_draft4_shapes(value: &mut Value, dialect: Dialect) {
 
 #[cfg(test)]
 mod tests {
-    use super::relative_uri;
+    use super::{relative_uri, strict_reference};
+    use crate::json_pointer::push_uri_fragment;
     use crate::json_schema::json_schema::Schema;
     use crate::json_schema::registry::{OfflineRetriever, Registry, Uri, parse_uri};
     use crate::validator::CompiledSchema;
@@ -791,6 +816,446 @@ mod tests {
         let instances: [Value; 2] = [json!(0), json!(1)];
         let (expected, actual): (Vec<bool>, Vec<bool>) =
             verdicts(&root, &documents, ROOT_URI, &instances);
+        assert_eq!(expected, actual);
+    }
+
+    // --- Strict URI references ---
+
+    const DRAFT4: &str = "http://json-schema.org/draft-04/schema#";
+    const DRAFT6: &str = "http://json-schema.org/draft-06/schema#";
+    const DRAFT7: &str = "http://json-schema.org/draft-07/schema#";
+    const DRAFT2019: &str = "https://json-schema.org/draft/2019-09/schema";
+
+    /// A string document at `https://example.com/schemas/<name>`, referenced by the root as
+    /// `name`.
+    fn string_document_bundle(name: &str) -> Value {
+        bundle(
+            &json!({"$ref": name}),
+            &[(
+                &format!("https://example.com/schemas/{name}"),
+                json!({"type": "string"}),
+            )],
+        )
+    }
+
+    #[test]
+    fn percent_encoded_retrieval_uri_embeds_with_a_strict_id() {
+        let expected: Value = json!({
+            "$ref": "%C3%BC.json",
+            "$defs": {"%C3%BC.json": {"$id": "%C3%BC.json", "type": "string"}}
+        });
+        let actual: Value = string_document_bundle("%C3%BC.json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn raw_retrieval_uri_embeds_with_a_strict_id_and_keeps_the_ref_as_written() {
+        let expected: Value = json!({
+            "$ref": "ü.json",
+            "$defs": {"%C3%BC.json": {"$id": "%C3%BC.json", "type": "string"}}
+        });
+        let actual: Value = string_document_bundle("ü.json");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn lower_case_hex_retrieval_uri_embeds_with_an_upper_case_strict_id() {
+        let expected: Value = json!({
+            "$ref": "%c3%bc.json",
+            "$defs": {"%C3%BC.json": {"$id": "%C3%BC.json", "type": "string"}}
+        });
+        let actual: Value = string_document_bundle("%c3%bc.json");
+        assert_eq!(expected, actual);
+    }
+
+    /// The bundle of a root that references `e.json#<fragment>` (from a schema with `$id`
+    /// `nested_id` two directories down, when given), where `e.json`'s root `$id` is `id`.
+    fn renamed_document_bundle(id: &str, fragment: &str, nested_id: Option<&str>) -> Value {
+        let root: Value = match nested_id {
+            Some(nested) => json!({"properties": {"x": {
+                "$id": nested,
+                "$ref": format!("../../e.json{fragment}")
+            }}}),
+            None => json!({"$ref": format!("e.json{fragment}")}),
+        };
+        bundle(
+            &root,
+            &[(
+                "https://example.com/schemas/e.json",
+                json!({"$id": id, "$defs": {"ö": {"type": "string"}}}),
+            )],
+        )
+    }
+
+    #[test]
+    fn percent_encoded_root_id_is_rewritten_as_a_strict_relative_reference() {
+        let expected: Value = json!({
+            "$ref": "../%C3%A9",
+            "$defs": {"../%C3%A9": {"$id": "../%C3%A9", "$defs": {"ö": {"type": "string"}}}}
+        });
+        let actual: Value = renamed_document_bundle("https://example.com/%C3%A9", "", None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn raw_root_id_is_rewritten_as_a_strict_relative_reference() {
+        let expected: Value = json!({
+            "$ref": "../%C3%A9",
+            "$defs": {"../%C3%A9": {"$id": "../%C3%A9", "$defs": {"ö": {"type": "string"}}}}
+        });
+        let actual: Value = renamed_document_bundle("https://example.com/é", "", None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rewritten_reference_writes_its_fragment_strict() {
+        let expected: Value = json!({
+            "$ref": "../%C3%A9#/$defs/%C3%B6",
+            "$defs": {"../%C3%A9": {"$id": "../%C3%A9", "$defs": {"ö": {"type": "string"}}}}
+        });
+        let actual: Value = renamed_document_bundle("https://example.com/é", "#/$defs/ö", None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rewritten_reference_with_an_encoded_fragment_stays_strict() {
+        let expected: Value = json!({
+            "$ref": "../%C3%A9#/$defs/%C3%B6",
+            "$defs": {"../%C3%A9": {"$id": "../%C3%A9", "$defs": {"ö": {"type": "string"}}}}
+        });
+        let actual: Value =
+            renamed_document_bundle("https://example.com/%C3%A9", "#/$defs/%c3%b6", None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn reference_rewritten_inside_a_nested_non_ascii_resource_is_strict_relative_to_it() {
+        let expected: Value = json!({
+            "properties": {"x": {
+                "$id": "https://example.com/schemas/nested/ö/x.json",
+                "$ref": "../../../%C3%A9"
+            }},
+            "$defs": {"../%C3%A9": {"$id": "../%C3%A9", "$defs": {"ö": {"type": "string"}}}}
+        });
+        let actual: Value = renamed_document_bundle(
+            "https://example.com/é",
+            "",
+            Some("https://example.com/schemas/nested/ö/x.json"),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_ascii_host_is_percent_encoded_in_the_id_and_the_rewritten_reference() {
+        let expected: Value = json!({
+            "$ref": "https://ex%C3%A4mple.com/h",
+            "$defs": {
+                "https://ex%C3%A4mple.com/h": {
+                    "$id": "https://ex%C3%A4mple.com/h",
+                    "$defs": {"ö": {"type": "string"}}
+                }
+            }
+        });
+        let actual: Value = renamed_document_bundle("https://exämple.com/h", "", None);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_ascii_query_is_percent_encoded_in_the_id() {
+        let expected: Value = json!({
+            "$ref": "q.json?v=é",
+            "$defs": {"q.json?v=%C3%A9": {"$id": "q.json?v=%C3%A9", "type": "string"}}
+        });
+        let actual: Value = string_document_bundle("q.json?v=é");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn documents_in_a_non_ascii_directory_get_strict_ids_and_keep_their_refs() {
+        let root: Value = json!({"$ref": "tÿpes/a.json"});
+        let expected: Value = json!({
+            "$ref": "tÿpes/a.json",
+            "$defs": {
+                "t%C3%BFpes/a.json": {"$id": "t%C3%BFpes/a.json", "items": {"$ref": "b-ü.json"}},
+                "t%C3%BFpes/b-%C3%BC.json": {
+                    "$id": "t%C3%BFpes/b-%C3%BC.json",
+                    "type": "integer"
+                }
+            }
+        });
+        let actual: Value = bundle(
+            &root,
+            &[
+                (
+                    "https://example.com/schemas/tÿpes/a.json",
+                    json!({"items": {"$ref": "b-ü.json"}}),
+                ),
+                (
+                    "https://example.com/schemas/tÿpes/b-ü.json",
+                    json!({"type": "integer"}),
+                ),
+            ],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    /// The bundle of a `schema` root with `$ref: e.json`, where `e.json` (same draft) has the
+    /// root id `https://example.com/%C3%A9` and references a local definition.
+    fn renamed_draft_bundle(schema: &str, id_keyword: &str) -> Value {
+        bundle(
+            &json!({"$schema": schema, "$ref": "e.json"}),
+            &[(
+                "https://example.com/schemas/e.json",
+                json!({
+                    "$schema": schema,
+                    id_keyword: "https://example.com/%C3%A9",
+                    "allOf": [{"$ref": "#/definitions/ö"}],
+                    "definitions": {"ö": {"type": "string"}}
+                }),
+            )],
+        )
+    }
+
+    /// The bundle [`renamed_draft_bundle`] gives for a draft 4–7 `schema`, which moves the
+    /// root's `$ref` into `allOf`.
+    fn expected_ref_into_all_of_bundle(schema: &str, id_keyword: &str) -> Value {
+        json!({
+            "$schema": schema,
+            "allOf": [{"$ref": "../%C3%A9"}],
+            "definitions": {
+                "../%C3%A9": {
+                    "$schema": schema,
+                    id_keyword: "../%C3%A9",
+                    "allOf": [{"$ref": "#/definitions/ö"}],
+                    "definitions": {"ö": {"type": "string"}}
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn draft4_bundle_writes_strict_ids_and_references() {
+        let expected: Value = expected_ref_into_all_of_bundle(DRAFT4, "id");
+        let actual: Value = renamed_draft_bundle(DRAFT4, "id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft6_bundle_writes_strict_ids_and_references() {
+        let expected: Value = expected_ref_into_all_of_bundle(DRAFT6, "$id");
+        let actual: Value = renamed_draft_bundle(DRAFT6, "$id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft7_bundle_writes_strict_ids_and_references() {
+        let expected: Value = expected_ref_into_all_of_bundle(DRAFT7, "$id");
+        let actual: Value = renamed_draft_bundle(DRAFT7, "$id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft2019_bundle_writes_strict_ids_and_references() {
+        let expected: Value = json!({
+            "$schema": DRAFT2019,
+            "$ref": "../%C3%A9",
+            "$defs": {
+                "../%C3%A9": {
+                    "$schema": DRAFT2019,
+                    "$id": "../%C3%A9",
+                    "allOf": [{"$ref": "#/definitions/ö"}],
+                    "definitions": {"ö": {"type": "string"}}
+                }
+            }
+        });
+        let actual: Value = renamed_draft_bundle(DRAFT2019, "$id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft4_document_in_a_newer_root_gets_strict_id_and_legacy_id() {
+        let root: Value = json!({"$ref": "%C3%B6ld.json"});
+        let expected: Value = json!({
+            "$ref": "%C3%B6ld.json",
+            "$defs": {
+                "%C3%B6ld.json": {
+                    "$schema": DRAFT4,
+                    "$id": "%C3%B6ld.json",
+                    "id": "%C3%B6ld.json"
+                }
+            }
+        });
+        let actual: Value = bundle(
+            &root,
+            &[(
+                "https://example.com/schemas/öld.json",
+                json!({"$schema": DRAFT4}),
+            )],
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn defs_key_of_a_non_ascii_document_is_reachable_by_its_pointer_fragment() {
+        let mut bundled: Value = string_document_bundle("ü.json");
+        let mut reference: String = "#".to_string();
+        push_uri_fragment(["$defs", "%C3%BC.json"].into_iter(), &mut reference);
+        bundled["$ref"] = Value::String(reference);
+        let schema: Schema = Schema::try_from(&bundled).expect("parse bundle");
+        let registry: Registry<'_> = Registry::builder()
+            .base_uri(ROOT_URI)
+            .retriever(OfflineRetriever)
+            .build(&schema)
+            .expect("build bundle registry");
+        let compiled: CompiledSchema = CompiledSchema::new(&registry).expect("compile bundle");
+        let expected: Vec<bool> = vec![true, false];
+        let actual: Vec<bool> = vec![compiled.is_valid(&json!("a")), compiled.is_valid(&json!(1))];
+        assert_eq!(expected, actual);
+    }
+
+    // --- Strict bundles validate the same ---
+
+    #[test]
+    fn non_ascii_bundle_validates_like_the_documents_it_holds() {
+        let root: Value = json!({
+            "type": "object",
+            "properties": {
+                "raw": {"$ref": "ü.json"},
+                "encoded": {"$ref": "%C3%A4.json"},
+                "lower": {"$ref": "%c3%b6.json"},
+                "renamed": {"$ref": "e.json#/$defs/ö"},
+                "host": {"$ref": "h.json"},
+                "query": {"$ref": "q.json?v=é"},
+                "nested": {"$id": "nested/ö/x.json", "$ref": "../../tÿpes/a.json"},
+                "nested_renamed": {"$id": "nested/ö/y.json", "$ref": "../../e.json#/$defs/ö"}
+            }
+        });
+        let documents: [(&str, Value); 8] = [
+            (
+                "https://example.com/schemas/ü.json",
+                json!({"type": "string"}),
+            ),
+            (
+                "https://example.com/schemas/ä.json",
+                json!({"type": "integer"}),
+            ),
+            (
+                "https://example.com/schemas/ö.json",
+                json!({"type": "boolean"}),
+            ),
+            (
+                "https://example.com/schemas/e.json",
+                json!({"$id": "https://example.com/é", "$defs": {"ö": {"maxLength": 1}}}),
+            ),
+            (
+                "https://example.com/schemas/h.json",
+                json!({"$id": "https://exämple.com/h", "type": "null"}),
+            ),
+            (
+                "https://example.com/schemas/q.json?v=é",
+                json!({"minimum": 5}),
+            ),
+            (
+                "https://example.com/schemas/tÿpes/a.json",
+                json!({"items": {"$ref": "b-ü.json"}}),
+            ),
+            (
+                "https://example.com/schemas/tÿpes/b-ü.json",
+                json!({"type": "integer"}),
+            ),
+        ];
+        let instances: [Value; 17] = [
+            json!({"raw": "a", "encoded": 1, "lower": true, "renamed": "x", "host": null,
+                   "query": 6, "nested": [1], "nested_renamed": "y"}),
+            json!({"nested_renamed": "yz"}),
+            json!({"nested_renamed": ""}),
+            json!({"raw": 1}),
+            json!({"encoded": "a"}),
+            json!({"lower": 1}),
+            json!({"renamed": "xy"}),
+            json!({"host": 1}),
+            json!({"query": 4}),
+            json!({"nested": ["a"]}),
+            json!({"raw": "b"}),
+            json!({"encoded": 2}),
+            json!({"lower": false}),
+            json!({"renamed": ""}),
+            json!({"host": null}),
+            json!({"query": 5}),
+            json!({"nested": []}),
+        ];
+        let (expected, actual): (Vec<bool>, Vec<bool>) =
+            verdicts(&root, &documents, ROOT_URI, &instances);
+        assert_eq!(expected, actual);
+    }
+
+    /// The verdicts [`verdicts`] gives for [`renamed_draft_bundle`]'s documents.
+    fn renamed_draft_verdicts(schema: &str, id_keyword: &str) -> (Vec<bool>, Vec<bool>) {
+        let root: Value = json!({"$schema": schema, "$ref": "e.json"});
+        let documents: [(&str, Value); 1] = [(
+            "https://example.com/schemas/e.json",
+            json!({
+                "$schema": schema,
+                id_keyword: "https://example.com/%C3%A9",
+                "allOf": [{"$ref": "#/definitions/ö"}],
+                "definitions": {"ö": {"type": "string"}}
+            }),
+        )];
+        verdicts(&root, &documents, ROOT_URI, &[json!("a"), json!(1)])
+    }
+
+    #[test]
+    fn draft4_non_ascii_bundle_validates_like_the_documents_it_holds() {
+        let (expected, actual): (Vec<bool>, Vec<bool>) = renamed_draft_verdicts(DRAFT4, "id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft6_non_ascii_bundle_validates_like_the_documents_it_holds() {
+        let (expected, actual): (Vec<bool>, Vec<bool>) = renamed_draft_verdicts(DRAFT6, "$id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft7_non_ascii_bundle_validates_like_the_documents_it_holds() {
+        let (expected, actual): (Vec<bool>, Vec<bool>) = renamed_draft_verdicts(DRAFT7, "$id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn draft2019_non_ascii_bundle_validates_like_the_documents_it_holds() {
+        let (expected, actual): (Vec<bool>, Vec<bool>) = renamed_draft_verdicts(DRAFT2019, "$id");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn non_ascii_bundle_validates_the_same_when_read_from_another_location() {
+        let root: Value = json!({"items": {"$ref": "tÿpes/%C3%BC.json"}});
+        let documents: [(&str, Value); 1] = [(
+            "https://example.com/schemas/tÿpes/ü.json",
+            json!({"type": "integer"}),
+        )];
+        let instances: [Value; 2] = [json!([1]), json!(["x"])];
+        let (expected, actual): (Vec<bool>, Vec<bool>) = verdicts(
+            &root,
+            &documents,
+            "file:///elsewhere/bündle.json",
+            &instances,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reference_of_an_ascii_reference_is_unchanged() {
+        let expected: &str = "../a%20b.json?q=%25#/$defs/x";
+        let actual: String = strict_reference(expected.to_string());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_reference_percent_encodes_every_non_ascii_character_upper_case() {
+        let expected: &str = "//ex%C3%A4mple.com/%C3%A9%25?%E6%97%A5#/%F0%9F%98%80";
+        let actual: String = strict_reference("//exämple.com/é%25?日#/😀".to_string());
         assert_eq!(expected, actual);
     }
 
