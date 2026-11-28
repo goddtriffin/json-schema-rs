@@ -135,7 +135,8 @@ pub struct ReverseCodeGenSettings {
     /// A JSON Pointer to the document root's definitions: `/$defs` (2019-09 and later),
     /// `/definitions` (drafts 04 to 07) or `/components/schemas` (`OpenAPI`) when `None`. One
     /// leading `#` and one trailing `/` are ignored, so `#/components/schemas/` is
-    /// `/components/schemas`. Every `$ref` to a definition is written to match.
+    /// `/components/schemas`. Every `$ref` to a definition is written to match, as a URI fragment:
+    /// `/x y` is `#/x%20y/..`.
     pub definitions_path: Option<String>,
 
     /// Write each named type's schema where it is used instead of in the definitions, keeping a

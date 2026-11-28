@@ -1088,16 +1088,23 @@ impl Scope {
             }
         }
 
+        // A ref is matched by the JSON Pointer its fragment holds (percent-decoded), and the
+        // rest of it after the entry is written back as a URI fragment.
         let resolve = |reference: &str| -> Option<String> {
+            if parse_provisional_ref(reference).is_some() || parse_resource_ref(reference).is_some()
+            {
+                return None;
+            }
+            let pointer: std::borrow::Cow<'_, str> =
+                fragment_to_pointer(reference.strip_prefix('#')?)?;
             by_pointer
                 .iter()
-                .filter(|(pointer, _)| {
-                    reference
-                        .strip_prefix(pointer.as_str())
-                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                .filter_map(|(entry, target)| {
+                    let rest: &str = pointer.strip_prefix(entry.strip_prefix('#')?)?;
+                    (rest.is_empty() || rest.starts_with('/')).then_some((entry, target, rest))
                 })
-                .max_by_key(|(pointer, _)| pointer.len())
-                .map(|(pointer, target)| format!("{target}{}", &reference[pointer.len()..]))
+                .max_by_key(|(entry, _, _)| entry.len())
+                .map(|(_, target, rest)| format!("{target}{}", pointer_to_fragment(rest)))
         };
         rewrite_refs_outside_resources(&mut flat, &resolve);
         for (definition, index) in hoisted.into_iter().zip(indices) {
@@ -1209,8 +1216,9 @@ impl HandWrittenContainers {
 /// `#/definitions/N` becomes `#/$defs/N` for every definition `N` that stays generated (its
 /// final name is not that of a hand-written entry, which is merged into instead) and every
 /// hand-written `$defs`-only entry, and `#/$defs/N` becomes `#/definitions/N` for every
-/// hand-written `definitions`-only entry. The token is matched decoded (URI percent-encoding,
-/// then JSON Pointer `~1` / `~0`) and kept as written, with any tail after it.
+/// hand-written `definitions`-only entry. The ref is matched decoded (URI percent-encoding,
+/// then JSON Pointer `~1` / `~0`; see [`split_definitions_ref`]) and keeps its token and any
+/// tail after it as written.
 fn alias_resolver<'a>(
     aliases: ModelAliases,
     final_names: &[Option<String>],
@@ -1231,54 +1239,102 @@ fn alias_resolver<'a>(
         if parse_provisional_ref(reference).is_some() {
             return None;
         }
-        let (to_defs, rest): (bool, &str) = match reference.strip_prefix("#/definitions/") {
-            Some(rest) => (true, rest),
-            None => (false, reference.strip_prefix("#/$defs/")?),
-        };
-        let (token, tail): (&str, &str) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
-        let name: String = decode_fragment_token(token)?;
-        let container: &str = if to_defs {
-            (generated.contains(&name) || hand_written.defs_only.contains(&name))
-                .then_some(DEFS_PATH)?
-        } else {
+        let (in_defs, rest): (bool, std::borrow::Cow<'_, str>) = split_definitions_ref(reference)?;
+        let pointer: std::borrow::Cow<'_, str> = fragment_to_pointer(&rest)?;
+        let token: &str = pointer.split('/').next().unwrap_or_default();
+        let name: String = crate::json_pointer::decode_token(token).ok()?;
+        let container: &str = if in_defs {
             hand_written
                 .definitions_only
                 .contains(&name)
                 .then_some("/definitions")?
+        } else {
+            (generated.contains(&name) || hand_written.defs_only.contains(&name))
+                .then_some(DEFS_PATH)?
         };
-        Some(format!("#{container}/{token}{tail}"))
+        Some(format!("#{container}/{rest}"))
     }
 }
 
-/// Decodes one JSON Pointer reference token of a URI fragment: URI percent-encoding first
-/// (RFC 6901 §6), then `~1` and `~0`. `None` when an escape is malformed or the bytes are not
-/// UTF-8.
-fn decode_fragment_token(token: &str) -> Option<String> {
-    let unescaped: std::borrow::Cow<'_, str> = if token.contains('%') {
-        let bytes: &[u8] = token.as_bytes();
-        let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
-        let mut at: usize = 0;
-        while at < bytes.len() {
-            if bytes[at] == b'%' {
-                let hex: &str = token
-                    .get(at + 1..at + 3)
-                    .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
-                decoded.push(u8::from_str_radix(hex, 16).ok()?);
-                at += 3;
-            } else {
-                decoded.push(bytes[at]);
-                at += 1;
-            }
+/// Splits a ref to an entry of the root `$defs` or `definitions` into whether the container is
+/// `$defs` and the fragment after the container's slash: as written, or re-encoded with
+/// [`pointer_to_fragment`] when the ref spells the container with percent-encoding
+/// (`#/%24defs/A`). `None` for any other ref, or one whose fragment does not decode.
+pub(super) fn split_definitions_ref(reference: &str) -> Option<(bool, std::borrow::Cow<'_, str>)> {
+    const CONTAINERS: [(&str, bool); 2] = [("/$defs/", true), ("/definitions/", false)];
+    let fragment: &str = reference.strip_prefix('#')?;
+    for (container, in_defs) in CONTAINERS {
+        if let Some(rest) = fragment.strip_prefix(container) {
+            return Some((in_defs, std::borrow::Cow::Borrowed(rest)));
         }
-        std::borrow::Cow::Owned(String::from_utf8(decoded).ok()?)
-    } else {
-        std::borrow::Cow::Borrowed(token)
-    };
-    if unescaped.contains('~') {
-        crate::json_pointer::decode_token(&unescaped).ok()
-    } else {
-        Some(unescaped.into_owned())
     }
+    let pointer: std::borrow::Cow<'_, str> = fragment_to_pointer(fragment)?;
+    CONTAINERS.iter().find_map(|&(container, in_defs)| {
+        let rest: &str = pointer.strip_prefix(container)?;
+        Some((
+            in_defs,
+            std::borrow::Cow::Owned(pointer_to_fragment(rest).into_owned()),
+        ))
+    })
+}
+
+/// Writes a JSON Pointer (its RFC 6901 string, tokens escaped with `~0` / `~1`) as a URI
+/// fragment (RFC 6901 §6): every character a fragment may not hold as written (RFC 3986 §3.5),
+/// `%` and non-ASCII characters included, is percent-encoded as its UTF-8 bytes. A `$ref` is a
+/// URI reference in every draft's metaschema, so the generator writes no IRI-only character.
+pub(super) fn pointer_to_fragment(pointer: &str) -> std::borrow::Cow<'_, str> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    if pointer
+        .chars()
+        .all(crate::json_pointer::is_uri_fragment_char)
+    {
+        return std::borrow::Cow::Borrowed(pointer);
+    }
+    let mut fragment: String = String::with_capacity(pointer.len() + 8);
+    let mut utf8: [u8; 4] = [0; 4];
+    for c in pointer.chars() {
+        if crate::json_pointer::is_uri_fragment_char(c) {
+            fragment.push(c);
+            continue;
+        }
+        for byte in c.encode_utf8(&mut utf8).bytes() {
+            fragment.push('%');
+            fragment.push(char::from(HEX[usize::from(byte >> 4)]));
+            fragment.push(char::from(HEX[usize::from(byte & 0xF)]));
+        }
+    }
+    std::borrow::Cow::Owned(fragment)
+}
+
+/// Reads a URI fragment as the JSON Pointer string it holds (RFC 6901 §6): percent-decoded,
+/// its `~0` / `~1` escapes kept. `None` when an escape is malformed or the bytes are not UTF-8.
+pub(super) fn fragment_to_pointer(fragment: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if !fragment.contains('%') {
+        return Some(std::borrow::Cow::Borrowed(fragment));
+    }
+    let bytes: &[u8] = fragment.as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut at: usize = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let hex: &str = fragment
+                .get(at + 1..at + 3)
+                .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(decoded).ok().map(std::borrow::Cow::Owned)
+}
+
+/// The `$ref` to the definition `name` under the JSON Pointer `container`, written as a URI
+/// fragment ([`pointer_to_fragment`]).
+fn definition_ref(container: &str, name: &str) -> String {
+    let pointer: String = format!("{container}/{}", escape_pointer_token(name));
+    format!("#{}", pointer_to_fragment(&pointer))
 }
 
 /// Whether `target` is draft 4, 6 or 7: the targets whose definitions go to `definitions`.
@@ -1407,7 +1463,7 @@ fn ref_targets(
             } else {
                 path
             };
-            Some(format!("#{container}/{}", escape_pointer_token(name)))
+            Some(definition_ref(container, name))
         })
         .collect()
 }
@@ -2519,6 +2575,7 @@ mod tests {
         GeneratedSchema, GeneratedSchemaResult, HandWrittenContainers, MetaSchema, ModelAliases,
         NumberFormats, ReverseCodeGenError, ReverseCodeGenResult, ReverseCodeGenSettings,
         SchemaGenerator, TargetDialect, ToJsonSchema, alias_resolver, derive_support,
+        escape_pointer_token, fragment_to_pointer, is_draft_4_to_7, pointer_to_fragment,
         root_schema_for,
     };
     use crate::json_schema::{JsonSchema, JsonType, Schema, TypeSet};
@@ -6233,8 +6290,9 @@ mod tests {
     // of the container conversion joins ---
 
     /// The refs `alias_resolver` gives for a root with a hand-written `$defs`-only `H`, a
-    /// `definitions`-only `D`, an `S` in both, and the generated definitions `G`, `A B` and
-    /// `a/b`.
+    /// `definitions`-only `D`, an `S` in both, and the generated definitions `G`, `A B`, `a/b`
+    /// and `A%20B`. A fragment is percent-decoded before it is split into tokens (RFC 6901 §6),
+    /// so `a%2Fb` names `a` then `b`.
     #[test]
     fn the_model_alias_rewrites_each_ref_to_the_container_the_model_holds_it_in() {
         let body: JsonSchema = serde_json::from_value(serde_json::json!({
@@ -6248,6 +6306,7 @@ mod tests {
             Some("G".to_string()),
             Some("A B".to_string()),
             Some("a/b".to_string()),
+            Some("A%20B".to_string()),
         ];
         let alias = alias_resolver(
             ModelAliases::HandWrittenAndGenerated,
@@ -6255,7 +6314,7 @@ mod tests {
             &BTreeSet::new(),
             &hand_written,
         );
-        let references: [&str; 13] = [
+        let references: [&str; 17] = [
             "#/definitions/G",
             "#/definitions/G/properties/x",
             "#/definitions/A%20B",
@@ -6269,6 +6328,10 @@ mod tests {
             "#/$defs/G",
             "#/definitions/A%2",
             "#/definitions/Missing",
+            "#/definitions/A%2520B",
+            "#/definitions/a%2Fb",
+            "#/%24defs/D",
+            "#/%64efinitions/A B",
         ];
         let expected: Vec<Option<String>> = vec![
             Some("#/$defs/G".to_string()),
@@ -6284,6 +6347,10 @@ mod tests {
             None,
             None,
             None,
+            Some("#/$defs/A%2520B".to_string()),
+            None,
+            Some("#/definitions/D".to_string()),
+            Some("#/$defs/A%20B".to_string()),
         ];
         let actual: Vec<Option<String>> = references
             .iter()
@@ -6651,7 +6718,8 @@ mod tests {
         dangling
     }
 
-    /// The value a URI fragment's JSON Pointer names in `base`.
+    /// The value a URI fragment's JSON Pointer names in `base`: the fragment percent-decoded,
+    /// then split into tokens, as the registry reads it.
     fn resolve_fragment<'a>(
         base: &'a serde_json::Value,
         fragment: &str,
@@ -6659,10 +6727,11 @@ mod tests {
         if fragment.is_empty() {
             return Some(base);
         }
-        let pointer: &str = fragment.strip_prefix('/')?;
+        let decoded: std::borrow::Cow<'_, str> = super::fragment_to_pointer(fragment)?;
+        let pointer: &str = decoded.strip_prefix('/')?;
         let mut current: &serde_json::Value = base;
         for token in pointer.split('/') {
-            let token: String = super::decode_fragment_token(token)?;
+            let token: String = crate::json_pointer::decode_token(token).ok()?;
             current = match current {
                 serde_json::Value::Object(object) => object.get(&token)?,
                 serde_json::Value::Array(items) => items.get(token.parse::<usize>().ok()?)?,
@@ -8264,5 +8333,448 @@ mod tests {
         const DIALECT: TargetDialect = TargetDialect::Draft202012;
 
         inlined_definitions_tests!();
+    }
+
+    // --- Every ref the generator writes to its own definitions is a URI reference: the name
+    // is escaped as a JSON Pointer token, then percent-encoded where a URI fragment needs it ---
+
+    /// Definition names that need each kind of escape, with the token their refs carry.
+    const ESCAPED_NAMES: [(&str, &str); 12] = [
+        ("A B", "A%20B"),
+        ("100%", "100%25"),
+        ("a#b", "a%23b"),
+        ("a\"b", "a%22b"),
+        ("<a>", "%3Ca%3E"),
+        ("a^b", "a%5Eb"),
+        ("{a}", "%7Ba%7D"),
+        ("a/b", "a~1b"),
+        ("a~b", "a~0b"),
+        ("é", "%C3%A9"),
+        ("A%20B", "A%2520B"),
+        ("-._!$&'()*+,;=:@?", "-._!$&'()*+,;=:@?"),
+    ];
+
+    const JSON_SCHEMA_TARGETS: [TargetDialect; 5] = [
+        TargetDialect::Draft04,
+        TargetDialect::Draft06,
+        TargetDialect::Draft07,
+        TargetDialect::Draft201909,
+        TargetDialect::Draft202012,
+    ];
+
+    #[test]
+    fn pointer_to_fragment_percent_encodes_what_a_fragment_does_not_allow() {
+        let expected: Vec<String> = ESCAPED_NAMES
+            .iter()
+            .map(|(_, token)| format!("/$defs/{token}"))
+            .collect();
+        let actual: Vec<String> = ESCAPED_NAMES
+            .iter()
+            .map(|(name, _)| {
+                pointer_to_fragment(&format!("/$defs/{}", escape_pointer_token(name))).into_owned()
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_to_pointer_inverts_pointer_to_fragment() {
+        let expected: Vec<Option<String>> = ESCAPED_NAMES
+            .iter()
+            .map(|(name, _)| Some(format!("/$defs/{}", escape_pointer_token(name))))
+            .collect();
+        let actual: Vec<Option<String>> = ESCAPED_NAMES
+            .iter()
+            .map(|(name, _)| {
+                let pointer: String = format!("/$defs/{}", escape_pointer_token(name));
+                fragment_to_pointer(&pointer_to_fragment(&pointer))
+                    .map(std::borrow::Cow::into_owned)
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn fragment_to_pointer_rejects_a_malformed_escape_or_bytes_that_are_not_utf_8() {
+        let expected: Vec<Option<String>> = vec![None, None, None, Some("/a%".to_string())];
+        let actual: Vec<Option<String>> = ["/a%2", "/a%zz", "/a%FF", "/a%25"]
+            .iter()
+            .map(|fragment: &&str| fragment_to_pointer(fragment).map(std::borrow::Cow::into_owned))
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// A root object whose property `p<i>` refs the generated string definition named
+    /// `ESCAPED_NAMES[i]`.
+    fn generated_with_escaped_names(settings: ReverseCodeGenSettings) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings);
+        let properties: Vec<(String, JsonSchema)> = ESCAPED_NAMES
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _))| {
+                let schema_id: String = format!("x::T{index}");
+                let reference: JsonSchema =
+                    generator.named_subschema(&schema_id, name, |_| string_schema());
+                (format!("p{index}"), reference)
+            })
+            .collect();
+        let properties: Vec<(&str, JsonSchema)> = properties
+            .iter()
+            .map(|(name, schema)| (name.as_str(), schema.clone()))
+            .collect();
+        generator
+            .into_root_schema(object_schema(&properties))
+            .expect("generated")
+    }
+
+    /// The `$ref` of each root property `p<i>` of `document`, in index order.
+    fn property_refs(document: &serde_json::Value) -> Vec<String> {
+        (0..ESCAPED_NAMES.len())
+            .map(|index| {
+                document["properties"][format!("p{index}")]["$ref"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// Every `$ref` in `document` that is not a URI reference (RFC 3986) or does not resolve.
+    fn bad_refs(document: &serde_json::Value) -> Vec<String> {
+        let mut bad: Vec<String> = dangling_refs(document);
+        let mut stack: Vec<&serde_json::Value> = vec![document];
+        while let Some(value) = stack.pop() {
+            match value {
+                serde_json::Value::Object(object) => {
+                    if let Some(serde_json::Value::String(reference)) = object.get("$ref")
+                        && fluent_uri::UriRef::parse(reference.as_str()).is_err()
+                    {
+                        bad.push(reference.clone());
+                    }
+                    stack.extend(object.values());
+                }
+                serde_json::Value::Array(items) => stack.extend(items),
+                _ => {}
+            }
+        }
+        bad
+    }
+
+    /// The model and the document of `generated` as JSON, in that order.
+    fn model_and_document(generated: &GeneratedSchema) -> [serde_json::Value; 2] {
+        [
+            serde_json::to_value(generated.schema()).expect("json"),
+            generated.to_value(),
+        ]
+    }
+
+    #[test]
+    fn refs_to_escaped_names_are_percent_encoded_in_the_2020_12_model() {
+        let expected: Vec<String> = ESCAPED_NAMES
+            .iter()
+            .map(|(_, token)| format!("#/$defs/{token}"))
+            .collect();
+        let generated: GeneratedSchema =
+            generated_with_escaped_names(settings_for(TargetDialect::Draft202012));
+        let actual: Vec<String> =
+            property_refs(&serde_json::to_value(generated.schema()).expect("json"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn refs_to_escaped_names_are_percent_encoded_in_the_draft_07_model_and_document() {
+        let expected: [Vec<String>; 2] = [
+            ESCAPED_NAMES
+                .iter()
+                .map(|(_, token)| format!("#/$defs/{token}"))
+                .collect(),
+            ESCAPED_NAMES
+                .iter()
+                .map(|(_, token)| format!("#/definitions/{token}"))
+                .collect(),
+        ];
+        let generated: GeneratedSchema =
+            generated_with_escaped_names(settings_for(TargetDialect::Draft07));
+        let actual: [Vec<String>; 2] = model_and_document(&generated).map(|v| property_refs(&v));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn refs_to_escaped_names_are_uri_references_that_resolve_on_every_target() {
+        let expected: Vec<[Vec<String>; 2]> =
+            vec![[Vec::new(), Vec::new()]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<[Vec<String>; 2]> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                let generated: GeneratedSchema =
+                    generated_with_escaped_names(settings_for(*target));
+                model_and_document(&generated).map(|v| bad_refs(&v))
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_instance_validates_against_refs_to_escaped_names_on_every_target() {
+        let valid: serde_json::Value = (0..ESCAPED_NAMES.len())
+            .map(|index| (format!("p{index}"), serde_json::json!("x")))
+            .collect::<serde_json::Map<String, serde_json::Value>>()
+            .into();
+        let invalid: serde_json::Value = (0..ESCAPED_NAMES.len())
+            .map(|index| (format!("p{index}"), serde_json::json!(1)))
+            .collect::<serde_json::Map<String, serde_json::Value>>()
+            .into();
+        let expected: Vec<Vec<Vec<bool>>> =
+            vec![vec![vec![true, false], vec![true, false]]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<Vec<Vec<bool>>> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                let generated: GeneratedSchema =
+                    generated_with_escaped_names(settings_for(*target));
+                model_and_document_verdicts(&generated, &[valid.clone(), invalid.clone()])
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn each_ref_to_an_escaped_name_rejects_an_instance_on_its_own() {
+        let expected: Vec<Vec<bool>> =
+            vec![vec![false; ESCAPED_NAMES.len()]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<Vec<bool>> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                let document: serde_json::Value =
+                    generated_with_escaped_names(settings_for(*target)).to_value();
+                (0..ESCAPED_NAMES.len())
+                    .map(|bad| {
+                        let instance: serde_json::Value = (0..ESCAPED_NAMES.len())
+                            .map(|index| {
+                                let value: serde_json::Value = if index == bad {
+                                    serde_json::json!(1)
+                                } else {
+                                    serde_json::json!("x")
+                                };
+                                (format!("p{index}"), value)
+                            })
+                            .collect::<serde_json::Map<String, serde_json::Value>>()
+                            .into();
+                        instance_is_valid(&document, &instance)
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_to_a_name_with_a_space_is_percent_encoded_in_the_2020_12_document() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","$defs":{"A B":{"type":"string"}},"properties":{"a":{"$ref":"#/$defs/A%20B"}}}"##.to_string());
+        let mut generator: SchemaGenerator = SchemaGenerator::default();
+        let reference: JsonSchema = generator.named_subschema("x::A", "A B", |_| string_schema());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(generator.into_root_schema(object_schema(&[("a", reference)])));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_ref_to_a_name_with_a_space_is_percent_encoded_in_the_draft_07_document() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"http://json-schema.org/draft-07/schema#","definitions":{"A B":{"type":"string"}},"properties":{"a":{"$ref":"#/definitions/A%20B"}},"type":"object"}"##.to_string());
+        let mut generator: SchemaGenerator =
+            SchemaGenerator::new(settings_for(TargetDialect::Draft07));
+        let reference: JsonSchema = generator.named_subschema("x::A", "A B", |_| string_schema());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(generator.into_root_schema(object_schema(&[("a", reference)])));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn a_custom_definitions_path_is_percent_encoded_in_refs() {
+        let expected: Result<String, Vec<ReverseCodeGenError>> = Ok(r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"a":{"$ref":"#/x%20y/a~1b%25/A%20B"}},"x y":{"a/b%":{"A B":{"type":"string"}}}}"##.to_string());
+        let mut generator: SchemaGenerator = SchemaGenerator::new(ReverseCodeGenSettings {
+            definitions_path: Some("/x y/a~1b%".to_string()),
+            ..ReverseCodeGenSettings::default()
+        });
+        let reference: JsonSchema = generator.named_subschema("x::A", "A B", |_| string_schema());
+        let actual: Result<String, Vec<ReverseCodeGenError>> =
+            serialized(generator.into_root_schema(object_schema(&[("a", reference)])));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn refs_under_a_custom_definitions_path_resolve_on_every_target() {
+        let expected: Vec<[Vec<String>; 2]> =
+            vec![[Vec::new(), Vec::new()]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<[Vec<String>; 2]> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                let generated: GeneratedSchema =
+                    generated_with_escaped_names(ReverseCodeGenSettings {
+                        dialect: Some(*target),
+                        definitions_path: Some("/x y/a~1b%".to_string()),
+                        ..ReverseCodeGenSettings::default()
+                    });
+                model_and_document(&generated).map(|v| bad_refs(&v))
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    /// A generated string `A B` beside a hand-written entry `A B` of the same body in the
+    /// target's container.
+    fn generated_beside_an_equal_hand_written_escaped_entry(
+        dialect: TargetDialect,
+    ) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let reference: JsonSchema = generator.named_subschema("x::A", "A B", |_| string_schema());
+        let mut body: JsonSchema = object_schema(&[("a", reference)]);
+        let entry: BTreeMap<String, Schema> = defs(&[("A B", string_schema())]);
+        if is_draft_4_to_7(dialect) {
+            body.definitions = Some(entry);
+        } else {
+            body.defs = Some(entry);
+        }
+        generator.into_root_schema(body).expect("generated")
+    }
+
+    #[test]
+    fn a_definition_merged_into_a_hand_written_escaped_entry_refs_it_percent_encoded() {
+        let expected: [serde_json::Value; 2] = [
+            serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "$defs": {"A B": {"type": "string"}},
+                "properties": {"a": {"$ref": "#/$defs/A%20B"}}
+            }),
+            serde_json::json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "definitions": {"A B": {"type": "string"}},
+                "properties": {"a": {"$ref": "#/definitions/A%20B"}}
+            }),
+        ];
+        let actual: [serde_json::Value; 2] = [TargetDialect::Draft202012, TargetDialect::Draft07]
+            .map(|dialect| {
+                generated_beside_an_equal_hand_written_escaped_entry(dialect).to_value()
+            });
+        assert_eq!(expected, actual);
+    }
+
+    /// A standalone schema whose `$defs` and `definitions` hold names that need URI escaping,
+    /// with refs to them written percent-encoded, as plain JSON Pointers (not URI references),
+    /// and into a definition with a tail.
+    fn standalone_with_escaped_definitions() -> JsonSchema {
+        serde_json::from_value(serde_json::json!({
+            "$defs": {
+                "A B": {"type": "string"},
+                "100%": {"type": "integer"},
+                "O P": {"properties": {"x y": {"type": "boolean"}}}
+            },
+            "definitions": {"é": {"type": "null"}},
+            "type": "object",
+            "properties": {
+                "encoded": {"$ref": "#/$defs/A%20B"},
+                "plain": {"$ref": "#/$defs/A B"},
+                "percent": {"$ref": "#/$defs/100%25"},
+                "tail": {"$ref": "#/$defs/O%20P/properties/x%20y"},
+                "plain_tail": {"$ref": "#/$defs/O P/properties/x y"},
+                "definitions": {"$ref": "#/definitions/%C3%A9"}
+            }
+        }))
+        .expect("a schema")
+    }
+
+    /// The standalone schema inlined as root property `s` and written for `dialect`.
+    fn inlined_with_escaped_definitions(dialect: TargetDialect) -> GeneratedSchema {
+        let mut generator: SchemaGenerator = SchemaGenerator::new(settings_for(dialect));
+        let inlined: JsonSchema = generator.inline_subschema(standalone_with_escaped_definitions());
+        generator
+            .into_root_schema(object_schema(&[("s", inlined)]))
+            .expect("generated")
+    }
+
+    #[test]
+    fn inline_subschema_rewrites_refs_to_hoisted_escaped_names_percent_encoded() {
+        let expected: [serde_json::Value; 2] = [
+            serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "$defs": {
+                    "A B": {"type": "string"},
+                    "100%": {"type": "integer"},
+                    "O P": {"properties": {"x y": {"type": "boolean"}}},
+                    "é": {"type": "null"}
+                },
+                "properties": {"s": {
+                    "type": "object",
+                    "properties": {
+                        "encoded": {"$ref": "#/$defs/A%20B"},
+                        "plain": {"$ref": "#/$defs/A%20B"},
+                        "percent": {"$ref": "#/$defs/100%25"},
+                        "tail": {"$ref": "#/$defs/O%20P/properties/x%20y"},
+                        "plain_tail": {"$ref": "#/$defs/O%20P/properties/x%20y"},
+                        "definitions": {"$ref": "#/$defs/%C3%A9"}
+                    }
+                }}
+            }),
+            serde_json::json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "definitions": {
+                    "A B": {"type": "string"},
+                    "100%": {"type": "integer"},
+                    "O P": {"properties": {"x y": {"type": "boolean"}}},
+                    "é": {"type": "null"}
+                },
+                "properties": {"s": {
+                    "type": "object",
+                    "properties": {
+                        "encoded": {"$ref": "#/definitions/A%20B"},
+                        "plain": {"$ref": "#/definitions/A%20B"},
+                        "percent": {"$ref": "#/definitions/100%25"},
+                        "tail": {"$ref": "#/definitions/O%20P/properties/x%20y"},
+                        "plain_tail": {"$ref": "#/definitions/O%20P/properties/x%20y"},
+                        "definitions": {"$ref": "#/definitions/%C3%A9"}
+                    }
+                }}
+            }),
+        ];
+        let actual: [serde_json::Value; 2] = [TargetDialect::Draft202012, TargetDialect::Draft07]
+            .map(|dialect| inlined_with_escaped_definitions(dialect).to_value());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn inline_subschema_refs_to_hoisted_escaped_names_resolve_on_every_target() {
+        let expected: Vec<[Vec<String>; 2]> =
+            vec![[Vec::new(), Vec::new()]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<[Vec<String>; 2]> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                model_and_document(&inlined_with_escaped_definitions(*target)).map(|v| bad_refs(&v))
+            })
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn an_instance_validates_against_hoisted_escaped_names_on_every_target() {
+        let valid: serde_json::Value = serde_json::json!({"s": {
+            "encoded": "x", "plain": "x", "percent": 1, "tail": true, "plain_tail": true,
+            "definitions": null
+        }});
+        let invalid: serde_json::Value = serde_json::json!({"s": {"percent": "x"}});
+        let expected: Vec<Vec<Vec<bool>>> =
+            vec![vec![vec![true, false], vec![true, false]]; JSON_SCHEMA_TARGETS.len()];
+        let actual: Vec<Vec<Vec<bool>>> = JSON_SCHEMA_TARGETS
+            .iter()
+            .map(|target: &TargetDialect| {
+                model_and_document_verdicts(
+                    &inlined_with_escaped_definitions(*target),
+                    &[valid.clone(), invalid.clone()],
+                )
+            })
+            .collect();
+        assert_eq!(expected, actual);
     }
 }

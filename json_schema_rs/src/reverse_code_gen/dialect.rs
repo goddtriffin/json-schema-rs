@@ -101,8 +101,8 @@ struct Work<'a> {
 /// Converts schemas built as 2020-12 into `target`, collecting every keyword it cannot express.
 pub(super) struct Converter<'a> {
     target: TargetDialect,
-    /// `#` and the definitions path and a slash: the prefix of the references to the document's
-    /// definitions, which are written final and must not be rewritten.
+    /// `#` and the definitions path (as a URI fragment) and a slash: the prefix of the references
+    /// to the document's definitions, which are written final and must not be rewritten.
     document_prefix: String,
     /// The JSON Pointer of every schema reached, as its parent's index and its last token (the
     /// first entry holds the whole pointer of the schema the walk started at). A pointer is
@@ -126,7 +126,7 @@ impl<'a> Converter<'a> {
     ) -> Self {
         Converter {
             target,
-            document_prefix: format!("#{definitions_path}/"),
+            document_prefix: format!("#{}/", super::pointer_to_fragment(definitions_path)),
             pointers: Vec::new(),
             errors,
             target_table: target.spec_version().map(Dialect::for_spec_version),
@@ -287,10 +287,10 @@ impl<'a> Converter<'a> {
         // Definitions live in `definitions` before 2019-09.
         if is_draft_4_to_7 {
             if let Some(Value::String(reference)) = map.get_mut("$ref")
-                && reference.starts_with("#/$defs/")
                 && !reference.starts_with(&self.document_prefix)
+                && let Some((true, rest)) = super::split_definitions_ref(reference)
             {
-                *reference = format!("#/definitions/{}", &reference["#/$defs/".len()..]);
+                *reference = format!("#/definitions/{rest}");
             }
             if let Some(defs) = map.remove("$defs") {
                 match (map.get_mut("definitions"), defs) {
@@ -730,6 +730,30 @@ mod tests {
             json!({
                 "properties": {"a": {"$ref": "#/$defs/A"}},
                 "$defs": {"A": {"type": "string"}}
+            }),
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn defs_refs_keep_their_percent_encoding_and_read_an_encoded_container_in_draft_07() {
+        let expected: Result<Value, Vec<ReverseCodeGenError>> = Ok(json!({
+            "properties": {
+                "a": {"$ref": "#/definitions/A%20B"},
+                "b": {"$ref": "#/definitions/A%20B/properties/x%20y"},
+                "c": {"$ref": "#/definitions/A%20B"}
+            },
+            "definitions": {"A B": {"properties": {"x y": {"type": "string"}}}}
+        }));
+        let actual: Result<Value, Vec<ReverseCodeGenError>> = converted(
+            TargetDialect::Draft07,
+            json!({
+                "properties": {
+                    "a": {"$ref": "#/$defs/A%20B"},
+                    "b": {"$ref": "#/$defs/A%20B/properties/x%20y"},
+                    "c": {"$ref": "#/%24defs/A B"}
+                },
+                "$defs": {"A B": {"properties": {"x y": {"type": "string"}}}}
             }),
         );
         assert_eq!(expected, actual);
