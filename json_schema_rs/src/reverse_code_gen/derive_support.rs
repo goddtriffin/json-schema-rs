@@ -5,7 +5,7 @@
 //! non-generic builders here, so the code it generates for a type is the same size whatever
 //! the type's width: a struct with 800 fields compiles one call, not 800 inlined blocks.
 
-use super::SchemaGenerator;
+use super::{SchemaGenerator, declares_identifier, escape_pointer_token, pointer_to_fragment};
 use crate::json_schema::{JsonSchema, JsonType, Schema};
 use std::collections::BTreeMap;
 
@@ -298,7 +298,8 @@ pub fn object_schema(generator: &mut SchemaGenerator, spec: &ObjectSpec) -> Json
     let mut parts: Vec<Schema> = Vec::new();
     let aliases: Vec<Schema> = alias_constraints(spec.fields);
     for flatten in spec.flattens {
-        let mut inner: JsonSchema = (flatten.schema)(generator);
+        let inner: JsonSchema = (flatten.schema)(generator);
+        let mut inner: JsonSchema = flattened_view(generator, inner);
         if !is_plain_object(&inner) {
             allow_unknown_properties(&mut inner);
             parts.push(Schema::from(if flatten.optional {
@@ -373,6 +374,65 @@ pub fn object_schema(generator: &mut SchemaGenerator, spec: &ObjectSpec) -> Json
         }
     }
     schema
+}
+
+/// The schema a flattened position (a `#[serde(flatten)]` field, an internally tagged newtype's
+/// payload) merges: `schema` itself, except for the `$ref` to a standalone schema's body that
+/// [`SchemaGenerator::inline_subschema`] made a definition, which is read as that body so it
+/// merges as it would in place (a `$ref` to a closed body would reject the parent's keys). The
+/// body's refs already point into the definition, which stays.
+///
+/// A plain-object body (see [`is_plain_object`]) becomes a plain object whose property schemas,
+/// and `additionalProperties` schema, are `$ref`s to the body's own: no `$id` or anchor in them
+/// is declared a second time. Any other body is copied when it declares no identifier (see
+/// [`declares_identifier`]), and otherwise stays the `$ref`.
+fn flattened_view(generator: &SchemaGenerator, schema: JsonSchema) -> JsonSchema {
+    let Some((body, reference)) = generator.inlined_body(&schema) else {
+        return schema;
+    };
+    let into_body = |pointer: String| -> Schema {
+        Schema::from(JsonSchema {
+            ref_: Some(format!("{reference}{}", pointer_to_fragment(&pointer))),
+            ..JsonSchema::default()
+        })
+    };
+    if is_plain_object(body) {
+        let properties: BTreeMap<String, Schema> = body
+            .properties
+            .iter()
+            .map(|(key, property): (&String, &Schema)| {
+                let property: Schema = match property {
+                    Schema::Bool(value) => Schema::Bool(*value),
+                    Schema::Object(_) => {
+                        into_body(format!("/properties/{}", escape_pointer_token(key)))
+                    }
+                };
+                (key.clone(), property)
+            })
+            .collect();
+        let additional_properties: Option<Schema> = match &body.additional_properties {
+            Some(Schema::Object(value)) if **value != JsonSchema::default() => {
+                Some(into_body("/additionalProperties".to_string()))
+            }
+            other => other.clone(),
+        };
+        return JsonSchema {
+            type_: body.type_,
+            properties,
+            additional_properties,
+            required: body.required.clone(),
+            title: body.title.clone(),
+            description: body.description.clone(),
+            comment: body.comment.clone(),
+            ..JsonSchema::default()
+        };
+    }
+    let mut copy: JsonSchema = body.clone();
+    if declares_identifier(&mut copy) {
+        schema
+    } else {
+        copy
+    }
 }
 
 /// Whether `schema` only lists properties of an object, so a parent can merge them into its
@@ -741,6 +801,7 @@ fn internal_branch(
         ),
         VariantShape::Newtype { flattened, .. } => {
             let payload: JsonSchema = flattened(generator);
+            let payload: JsonSchema = flattened_view(generator, payload);
             if payload.type_ == Some(JsonType::Null.into()) && is_plain_null(&payload) {
                 JsonSchema {
                     type_: Some(JsonType::Object.into()),
