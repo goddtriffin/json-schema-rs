@@ -1077,4 +1077,26 @@ mod tests {
             "{actual:?}"
         );
     }
+
+    #[test]
+    fn reference_into_another_dialect_under_a_non_ascii_uri_names_it_as_a_strict_uri() {
+        let root: Value = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "items": {"$ref": "ö.json#/$defs/é"}
+        });
+        let old: Value = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$defs": {"é": {"type": "string"}}
+        });
+        let actual: Result<Value, DereferenceError> =
+            dereference(&root, &[("https://example.com/schemas/ö.json", old)]);
+        assert!(
+            matches!(
+                &actual,
+                Err(DereferenceError::MixedDialects { location })
+                    if location == "https://example.com/schemas/%C3%B6.json#/$defs/%C3%A9"
+            ),
+            "{actual:?}"
+        );
+    }
 }

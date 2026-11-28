@@ -5050,6 +5050,34 @@ fn cli_validate_output_basic_prints_the_errors() {
 }
 
 #[test]
+fn cli_validate_output_basic_prints_a_non_ascii_id_as_a_strict_uri() {
+    let actual: (i32, String, String) = run_cli_validate_output(
+        r##"{"$id":"https://example.com/é","$ref":"#/$defs/ü","$defs":{"ü":{"minimum":3}}}"##,
+        "2",
+        "basic",
+    );
+    let expected: (i32, String, String) = (
+        1,
+        r#"{
+  "valid": false,
+  "errors": [
+    {
+      "valid": false,
+      "keywordLocation": "/$ref/minimum",
+      "absoluteKeywordLocation": "https://example.com/%C3%A9#/$defs/%C3%BC/minimum",
+      "instanceLocation": "",
+      "error": "value 2 is below minimum 3"
+    }
+  ]
+}
+"#
+        .to_string(),
+        "error: validation failed\n".to_string(),
+    );
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn cli_validate_output_basic_prints_the_annotations_of_a_valid_payload() {
     let actual: (i32, String, String) = run_cli_validate_output(
         r#"{"properties":{"a":{"title":"A","readOnly":true}}}"#,

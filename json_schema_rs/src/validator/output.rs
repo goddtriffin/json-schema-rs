@@ -1577,6 +1577,217 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    #[test]
+    fn percent_encoded_non_ascii_id_gives_a_strict_absolute_location() {
+        let expected: Value = json!({
+            "valid": false,
+            "errors": [{
+                "valid": false,
+                "keywordLocation": "/$ref/minimum",
+                "absoluteKeywordLocation": "https://example.com/%C3%A9#/$defs/%C3%A9/minimum",
+                "instanceLocation": "",
+                "error": "value 1 is below minimum 5"
+            }]
+        });
+        let actual: Value = render(
+            &json!({
+                "$id": "https://example.com/%C3%A9",
+                "$ref": "#/$defs/%C3%A9",
+                "$defs": {"é": {"minimum": 5}}
+            }),
+            &json!(1),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn raw_non_ascii_id_gives_the_same_strict_absolute_location() {
+        let expected: Value = json!({
+            "valid": false,
+            "errors": [{
+                "valid": false,
+                "keywordLocation": "/$ref/minimum",
+                "absoluteKeywordLocation": "https://example.com/%C3%A9#/$defs/%C3%A9/minimum",
+                "instanceLocation": "",
+                "error": "value 1 is below minimum 5"
+            }]
+        });
+        let actual: Value = render(
+            &json!({
+                "$id": "https://example.com/é",
+                "$ref": "#/$defs/é",
+                "$defs": {"é": {"minimum": 5}}
+            }),
+            &json!(1),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn detailed_absolute_locations_in_a_nested_non_ascii_id_are_strict() {
+        let expected: Value = json!({
+            "valid": false,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "errors": [{
+                "valid": false,
+                "keywordLocation": "/properties/a/$ref/properties/x",
+                "absoluteKeywordLocation": "https://example.com/%C3%BC.json#/properties/x",
+                "instanceLocation": "/a/x",
+                "errors": [
+                    {
+                        "valid": false,
+                        "keywordLocation": "/properties/a/$ref/properties/x/minimum",
+                        "absoluteKeywordLocation": "https://example.com/%C3%BC.json#/properties/x/minimum",
+                        "instanceLocation": "/a/x",
+                        "error": "value 1 is below minimum 2"
+                    },
+                    {
+                        "valid": false,
+                        "keywordLocation": "/properties/a/$ref/properties/x/maximum",
+                        "absoluteKeywordLocation": "https://example.com/%C3%BC.json#/properties/x/maximum",
+                        "instanceLocation": "/a/x",
+                        "error": "value 1 is above maximum 0"
+                    }
+                ]
+            }]
+        });
+        let actual: Value = render(
+            &json!({
+                "$id": "https://example.com/root.json",
+                "properties": {"a": {"$ref": "ü.json"}},
+                "$defs": {"B": {"$id": "ü.json", "properties": {"x": {"minimum": 2, "maximum": 0}}}}
+            }),
+            &json!({"a": {"x": 1}}),
+            OutputFormat::Detailed,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn verbose_absolute_locations_under_a_non_ascii_host_and_query_are_strict() {
+        let expected: Value = json!({
+            "valid": false,
+            "keywordLocation": "",
+            "instanceLocation": "",
+            "errors": [{
+                "valid": false,
+                "keywordLocation": "/$ref",
+                "absoluteKeywordLocation": "https://ex%C3%A4mple.com/s?%C3%A9#/$defs/d",
+                "instanceLocation": "",
+                "errors": [{
+                    "valid": false,
+                    "keywordLocation": "/$ref/minimum",
+                    "absoluteKeywordLocation": "https://ex%C3%A4mple.com/s?%C3%A9#/$defs/d/minimum",
+                    "instanceLocation": "",
+                    "error": "value 1 is below minimum 2"
+                }]
+            }]
+        });
+        let actual: Value = render(
+            &json!({
+                "$id": "https://exämple.com/s?é",
+                "$ref": "#/$defs/d",
+                "$defs": {"d": {"minimum": 2}}
+            }),
+            &json!(1),
+            OutputFormat::Verbose,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn annotation_absolute_location_under_a_non_ascii_id_is_strict() {
+        let expected: Value = json!({
+            "valid": true,
+            "annotations": [
+                {
+                    "valid": true,
+                    "keywordLocation": "/properties/b/$ref/description",
+                    "absoluteKeywordLocation": "https://example.com/%C3%A9#/$defs/b/description",
+                    "instanceLocation": "/b",
+                    "annotation": "B"
+                },
+                note("/properties", "", &json!(["b"]))
+            ]
+        });
+        let actual: Value = render_annotating(
+            &json!({
+                "$id": "https://example.com/é",
+                "properties": {"b": {"$ref": "#/$defs/b"}},
+                "$defs": {"b": {"description": "B"}}
+            }),
+            &json!({"b": 1}),
+            OutputFormat::Basic,
+        );
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn every_draft_writes_a_non_ascii_id_as_a_strict_absolute_location() {
+        let absolute = |schema_uri: &str, id_keyword: &str| -> Option<String> {
+            let output: Value = render(
+                &json!({
+                    "$schema": schema_uri,
+                    id_keyword: "https://example.com/é/s.json",
+                    "properties": {"a": {"$ref": "#/definitions/ü"}},
+                    "definitions": {"ü": {"minimum": 2}}
+                }),
+                &json!({"a": 1}),
+                OutputFormat::Basic,
+            );
+            output
+                .pointer("/errors/0/absoluteKeywordLocation")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        let uri: Option<String> =
+            Some("https://example.com/%C3%A9/s.json#/definitions/%C3%BC/minimum".to_string());
+        let expected: Vec<Option<String>> = vec![uri; 5];
+        let actual: Vec<Option<String>> = vec![
+            absolute("http://json-schema.org/draft-04/schema#", "id"),
+            absolute("http://json-schema.org/draft-06/schema#", "$id"),
+            absolute("http://json-schema.org/draft-07/schema#", "$id"),
+            absolute("https://json-schema.org/draft/2019-09/schema", "$id"),
+            absolute("https://json-schema.org/draft/2020-12/schema", "$id"),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_absolute_location_under_a_non_ascii_id_resolves_back_to_its_schema() {
+        let schema: Value = json!({
+            "$id": "https://example.com/é/s.json",
+            "$ref": "#/$defs/ü",
+            "$defs": {"ü": {"minimum": 2}}
+        });
+        let output: Value = render(&schema, &json!(1), OutputFormat::Basic);
+        let absolute: &str = output
+            .pointer("/errors/0/absoluteKeywordLocation")
+            .and_then(Value::as_str)
+            .expect("absolute location");
+        let subschema: &str = absolute.strip_suffix("/minimum").expect("keyword last");
+        let referring: Value = json!({
+            "$id": "https://example.com/t",
+            "$defs": {"s": schema},
+            "properties": {
+                "strict": {"$ref": subschema},
+                "raw": {"$ref": "https://example.com/é/s.json#/$defs/ü"}
+            }
+        });
+        let compiled: CompiledSchema = compile(&referring);
+        let expected: Vec<bool> = vec![false, true, false, true];
+        let actual: Vec<bool> = vec![
+            compiled.is_valid(&json!({"strict": 1})),
+            compiled.is_valid(&json!({"strict": 2})),
+            compiled.is_valid(&json!({"raw": 1})),
+            compiled.is_valid(&json!({"raw": 2})),
+        ];
+        assert_eq!(expected, actual);
+    }
+
     /// An annotation unit of the `basic` output.
     fn note(keyword_location: &str, instance_location: &str, annotation: &Value) -> Value {
         json!({

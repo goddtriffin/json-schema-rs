@@ -94,6 +94,14 @@ fn without_fragment(uri: &Uri) -> Uri {
     uri.strip_fragment().normalize()
 }
 
+/// `uri` as a strict URI (RFC 3987 §3.1): each non-ASCII character percent-encoded as its UTF-8
+/// bytes, in the host too (RFC 3986 §3.2.2), no punycode. `None` when `uri` is ASCII, so already
+/// one: a normalised URI keeps a percent-encoding only for an octet the IRI may not hold as
+/// written. [`parse_uri`] reads the result back to `uri`, since IRI normalisation decodes it.
+fn strict_spelling(uri: &Uri) -> Option<Box<str>> {
+    (!uri.as_str().is_ascii()).then(|| uri.to_uri().into_string().into_boxed_str())
+}
+
 /// The standard metaschemas, embedded so that `$ref` and `$schema` to them never need the
 /// network: `(URI without fragment, document text)`.
 pub(crate) const METASCHEMAS: &[(&str, &str)] = &[
@@ -487,7 +495,8 @@ pub(crate) enum RegistryDocumentKind {
 /// [`Registry::embeddable_documents`]).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RegistryDocument<'r> {
-    /// The document's retrieval URI, normalised (`json-schema:///` for a root without a base).
+    /// The document's retrieval URI, normalised and strict (`json-schema:///` for a root without
+    /// a base).
     pub(crate) uri: &'r str,
     /// The document's root schema.
     pub(crate) schema: SchemaRef<'r>,
@@ -514,6 +523,8 @@ struct Target {
 #[derive(Debug)]
 struct Resource {
     uri: Uri,
+    /// `uri`'s strict spelling when it differs ([`strict_spelling`]).
+    strict_uri: Option<Box<str>>,
     document: usize,
     pointer: Vec<String>,
     dialect: Dialect,
@@ -525,6 +536,14 @@ struct Resource {
     child_ids: HashMap<String, Scope>,
     /// `$ref` as written in this resource → its target.
     refs: HashMap<String, Target>,
+}
+
+impl Resource {
+    /// The resource's URI as a strict URI: borrowed, allocated once at build time only for a
+    /// non-ASCII IRI.
+    fn strict_uri(&self) -> &str {
+        self.strict_uri.as_deref().unwrap_or(self.uri.as_str())
+    }
 }
 
 /// One step of a JSON Pointer while walking, borrowed from the schema.
@@ -795,7 +814,8 @@ pub struct Registry<'a> {
     /// The custom metaschemas a document's `$schema` named (and the ones their own `$schema`
     /// named in turn), each read only for its `$vocabulary` and base draft: retrieval URI and
     /// root, in the order they were loaded.
-    metaschemas: Vec<(Uri, Arc<Schema>)>,
+    /// The strict spelling ([`strict_spelling`]) is kept next to the URI.
+    metaschemas: Vec<(Uri, Option<Box<str>>, Arc<Schema>)>,
 }
 
 /// A `$ref` waiting to be resolved: the scope it appears in, the reference as written, and where
@@ -1124,11 +1144,11 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
             .registry
             .metaschemas
             .iter()
-            .any(|(known, _)| known == uri)
+            .any(|(known, _, _)| known == uri)
         {
             self.registry
                 .metaschemas
-                .push((uri.clone(), Arc::clone(schema)));
+                .push((uri.clone(), strict_spelling(uri), Arc::clone(schema)));
         }
     }
 
@@ -1227,6 +1247,7 @@ impl<'a, 'b: 'a> Builder<'a, 'b> {
         }
         let scope: Scope = Scope(self.registry.resources.len());
         self.registry.resources.push(Resource {
+            strict_uri: strict_spelling(&uri),
             uri: uri.clone(),
             document,
             pointer,
@@ -2014,16 +2035,18 @@ impl<'a> Registry<'a> {
         self.resources[scope.0].dialect
     }
 
-    /// The base URI of the resource `scope` is in.
+    /// The base URI of the resource `scope` is in, normalised and written as a strict URI
+    /// (RFC 3987 §3.1: `https://example.com/%C3%BC.json` for the `$id` `https://example.com/ü.json`).
     #[must_use]
     pub fn base_uri(&self, scope: Scope) -> &str {
-        self.resources[scope.0].uri.as_str()
+        self.resources[scope.0].strict_uri()
     }
 
     /// The canonical URI of the schema at `pointer` (JSON Pointer segments from its document's
     /// root) in the resource `scope` (after [`Registry::enter`] on that schema): the resource's
     /// URI with the pointer from the resource's root as its fragment
-    /// (`https://example.com/polygon#/$defs/point`). `None` when the resource's URI is the
+    /// (`https://example.com/polygon#/$defs/point`), a strict URI (non-ASCII characters
+    /// percent-encoded in the base and the fragment). `None` when the resource's URI is the
     /// placeholder [`DEFAULT_BASE_URI`] (the schema declares no absolute URI) or the schema does
     /// not sit under the resource's root.
     pub(crate) fn canonical_uri(&self, scope: Scope, pointer: &[String]) -> Option<String> {
@@ -2043,7 +2066,7 @@ impl<'a> Registry<'a> {
     /// the schema does not sit under the resource's root.
     pub(crate) fn location_uri(&self, scope: Scope, pointer: &[String]) -> Option<String> {
         let resource: &Resource = &self.resources[scope.0];
-        let base: &str = resource.uri.as_str();
+        let base: &str = resource.strict_uri();
         let base: &str = base.split_once('#').map_or(base, |(base, _)| base);
         let rest: &[String] = pointer.strip_prefix(resource.pointer.as_slice())?;
         let mut uri: String = String::with_capacity(base.len() + 1 + rest.len() * 8);
@@ -2092,16 +2115,17 @@ impl<'a> Registry<'a> {
             .iter()
             .filter_map(|document| {
                 Some(RegistryDocument {
-                    uri: self.resources[document.scope.0].uri.as_str(),
+                    uri: self.resources[document.scope.0].strict_uri(),
                     schema: document.root.schema_ref(),
                     kind: document.kind?,
                 })
             })
             .collect();
-        for (uri, schema) in &self.metaschemas {
-            if !out.iter().any(|document| document.uri == uri.as_str()) {
+        for (uri, strict, schema) in &self.metaschemas {
+            let uri: &str = strict.as_deref().unwrap_or(uri.as_str());
+            if !out.iter().any(|document| document.uri == uri) {
                 out.push(RegistryDocument {
-                    uri: uri.as_str(),
+                    uri,
                     schema: schema.as_schema_ref(),
                     kind: RegistryDocumentKind::Loaded,
                 });
@@ -2115,7 +2139,7 @@ impl<'a> Registry<'a> {
     pub(crate) fn document_uri(&self, scope: Scope) -> Option<&str> {
         let document: &Document<'a> = &self.documents[self.resources[scope.0].document];
         document.kind?;
-        Some(self.resources[document.scope.0].uri.as_str())
+        Some(self.resources[document.scope.0].strict_uri())
     }
 
     /// Whether the resource `scope` is in declares the `$dynamicAnchor` `name` (resolvable in
@@ -2167,6 +2191,7 @@ mod tests {
     }
     use super::{
         Registry, RegistryDocumentKind, RegistryError, RegistryErrors, Resolved, Scope, UnknownRef,
+        parse_uri, strict_spelling,
     };
     use crate::json_pointer::JsonPointer;
     use crate::json_schema::dialect::{Dialect, FormatMode, VocabularyKind, VocabularySet};
@@ -4081,6 +4106,183 @@ mod tests {
         let scope: Scope = registry.enter(registry.root_scope(), b);
         let expected: Option<String> = None;
         let actual: Option<String> = registry.location_uri(scope, &["$defs".to_string()]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_spelling_of_an_ascii_uri_is_none() {
+        let expected: Option<Box<str>> = None;
+        let actual: Option<Box<str>> =
+            strict_spelling(&parse_uri("https://example.com/a%20b?q=1").expect("uri"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_spelling_of_an_encoded_invalid_utf8_octet_is_none() {
+        let expected: Option<Box<str>> = None;
+        let actual: Option<Box<str>> =
+            strict_spelling(&parse_uri("https://example.com/%ff").expect("uri"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn strict_spelling_percent_encodes_every_non_ascii_character() {
+        let expected: Option<Box<str>> =
+            Some("https://%C3%BC@ex%C3%A4mple.com/%C3%A9?%E6%97%A5#%C3%B6".into());
+        let actual: Option<Box<str>> =
+            strict_spelling(&parse_uri("https://ü@exämple.com/é?日#ö").expect("iri"));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_percent_encodes_a_non_ascii_root_id_and_round_trips() {
+        let root: JsonSchema = parse(&json!({
+            "$id": "https://example.com/é",
+            "$defs": {"ü": {"type": "string"}}
+        }));
+        let expected: (String, Vec<String>) = (
+            "https://example.com/%C3%A9#/$defs/%C3%BC".to_string(),
+            vec!["$defs".to_string(), "ü".to_string()],
+        );
+        let actual: (String, Vec<String>) = location_uri_round_trip(&root, &["$defs", "ü"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_of_a_percent_encoded_root_id_is_encoded_and_round_trips() {
+        // IRI normalisation decodes `%C3%A9` to `é`; the URI is written encoded again.
+        let root: JsonSchema = parse(&json!({
+            "$id": "https://example.com/%c3%a9",
+            "$defs": {"ü": {"type": "string"}}
+        }));
+        let expected: (String, Vec<String>) = (
+            "https://example.com/%C3%A9#/$defs/%C3%BC".to_string(),
+            vec!["$defs".to_string(), "ü".to_string()],
+        );
+        let actual: (String, Vec<String>) = location_uri_round_trip(&root, &["$defs", "ü"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_inside_a_nested_non_ascii_relative_id_round_trips() {
+        let root: JsonSchema = parse(&json!({
+            "$id": "https://example.com/root.json",
+            "$defs": {"B": {"$id": "ü.json", "properties": {"x": {"type": "integer"}}}}
+        }));
+        let expected: (String, Vec<String>) = (
+            "https://example.com/%C3%BC.json#/properties/x".to_string(),
+            vec![
+                "$defs".to_string(),
+                "B".to_string(),
+                "properties".to_string(),
+                "x".to_string(),
+            ],
+        );
+        let actual: (String, Vec<String>) =
+            location_uri_round_trip(&root, &["$defs", "B", "properties", "x"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_percent_encodes_a_non_ascii_host_and_round_trips() {
+        let root: JsonSchema = parse(&json!({
+            "$id": "https://exämple.com/s",
+            "$defs": {"a": {"type": "string"}}
+        }));
+        let expected: (String, Vec<String>) = (
+            "https://ex%C3%A4mple.com/s#/$defs/a".to_string(),
+            vec!["$defs".to_string(), "a".to_string()],
+        );
+        let actual: (String, Vec<String>) = location_uri_round_trip(&root, &["$defs", "a"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn location_uri_percent_encodes_a_non_ascii_query_and_round_trips() {
+        let root: JsonSchema = parse(&json!({
+            "$id": "https://example.com/s?name=é",
+            "$defs": {"a": {"type": "string"}}
+        }));
+        let expected: (String, Vec<String>) = (
+            "https://example.com/s?name=%C3%A9#/$defs/a".to_string(),
+            vec!["$defs".to_string(), "a".to_string()],
+        );
+        let actual: (String, Vec<String>) = location_uri_round_trip(&root, &["$defs", "a"]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn base_uri_of_a_non_ascii_id_is_a_strict_uri() {
+        let root: JsonSchema = parse(&json!({"$id": "https://exämple.com/é?ü"}));
+        let registry: Registry<'_> = Registry::new(&root).expect("build registry");
+        let scope: Scope = registry.enter(registry.root_scope(), &root);
+        let expected: &str = "https://ex%C3%A4mple.com/%C3%A9?%C3%BC";
+        let actual: &str = registry.base_uri(scope);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn raw_and_percent_encoded_refs_reach_the_same_non_ascii_resource() {
+        let root: JsonSchema = parse(&json!({
+            "$id": "https://example.com/root.json",
+            "$defs": {"B": {"$id": "ü.json", "type": "string"}},
+            "properties": {
+                "raw": {"$ref": "ü.json"},
+                "encoded": {"$ref": "%C3%BC.json"},
+                "lower": {"$ref": "https://example.com/%c3%bc.json#"}
+            }
+        }));
+        let registry: Registry<'_> = Registry::new(&root).expect("build registry");
+        let scope: Scope = registry.enter(registry.root_scope(), &root);
+        let pointer = |ref_str: &str| -> Option<Vec<String>> {
+            registry
+                .resolve(scope, ref_str)
+                .ok()
+                .map(|resolved| resolved.pointer.to_vec())
+        };
+        let b: Option<Vec<String>> = Some(vec!["$defs".to_string(), "B".to_string()]);
+        let expected: Vec<Option<Vec<String>>> = vec![b.clone(), b.clone(), b];
+        let actual: Vec<Option<Vec<String>>> = vec![
+            pointer("ü.json"),
+            pointer("%C3%BC.json"),
+            pointer("https://example.com/%c3%bc.json#"),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn embeddable_documents_name_non_ascii_documents_by_strict_uri() {
+        let root: JsonSchema = parse(&json!({
+            "$schema": "https://example.com/mëta",
+            "$ref": "ü.json"
+        }));
+        let mut meta: Value = format_assertion_metaschema();
+        meta["$id"] = json!("https://example.com/mëta");
+        let registry: Registry<'_> = Registry::builder()
+            .base_uri("https://example.com/é/root.json")
+            .document("https://example.com/é/ü.json", json!({"type": "integer"}))
+            .document("https://example.com/mëta", meta)
+            .build(&root)
+            .expect("build registry");
+        let expected: Vec<(String, RegistryDocumentKind)> = vec![
+            (
+                "https://example.com/%C3%A9/root.json".to_string(),
+                RegistryDocumentKind::Root,
+            ),
+            (
+                "https://example.com/%C3%A9/%C3%BC.json".to_string(),
+                RegistryDocumentKind::Loaded,
+            ),
+            (
+                "https://example.com/m%C3%ABta".to_string(),
+                RegistryDocumentKind::Loaded,
+            ),
+        ];
+        let actual: Vec<(String, RegistryDocumentKind)> = registry
+            .embeddable_documents()
+            .into_iter()
+            .map(|document| (document.uri.to_string(), document.kind))
+            .collect();
         assert_eq!(expected, actual);
     }
 
